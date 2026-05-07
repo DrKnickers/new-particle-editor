@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A DirectX 9 particle editor for Star Wars: Empire at War / Forces of Corruption modding. Written in C++ using Win32 and D3DX9. Built with Visual Studio 2022 (toolset v145), targeting x64 and Win32.
+A DirectX 9 particle editor for Star Wars: Empire at War / Forces of Corruption modding. Written in C++ using Win32 and D3DX9. Built with Visual Studio 2022 (toolset v143), targeting x64 and Win32.
 
 Solution: `ParticleEditor.sln`  
 Main project: `src/ParticleEditor.vcxproj`
@@ -11,7 +11,7 @@ Main project: `src/ParticleEditor.vcxproj`
 
 ## Build Environment Requirements
 
-- **Visual Studio 2022** (toolset `v145`)
+- **Visual Studio 2022** (toolset `v143`). Newer VS releases (e.g. VS18/2026 Insiders) will silently bump this to a higher toolset (`v145`+) when you open the solution; revert any such change before committing or CI will fail with `MSB8020: build tools for v145 cannot be found`.
 - **DirectX SDK June 2010** — must be installed. The project uses `$(DXSDK_DIR)` to find headers and libs. Install from: https://www.microsoft.com/en-us/download/details.aspx?id=6812
 - **Windows 10 SDK** (10.0) — configured via `WindowsTargetPlatformVersion`
 - MFC is **not** required
