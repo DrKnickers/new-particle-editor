@@ -29,6 +29,14 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
 
+    - name: Install DirectX SDK (June 2010)
+      shell: pwsh
+      run: |
+        # The .vcxproj references $(DXSDK_DIR) for D3DX9 headers/libs, and
+        # the GitHub Actions windows-latest runner doesn't ship with it.
+        choco install directx-sdk -y --no-progress
+        "DXSDK_DIR=C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\" >> $env:GITHUB_ENV
+
     - name: Restore NuGet packages
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
@@ -36,3 +44,7 @@ jobs:
     - name: Build ${{matrix.build_config}}|x86
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild /m /p:Configuration=${{matrix.build_config}} /p:Platform=x86 ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Build ${{matrix.build_config}}|x64
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: msbuild /m /p:Configuration=${{matrix.build_config}} /p:Platform=x64 ${{env.SOLUTION_FILE_PATH}}
