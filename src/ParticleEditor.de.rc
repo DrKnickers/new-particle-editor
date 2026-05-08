@@ -216,15 +216,15 @@ BEGIN
     LTEXT           "Minimal Grï¿½ï¿½e:",-1,6,57,48,8
     LTEXT           "Auslï¿½uferlï¿½nge:",-1,18,148,60,8
     LTEXT           "%",-1,180,57,8,8
-    LTEXT           "ï¿½",-1,57,198,8,8
+    LTEXT           "°",-1,57,198,8,8
     LTEXT           "%",-1,180,96,8,8
     LTEXT           "Rot",-1,23,84,14,8
     LTEXT           "Grï¿½n",-1,66,84,20,8
     LTEXT           "Blau",-1,110,84,14,8
     LTEXT           "Alpha",-1,150,84,19,8
     LTEXT           "x",-1,148,149,8,8
-    LTEXT           "%",-1,113,198,8,8
-    LTEXT           "ï¿½",-1,64,198,8,8
+    LTEXT           "°",-1,113,198,8,8
+    LTEXT           "±",-1,64,198,8,8
 END
 
 IDD_EMITTER_PROPS1 DIALOGEX 0, 0, 197, 294
