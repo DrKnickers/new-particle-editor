@@ -289,8 +289,19 @@ Workflow at `.github/workflows/build.yml`. Builds `Debug` and `Release` × `Win3
 
 ---
 
+## Tolerating malformed `.alo` data
+
+Some `.alo` files in the wild store a `spawnOnDeath` or `spawnDuringLife` index that points past the end of the emitter list — usually the residue of a delete operation in an external tool / older editor build that didn't update cross-references. Pre-fix, the `!= -1` guard in `ParticleSystem::ParticleSystem`'s post-process loop didn't catch this, and `m_emitters[badIndex]` tripped *vector subscript out of range* before the file finished loading.
+
+**Policy**: in the post-process loop, if a non-sentinel spawn-field index is `>= m_emitters.size()`, log a `[Load]` warning with the offending emitter name + bad value + emitter count, then clamp to `(size_t)-1` so the rest of the load can continue. The user can re-save the file to commit the cleanup.
+
+Concrete example: `p_starfighter_explosion.ALO` from Chelmod stores `spawnDuringLife = 78` on emitter 8 in a 26-emitter file. Pre-fix that crashed the editor on open; now it loads with a warning line.
+
+If you ever add another place that indexes into `m_emitters` from a value that came out of a file (especially fields stored as 32-bit and read into `size_t`), apply the same bound-check pattern.
+
+---
+
 ## Open Issues
 
-- **Sporadic vector-subscript-out-of-range assertion** when opening some `.alo` files. The known case (32-bit `0xFFFFFFFF` widening into `size_t`) is fixed for `spawnOnDeath` / `spawnDuringLife`, but a similar assertion can still occasionally fire on file open with certain particle systems. Non-fatal — clicking **Ignore** on the assertion dialog lets the file load and the app remains fully usable. To root-cause: click **Retry** with VS attached for an exact stack trace, then look for any other 32-bit-to-`size_t` widening in the file-read path.
 - **Mod-bundled megafiles** (`Mods\<name>\Data\MegaFiles.xml`) are not loaded. Most particle-overriding mods ship loose files, which the loose-file path covers. Total conversions like Thrawn's Revenge or Awakening of the Rebellion that package assets in their own `.meg` would need a follow-up: extend `FileManager` with a `m_modMegafiles` vector that's searched before `m_megafiles`, populated/cleared on `SetModPath`.
 - **`d3dx9_43.dll` redistribution.** D3DX9 is a DLL-only library — there is no static-link variant. The DLL must be findable at load time (alongside the exe, in `System32`, or via PATH). Per the DXSDK redist license we can ship it next to the exe in releases. Replacing D3DX9 with DirectXMath / DirectXTK / Effects11 would let us produce a single self-contained exe but is a large refactor woven through `engine.cpp` and `EmitterInstance.cpp`; deferred indefinitely.
