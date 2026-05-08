@@ -239,6 +239,45 @@ Both fonts are cached on `APPLICATION_INFO` (`hMenuFont`, `hMenuItalicFont`), la
 
 ---
 
+## Hot-reload (View menu)
+
+Two manual reload commands plus mod-aware automatic reload on selection change.
+
+- **View → Reload Textures (F5)** — `Engine::ReloadTextures()` flushes `TextureManager`'s cache and pushes every active `EmitterInstance` to re-fetch via `OnParticleSystemChanged(-1)`. Lets you edit a `.tga` in your image editor and see the change without respawning particles.
+- **View → Reload Shaders (F6)** — `Engine::ReloadShaders()` flushes `ShaderManager`'s cache and re-loads every entry from `ShaderNames[]` with **all-or-nothing semantics**: new shaders go into a temporary array first, only commit to `m_pShaders[]` if all 14 succeed. On failure the previous set stays alive (a malformed mod shader can't brick a running session). Status bar reports success / "keep previous" failure.
+
+Both menu items grayed when `info->engine == NULL`. The `texture_filename` annotation pass on each effect (binding named textures) was extracted into `BindShaderTextures()` so it runs both at initial construction and on hot-reload.
+
+`ITextureManager` and `IShaderManager` grew `Clear()` so the engine can encapsulate the cache flush without `main.cpp` knowing the concrete manager types.
+
+`SelectMod` now just calls `ReloadShaders()` + `ReloadTextures()` after `SetModPath` — no manual cache plumbing on the call site.
+
+---
+
+## Object lifetime: Emitter ↔ EmitterInstance
+
+`EmitterInstance` objects are owned by `std::unique_ptr` inside `ParticleSystemInstance::m_emitters`. Each `EmitterInstance` registers a raw `this` pointer with its template `ParticleSystem::Emitter::m_instances` for back-reference.
+
+**Important rule**: never raw-`delete` an `EmitterInstance`. The `unique_ptr` owns it. Use `ParticleSystemInstance::RemoveEmitter(EmitterInstance*)`, which `erase()`s the matching `unique_ptr` so the proper destructor runs.
+
+`Emitter::~Emitter()` walks `m_instances` and calls `inst->GetSystem().RemoveEmitter(inst)` for each — that path triggers `~EmitterInstance` (which calls `m_emitter.unregisterEmitterInstance(this)` and shrinks `m_instances`) so the loop terminates cleanly. Pre-fix this was a raw `delete` and any live-particle delete crashed on the next render frame.
+
+If you find yourself wanting to call `delete` on a raw `EmitterInstance*` anywhere else, you have a bug.
+
+---
+
+## Debugging methodology that worked
+
+For data-dependent crashes (load-X, delete-Y) we used three tools in sequence and they paid off cleanly:
+
+1. **Out-of-process file parse first.** Wrote a small Python script (`.claude/dump_alo.py`) that walks the `.alo` chunk format the same way `ChunkReader` does and dumps every emitter's name + `spawnDuringLife` + `spawnOnDeath`. Done before instrumenting any C++. Tells you whether the file is malformed (unusual indices, sentinels, etc.) or whether the bug is purely in the editor's logic. **Watch out**: the `0x36` chunk (spawn fields) is a *data* chunk holding mini-chunks, not a *container* — the high bit of the size field tells you which.
+2. **Targeted printf instrumentation.** Add `[Tag] enter / step N / exit` traces around the suspected code path. Build, hand the user the binary, have them paste the console output. Two cycles of this got us from "crashes sometimes" to "this exact line dereferences freed memory."
+3. **State-condition guesses.** When the trace looked clean but the user said it crashed, the bug was timing/state-dependent. Asking *"did you spawn particles before deleting?"* turned a sporadic crash into a 100%-reproducible one — and exposed a double-ownership bug between raw `delete` and `unique_ptr`.
+
+The Python parser lives at `.claude/dump_alo.py` and is worth keeping for any future "this specific file crashes" report.
+
+---
+
 ## CI / GitHub Actions
 
 Workflow at `.github/workflows/build.yml`. Builds `Debug` and `Release` × `Win32` and `x64` on `windows-latest`.
@@ -253,4 +292,5 @@ Workflow at `.github/workflows/build.yml`. Builds `Debug` and `Release` × `Win3
 ## Open Issues
 
 - **Sporadic vector-subscript-out-of-range assertion** when opening some `.alo` files. The known case (32-bit `0xFFFFFFFF` widening into `size_t`) is fixed for `spawnOnDeath` / `spawnDuringLife`, but a similar assertion can still occasionally fire on file open with certain particle systems. Non-fatal — clicking **Ignore** on the assertion dialog lets the file load and the app remains fully usable. To root-cause: click **Retry** with VS attached for an exact stack trace, then look for any other 32-bit-to-`size_t` widening in the file-read path.
-- **Mod-bundled megafiles** (`Mods\<name>\Data\MegaFiles.xml`) are not loaded. Most particle-overriding mods ship loose textures, which the loose-file path covers. Total conversions like Thrawn's Revenge or Awakening of the Rebellion that package particle assets in their own `.meg` would need a follow-up: extend `FileManager` with a `m_modMegafiles` vector that's searched before `m_megafiles`, populated/cleared on `SetModPath`.
+- **Mod-bundled megafiles** (`Mods\<name>\Data\MegaFiles.xml`) are not loaded. Most particle-overriding mods ship loose files, which the loose-file path covers. Total conversions like Thrawn's Revenge or Awakening of the Rebellion that package assets in their own `.meg` would need a follow-up: extend `FileManager` with a `m_modMegafiles` vector that's searched before `m_megafiles`, populated/cleared on `SetModPath`.
+- **`d3dx9_43.dll` redistribution.** D3DX9 is a DLL-only library — there is no static-link variant. The DLL must be findable at load time (alongside the exe, in `System32`, or via PATH). Per the DXSDK redist license we can ship it next to the exe in releases. Replacing D3DX9 with DirectXMath / DirectXTK / Effects11 would let us produce a single self-contained exe but is a large refactor woven through `engine.cpp` and `EmitterInstance.cpp`; deferred indefinitely.
