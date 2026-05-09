@@ -56,15 +56,6 @@ dropping a parent onto its own descendant.
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 6–10 hours
 
-### ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
-When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` should
-increment / decrement the value. Hold Shift for ×10 steps, Ctrl for ×0.1
-steps. Self-contained change to `src/UI/Spinner.cpp`.
-
-- **Difficulty**: ★☆☆☆☆ (1/5)
-- **Estimated effort**: 1–2 hours
-- **Actual**: ~30 min, single file
-
 ### Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
 ground plane up or down along Z. Useful when the particle anchors below
@@ -73,20 +64,6 @@ specific elevation. Persists per-session; not saved into the `.alo`.
 
 - **Difficulty**: ★☆☆☆☆ (1/5)
 - **Estimated effort**: 1–2 hours
-
-### ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
-Add a *Duplicate* item to the emitter context menu (between Copy and
-Delete). Internally copies the emitter into a new slot inserted right
-below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
-Faster than the existing Copy → Paste flow because it skips the
-clipboard round-trip.
-
-- **Difficulty**: ★☆☆☆☆ (1/5)
-- **Estimated effort**: 1–2 hours
-- **Actual**: ~1 hour. Landed the "proper" variant that inserts the
-  duplicate at `original.index + 1` rather than appending to the end —
-  required a new `ParticleSystem::insertEmitterAfter` method that
-  mirrors `deleteEmitter`'s index-shift logic in reverse.
 
 ---
 
@@ -322,3 +299,34 @@ is the one with the highest leverage on the iteration loop; the **UI
 overhaul** is the largest item in scope and probably wants to land on a
 long-lived branch that other work can be rebased onto rather than blocking
 the rest of the roadmap.
+
+---
+
+## Shipped
+
+Roadmap items that have landed on master. Kept here for traceability —
+PR number, original estimate, and actual effort, so future estimates can
+calibrate against history. New shipped items go at the top.
+
+### ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+Added a *Duplicate* item to the emitter context menu (between Copy and
+Paste). Copies the selected emitter into a new slot inserted right
+below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
+Faster than the existing Copy → Paste flow because it skips the
+clipboard round-trip.
+
+- **Difficulty**: ★☆☆☆☆ (1/5)
+- **Estimated effort**: 1–2 hours
+- **Actual**: ~1 hour. Landed the "proper" variant that inserts the
+  duplicate at `original.index + 1` rather than appending to the end —
+  required a new `ParticleSystem::insertEmitterAfter` method that
+  mirrors `deleteEmitter`'s index-shift logic in reverse.
+
+### ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
+decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
+Self-contained change to `src/UI/Spinner.cpp`.
+
+- **Difficulty**: ★☆☆☆☆ (1/5)
+- **Estimated effort**: 1–2 hours
+- **Actual**: ~30 min, single file
