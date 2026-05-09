@@ -56,13 +56,14 @@ dropping a parent onto its own descendant.
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 6–10 hours
 
-### Scroll-wheel adjustment on numeric boxes
+### ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` should
 increment / decrement the value. Hold Shift for ×10 steps, Ctrl for ×0.1
 steps. Self-contained change to `src/UI/Spinner.cpp`.
 
 - **Difficulty**: ★☆☆☆☆ (1/5)
 - **Estimated effort**: 1–2 hours
+- **Actual**: ~30 min, single file
 
 ### Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
