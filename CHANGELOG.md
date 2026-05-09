@@ -17,7 +17,7 @@ Conventions:
 ## Changelog
 
 ### Persist view settings across sessions (background color, ground toggle, custom colors) + Reset View Settings
-*2026-05-09 · `<commit-pending>` · `<pr-pending>`*
+*2026-05-09 · [#27](https://github.com/DrKnickers/new-particle-editor/pull/27)*
 
 Three view-state values now round-trip across launches via the existing `HKCU\Software\AloParticleEditor\` registry key:
 
