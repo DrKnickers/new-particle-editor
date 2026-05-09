@@ -25,16 +25,6 @@ save target — the editor never silently overwrites the user's `.alo`.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
 
-### Buttons to reorder emitters
-Add **Move Up** / **Move Down** buttons to the emitter-list toolbar. Each
-swaps the selected emitter with its neighbor in the underlying vector,
-updates any spawn-field indices that referenced the swapped slots, and
-refreshes the tree. The same logic underlies drag-and-drop reordering, so
-shipping the buttons first de-risks that work.
-
-- **Difficulty**: ★★☆☆☆ (2/5)
-- **Estimated effort**: 2–3 hours
-
 ### Drag-and-drop reordering in the emitter tree
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
@@ -307,6 +297,28 @@ the rest of the roadmap.
 Roadmap items that have landed on master. Kept here for traceability —
 PR number, original estimate, and actual effort, so future estimates can
 calibrate against history. New shipped items go at the top.
+
+### ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
+between Delete and the visibility eye, plus right-click context-menu
+items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
+selected root emitter past its neighbor; the full subtree (children,
+grandchildren, anything reachable via spawn-field traversal) moves
+with it as a block. Children can't be reordered — they fill named
+slots on their parent (`spawnDuringLife` / `spawnOnDeath`), not an
+ordered sibling list. Buttons grey out for child emitters and at the
+top / bottom of the root list.
+
+- **Difficulty**: ★★☆☆☆ (2/5)
+- **Estimated effort**: 2–3 hours
+- **Actual**: ~2 hours. Slightly more complex than the "swap with
+  neighbor in vector" wording suggested — subtrees aren't contiguous
+  in `m_emitters` (children get push_back'd at add time and stay put
+  through any later reorders), so the algorithm collects both
+  subtrees by spawn-field DFS and rearranges only those positions
+  while emitters belonging to neither stay where they are. Foundation
+  for the upcoming drag-and-drop roadmap item — same backend method,
+  same tree-rebuild path; only the input changes.
 
 ### ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
