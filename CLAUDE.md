@@ -67,6 +67,34 @@ shorter answer that opens dialogue beats a longer one that closes it.
 - When given a bug report, just fix it. Zero context-switching required
   from the user beyond the original report.
 
+### Roadmap items: update `ROADMAP.md` and `CHANGELOG.md` when a feature ships
+
+Whenever a `ROADMAP.md` item lands, update both files — same PR if
+practical, immediate follow-up otherwise.
+
+**`ROADMAP.md`**: strikethrough the item heading, append
+`✅ Shipped (#NN)` with the merge PR number, and add an
+*Actual:* line under the estimate so future readers can calibrate.
+
+**`CHANGELOG.md`**: add a section covering three things, in this order:
+
+1. **What ships** — one-paragraph user-facing description. What the user
+   can now do that they couldn't before, what shortcuts / modifiers
+   exist, where the feature lives in the UI.
+2. **How we tackled it** — one paragraph naming the files / functions
+   touched and the architectural choice that's worth remembering. Skip
+   the play-by-play; record the design decision that future contributors
+   would have to rediscover otherwise.
+3. **Issues encountered and resolutions** — anything non-obvious that
+   bit us during implementation, with the fix. Skip routine compile
+   errors and forward-declaration shuffles; record the gotchas a future
+   contributor would otherwise step on.
+
+Skip the CHANGELOG addition only when the change is purely cosmetic with
+no behavioural or architectural pattern worth remembering. When in
+doubt, write the section — every entry costs five minutes today and
+saves an hour of rediscovery later.
+
 ---
 
 ## Communication defaults
@@ -160,3 +188,4 @@ These principles are not license to:
 | Bug report                                 | Fix it; don't ask permission                     |
 | Simple fix                                 | Don't over-engineer; skip the elegance pass      |
 | Marking a task done                        | Quote proof. *"Would a staff engineer approve?"* |
+| Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `CHANGELOG.md` (description + how-we-tackled-it + issues) |
