@@ -397,6 +397,7 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "Ausschneiden",                ID_EDIT_CUT
         MENUITEM "&Kopieren",                   ID_EDIT_COPY
+        MENUITEM "Du&plizieren",                ID_EMITTER_DUPLICATE
         MENUITEM "&Einfügen",                   ID_EDIT_PASTE
         POPUP "Einfügen als"
         BEGIN
