@@ -25,16 +25,6 @@ save target — the editor never silently overwrites the user's `.alo`.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
 
-### Buttons to reorder emitters
-Add **Move Up** / **Move Down** buttons to the emitter-list toolbar. Each
-swaps the selected emitter with its neighbor in the underlying vector,
-updates any spawn-field indices that referenced the swapped slots, and
-refreshes the tree. The same logic underlies drag-and-drop reordering, so
-shipping the buttons first de-risks that work.
-
-- **Difficulty**: ★★☆☆☆ (2/5)
-- **Estimated effort**: 2–3 hours
-
 ### Drag-and-drop reordering in the emitter tree
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
