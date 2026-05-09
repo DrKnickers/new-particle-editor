@@ -17,7 +17,7 @@ Conventions:
 ## Changelog
 
 ### Move Up / Move Down buttons for root emitters
-*2026-05-09 · `<commit-pending>` · `<pr-pending>`*
+*2026-05-09 · [#25](https://github.com/DrKnickers/new-particle-editor/pull/25)*
 
 Two new buttons on the emitter-list toolbar — **▲** (Move Up) and **▼** (Move Down) — that reorder the selected root emitter past its previous / next root sibling. Same actions are available via the right-click context menu (**Move Up** / **Move Down**, between *Rescale* and *Toggle Visibility*) and the `Alt+Up` / `Alt+Down` keyboard shortcuts. The whole subtree of the selected root moves with it as a block — children, grandchildren, everything reachable via spawn-field traversal. Buttons grey out when the selection is a child emitter (children fill named slots `spawnDuringLife` / `spawnOnDeath` on their parent — they don't form an ordered sibling list, so reordering them isn't meaningful), or when the selection is the topmost / bottommost root in that direction.
 
