@@ -115,6 +115,59 @@ implicitly assumes "one child or the other", fix it. Ship test fixture
 - **Difficulty**: ★★☆☆☆ (2/5) — mostly investigation
 - **Estimated effort**: 2–4 hours
 
+### Bloom in the preview renderer
+Add the game's "fake-HDR" bloom post-process to the editor preview so
+particles that glow in-game also glow in the editor. Today, an emitter
+authored to bloom (e.g. fire / explosion hotspots, energy weapon trails)
+renders flat in the preview, which means lighting decisions get made
+against the wrong reference image.
+
+The reference shader is the game's
+`SHADERS/Source/Engine/SceneBloom.fx` — three passes (bright filter →
+ping-pong Gaussian-ish blur → AddSmooth combine) with three tunables:
+
+- **`BloomStrength`** (game default `0.1`) — final multiplier on the
+  blurred bright-pass result before it's blended back onto the scene.
+  The primary knob the user wants.
+- **`BloomCutoff`** (default `1.0`) — luminance threshold for the
+  bright-pass filter. Pixels above it pass through unchanged; pixels
+  below are suppressed by `pixel⁵`.
+- **`BloomSize`** (default `0.25`) — blur kernel radius.
+
+Plus a non-obvious detail from the shader comments worth mirroring:
+*"the alpha channel can pull the luminance up for this formula"* — the
+game lets specific particles opt into bloom by writing non-zero alpha
+into the frame buffer alpha channel, which is then folded into the
+luminance dot product. We should preserve this behavior so editor
+preview matches in-game contribution per-particle, not just per-scene.
+
+UI: a new **View → Bloom…** dialog (or a panel under View) with a
+master enable checkbox plus three sliders matching the shader inputs.
+Defaults match the shader. Persisted per-session in the registry.
+
+**Implementation notes:**
+
+- Requires render-to-texture infrastructure the editor doesn't have
+  today. The current preview renders directly to the swap chain. We'd
+  need at least three off-screen targets at half-resolution: the
+  scene, plus two ping-pong targets for the blur passes. Then the
+  combine pass blends the ping-pong result onto the back buffer.
+- DXSDK ships D3DX9 helpers for offscreen RT creation
+  (`IDirect3DDevice9::CreateTexture` with `D3DUSAGE_RENDERTARGET`).
+  No new dependency.
+- Port the three shader programs from `SceneBloom.fx`. They compile
+  to vs_1_1 / ps_1_3 — well within the editor's existing shader
+  pipeline. `ShaderManager` already has the all-or-nothing reload
+  semantics we'd want for bloom shaders too.
+- The "fake-HDR alpha-as-luminance-boost" trick assumes the back
+  buffer is a format that preserves alpha through the particle
+  blends. Need to verify that's true for the editor's current swap
+  chain config; if not, an intermediate FP / `D3DFMT_A8R8G8B8` RT
+  fixes it.
+
+- **Difficulty**: ★★★★☆ (4/5)
+- **Estimated effort**: 8–12 hours
+
 ---
 
 ## Long term
