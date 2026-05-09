@@ -95,6 +95,46 @@ no behavioural or architectural pattern worth remembering. When in
 doubt, write the section — every entry costs five minutes today and
 saves an hour of rediscovery later.
 
+#### CHANGELOG formatting conventions
+
+Match the existing entries — readers and tooling rely on the shape:
+
+- **Reverse chronological order.** New entries go at the *top* of the
+  `## Changelog` section, immediately under the heading. Within a single
+  day, the most recently merged entry sits above older ones from the
+  same day.
+- **Date line format.** Italicised line directly under the `### Title`,
+  with three pieces separated by ` · `:
+  ```
+  *YYYY-MM-DD · [`<short-hash>`](https://github.com/DrKnickers/new-particle-editor/commit/<short-hash>) · [#NN](https://github.com/DrKnickers/new-particle-editor/pull/NN)*
+  ```
+  - **Date** is the merge date on `master`.
+  - **Short hash** is the 7-character merge-commit hash on `master`
+    (or the direct commit for pre-PR-workflow entries before #1).
+    Wrap it in backticks inside the link text.
+  - **PR number** is the merge PR. If the entry is being added before
+    the PR is merged, leave a `TODO` and backfill the hash + number once
+    the merge commit exists — see PR [#27](https://github.com/DrKnickers/new-particle-editor/pull/27)
+    for prior art on the backfill pattern.
+- **Section title** is plain prose, not a Conventional-Commit prefix.
+  Commit *messages* still use `feat:` / `fix:` / `docs:`; the heading
+  in the changelog reads naturally (e.g. *"Move Up / Move Down buttons
+  for root emitters"*, not *"feat(emitter-list): …"*).
+- **Section delimiter.** End every entry with a `---` on its own line
+  before the next entry.
+- **Inline code references** use the editor-friendly path:line link
+  form `` [`src/main.cpp`](src/main.cpp:1234) `` so readers can jump
+  directly to the cited site. Use `src/<file>` even when the document
+  is at repo root.
+- **Bold the three section labels** (`**How we tackled it.**`,
+  `**Issues encountered and resolutions.**`) and end each with a
+  period — they're sentence-leading run-in headers, not separate
+  blocks.
+
+The changelog header (top of `CHANGELOG.md`) is the authoritative
+short-form of these rules; if it ever drifts from this section, the
+header wins.
+
 ---
 
 ## Communication defaults
