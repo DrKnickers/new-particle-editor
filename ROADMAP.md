@@ -74,7 +74,7 @@ specific elevation. Persists per-session; not saved into the `.alo`.
 - **Difficulty**: ★☆☆☆☆ (1/5)
 - **Estimated effort**: 1–2 hours
 
-### Right-click → Duplicate Emitter
+### ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Add a *Duplicate* item to the emitter context menu (between Copy and
 Delete). Internally copies the emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -83,6 +83,10 @@ clipboard round-trip.
 
 - **Difficulty**: ★☆☆☆☆ (1/5)
 - **Estimated effort**: 1–2 hours
+- **Actual**: ~1 hour. Landed the "proper" variant that inserts the
+  duplicate at `original.index + 1` rather than appending to the end —
+  required a new `ParticleSystem::insertEmitterAfter` method that
+  mirrors `deleteEmitter`'s index-shift logic in reverse.
 
 ---
 
