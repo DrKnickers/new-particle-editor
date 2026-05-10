@@ -25,7 +25,7 @@ save target — the editor never silently overwrites the user's `.alo`.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
 
-### ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#34)
+### ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
