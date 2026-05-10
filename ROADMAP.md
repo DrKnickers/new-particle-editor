@@ -36,16 +36,6 @@ the estimate, **and the entry is moved out of its tier section into
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### NT-1: Autosave for in-progress particles
-Periodically save the current particle system to a recovery file (e.g.
-`%TEMP%\AloParticleEditor\autosave.alo`) so an editor crash or a forgotten
-save doesn't lose work. On launch, if a recovery file exists from a previous
-session, prompt the user to recover it. Independent of the user's manual
-save target — the editor never silently overwrites the user's `.alo`.
-
-- **Difficulty**: ★★☆☆☆ (2/5)
-- **Estimated effort**: 3–5 hours
-
 ### NT-2: Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
 ground plane up or down along Z. Useful when the particle anchors below
@@ -359,6 +349,28 @@ the rest of the roadmap.
 Roadmap items that have landed on master. Kept here for traceability —
 PR number, original estimate, and actual effort, so future estimates can
 calibrate against history. New shipped items go at the top.
+
+### ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+Two-tier autosave: a 30-second "recent" tier captures the freshest
+state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
+captures an older known-good state for the "recent file is corrupt"
+or "I made a bad edit 2 minutes ago" cases. Files live at
+`%TEMP%\AloParticleEditor\autosave-<pid>-<tier>.alo`; per-PID names
+so concurrent editor instances don't clobber each other. On launch
+(when no CLI file is specified) the editor scans for orphan
+autosaves left by crashed prior sessions and prompts the user to
+restore.
+
+- **Difficulty**: ★★☆☆☆ (2/5)
+- **Estimated effort**: 3–5 hours
+- **Actual**: ~3 hours. The data layer is a single new module
+  ([`src/Autosave.{h,cpp}`](src/Autosave.cpp)); most of the time
+  went into the PID-liveness check (`OpenProcess` +
+  `QueryFullProcessImageNameW` with the right "skip if it's another
+  live editor" semantics, defaulting conservatively on ambiguous
+  errors) and the three-state recovery prompt (recent-only, stable-
+  only, or both-tiers each pick a different MessageBox variant).
+  The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
 ### ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
