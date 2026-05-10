@@ -17,7 +17,7 @@ Conventions:
 ## Changelog
 
 ### Programmable particle spawner (v1) — `Emitters → Spawner…` / `F7`
-*2026-05-10 · `<commit-pending>` · `<pr-pending>`*
+*2026-05-10 · [#30](https://github.com/DrKnickers/new-particle-editor/pull/30)*
 
 Replaces the "hold Shift, click in viewport, spawn one instance" preview flow with a modeless **Spawner** dialog hosting a configurable test driver. Two modes:
 

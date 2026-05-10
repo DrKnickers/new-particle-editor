@@ -360,7 +360,7 @@ Roadmap items that have landed on master. Kept here for traceability —
 PR number, original estimate, and actual effort, so future estimates can
 calibrate against history. New shipped items go at the top.
 
-### ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#TBD)
+### ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
 
