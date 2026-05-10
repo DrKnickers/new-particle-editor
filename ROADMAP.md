@@ -25,7 +25,7 @@ save target — the editor never silently overwrites the user's `.alo`.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
 
-### Drag-and-drop reordering in the emitter tree
+### ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -34,6 +34,15 @@ of the work.
 
 - **Difficulty**: ★★★☆☆ (3/5)
 - **Estimated effort**: 4–6 hours
+- **Actual**: ~5 hours including the planning + risk-mitigation pass.
+  Most of the time went into the cancellation paths (`WM_CAPTURECHANGED`
+  backstop, idempotent `EndDrag`), the no-op detection (drop on the
+  source's own gap mustn't dirty the file), and the accelerator gate at
+  the message pump (Ctrl+Z mid-drag would otherwise free the
+  ParticleSystem under the drag's `Emitter*` pointer). Auto-scroll
+  (16-pixel hot zones, `SetTimer`-driven) was straightforward once the
+  WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
+  re-anchor.
 
 ### Drag-and-drop to reparent (make an emitter a child of another)
 Extension of the previous item: dropping an emitter onto another emitter
