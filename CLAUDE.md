@@ -73,8 +73,17 @@ Whenever a `ROADMAP.md` item lands, update both files — same PR if
 practical, immediate follow-up otherwise.
 
 **`ROADMAP.md`**: strikethrough the item heading, append
-`✅ Shipped (#NN)` with the merge PR number, and add an
-*Actual:* line under the estimate so future readers can calibrate.
+`✅ Shipped (#NN)` with the merge PR number, add an
+*Actual:* line under the estimate so future readers can calibrate,
+**and move the entry from its tier section (Near term / Medium /
+Long) into the [Shipped](ROADMAP.md#shipped) section at the top of
+that section** (newest first). Don't leave shipped items in their
+original tier — readers scanning the tier sections should see only
+unshipped work.
+
+The roadmap also has a top-level table of contents ([ROADMAP.md](ROADMAP.md)
+intro). If you add a new top-level section, update the TOC. If you
+rename one, update both the TOC text and the anchor links.
 
 **`CHANGELOG.md`**: add a section covering three things, in this order:
 
