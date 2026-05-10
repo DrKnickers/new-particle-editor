@@ -1,546 +1,251 @@
-# Plan: Programmable particle spawner for the preview
-
-ROADMAP entry: long-term, ★★★★★ (5/5), 15-25 hours estimated.
+# Plan: Undo / Redo for the particle editor
 
 ## Goal
 
-Replace the "hold Shift, click in viewport, spawn one instance" preview
-flow with a **configurable test driver** that emits instances over time:
+Ctrl+Z / Ctrl+Y (also Ctrl+Shift+Z) walk the user back and forth through
+edits. Toolbar icons next to File New/Open/Save. An Edit-menu Undo / Redo
+pair. Greyed out at the ends of the stack.
 
-- Adjustable spawn rate (steady, pulsed, one-shot).
-- Initial velocity vector inherited by each spawn.
-- Motion path for the spawn point (stationary, line, arc, user-drawn curve).
-- Optional jitter / randomization on each axis.
+## Scope (confirmed with user)
 
-This dramatically tightens the iteration loop for any particle whose look
-depends on motion: rocket trails, debris, projectile impacts.
+**Undoable** (anything that survives `.alo` save/load):
 
-Per the roadmap, **session state, not saved into `.alo`**. The config
-should also persist across launches via the registry pattern we just
-established (`BackgroundColor` / `ShowGround` / `CustomColors`) — same
-ergonomic argument.
+- Every emitter property edit (basic / appearance / physics tabs)
+- Every track key add / move / delete
+- Every random-parameter group field
+- Structural ops: add / delete / duplicate / move / paste / rename
+- `leaveParticles` system flag, system name (set on save from filename)
 
----
+**Not undoable** (session / UI affordances):
 
-## What the codebase already gives us
+- Selection, scroll, expand/collapse, tab-active
+- Per-emitter `visible` flag (already documented as editor-only)
+- Spawner config, camera, background color, ground, mod selection
+- File ops (New / Open / Save) clear the stack instead of being undo
+  steps within it
 
-From the architecture survey:
+## Architecture
 
-- **`Engine::SpawnParticleSystem(const ParticleSystem& sys, Object3D* parent)`**
-  ([`engine.cpp:43-48`](src/engine.cpp:43)) — already does exactly the
-  thing the spawner needs to call repeatedly. Returns
-  `ParticleSystemInstance*`.
-- **Instance follows its `Object3D` parent** until `Detach()` is called
-  — at which point it lives until particles die naturally
-  ([`engine.cpp:171-173`](src/engine.cpp:171)).
-- **Position + velocity are inherited from the parent at spawn time**
-  ([`ParticleSystemInstance.cpp:115-128`](src/ParticleSystemInstance.cpp:115)).
-  So if we set parent.position + parent.velocity, then `SpawnParticleSystem`,
-  then `Detach`, we get a "fire and forget" emission stamped with the
-  current path-point and inherited velocity.
-- **Per-frame update hook**: [`Render(info)`](src/main.cpp:1003) calls
-  `info->engine->Update()` before `Render()`. We tick the spawner right
-  before that.
-- **Cursor-to-3D unprojection** already exists at
-  [`main.cpp:1554-1567`](src/main.cpp:1554) — useful later for the
-  "draw the path with the mouse" feature.
-- **View state vs. particle data are cleanly separated** — the spawner
-  config rides on `APPLICATION_INFO`, never touches `ParticleSystem`.
+**Snapshot the whole `ParticleSystem` per edit boundary.** Reuses the
+existing `ChunkWriter` / `ParticleSystem(IFile*)` round-trip — proven
+correct by save/load and clipboard. `.alo` files are tiny (single-digit
+KB), so a 100-deep stack is comfortably under 10 MB.
 
----
+Rejected the command pattern: dozens of command classes for every
+spinner / checkbox / combo / track-key op, plus the `Emitter*` pointer
+re-resolution after delete-undo is exactly the landmine the snapshot
+approach sidesteps (whole graph rebuilt fresh; pointers re-resolved by
+index).
 
-## Scope: cut into v1 + v2
+## Components
 
-The roadmap spec is ambitious. Trying to land it all in one PR is a
-recipe for a stalled long-running branch. I'll split:
-
-### v1 (this PR; ~10–13 hours total — redesigned mid-flight)
-
-The first build shipped with a single STEADY mode. Replaced before
-merge with a richer two-mode model:
-
-- **Modes**: **Manual** ("Spawn on command", on-demand single burst)
-  and **Auto** ("Spawn at regular intervals", continuous). Radio-
-  selected.
-- **Burst structure** (both modes): a *burst* fires `(b)` instances
-  spaced `(c)` seconds apart. Auto repeats with `(d)` seconds between
-  bursts.
-  - Burst size **(b)**: 1–10 instances; spinner. Capped at 10 to keep
-    a single burst small relative to the 50-instance live cap (a
-    maxed burst still leaves headroom for in-flight instances from
-    earlier bursts).
-  - Spacing within burst **(c)**: 0.0–10.0 s; spinner. `c=0` means
-    all instances spawn the same frame (subject to per-frame cap).
-  - Interval between bursts **(d)**: 0.0–60.0 s; spinner; greyed in
-    Manual mode.
-- **Pulses/sec readout (a)**: read-only label in Auto mode showing
-  the derived rate `1 / (b·c + d)`. Greyed/blank in Manual.
-- **Manual mode trigger**: a "Spawn now" button in the dialog plus a
-  global `Shift+Space` hotkey so you can fire without focusing the
-  dialog. Manual has no "Enable" checkbox — fires only on demand.
-  `Shift+Space` doesn't collide with the existing
-  hold-Shift-in-viewport spawn mechanic (that runs in `WM_KEYDOWN`,
-  not the accelerator table).
-- **Skip rule**: if a burst takes longer than `(d)` (so the next
-  one would start before this one finishes), the next burst delays
-  until the current one completes. No overlap. Cleaner mental model;
-  could become a "Allow overlap" checkbox in v2 if anyone needs it.
-- **Path**: STATIONARY (fixed point in world space) + LINE
-  (start → end, configurable duration, optional loop). Unchanged.
-  - Manual mode resets path-T to 0 on each trigger (each burst is a
-    fresh sweep).
-  - Auto mode advances path continuously regardless of burst gaps.
-- **Velocity**: 3-axis XYZ spinners. Unchanged.
-- **Jitter**: 3-axis position + 3-axis velocity. Unchanged.
-- **UI**: modeless **Spawner** dialog opened via `Emitters → Spawner…`
-  (mnemonic Alt+M, S) or **F7**. Live-applies on every change.
-- **Persistence**: REG_BINARY blob `SpawnerConfig` under the existing
-  registry key. Schema bumped `'SPN1'` → `'SPN2'` so mid-flight
-  upgrades just discard the old payload and start fresh — no
-  migration logic.
-
-**Naming convention** in the UI / code (avoids "pulse" overloading):
-
-- *Burst* = group of `(b)` instances spaced `(c)` apart.
-- *Spacing* = `(c)`.
-- *Interval* = `(d)`, the gap between bursts in Auto mode.
-- *Bursts/sec* = the derived `(a)`, shown read-only in Auto mode.
-
-**Mode switch behavior**:
-
-- Manual → Auto: any in-flight burst finishes; auto schedule starts
-  fresh from t=0.
-- Auto → Manual: any in-flight burst finishes; further auto firing
-  stops; user takes over with the trigger.
-- Switching mode is a config change like any other — written to the
-  registry on the spot.
-
-**Limits unchanged from the original v1 design**:
-
-| Limit | Value | Why |
-|---|---|---|
-| Max active spawner-emitted instances | 50 | Bounds every downstream cost |
-| Per-frame emission burst | ≤ 5 spawns | Survives stutter without storming |
-| Path duration min | 0.05 s | Numerical stability |
-| Jitter range | ±10000 world units | UI sanity |
-
-The 5/frame cap applies *across* a burst when `(c)` is small enough
-that multiple instances want the same frame. Surplus is dropped.
-
-**Default config** for a fresh registry: Auto mode, `b=1`, `c=0`,
-`d=0.2 s` — equivalent to the old "steady 5/sec" default, so users
-who liked the old behavior get it without touching anything.
-
-### Resource limits (v1)
-
-Wired in at the controller / UI layer to keep framerate bounded
-regardless of what the user types in:
-
-| Limit | Value | Enforcement site |
-|---|---|---|
-| Max active spawner-emitted instances | **50** | `SpawnerDriver::Tick` checks `engine->ActiveSpawnerInstanceCount() >= 50` and drops the spawn if so |
-| Rate spinner range | **0.1 – 100 Hz** | Rate spinner `MinValue` / `MaxValue` |
-| Per-frame emission burst | **≤ 5 spawns** | Loop guard inside `Tick`; on overflow, reset `m_accumSpawn = 0` (drop surplus, don't queue) |
-| Path duration floor | **0.05 seconds** | Duration spinner `MinValue` |
-| Jitter spinner range | **±10000 world units** | Per-axis spinner clamp |
-
-When the active-instance cap is hit, the status bar's spawner cell
-displays `Spawner: 50/50 (limited)` so the user knows why new spawns
-aren't appearing. Below the cap it shows `Spawner: N active` with the
-current live count (only counting instances the spawner emitted, not
-all instances in the engine).
-
-The 50-cap means tracking which instances came from the spawner
-specifically. Two clean ways to do this:
-
-1. **Tag at spawn time** — extend `SpawnParticleSystem` (or add a sibling
-   API) that flags the resulting `ParticleSystemInstance` as
-   spawner-owned. The engine maintains a counter that increments on
-   spawn and decrements on the existing self-destruct path.
-2. **Track on the SpawnerDriver side** — driver holds a
-   `std::vector<ParticleSystemInstance*>` of "currently alive
-   spawner-emitted" pointers, walks it once per tick to drop ones the
-   engine has destroyed (compare against engine's `m_instances` list).
-
-Approach (1) is cleaner; approach (2) avoids touching the engine. I'll
-go with (1) — the engine already has a uniform `m_instances` list, and
-flipping a bool on `ParticleSystemInstance` plus a getter is a tiny
-intrusion compared to the cross-list reconciliation in (2).
-
-### v2 (deferred to a separate roadmap item; ~5–9 hours)
-
-The original v2 plan included pulsed/one-shot modes, user-drawn
-curve paths, and a draw-in-viewport interactive mode. The mode
-work folded into v1 (Manual + Auto). User-curve paths and the
-draw-in-viewport mode are **dropped** — too much UX complexity for
-the value they add.
-
-Remaining v2 scope:
-
-- **ARC paths** — rotate the spawn point around an axis by a
-  configurable angle over `pathDuration`. Adds an axis-vector input
-  + angle spinner to the dialog when Path = Arc.
-- **Velocity shorthand** — alongside XYZ, accept magnitude +
-  azimuth + elevation. Useful when "I want 100 units/sec going up
-  at 45°" is easier to express than the XYZ math.
-- **Named presets** — save a config under a name, recall later.
-  Useful when iterating between two test setups (e.g. "rocket
-  trail" vs. "explosion debris"). Stored as additional REG_BINARY
-  blobs `SpawnerPreset_<name>`.
-- **Path visualization in the preview** — render the path as a thin
-  teal line and the current spawn anchor as a marker. Deferred from
-  v1 because the engine has no simple-line draw helper today;
-  needs a small render-state-aware helper. Spike-required to
-  estimate accurately.
-
-I'll file these as a single roadmap entry once v1 lands.
-
----
-
-## Implementation steps
-
-### 1. SpawnerConfig + SpawnerDriver
-
-New header `src/SpawnerDriver.h` + impl `src/SpawnerDriver.cpp`.
+### 1. `src/UndoStack.{h,cpp}` (new)
 
 ```cpp
-struct SpawnerConfig {
-    bool   enabled       = false;
-    float  rateHz        = 5.0f;        // STEADY: instances/second
-
-    enum class Path { Stationary, Line } path = Path::Stationary;
-    D3DXVECTOR3 pathStart = D3DXVECTOR3(0, 0, 0);
-    D3DXVECTOR3 pathEnd   = D3DXVECTOR3(0, 100, 0);   // LINE only
-    float  pathDuration   = 2.0f;       // LINE only (seconds)
-    bool   pathLoop       = true;       // LINE only
-
-    D3DXVECTOR3 velocity       = D3DXVECTOR3(0, 0, 0);
-    D3DXVECTOR3 jitterPosition = D3DXVECTOR3(0, 0, 0);
-    D3DXVECTOR3 jitterVelocity = D3DXVECTOR3(0, 0, 0);
-};
-
-class SpawnerDriver {
+class UndoStack {
+    struct Entry {
+        std::vector<char> snapshot;
+        size_t            selectedIndex;  // SIZE_MAX if none
+        DWORD             coalesceKey;    // (notify-code << 16) | emitter-idx
+        DWORD             timestamp;      // GetTickCount()
+        bool              isSavedState;   // matches what's on disk
+    };
+    std::deque<Entry> m_entries;
+    size_t            m_cursor;       // 0..m_entries.size()
+    bool              m_applying;     // re-entrancy guard
+    static const size_t MAX_ENTRIES = 100;
 public:
-    SpawnerDriver();
-
-    void SetConfig(const SpawnerConfig& cfg);  // also resets time / path-t
-    const SpawnerConfig& GetConfig() const;
-
-    // Called once per frame from main.cpp before engine->Update().
-    void Tick(float dtSeconds, const ParticleSystem* sys, Engine* engine);
-
-    // For the path-line visualization; main.cpp's render path queries.
-    bool        IsActive() const;
-    D3DXVECTOR3 CurrentSpawnPoint() const;
-
-private:
-    SpawnerConfig m_cfg;
-    Object3D      m_anchor;       // position + velocity stamped per spawn
-    float         m_pathT;        // 0..1 for LINE, ignored for STATIONARY
-    float         m_accumSpawn;   // time accumulator for STEADY rate
+    void Capture(const ParticleSystem& sys, size_t selIdx,
+                 DWORD coalesceKey);
+    bool CanUndo() const;
+    bool CanRedo() const;
+    bool Undo(/*out*/ std::vector<char>** snapshot,
+              /*out*/ size_t* selIdx);
+    bool Redo(/*out*/ std::vector<char>** snapshot,
+              /*out*/ size_t* selIdx);
+    void Clear();
+    void MarkSaved();          // current cursor's entry == disk state
+    bool IsAtSavedState() const;
+    bool IsApplying() const { return m_applying; }
+    void BeginApplying() { m_applying = true; }
+    void EndApplying()   { m_applying = false; }
 };
 ```
 
-`Tick` advances `m_pathT` by `dt / pathDuration` (wrapping when
-`pathLoop`), accumulates `m_accumSpawn += dt`, and while
-`m_accumSpawn >= 1/rateHz` emits one instance: stamp the anchor's
-position + velocity, call `engine->SpawnParticleSystem(*sys, &m_anchor)`,
-**immediately Detach** the returned instance so it doesn't follow the
-moving anchor on subsequent ticks. Subtract `1/rateHz` from
-`m_accumSpawn` and loop. Tiny dt's that don't trigger a spawn: nothing
-happens, accumulator carries over. Spike-friendly.
-
-Jitter: each spawn, perturb stamped position + velocity by
-`uniform(-jitter, +jitter)` per axis.
-
-### 2. Wire into the render loop
-
-In [`main.cpp:1003-1019`](src/main.cpp:1003) (`Render`), keep a
-`static SpawnerDriver* driver` on `APPLICATION_INFO`. Compute `dt`
-from `GetTickCount64()` deltas (look at how the engine already does it
-— likely already tracking `currentTime`). Call:
+Snapshot helpers in `UndoStack.cpp`:
 
 ```cpp
-if (info->spawner != nullptr && info->particleSystem != nullptr) {
-    info->spawner->Tick(dt, info->particleSystem, info->engine);
+static std::vector<char> Serialize(const ParticleSystem& sys) {
+    MemoryFile* mf = new MemoryFile();
+    sys.write(mf);
+    std::vector<char> buf(mf->size());
+    mf->seek(0);
+    mf->read(buf.data(), mf->size());
+    mf->Release();
+    return buf;
 }
-info->engine->Update();
-info->engine->Render();
-```
 
-Edge case: when `info->particleSystem` is replaced (file open / new),
-the spawner's `m_anchor` keeps its world coords; existing live
-instances are unaffected. The next spawn just uses the newly-loaded
-system. **Handled automatically** by passing `info->particleSystem`
-into `Tick` rather than caching it.
-
-### 3. Emitters → Spawner… modeless dialog
-
-Menu placement: **Emitters menu** (the existing `POPUP "E&mitters"` at
-[`src/ParticleEditor.en.rc:361`](src/ParticleEditor.en.rc:361)), not
-View — the spawner is a particle-testing tool, conceptually adjacent
-to "New Emitter" / "Rescale Emitter" rather than to view-state
-settings like background color. Slot it at the bottom of the menu,
-below "Hide All Emitters", separated by `MENUITEM SEPARATOR`:
-
-```
-Emitters
-├── New Emitter
-│   ├── Root Emitter
-│   ├── Child Emitter (Lifetime)
-│   └── Child Emitter (on Death)
-├── Rename Emitter        F2
-├── Rescale Emitter
-├── Toggle Emitter Visibility
-├── ──────────────────────────
-├── Show All Emitters
-├── Hide All Emitters
-├── ──────────────────────────  ← new separator
-└── Spawner…              F7    ← new item; check-mark when visible
-```
-
-Mnemonic: `&Spawner` (Alt+M, S) — unique within the Emitters menu.
-German equivalent in `de.rc`: `&Spawner…\tF7` (same mnemonic; English
-loanword fits naturally and avoids inventing a translation for a
-domain term).
-
-Keyboard accelerator: **F7**. Unused, slots next to F5 (Reload
-Textures) / F6 (Reload Shaders), easy one-handed reach. Both the menu
-item and F7 toggle the same `ShowSpawnerDialog(info)` helper that
-opens the dialog if hidden, focuses it if open, hides it if focused +
-visible. Same "show or focus" pattern modal-ish dialogs typically use.
-
-New `IDD_SPAWNER` dialog in both `.rc` files. Layout:
-
-- **Enabled** checkbox at the top.
-- **Rate group**: spinner for instances/second.
-- **Path group**: dropdown (Stationary / Line). When Line: 6 spinners
-  for start (X/Y/Z) and end (X/Y/Z), 1 spinner for duration, 1
-  checkbox for loop. Stationary: just the 3 start spinners.
-- **Velocity group**: 3 spinners.
-- **Jitter group**: 6 spinners (3 position + 3 velocity).
-
-Modeless because the user wants to tweak settings while watching the
-preview update in real time.
-
-Each control's change handler updates `info->spawner->SetConfig(...)`
-+ `WriteSpawnerConfig(...)` so changes round-trip on every tweak,
-matching the existing background-color pattern.
-
-**Keyboard + menu entry points.**
-
-- **`Emitters → Spawner…`** menu item (Alt+M, S mnemonic) — primary
-  discoverable path. Check-mark next to the menu item when the
-  dialog is visible.
-- **F7** global accelerator — same toggle, one-keystroke. Wired in
-  `IDR_ACCELERATOR1` next to F5/F6 in both `.rc` files. Unused
-  today; slots naturally next to the View → Reload F5/F6 family.
-- Inside the dialog: **Esc** closes; **Tab** cycles controls; the
-  existing `Spinner` controls keep their scroll-wheel + Shift/Ctrl
-  modifiers from PR #16.
-
-**Closing and restoring the dialog.**
-
-The dialog is a modeless `CreateDialog`-style child of the main
-window — created **lazily on first show** rather than at startup.
-Lifetime + state on `APPLICATION_INFO`:
-
-```cpp
-HWND hSpawnerDlg = NULL;   // NULL means "not created yet"
-bool spawnerVisible = false;
-RECT spawnerWindowRect = {0};   // last-known position+size for restore
-```
-
-The single toggle helper:
-
-```cpp
-static void ToggleSpawnerDialog(APPLICATION_INFO* info)
-{
-    if (info->hSpawnerDlg == NULL)
-    {
-        // Lazy create. Position from registry on first ever launch,
-        // or from the last-known rect within this session.
-        info->hSpawnerDlg = CreateDialogParam(
-            info->hInstance,
-            MAKEINTRESOURCE(IDD_SPAWNER),
-            info->hMainWnd,        // owner; not parent — modeless on top
-            SpawnerDlgProc,
-            (LPARAM)info);
-
-        if (info->spawnerWindowRect.right != 0)
-        {
-            // Restore prior position (this session OR from registry).
-            SetWindowPos(info->hSpawnerDlg, NULL,
-                         info->spawnerWindowRect.left,
-                         info->spawnerWindowRect.top, 0, 0,
-                         SWP_NOSIZE | SWP_NOZORDER);
-        }
-    }
-
-    if (info->spawnerVisible)
-    {
-        // Visible → hide. Capture position first so a re-show
-        // restores it. Don't destroy — preserves all field values.
-        GetWindowRect(info->hSpawnerDlg, &info->spawnerWindowRect);
-        ShowWindow(info->hSpawnerDlg, SW_HIDE);
-        info->spawnerVisible = false;
-    }
-    else
-    {
-        ShowWindow(info->hSpawnerDlg, SW_SHOW);
-        SetForegroundWindow(info->hSpawnerDlg);
-        info->spawnerVisible = true;
-    }
-
-    // Sync the menu check-mark.
-    CheckMenuItem(GetMenu(info->hMainWnd), ID_EMITTER_SPAWNER,
-                  MF_BYCOMMAND | (info->spawnerVisible ? MF_CHECKED : MF_UNCHECKED));
+static ParticleSystem* Deserialize(const std::vector<char>& buf) {
+    MemoryFile* mf = new MemoryFile();
+    mf->write(buf.data(), (unsigned long)buf.size());
+    mf->seek(0);
+    ParticleSystem* sys = new ParticleSystem(mf);
+    mf->Release();
+    return sys;
 }
 ```
 
-Why hide rather than destroy: dialog state (which control has
-focus, scroll position of any spinners, ephemeral things like an
-in-progress edit in a spinner field) survives a hide/show round
-trip. Destroying it on close + re-creating on open is correct but
-flickers and loses transient state.
+### 2. Edit boundaries in `main.cpp`
 
-**Window-position persistence across sessions.**
+Three notification sites already funnel every change. Push a snapshot
+**after** the change has landed in the model:
 
-Registry value `SpawnerDialogPos` (REG_BINARY, 16 bytes = packed
-`RECT`). Read once on startup and stashed into
-`info->spawnerWindowRect`; written whenever the dialog is hidden or
-the app exits. Garbage / wrong-size payload → ignored, dialog
-appears at the system default `CW_USEDEFAULT` position.
+| Notify           | Source                       | Coalesce |
+|------------------|------------------------------|----------|
+| `EP_CHANGE`      | Property panel field         | yes      |
+| `TE_CHANGE`      | Track key add/move/delete    | yes      |
+| `ELN_LISTCHANGED`| Structural emitter-list op   | **no**   |
 
-If the saved position is now off-screen (user disconnected a second
-monitor), clamp it back into the primary monitor's work area before
-applying — `MonitorFromRect(MONITOR_DEFAULTTONULL)` returns NULL
-when the rect is fully off-screen, in which case fall back to
-default position.
+Plus `BN_CLICKED` on `hLeaveParticles` (single bool, no coalesce needed).
 
-**Closing the dialog by other paths.**
+**Coalesce rule (simple version, time-based):**
 
-- Clicking the dialog's window-frame X button (`WM_CLOSE` /
-  `IDCANCEL`): same as the toggle helper's hide branch. Don't
-  destroy.
-- Main window closing (app exit): the dialog destroys with its
-  owner. Final position write happens in `WM_CLOSE` of the main
-  window, before the dialog gets torn down.
-- File close / particle-system swap: dialog stays open and visible.
-  Spawner config is independent of the loaded file.
+> If previous entry's `coalesceKey` matches the new one AND the new
+> timestamp is within 750 ms of the previous, replace the previous
+> entry's snapshot in place instead of pushing a new one.
 
-### 4. Path visualization
+`coalesceKey = (notifyCode << 16) | selectedEmitterIdx`. Structural ops
+always pass key 0 (never coalesce). For `TE_CHANGE`, fold the track ID
+into the key so cross-track edits don't collapse into one step.
 
-New small render pass in [`engine.cpp Render`](src/engine.cpp) before
-the particle pass — the existing engine doesn't have a primitive line
-helper, but D3DX9 ships `D3DXLINE` (or we use `IDirect3DDevice9::DrawPrimitiveUP`
-with `D3DPT_LINESTRIP` and a tiny vertex array). Pen color: a
-distinct teal that contrasts with the dark default background.
+This is intentionally simple; can be tightened later if a particular
+spinner produces too-coarse undo steps.
 
-The current spawn anchor (`CurrentSpawnPoint()`) renders as a tiny
-3-axis cross or sphere so the user can see where the next emission
-will be.
+### 3. Restore path
 
-Toggle: only renders when `info->spawner->IsActive()`.
+```cpp
+static void RestoreFromSnapshot(APPLICATION_INFO* info,
+                                 const std::vector<char>& buf,
+                                 size_t selIdx) {
+    info->undoStack.BeginApplying();
 
-Risk: if the engine's current shader/state machinery doesn't have a
-"draw simple line" path, this is more work than I'm budgeting. **First
-spike of the implementation phase: confirm we can render a line
-strip.** If it turns out to be a multi-hour shader-management chore,
-defer the visualization to v2 and ship v1 without it (with a
-README note: "spawner is active even though invisible, watch the
-particles").
+    ParticleSystem* sys = UndoStack_Deserialize(buf);
 
-### 5. Registry persistence
+    if (info->engine != NULL) info->engine->Clear();
+    delete info->particleSystem;
+    info->particleSystem  = sys;
+    info->selectedEmitter = (selIdx < sys->getEmitters().size())
+                            ? &sys->getEmitter(selIdx) : NULL;
 
-Mirror the `BackgroundColor` / `ShowGround` pattern in
-[`main.cpp`](src/main.cpp):
+    EmitterList_SetParticleSystem(info->hEmitterList, sys);
+    SendMessage(info->hLeaveParticles, BM_SETCHECK,
+                sys->getLeaveParticles() ? BST_CHECKED : BST_UNCHECKED, 0);
+    SetEmitterInfo(info);
 
-- `static SpawnerConfig ReadSpawnerConfig(SpawnerConfig defaults)`
-- `static void WriteSpawnerConfig(const SpawnerConfig& cfg)`
-- Reset View Settings (already added) gets a new "...and the spawner
-  config" line in its confirmation prompt + clears `SpawnerConfig`
-  from the registry.
+    if (info->engine != NULL) info->engine->OnParticleSystemChanged(-1);
+    SetFileChanged(info, !info->undoStack.IsAtSavedState());
+    UpdateUndoRedoUI(info);
 
-Stored as REG_BINARY of the entire struct, with a leading 4-byte magic
-number (`'SPN1'` for the v1 schema) so future schema changes can
-discard incompatible payloads cleanly.
+    info->undoStack.EndApplying();
+}
+```
 
-### 6. UI cleanup on file change + mod swap
+`engine->Clear()` kills all live `EmitterInstance`s pointing at the old
+graph. `SpawnerDriver` holds no `Emitter*`s itself; its tick passes the
+current `ParticleSystem*` per call, so it's automatically re-pointed.
 
-When `info->particleSystem` becomes `nullptr` (file close), the
-spawner's `Tick` no-ops (already handled). When it changes (open /
-new), in-flight instances of the *old* system continue to live until
-their particles die — that's the existing behavior for Shift-spawn
-too, so no special handling needed.
+### 4. UI surface
 
-### 7. Test plan
+- **Edit menu**: `Undo\tCtrl+Z`, `Redo\tCtrl+Y` — at the **top** of the
+  existing Edit menu, before Cut/Copy/Paste, with a separator.
+- **Accelerators**: `Ctrl+Z` → `ID_EDIT_UNDO`, `Ctrl+Y` → `ID_EDIT_REDO`,
+  `Ctrl+Shift+Z` → `ID_EDIT_REDO` (synonym).
+- **Toolbar icons**: extend `src/Resources/toolbar1.bmp` from 5 cells
+  (80×16) to 7 cells (112×16), reusing the pattern in
+  `tasks/extend_toolbar_bitmap.ps1` — that script extended `toolbar2.bmp`
+  for Move Up / Move Down. The two new cells are undo (counterclockwise
+  curved arrow) and redo (clockwise curved arrow). Add them between the
+  existing File group and the View toggles, with `BTNS_SEP` spacers.
+- **Enable/disable**: refresh on every capture / undo / redo. Both
+  toolbar (`TB_SETSTATE`) and menu (`EnableMenuItem` from
+  `WM_INITMENUPOPUP`).
+- **Tooltips**: `IDS_TOOLTIP_EDIT_UNDO`, `IDS_TOOLTIP_EDIT_REDO`.
 
-- **Steady rate**, stationary path: instances appear at a constant
-  position with constant cadence; rate spinner adjusts cadence live.
-- **Line path with loop**: spawn point ping-pongs along the line
-  (or wraps from end to start, depending on loop semantics — match
-  the user's expectation; "loop" means restart from start).
-- **Velocity**: spawned particles move in the configured direction.
-  Verify by dropping rate to 1/sec and watching individual instances
-  drift.
-- **Jitter**: rate=many/sec, jitter=large; should produce a cloud
-  rather than a stream.
-- **Disable**: toggle off → no new spawns; live ones die naturally.
-- **Persistence**: relaunch → config restored; relaunch with garbage
-  in registry → defaults used, no crash.
-- **Reset View Settings**: clears spawner config too.
-- **Mod swap mid-spawn**: in-flight instances unaffected; new
-  instances reflect the new mod's textures (since they sample
-  `m_textureManager` at render time, not spawn time).
+### 5. Saved-state asterisk
 
-### 8. Documentation
+Each entry has `isSavedState`. On `OnFileChange` (after Open / New) and
+on successful save, call `m_undo.MarkSaved()` which sets the current
+entry's bit and clears the bit on every other entry. After any restore,
+set `info->changed = !current.isSavedState`. Undo back to disk-state
+clears the asterisk; redo past it restores it. Edits past the cursor
+clear the saved-state bit on whatever lay ahead (those snapshots are
+about to be discarded anyway).
 
-- CHANGELOG entry (top of changelog, new convention).
-- ROADMAP: move "Programmable particle spawner for the preview" to
-  the **Shipped** section with PR # and *Actual* line. **Add a new
-  long-term item**: "Programmable particle spawner v2 (pulsed,
-  one-shot, arc, drawn-in-viewport curves, presets)" so the cut
-  scope is captured.
+### 6. Initial baseline
+
+`OnFileChange` clears the stack and pushes one initial entry with
+`isSavedState = true`, so the first Ctrl+Z after opening rewinds back
+into the loaded file rather than into nothing.
+
+## Risks named up front
+
+1. **Dangling `info->selectedEmitter` after swap.** Captured as index
+   beforehand; re-resolved against the new system's `m_emitters`.
+2. **Re-entrancy.** `EmitterProps_SetEmitter` and `EmitterList_SetPS`
+   may dispatch their own `EP_CHANGE` / `ELN_LISTCHANGED` during
+   restore. `m_applying` flag in the capture function guards against it.
+3. **Coalescing across structural ops.** A spinner edit then a delete
+   must not collapse together — so the rule is "structural ops pass
+   coalesceKey = 0, which never matches anything".
+4. **Visibility toggle.** Confirmed: `EmitterList_ToggleEmitterVisibility`
+   does NOT send `ELN_LISTCHANGED`, so it correctly stays out of the
+   undo stack. (There's a stale-feeling pre-existing call in
+   `main.cpp:1554` that calls `SetFileChanged(true)` on rename — that's
+   a separate concern; not our problem here.)
+5. **Track-key drag** in CurveEditor fires many `TE_CHANGE`s; coalescing
+   collapses them into one step. Mouse-up doesn't currently fire a
+   distinct event, so the 750 ms timer is what closes the entry.
+6. **Memory.** 100-entry cap × typical `.alo` size (10–50 KB) = a few
+   MB worst case. Drop oldest on overflow.
+
+## Implementation order
+
+1. Build UndoStack (header + cpp), no UI yet.
+2. Plumb capture in `WM_NOTIFY` for the three notify sites + the
+   `leaveParticles` BN_CLICKED, gated by `m_applying`.
+3. Implement RestoreFromSnapshot + selection re-resolution. Wire one
+   debug hotkey first to validate end-to-end before menu.
+4. Add `ID_EDIT_UNDO` / `ID_EDIT_REDO` IDs + tooltip string IDs in
+   `resource.en.h` / `resource.de.h`.
+5. Edit menu items, accelerators, en + de string tables.
+6. Extend `toolbar1.bmp` (script in `tasks/`) and update toolbar
+   button list in `main.cpp`.
+7. Enable/disable on `WM_INITMENUPOPUP` + after each capture.
+8. Saved-state asterisk + MarkSaved on save.
+9. Smoke test (manual checklist below). Hand off to user.
+
+## Smoke-test checklist
+
+- [ ] Open a real `.alo`. Edit a spinner. Ctrl+Z → reverts. Ctrl+Y → redoes.
+- [ ] Drag a track-key. One Ctrl+Z reverts the whole drag.
+- [ ] Add an emitter. Undo → emitter gone. Redo → it's back. Selection
+      lands on the right thing.
+- [ ] Delete an emitter with children. Undo restores children too.
+- [ ] Move emitter up. Undo. Redo.
+- [ ] Toggle leaveParticles. Undo.
+- [ ] Toggle visibility on an emitter. Ctrl+Z does NOT undo it.
+- [ ] Open a different `.alo`. Stack cleared (Ctrl+Z is greyed out).
+- [ ] Edit, save, edit, Ctrl+Z to saved state — title-bar asterisk gone.
+      Ctrl+Y past saved state — asterisk back.
+- [ ] Make >100 edits (rapid-fire), confirm no crash and oldest fall off.
+- [ ] Edit, then redo-history is clipped after a new edit.
+
+## Estimate
+
+3/5 difficulty, 8–14 hours.
 
 ---
 
-## Open questions / assumptions worth flagging
+# Review
 
-1. **Detach immediately after spawn — does it produce the right
-   look?** I believe so based on how Shift-spawn ends (Shift release
-   → StopSpawning → Detach), but the precise frame-by-frame behavior
-   between "spawned but not yet detached" and "spawned and detached"
-   needs a quick eyeball test in the spike phase.
-
-2. **The path-line visualization may be more work than estimated.**
-   If the engine's render plumbing makes simple-line drawing painful
-   (no helper, shader required, state-machine flush issues), I'll
-   ship v1 *without* visualization and add it in v2. Will spike this
-   first.
-
-3. **Rate during load spikes.** If the editor stutters (loading a
-   texture, hot-reload), `dt` could be 200ms and the spawner would
-   try to emit a burst. Cap the per-frame emission count at
-   `min(rateHz * dt, 20)` to avoid storms during stutters.
-
-4. **Coordinate space.** Path coords are world-space, matching how
-   the existing `mouseCursor.SetPosition(D3DXVECTOR3)` works. The
-   user enters values in world units, same as every other position
-   field in the editor.
-
----
-
-## Recommendation
-
-Proceed with **v1 scope** as listed above. Spike step 4 (line
-visualization) first — if it's clean, it stays in v1; if not, defer
-and ship v1 without it. File v2 as a follow-up roadmap entry on
-ship.
-
-Estimated **8–10 hours** for v1 vs the roadmap's 15-25h for the full
-spec. The cut roughly halves scope while still delivering the core
-value: turning "click once, watch one instance" into "set up a
-sustained stream and iterate on the look in motion."
-
-Awaiting confirmation before starting.
+(Filled in after implementation lands.)
