@@ -1,577 +1,545 @@
-# Plan: Drag-and-drop to reparent (make an emitter a child of another)
+# Plan: NT-1 — Autosave for in-progress particles
 
-ROADMAP entry: near-term, ★★★★☆ (4/5), 6-10 hours estimated. Extends
-the drag-drop reorder work from PR #35.
+ROADMAP entry: near-term, ★★☆☆☆ (2/5), 3-5 hours estimated. With
+the two-tier addition the upper end is a bit more — call it 4-6
+hours.
 
 ## Goal
 
-Drop emitter S onto emitter T to make S a child of T (occupying T's
-`spawnDuringLife` or `spawnOnDeath` slot). The full subtree under S
-moves with it. If S was a root, S is no longer a root. If S was a
-child of some other emitter P, S is detached from P (P's spawn slot
-that referenced S becomes -1) and reattached to T.
-
-This is "extension" — not "replacement" — of PR #35. Drop *between
-gaps* still does reorder (root sources only); drop *onto an emitter*
-is the new reparent gesture.
+Periodically save the current particle system to recovery files so an
+editor crash or a forgotten Save doesn't lose work. **Two tiers** of
+autosave provide both freshness (30 s cadence catches "I crashed
+10 seconds ago") and resilience (5 min cadence catches "the recent
+autosave is corrupt" or "I made a bad change 2 minutes ago and the
+recent autosave already overwrote the pre-bad-change state"). On
+launch, if recovery files from a previous session exist, prompt the
+user to restore one. The autosaves are **always** at separate paths
+from the user's `.alo` — the editor never silently overwrites the
+user's file.
 
 ## Scope
 
 **In:**
 
-- Drop S onto T → reparent. S can be a root or a child.
-- Slot decision:
-  - **Both T slots free** → small popup menu at the cursor: "Reparent
-    as Lifetime child" / "Reparent as Death child" / cancel.
-  - **One T slot free** → use that slot; no popup.
-  - **Both T slots occupied** → `IDC_NO`, refuse.
-- Visual feedback when hovering an "onto" target: `TVIS_DROPHILITED`
-  on the target item via `TreeView_SetItem`. Insertion mark cleared.
-- Three-zone hit-test on each item rect: top 1/3 = insert-above,
-  middle 1/3 = drop-onto, bottom 1/3 = insert-below.
-- Cycle protection: drop on self / on a descendant / on the source's
-  current parent → all refused with `IDC_NO`.
+- **Two-tier autosave** running side by side:
+  - **Recent tier** — every 30 s. Captures the freshest state;
+    overwritten frequently.
+  - **Stable tier** — every 5 min. Captures an older known-good
+    state; useful when the recent file is corrupt (mid-write
+    crash) or when the user wants to roll back a bad edit they
+    made in the last few minutes.
+- Both tiers gated by `info->changed == true` AND
+  `info->particleSystem != NULL` — no point writing identical
+  bytes when nothing changed.
+- Recovery files live at
+  `%TEMP%\AloParticleEditor\autosave-<pid>-<tier>.alo` (with
+  `<tier>` ∈ `recent` / `stable`) so concurrent editor instances
+  don't clobber each other and the two tiers don't fight for the
+  same path.
+- On launch: scan `%TEMP%\AloParticleEditor\` for autosave files
+  NOT belonging to a currently-running editor PID. If any exist,
+  prompt with whatever combination is available (recent only,
+  stable only, or both).
+- Recovery prompt (MB_YESNOCANCEL when both tiers present, MB_YESNO
+  when only one):
+  ```
+  Unsaved changes detected from a previous session.
 
-**Out (refused with `IDC_NO` or skipped):**
+  Original: <C:\path\to\file.alo>   (or "Unsaved new file")
 
-- **Drop a child between root gaps** (would mean "promote to root +
-  reorder"). Refuse for v1; user can still right-click → Cut → Paste
-  to do the same effect manually. Could land as a follow-up PR.
-- **Drop onto same parent** (slot-switching: source already at
-  spawnDuringLife, drop onto same parent picking spawnOnDeath). Refuse
-  to keep semantics simple. Document as known limitation.
-- Multi-select drag.
-- Auto-expand of collapsed targets on hover (Win32 trees don't do this
-  by default; not adding it).
+  [Yes]    Restore most recent autosave from <X seconds> ago
+  [No]     Restore stable backup from <Y minutes> ago
+  [Cancel] Discard and start fresh
+  ```
+  - Only recent present → buttons collapse to Yes / Cancel (no
+    stable to fall back to).
+  - Only stable present → buttons read "Restore stable backup from
+    <Y> ago" / Cancel. (Recent absent is unusual but possible if
+    crash happened in the first 30 s after a stable write.)
+- On Yes / No (restore): load the chosen tier; set `info->filename`
+  to the recovered original filename so Ctrl+S overwrites the
+  right place. Delete BOTH orphan tier files (they're a matched
+  pair from one session).
+- On Cancel (discard): delete BOTH orphan files.
+- On clean shutdown / Save / Save-As / DoCloseFile / DoNewFile:
+  delete this session's autosave files (both tiers) so they're not
+  seen as orphaned next launch.
+
+**Out (explicitly):**
+
+- Multiple-undo of an autosave restore. Restore is final; user can
+  Ctrl+Z if they don't like the recovered state (it'll be the
+  load-time baseline of the recovered file).
+- Per-emitter autosave granularity — autosave is whole-system, same
+  as manual save and same as the undo snapshot pattern.
+- Cloud / network autosave.
+- Migrating between editor versions — autosave is just a `.alo`; if
+  the format ever changes, a stale autosave from a different version
+  loads or fails the same way a regular `.alo` would.
+- Crash-recovery telemetry — out of scope.
 
 ## What the codebase already gives us
 
-- **`ParticleSystem::deleteEmitter`** already shows the index-rewrite
-  pattern for invalidating a parent's spawn-field reference and
-  fixing up indices when an emitter leaves a slot. Reparent does the
-  detach half of that.
-- **`ParticleSystem::addLifetimeEmitter` / `addDeathEmitter`** show
-  the attach side — set `parent->spawnXxx = child->index`, set
-  `child->parent = parent`. We don't need to allocate a new emitter,
-  but the linkage code is the model.
-- **`OnParticleSystemChange`** rebuilds the tree from
-  `parent==NULL` roots and descends via spawn fields. Reparent must
-  ensure (a) source's old parent's slot is cleared so source isn't
-  reachable from its old subtree, AND (b) target's slot is set so
-  source IS reachable from its new subtree. Otherwise source becomes
-  orphaned (visible nowhere).
-- **`EndDrag` + `WM_CAPTURECHANGED` backstop + `EmitterList_IsDragging`
-  accelerator gate** from PR #35 carry over unchanged. The
-  `dragInProgress` semantic still applies during the slot-picker
-  popup.
-- **`TrackPopupMenuEx` + `TPM_RETURNCMD`** is already the in-house
-  pattern for context menus — see
-  [`EmitterList.cpp:828, 902`](src/UI/EmitterList.cpp:828) for the
-  emitter context menu and the new-emitter dropdown.
+- **`ParticleSystem::write(IFile*)`** — already serializes to any
+  `IFile`. `PhysicalFile(filename, WRITE)` is the same path
+  `DoSaveFile` uses ([`main.cpp:1075`](src/main.cpp:1075)).
+- **`info->changed` flag** + `SetFileChanged(info, bool)` — already
+  tracks the dirty bit. Autosave checks it before writing.
+- **`info->filename`** — already tracks the user's save target. We
+  store this alongside the autosave so recovery can restore it.
+- **`SetTimer` infrastructure** — already used elsewhere
+  (auto-scroll in EmitterList; spawner driver). Standard timer
+  pattern.
+- **Registry helpers** (`ReadLastMod` / `WriteLastMod` /
+  `ReadBackgroundColor` / `WriteBackgroundColor`) at
+  [`main.cpp:2276`](src/main.cpp:2276) — established pattern for
+  per-key `HKCU\Software\AloParticleEditor` values. Can reuse for
+  autosave metadata if registry is the right home.
+- **`LoadFile` + `OnFileChange`** — handles the load + UI rebuild
+  path. Recovery is just `LoadFile` with a special filename
+  remapping.
+- **`PathFileExists` / `PathIsDirectory`** — used elsewhere; same
+  in autosave-discovery.
+- **`GetTempPath` / `GetCurrentProcessId`** — Win32 standard. Not
+  yet used in this codebase but no new dependency.
 
-## API changes
+## Architecture
 
-### One new `ParticleSystem` method
+### Storage layout
+
+```
+%TEMP%\AloParticleEditor\
+    autosave-<pid>-recent.alo     — content, 30 s cadence
+    autosave-<pid>-stable.alo     — content, 5 min cadence
+    autosave-<pid>.meta           — small text file, original
+                                    filename on first line
+                                    (or empty for unsaved-new)
+```
+
+Per-PID names so two editors running side-by-side don't fight. The
+`.meta` file is shared between the two tiers — both tiers come from
+the same in-memory state and have the same original filename.
+
+`.meta` file is UTF-16LE BOM + two lines: original filename (full
+path, or empty), ISO-8601 timestamp of last autosave. Recovery
+scans for `.alo` files; for each, looks up the matching `.meta`. If
+`.meta` is missing or unreadable, treat the autosave as "unknown
+origin" (user sees `<unknown>` in the prompt).
+
+Why a sibling file rather than registry: registry values are
+process-global and harder to clean up after orphan PIDs. Sibling files
+under one TEMP subdirectory are cleanly self-contained.
+
+### Periodic save — two independent timers
 
 ```cpp
-// Reparent `source` (must be in this system) so it becomes a child of
-// `target` via `target->spawnDuringLife` (if useSpawnDuringLife is
-// true) or `target->spawnOnDeath` (false). The full subtree under
-// source is preserved — children stay attached to source.
-//
-// Validation:
-//   - source != NULL, target != NULL, source != target
-//   - target's chosen slot must currently be -1 (free)
-//   - target must not be a descendant of source (cycle check)
-//   - source's old parent's spawn slot referencing source is cleared
-//     to -1 as part of the operation
-//
-// Returns true on success, false on any validation failure (the
-// system is left untouched).
-//
-// Doesn't relocate source within m_emitters; addLifetimeEmitter /
-// addDeathEmitter already establish that the vector layout doesn't
-// follow tree layout, so leaving source in place avoids unrelated
-// index churn.
-bool reparentEmitter(Emitter* source, Emitter* target, bool useSpawnDuringLife);
+static const UINT_PTR AUTOSAVE_RECENT_TIMER_ID = 2;   // 1 is autoscroll
+static const UINT_PTR AUTOSAVE_STABLE_TIMER_ID = 3;
+static const UINT     AUTOSAVE_RECENT_INTERVAL_MS = 30 * 1000;        // 30 s
+static const UINT     AUTOSAVE_STABLE_INTERVAL_MS = 5  * 60 * 1000;   // 5 min
+
+enum class AutosaveTier { Recent, Stable };
 ```
 
-### A new helper (internal to ParticleSystem.cpp)
+Both timers set in `WM_CREATE` on the main window. `WM_TIMER` handler:
 
 ```cpp
-// True if `candidate` is `ancestor` or appears anywhere in
-// `ancestor`'s subtree (reachable via spawn fields). Cheap O(depth)
-// walk via parent pointers — and source's parent chain is bounded
-// by the number of emitters, which is in the dozens at most.
-static bool IsInSubtreeOf(const Emitter* candidate, const Emitter* ancestor);
-```
-
-Implementation walks `candidate->parent` chain looking for `ancestor`
-(or `candidate == ancestor` as the trivial case). Equivalent to
-checking `candidate` is reachable from `ancestor` via spawn fields,
-just done bottom-up.
-
-### Two new menu strings (en.rc + de.rc)
-
-```
-IDS_MENU_REPARENT_LIFETIME  "Reparent as &Lifetime child"
-IDS_MENU_REPARENT_DEATH     "Reparent as on-&Death child"
-```
-
-Plus the corresponding ID_REPARENT_AS_LIFETIME / ID_REPARENT_AS_DEATH
-WM_COMMAND IDs in `resource.en.h` / `resource.de.h`. The popup itself
-is built at runtime via `CreatePopupMenu` + `AppendMenu` (no new
-.rc resource needed; same approach used for some existing dynamic
-context entries).
-
-## State-machine extensions
-
-Existing fields on `EmitterListControl` (from PR #35):
-
-```cpp
-ParticleSystem::Emitter* dragSource;
-HIMAGELIST               dragImageList;
-HTREEITEM                dragInsertTarget;   // insertion-mark anchor
-bool                     dragInsertAfter;
-UINT_PTR                 dragScrollTimer;
-int                      dragScrollDir;
-```
-
-New field:
-
-```cpp
-HTREEITEM                dragDropHighlight;  // currently TVIS_DROPHILITED'd item, NULL if none
-```
-
-The existing `DropTarget` struct grows a kind field:
-
-```cpp
-enum DropKind {
-    DROP_INVALID,
-    DROP_BETWEEN_GAP,    // existing reorder semantic
-    DROP_ONTO_EMITTER,   // new reparent semantic
-};
-
-struct DropTarget {
-    DropKind  kind;
-    HTREEITEM hTarget;                          // tree item the action concerns; NULL when DROP_INVALID
-    size_t    gap;                              // valid for DROP_BETWEEN_GAP
-    bool      after;                            // valid for DROP_BETWEEN_GAP
-    ParticleSystem::Emitter* targetEmitter;     // valid for DROP_ONTO_EMITTER
-};
-```
-
-`ComputeDropTarget` upgrades from the existing four-zone enumeration
-(above-first / between / below-last / over-child / outside) to a
-five-zone enumeration that uses **thirds** within each item's rect:
-
-- Top 1/3 → insertion-mark above.
-- Middle 1/3 → drop onto.
-- Bottom 1/3 → insertion-mark below.
-
-For a `DROP_ONTO_EMITTER` target, validity is computed eagerly by
-`UpdateDropFeedback` (renamed from `UpdateInsertMark`):
-
-- Refuse if source == target.
-- Refuse if target is in source's subtree (cycle).
-- Refuse if target IS source's current parent (slot-switching case).
-- Refuse if target's both spawn slots are occupied.
-
-Otherwise valid. The visual feedback then sets `TVIS_DROPHILITED` on
-the target item; the insertion mark is cleared. `IDC_NO` cursor on
-invalid drops; default cursor on valid drops.
-
-For `DROP_BETWEEN_GAP`, source-must-be-root rule from PR #35 stays —
-between-gap drops with a child source get `IDC_NO`.
-
-## Drop-commit flow
-
-`WM_LBUTTONUP`:
-
-```cpp
-DropTarget t = UpdateDropFeedback(control, pt);
-ParticleSystem::Emitter* moved = control->dragSource;
-bool committed = false;
-
-// Tear down visual feedback BEFORE the slot-picker popup so the
-// ghost / insertion mark / drop-highlight don't linger. Keep
-// dragSource set so EmitterList_IsDragging still returns true and
-// the accelerator gate keeps Ctrl+Z out of our hair during the popup.
-ImageList_DragLeave + ImageList_EndDrag + ImageList_Destroy;
-TreeView_SetInsertMark(NULL); ClearDropHighlight(control);
-ReleaseCapture(); KillTimer(autoscroll);
-
-if (t.kind == DROP_ONTO_EMITTER && t.targetEmitter != NULL) {
-    bool useSpawnDuringLife = false;
-    bool slotADL = (t.targetEmitter->spawnDuringLife == (size_t)-1);
-    bool slotADD = (t.targetEmitter->spawnOnDeath    == (size_t)-1);
-    if (slotADL && slotADD) {
-        // Popup. TPM_RETURNCMD so we get the picked ID directly.
-        // Returns 0 on cancel (Esc / click outside).
-        useSpawnDuringLife = ShowSlotPickerPopup(...);
-        if (cancelled) goto cleanup;
-    } else {
-        useSpawnDuringLife = slotADL;  // pick the only free slot
+case WM_TIMER:
+    if (wParam == AUTOSAVE_RECENT_TIMER_ID) {
+        if (info->particleSystem != NULL && info->changed) {
+            WriteAutosave(info, AutosaveTier::Recent);
+        }
+        return 0;
     }
-    committed = system->reparentEmitter(moved, t.targetEmitter, useSpawnDuringLife);
-}
-else if (t.kind == DROP_BETWEEN_GAP && moved->parent == NULL) {
-    committed = system->moveEmitterToRootIndex(moved, t.gap);
-}
+    if (wParam == AUTOSAVE_STABLE_TIMER_ID) {
+        if (info->particleSystem != NULL && info->changed) {
+            WriteAutosave(info, AutosaveTier::Stable);
+        }
+        return 0;
+    }
+    break;
+```
 
-cleanup:
-control->dragSource = NULL;  // now EmitterList_IsDragging returns false
-... clear other state fields ...
+`WriteAutosave(info, tier)` picks the right path based on tier and
+writes via the same `ParticleSystem::write` + atomic-rename pattern.
+Best-effort — IO errors (disk full, permission denied) are swallowed.
+Don't pop a dialog every 30 s for the same error.
 
-if (committed) {
-    OnParticleSystemChange(control, control->system);
-    re-select moved via FindTreeItemByEmitter;
-    NotifyParent(control, ELN_LISTCHANGED);
+**Why two independent timers, not one driving both:** each tier's
+cadence is self-contained — recent fires at 0:30, 1:00, 1:30, ...
+and stable at 5:00, 10:00, ... regardless of what the other did.
+Simpler than a tick-counter ("every 10th recent write also writes
+stable") and the slight tick-alignment drift is invisible to the
+user. The cost is two `SetTimer` calls; trivial.
+
+### Recovery on launch
+
+After `InitializeWindows` completes and before the CLI-arg / DoNewFile
+branch:
+
+```cpp
+OrphanSession recover;  // holds optional recent + optional stable + meta
+if (FindOrphanAutosave(&recover))
+{
+    int answer = ShowRecoveryPrompt(info, recover);
+    if (answer == IDYES && recover.recentPath != L"") {
+        LoadFile(info, recover.recentPath);
+        info->filename = recover.originalFilename;
+        SetFileChanged(info, true);
+    }
+    else if (answer == IDNO && recover.stablePath != L"") {
+        LoadFile(info, recover.stablePath);
+        info->filename = recover.originalFilename;
+        SetFileChanged(info, true);
+    }
+    // IDCANCEL: discard; fall through to normal startup.
+    // Either way, both tier files (and the .meta) are deleted now —
+    // the session is consumed.
+    DeleteOrphanSession(recover);
 }
 ```
 
-The crucial bit is the **`dragSource` field timing**: we tear down
-visual feedback before the popup, but keep `dragSource` set until the
-popup returns, so the accelerator gate (`EmitterList_IsDragging`)
-keeps Ctrl+Z / Ctrl+S / etc. blocked during the popup. The capture
-release before the popup is necessary because `TrackPopupMenuEx`
-takes its own capture.
+```cpp
+struct OrphanSession {
+    DWORD    pid;
+    wstring  recentPath;        // empty if no recent file
+    wstring  stablePath;        // empty if no stable file
+    wstring  originalFilename;  // from .meta, or empty
+    FILETIME recentMtime;
+    FILETIME stableMtime;
+};
+```
 
-## Risks and mitigations
+`FindOrphanAutosave`:
 
-### 1 — Cycle detection bug → infinite recursion in `deleteEmitter`
+1. Build TEMP subdir path.
+2. Iterate `autosave-*-recent.alo` and `autosave-*-stable.alo` via
+   `FindFirstFile`/`FindNextFile`.
+3. Group by PID. Each PID produces 0..1 recent + 0..1 stable.
+4. For each PID, use
+   `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)`. If
+   the call succeeds AND the process image name (via
+   `QueryFullProcessImageNameW`) tail-matches our own exe name,
+   it's a live editor instance — skip its files.
+5. Among the remaining (truly orphan) PIDs, pick the session with
+   the most-recently-modified file (either tier counts).
 
-`deleteEmitter` recurses via `spawnDuringLife` / `spawnOnDeath`.
-`OnParticleSystemChange_AddChildren` does the same. If reparent
-introduces a cycle (S becomes child of T, but T is in S's subtree),
-either of those will spin forever / blow the stack.
+Strict process-image matching keeps us from misclassifying an
+unrelated process that happens to have the same numeric PID.
 
-**Mitigation**:
-- `IsInSubtreeOf(target, source)` walks via parent pointers (bottom-
-  up), so it can't itself recurse into a malformed cycle. Caught
-  before mutation.
-- Belt-and-braces: even after the up-front check, `reparentEmitter`
-  re-validates the cycle property as the very last step before
-  mutation. Defensive but cheap.
-- Manual test cases: drop on self, on direct child, on grandchild,
-  on great-grandchild, on a sibling-of-self that has source's other
-  sibling under it (sanity).
+If the chosen session has only a stable file (no recent — possible
+if the editor crashed between the 5 min stable write and the next
+30 s recent tick), the prompt offers stable as the only option.
+If only recent (the common case for crashes within the first
+5 minutes of editing), the prompt offers recent as the only option.
 
-### 2 — Detach goes wrong → orphan emitter
+### Cleanup paths
 
-If we don't clear the old parent's spawn slot during detach, the
-old parent will still reference source's index. After reparent, both
-old parent's and new parent's spawn fields will point at source.
-The tree-rebuild then visits source twice — once under old subtree,
-once under new — and TreeView_InsertItem with the same lParam fires
-twice, leaving dangling state. Or maybe just visual duplication.
+All cleanup is whole-session: when we delete OUR autosave we delete
+both tier files plus the meta file. When we discard an orphan we
+delete all three for that PID.
 
-**Mitigation**:
-- Explicit comparison in `reparentEmitter` for which slot (Lifetime
-  vs Death) the old parent had source in. Don't rely on assumption.
-- Test case: drag a child from `spawnDuringLife` to a new target
-  with `spawnOnDeath` free. Verify old parent's `spawnDuringLife`
-  becomes `-1` and source ONLY appears under the new target in the
-  rebuilt tree.
+- **`DoSaveFile` succeeds** → `DeleteOurAutosaveSession(info)` —
+  the user's work is on disk; no need to keep either tier.
+- **Editor's clean shutdown** (`WM_DESTROY` on main window, or
+  successful exit through `DoCheckChanges`) →
+  `DeleteOurAutosaveSession`.
+- **`DoCloseFile` / `DoNewFile`** → `DeleteOurAutosaveSession`
+  then start fresh. (The new file is brand new and has nothing to
+  autosave yet until the user edits.)
+- **Recovery prompt resolution** (any of Yes / No / Cancel) →
+  `DeleteOrphanSession(recover)` — the orphan session is fully
+  consumed.
 
-### 3 — Dropping source onto its current parent
+If we crash before `DeleteOurAutosaveSession` runs, our files
+become orphans — exactly the case the recovery flow handles.
 
-Detach + reattach to same parent is mechanically valid (the old slot
-clears, the new slot fills, possibly different slot than before).
-But it's confusing UX — "I dragged my child onto its parent, what
-just happened?"
+### File names + metadata layout
 
-**Mitigation**: explicitly refuse this case in `UpdateDropFeedback`'s
-validity check. `IDC_NO` cursor when source.parent == target. User
-sees clearly that the gesture has no effect. Documented as a
-known-limitation in the CHANGELOG.
+```
+autosave-<pid>.alo     ← ParticleSystem::write output, byte-for-byte
+                         the same as a normal .alo save
+autosave-<pid>.meta    ← UTF-16LE BOM + LF-terminated lines:
+                           line 1: original filename (full path) or empty
+                           line 2: ISO-8601 timestamp of last autosave
+                           (more lines reserved; recovery ignores extras)
+```
 
-### 4 — TrackPopupMenu interferes with capture / accelerator state
-
-`TrackPopupMenuEx` runs its own modal pump and takes its own mouse
-capture. If we still had the drag's mouse capture, it'd be
-overridden, firing `WM_CAPTURECHANGED` to our subclass mid-popup.
-Our handler would then call `EndDrag`, which would clear
-`dragSource` — but the popup hasn't returned yet, so the accelerator
-gate would re-enable, and a stray accelerator could hit before we
-finish committing.
-
-**Mitigation**:
-- Release capture and tear down image list / insertion mark / etc.
-  *before* `TrackPopupMenuEx`. The visual feedback was already
-  torn down anyway because the user has clicked.
-- Keep `dragSource` set until the popup returns and we've decided
-  what to commit. `EmitterList_IsDragging` still returns true; the
-  accelerator gate keeps Ctrl+Z blocked.
-- The `WM_CAPTURECHANGED` we'll inevitably receive when the popup
-  takes capture is a harmless no-op because EndDrag is idempotent
-  AND because we've already released our capture by that point —
-  `GetCapture() == hTree` is false, so the cleanup is mostly
-  no-ops. The `dragSource = NULL` line in EndDrag would clear our
-  flag prematurely, though, which is the actual bug. **Fix**: split
-  EndDrag into `EndDragVisual()` (capture, image list, insertion
-  mark, highlight, timer) and `EndDragLogical()` (clears
-  `dragSource`). Visual cleanup is idempotent; logical cleanup
-  happens exactly once at the very end of `WM_LBUTTONUP`'s flow.
-  `WM_CAPTURECHANGED` calls EndDragVisual only.
-
-### 5 — Stale `TVIS_DROPHILITED` on old target
-
-User drags over item A → highlight A. Cursor moves to item B →
-need to clear A and highlight B. If we forget the clear, both look
-highlighted.
-
-**Mitigation**:
-- Track currently-highlighted item in
-  `control->dragDropHighlight`. Before setting a new one, clear the
-  old one. Always clear on EndDragVisual.
-
-### 6 — Reparenting a root with no children = degenerate
-
-If S was a single-emitter root (no subtree), reparent is just "S
-becomes T's child." Mechanically same as the subtree case; the
-"subtree" is just S alone. No special-casing needed.
-
-### 7 — Slot-picker popup at edge of screen
-
-`TrackPopupMenuEx` repositions automatically if the cursor is too
-close to a screen edge. No mitigation needed — Win32 handles it.
-
-### 8 — Right-click during drag
-
-The user could right-click while dragging. Tree's default behavior
-on right-click is to show the context menu, which would conflict
-with our drag. Capture is on the tree, so right-click WM_RBUTTONDOWN
-goes to our subclass — by default we don't handle it, fall through
-to default tree proc, which... might or might not pop the context
-menu.
-
-**Mitigation**: explicitly handle `WM_RBUTTONDOWN` in the subclass
-during drag — treat as cancel (`EndDrag` + return 0). Right-click
-shouldn't be a drag-drop interaction.
-
-### 9 — User scrolls the tree during drag (mousewheel)
-
-Tree handles mousewheel natively — items scroll. The drag-image
-ghost stays anchored to the cursor (we re-anchor on each
-`WM_MOUSEMOVE`), but the insertion mark / drop-highlight need to
-recompute. WM_MOUSEMOVE doesn't fire on a wheel event with a
-stationary cursor.
-
-**Mitigation**: handle `WM_MOUSEWHEEL` in the subclass during drag.
-After forwarding to default proc (so the tree scrolls), recompute
-drop feedback as if a mousemove happened.
-
-### 10 — Engine-instance staleness after reparent
-
-After reparent, the engine's live `EmitterInstance`s reference the
-old parent / spawn-field structure. Specifically: if a parent had a
-particle alive when the user reparented its child away, the parent's
-existing `EmitterInstance::m_emitter.spawnDuringLife` is now -1. The
-parent's existing live particles' `m_childEmitter` field points at
-already-spawned child instances which are still alive — those don't
-get re-evaluated.
-
-This is consistent with how every other structural change works in
-this codebase: live instances continue with their spawned children;
-new particles spawned after the change pick up new structure.
-Engine::OnParticleSystemChanged is called on `ELN_LISTCHANGED` to
-re-sync. **Mitigation**: same pattern as PR #25's reorder and
-PR #35's reparent — fire `ELN_LISTCHANGED` post-commit, let the
-existing pump handle it.
-
-### 11 — Re-entry into reparentEmitter via the popup's modal pump
-
-The popup is modal; while it's up, the tree window doesn't process
-its own messages. Our subclass can't get re-entered. Safe.
-
-### 12 — Source = dialog's "selected" emitter is now a non-root
-
-Toolbar's Move Up / Move Down state is recomputed on
-`ELN_LISTCHANGED` + `ELN_SELCHANGED` based on whether the current
-selection is a root. After reparent, the moved emitter is no longer
-a root, so the buttons grey out correctly.
-
-**Mitigation**: nothing extra. Existing logic in
-[`EmitterList.cpp:80-93`](src/UI/EmitterList.cpp:80) already
-recomputes per-selection state on every `ELN_LISTCHANGED` /
-`ELN_SELCHANGED`. Verified by smoke test.
-
-### 13 — Undo of a reparent
-
-The undo system captures the whole `ParticleSystem` via
-`ELN_LISTCHANGED`. Reparent fires that notification → one undo entry
-→ Ctrl+Z reverts the entire reparent in one step. Already
-covered by PR #31's snapshot mechanism. **Mitigation**: just verify
-in the smoke checklist.
-
-## Process-level mitigations spanning multiple risks
-
-- **Single canonical commit/cleanup flow** for `WM_LBUTTONUP` —
-  one function (`CommitDrop` or inline) so the popup-or-no-popup
-  branch and the cancel-via-popup-Esc path all converge into a
-  single "clear drag state, optionally rebuild + re-select +
-  notify" tail.
-- **Split EndDrag into Visual + Logical** as in Risk #4. Visual
-  cleanup is idempotent and safe to call from
-  `WM_CAPTURECHANGED` mid-popup. Logical cleanup
-  (`dragSource = NULL`) is deferred to the very end so the
-  accelerator gate stays armed.
-- **Reuse `EmitterList_SelectEmitter`** (PR #31) for re-selecting
-  the moved emitter after rebuild. No new selection helper needed.
-
-## Testing & verification
-
-Drive on `P_explosion_med06.alo` (sparks → smoke trail, plus 6
-standalone roots) and a synthetic 3-deep tree (A → B → C).
-
-### Happy paths
-
-- [ ] Drag root R onto root T (T's both slots free) → popup; pick
-      Lifetime → R becomes T's spawn-during-life child; subtree
-      preserved; tree shows R under T.
-- [ ] Same, but pick Death → R becomes T's spawn-on-death child.
-- [ ] Drag root R onto root T (T's spawnDuringLife free, spawnOnDeath
-      occupied) → no popup; auto-pick Lifetime; reparent succeeds.
-- [ ] Drag root R onto root T (only spawnOnDeath free) → auto-pick
-      Death.
-- [ ] Drag root R with subtree (R has children) onto root T → R's
-      whole subtree moves under T; R's children's `parent` still
-      resolves to R; R's `spawnDuringLife`/`spawnOnDeath` unchanged.
-- [ ] Drag child C onto root T → C detaches from old parent (old
-      parent's slot becomes -1), C reattaches under T.
-- [ ] Drag child C onto another child D (D has free slot) → reparent;
-      both detach+attach work.
-- [ ] After reparent, drop the moved emitter onto its old parent's
-      old slot (now free) → reparent back. Verify round-trip.
-
-### Refused targets
-
-- [ ] Drag onto self → `IDC_NO`, no commit.
-- [ ] Drag onto direct child → `IDC_NO` (cycle).
-- [ ] Drag onto grandchild → `IDC_NO` (cycle).
-- [ ] Drag onto great-grandchild → `IDC_NO` (cycle).
-- [ ] Drag onto current parent → `IDC_NO` (out-of-scope slot-switch).
-- [ ] Drag onto target with both slots occupied → `IDC_NO`, no popup.
-
-### Slot picker
-
-- [ ] Both slots free → popup appears at cursor; both menu items
-      enabled.
-- [ ] Pick Lifetime → reparent commits; spawnDuringLife = source.
-- [ ] Pick Death → reparent commits; spawnOnDeath = source.
-- [ ] Press Esc in popup → no commit; tree unchanged.
-- [ ] Click outside popup → no commit.
-- [ ] Popup near screen edge → repositions automatically (Win32).
-
-### Coexistence with reorder
-
-- [ ] Drag a root between two other roots (top 1/3 or bottom 1/3
-      of an item's rect) → reorder, NOT reparent (same as PR #35).
-- [ ] Drag a root onto middle 1/3 of an item → reparent.
-- [ ] Drag a root above the first root (cursor above all items) →
-      reorder to position 0.
-- [ ] Drag a child between gaps → `IDC_NO` (out of scope:
-      promote-to-root).
-
-### Cancellation
-
-- [ ] Esc mid-drag (before mouse-up) → no change, no leak.
-- [ ] WM_CAPTURECHANGED mid-drag → cancel, EndDragVisual fires.
-- [ ] Right-click mid-drag → cancel.
-- [ ] Mousewheel mid-drag → tree scrolls, drop feedback recomputes.
-
-### Undo / redo
-
-- [ ] Reparent root onto root, Ctrl+Z → S back to root, T's slot
-      back to -1. Selection lands on S.
-- [ ] Reparent child between parents, Ctrl+Z → C back under old P.
-- [ ] Reparent + reparent + Ctrl+Z + Ctrl+Z → fully reverted.
-- [ ] Save, reparent, save → asterisk clears at second save.
-
-### Engine-instance behaviour
-
-- [ ] Hold Shift to spawn live preview (root R has children, child
-      C is rendering). Reparent C to a different root T. Existing
-      live particles continue (don't crash). New Shift+spawn shows
-      C under T.
-
-### Edge cases
-
-- [ ] Reparent then immediately File → Open another file → tree
-      rebuilds cleanly; no stale state.
-- [ ] Drag start, slot-picker open, Alt+Tab away mid-popup → popup
-      dismisses (Win32 default); no commit; clean state.
-- [ ] 20 reparents in a row → GDI handle count stable in Debug
-      build.
-- [ ] Reparent in German (`de.rc`) build — same code path; verify
-      menu strings show in German.
-
-### Cycle / orphan detection
-
-- [ ] After every reparent in the smoke test above, walk
-      `m_emitters` and verify: every non-root emitter is reachable
-      from exactly one root via spawn fields; no emitter has
-      `parent != NULL` while its parent's spawn fields don't
-      reference it.
-
-## Debugging hooks
-
-`#ifndef NDEBUG` printf at:
-
-- `TVN_BEGINDRAG` (existing): also prints whether source is root or
-  child.
-- `WM_LBUTTONUP` commit: prints "REPARENT src='X' target='Y' slot=L/D"
-  or "REORDER src='X' gap=N".
-- `reparentEmitter` validation failures: print which check failed
-  (cycle / slot-occupied / current-parent).
-
-Tag with `[DnD]` for grep alongside the existing PR #35 logs.
+Plain text rather than binary so a curious user can inspect / recover
+manually if the recovery flow fails. Two-line format keeps parsing
+trivial.
 
 ## Implementation order
 
-1. Add `ParticleSystem::reparentEmitter` + `IsInSubtreeOf` helper.
-   Unit-style smoke test by re-implementing the existing emitter
-   context-menu Cut+Paste flow as a chain of reparent calls.
-   Confirm equivalent behaviour in isolation before wiring DnD.
-2. Add menu strings + IDs (`ID_REPARENT_AS_LIFETIME`,
-   `ID_REPARENT_AS_DEATH`,
-   `IDS_MENU_REPARENT_LIFETIME`, `IDS_MENU_REPARENT_DEATH`) in
-   en.rc + de.rc + resource.en.h + resource.de.h.
-3. Extend `DropTarget` struct with `kind` + `targetEmitter`;
-   refactor `ComputeDropTarget` to do thirds-based hit-test;
-   rename `UpdateInsertMark` → `UpdateDropFeedback` and add
-   drop-highlight handling.
-4. Split `EndDrag` into `EndDragVisual` + `EndDragLogical`
-   (Risk #4 mitigation).
-5. Add `dragDropHighlight` field; clear in EndDragVisual.
-6. Add `WM_RBUTTONDOWN` cancel handler (Risk #8) and
-   `WM_MOUSEWHEEL` re-feedback handler (Risk #9).
-7. Update `TVN_BEGINDRAG` to allow children as source (drop the
-   `parent != NULL` refusal). Single-root + label-edit refusals
-   stay only for root sources targeting reorder.
-8. Update `WM_LBUTTONUP` to dispatch on `t.kind`: reorder for
-   between-gap (existing behavior, root sources only); reparent
-   for onto-emitter (with slot picker for both-free case).
-9. Add `ShowSlotPickerPopup` helper (TrackPopupMenuEx with a
-   runtime-built menu).
-10. Manual smoke checklist above.
-11. ROADMAP strikethrough + ✅ Shipped (#NN). CHANGELOG entry per
-    the conventions only after user confirms.
+1. **`Autosave.{h,cpp}`** — new module with the helpers:
+   - `BuildAutosaveDir()` → `%TEMP%\AloParticleEditor\` (creates if
+     missing via `SHCreateDirectoryEx`).
+   - `OurAutosavePath()` / `OurAutosaveMetaPath()` — for current
+     PID.
+   - `WriteAutosave(info)` — try/catch wraps both PhysicalFile write
+     and the metadata file. Silent on failure.
+   - `DeleteOurAutosave()` — best-effort `DeleteFile` on both
+     `.alo` and `.meta`.
+   - `FindOrphanAutosave(out path, out original)` — directory scan
+     + PID liveness check + meta read. Returns most-recently-modified
+     orphan.
+   - `IsEditorPidLive(DWORD pid)` — `OpenProcess` +
+     `QueryFullProcessImageNameW` + tail-match against our exe name.
+2. **Integration in `main.cpp`**:
+   - `WM_CREATE` of main window → `SetTimer` for autosave.
+   - `WM_TIMER` handler → call `WriteAutosave` if dirty.
+   - `WM_DESTROY` → `KillTimer` + `DeleteOurAutosave`.
+   - `DoSaveFile` post-success → `DeleteOurAutosave`.
+   - `DoCloseFile` / `DoNewFile` → `DeleteOurAutosave` (since the
+     "in-progress work" is being intentionally discarded).
+   - `main()` startup, between `InitializeWindows` and CLI/DoNewFile
+     branch → recovery prompt flow.
+3. **Wire up the recovery flow** carefully:
+   - If user passes a CLI file AND an orphan exists, prefer the
+     CLI file (their explicit intent). The orphan stays untouched
+     for next launch.
+   - If user picks Recovery → load the orphan as if it were the
+     original filename; set `info->changed = true` (still unsaved).
+   - If user declines → delete the orphan; continue normal startup.
+4. **Smoke test** per the checklist below.
+5. **Update ROADMAP**: strikethrough NT-1, ✅ Shipped (#NN), Actual
+   line, MOVE to Shipped section. Per the convention now in
+   CLAUDE.md.
+6. **CHANGELOG entry** with the three required sections.
+
+## Risks and mitigations
+
+### 1 — Autosave overwrites the user's `.alo`
+
+The whole point of the design: autosave file is **always** at a
+separate path under `%TEMP%`. Mitigated by construction. Smoke test:
+verify after autosaving, the user's named `.alo` mtime is unchanged.
+
+### 2 — Concurrent editor instances clobber each other's autosave
+
+Per-PID filenames. Editor A writes `autosave-1234.alo`; editor B
+writes `autosave-5678.alo`. They're orthogonal.
+
+Risk subtler: editor A crashes, editor B is still running. On editor
+A's relaunch, it scans the dir and finds *two* autosave files —
+its own crashed one (orphan, recoverable) and editor B's (PID is
+live, skip). The PID-liveness check has to be reliable.
+
+**Mitigation**: `OpenProcess` + `QueryFullProcessImageNameW`
+tail-matched against our exe's image name. Both PID number AND
+process image have to match to count as "live editor." Bare PID
+collisions (a non-editor process happens to have the same PID number)
+won't trigger a false positive.
+
+### 3 — Editor crashes mid-write → partial autosave file
+
+`PhysicalFile::write` could be interrupted by a process kill. The
+autosave file is then truncated / corrupt.
+
+**Mitigation**: write to a temp file (`autosave-<pid>.alo.tmp`) then
+`MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` to atomically rename
+into place. On crash before rename, `.tmp` is left behind; recovery
+scan can ignore `.tmp` files (or sweep them as garbage).
+
+Belt-and-braces: recovery's `LoadFile` already handles
+`wexception` from `ParticleSystem(IFile*)` — the existing
+"corrupt file" message path. If a partial autosave still slips
+through, the user sees the same error they'd see for any corrupt
+`.alo`. Acceptable; not a crash.
+
+### 4 — Disk full / permission denied on autosave write
+
+A `MessageBox` every 30 s during a disk-full incident would be
+infuriating.
+
+**Mitigation**: wrap `WriteAutosave` in try/catch; swallow the
+exception silently (Debug-build: print to console). Don't disable
+the timer — once disk space is freed, the next attempt succeeds.
+
+### 5 — Recovery prompt fires for an autosave the user explicitly discarded last session
+
+User declines → we delete the orphan. So this can't happen unless
+the deletion failed.
+
+**Mitigation**: `DeleteFile` is reliable for files we own; if it
+fails (permission), the file persists and recovery prompts again.
+Ugly but not data-losing. Smoke test verifies clean delete.
+
+### 6 — Many orphan autosave files accumulate
+
+Repeated crashes / abandoned PIDs over weeks. `%TEMP%\AloParticleEditor\`
+fills up.
+
+**Mitigation**: on launch, after the recovery prompt resolves, sweep
+any autosave files older than 30 days — they're not actionable for
+a normal user and `%TEMP%` is supposed to be transient anyway.
+
+### 7 — Autosave fires while a modal dialog is open (Save As, Color picker, ...)
+
+The `WM_TIMER` is queued; modal pumps process it. If `info->changed`
+is true and the model is consistent (which it always is — we don't
+mutate mid-message-handler), the autosave write succeeds.
+
+**Mitigation**: nothing extra. The model is always consistent at
+message boundaries. Smoke test: open Save-As dialog, leave it open
+for 60+ s, verify autosave fires without crashing the dialog.
+
+### 8 — Recovery prompt fires for a file the user CLI-loaded
+
+If the user explicitly passes a `.alo` on the command line (e.g.
+double-clicking a `.alo` in Explorer), they clearly want THAT
+file. Showing a recovery prompt would interrupt that gesture and
+feel like the editor is second-guessing them.
+
+**Mitigation — Option A (locked in)**: when a CLI file is present,
+**skip the recovery prompt entirely** and load the CLI file. The
+orphan autosave is preserved untouched in `%TEMP%`; the next
+launch *without* a CLI argument will prompt for it. The orphan-
+sweep step (Risk #6, 30-day cleanup) still applies, so an orphan
+that's never explicitly handled doesn't accumulate forever.
+
+The behaviour is asymmetric with the no-CLI case (where we always
+prompt) but matches the user's most likely intent: an Explorer
+double-click is an explicit request, not "open the editor".
+
+### 9 — Recovery loaded file's `original filename` is stale (file was deleted / renamed)
+
+User accepts recovery → `info->filename` set to a path that no
+longer exists. Ctrl+S then fails with the existing
+`IDS_ERROR_FILE_SAVE` message.
+
+**Mitigation**: nothing extra; the existing error path is fine.
+Document: if the original file is gone, user should Save-As after
+recovery.
+
+### 10 — Recovery flow corrupts the live preview (engine still has instances from a previous load)
+
+Same problem the undo system already solved (PR #31).
+
+**Mitigation**: `LoadFile` already handles `engine->Clear()` and
+the safe NULL-out-particleSystem-during-rebuild ordering. We're
+calling it the same way `DoOpenFile` does.
+
+### 11 — `%TEMP%` directory missing or unwritable (corporate-locked-down environments)
+
+`SHCreateDirectoryEx` fails; `WriteAutosave` raises an exception.
+
+**Mitigation**: wrap directory creation in the same swallow-on-error
+pattern. If the autosave dir can't be created, autosave is silently
+disabled for the session. User loses no DATA — they just have no
+recovery safety net (same as before this PR).
+
+### 12 — Atomic-rename across drives
+
+`MoveFileEx` with `MOVEFILE_REPLACE_EXISTING` works on the same
+volume. `%TEMP%` is typically on the system drive, same as where the
+process writes — same volume. Cross-volume edge case not worth
+designing around.
+
+### 13 — Autosave files leak to git or to release zips
+
+`%TEMP%` is outside the repo and outside any release packaging path.
+
+**Mitigation**: nothing extra.
+
+## Testing & verification
+
+### Happy paths — recent tier
+
+- [ ] Open editor, edit, wait 35 s → `autosave-<pid>-recent.alo`
+      appears, mtime ≈ now. Stable absent.
+- [ ] Continue editing → next 30 s tick overwrites recent.
+- [ ] Save manually → both tier files deleted.
+- [ ] Edit again post-save → recent reappears at the next 30 s
+      tick.
+
+### Happy paths — stable tier
+
+- [ ] Open editor, edit, wait 5 min 30 s → both `-recent.alo`
+      (mtime ≈ now) AND `-stable.alo` (mtime ≈ now) exist.
+- [ ] Wait another 5 min → stable refreshed at the 10 min mark;
+      recent ticks 10× in that interval.
+- [ ] Save manually → both deleted.
+
+### Recovery prompt — three outcomes
+
+- [ ] Edit for 90 s, kill the process → relaunch shows MB_YESNO
+      (recent only, no stable yet). Yes restores; Cancel discards.
+- [ ] Edit for 6 min, kill the process → relaunch shows
+      MB_YESNOCANCEL. Yes restores recent; No restores stable;
+      Cancel discards both. Verify all three branches separately.
+- [ ] After restore (either tier), title bar shows the original
+      filename with `*`; Ctrl+S overwrites the original.
+- [ ] Cancel → both orphan files deleted; normal startup.
+
+### Tier resilience
+
+- [ ] Edit for 6 min, corrupt the recent file manually
+      (truncate it), kill process, relaunch → load of recent fails
+      gracefully; user can then pick stable instead. Verify the
+      corrupt-file message doesn't crash the editor.
+- [ ] Edit, save, edit (so file is dirty again), kill process →
+      recent reflects post-save state; stable might still hold a
+      pre-save state if the 5 min window hadn't elapsed. Recovery
+      offers either; both load consistently.
+
+### Concurrency
+
+- [ ] Launch editor A; edit; let recent fire (30 s); let stable
+      fire (5+ min).
+- [ ] Launch editor B (in parallel, not a closed-and-reopened); edit
+      different file; let its tiers fire.
+- [ ] Close A cleanly → A's three files (recent, stable, meta)
+      deleted; B's untouched.
+- [ ] Verify each editor wrote its own per-PID files; no two
+      editors fight over the same path.
+- [ ] Kill A via Task Manager; relaunch A → recovery prompt fires
+      for A's orphaned session (B's is correctly skipped because B
+      is live).
+
+### Edge cases
+
+- [ ] CLI arg + orphan present → no prompt; CLI file loads; orphan
+      preserved for next launch.
+- [ ] Corrupt autosave file (truncate manually) → graceful "couldn't
+      load" message; editor still starts.
+- [ ] Stale orphan from 31 days ago → swept on launch, no prompt.
+- [ ] `%TEMP%\AloParticleEditor\` is read-only → autosave silently
+      disabled, no error spam, editor functions normally.
+- [ ] Save-As → autosave deletes old name's autosave, next tick
+      writes new name's.
+- [ ] Open file A, autosave fires, open file B without saving A,
+      autosave overwrites with B's state — verify the autosave is
+      always for the *currently loaded* file.
+
+### Cleanup
+
+- [ ] Run editor for 5 minutes with edits, exit cleanly → no files
+      left in `%TEMP%\AloParticleEditor\` for our PID.
+
+### Debug instrumentation
+
+`#ifndef NDEBUG` printf at:
+
+- `[Autosave] tier=<recent|stable> write OK <path> bytes=N` on each
+  successful tick.
+- `[Autosave] tier=<recent|stable> write FAILED <path>
+  reason=<error>` on each failure.
+- `[Autosave] orphan PID=<N> recent=<path|empty>
+  stable=<path|empty> origfile=<X>` at startup scan.
+- `[Autosave] discard PID=<N>` when sweeping stale or declined.
+- `[Autosave] restore from tier=<recent|stable>` on user-accepted
+  recovery.
+
+Tag with `[Autosave]` for grep alongside the existing `[DnD]` /
+`[Undo]` logs.
 
 ## Estimate
 
-★★★★☆ (4/5), **6-10 hours** consistent with the roadmap. Most of
-the time goes into:
-
-- The cycle-and-orphan correctness pass (Risks #1, #2).
-- Splitting EndDrag and threading `dragSource` lifetime through
-  the popup correctly (Risk #4).
-- Smoke testing the full matrix of source-types × target-types
-  × slot-occupancy.
-
-The data-layer change (`reparentEmitter`) is mechanically simple —
-~30 lines.
+★★☆☆☆ (2/5), **3-5 hours** consistent with the roadmap. The data
+layer is small (reuse `ParticleSystem::write` and existing file
+helpers); most of the time goes into correctly handling the
+PID-liveness scan, atomic rename, and the recovery-prompt UX flow.
 
 ---
 
