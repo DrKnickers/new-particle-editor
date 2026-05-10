@@ -44,7 +44,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### Drag-and-drop to reparent (make an emitter a child of another)
+### ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the previous item: dropping an emitter onto another emitter
 turns the source into the target's spawn-during-life or spawn-on-death
 child. Requires a small "what kind of child?" prompt when the target
@@ -54,6 +54,18 @@ dropping a parent onto its own descendant.
 
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 6–10 hours
+- **Actual**: ~5 hours including the planning + risk-mitigation pass.
+  The data layer is small (~50 lines for `reparentEmitter` plus the
+  `IsInSubtreeOf` cycle helper); most of the time went into the
+  thirds-based hit-test (top/middle/bottom of each item rect classify
+  as insert-above / drop-onto / insert-below), splitting `EndDrag` into
+  Visual + Logical halves so the modal slot-picker popup can run
+  without disarming the accelerator gate, and chasing down a
+  drag-image ghost-residue artifact (TVIS_DROPHILITED row repaints
+  during the drag clobbered the imagelist's saved background — fixed
+  by wrapping every per-message handler in a single
+  `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
+  wraps inside `UpdateDropFeedback`).
 
 ### Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
