@@ -16,7 +16,18 @@ This file is split into five parts:
 4. **[Notes on prioritization](#notes-on-prioritization)** — guidance on which tier to pick from next.
 5. **[Shipped](#shipped)** — roadmap items that have landed on master. Kept for traceability with PR number, original estimate, and actual effort.
 
-When a roadmap item ships, it gets struck through with `✅ Shipped (#NN)`, an *Actual:* line is appended under the estimate, **and the entry is moved out of its tier section into [Shipped](#shipped) at the top of that section** (newest first). See [CLAUDE.md](CLAUDE.md) for the full convention.
+**Item IDs.** Each planned item is prefixed with a stable ID of the form
+`TIER-N` (e.g. `NT-1`, `MT-3`, `LT-2`) for easy referencing in PRs,
+discussion, and commit messages. IDs are stable once assigned: new
+items in a tier take `max+1`. When an item ships, its ID is vacated
+permanently — gaps stay so older references remain valid. Shipped
+items are referenced by PR number, not by their original ID.
+
+**Shipping convention.** When a roadmap item ships, it gets struck
+through with `✅ Shipped (#NN)`, an *Actual:* line is appended under
+the estimate, **and the entry is moved out of its tier section into
+[Shipped](#shipped) at the top of that section** (newest first). See
+[CLAUDE.md](CLAUDE.md) for the full convention.
 
 ---
 
@@ -25,7 +36,7 @@ When a roadmap item ships, it gets struck through with `✅ Shipped (#NN)`, an *
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### Autosave for in-progress particles
+### NT-1: Autosave for in-progress particles
 Periodically save the current particle system to a recovery file (e.g.
 `%TEMP%\AloParticleEditor\autosave.alo`) so an editor crash or a forgotten
 save doesn't lose work. On launch, if a recovery file exists from a previous
@@ -35,7 +46,7 @@ save target — the editor never silently overwrites the user's `.alo`.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
 
-### Adjustable ground-plane height in the preview
+### NT-2: Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
 ground plane up or down along Z. Useful when the particle anchors below
 ground or you want to see how a fire effect interacts with terrain at a
@@ -51,7 +62,7 @@ specific elevation. Persists per-session; not saved into the `.alo`.
 Bigger UX investments and modest engine work. Each touches more than one
 subsystem but stays inside the rendering preview / editor surface.
 
-### Frequently-used textures palette
+### MT-1: Frequently-used textures palette
 A small panel — probably docked under the Color/Bump texture fields on
 the Appearance tab — that surfaces recently-used and pinned textures as
 clickable thumbnails. Saves clicking through the file browser when
@@ -62,7 +73,7 @@ doesn't pollute the list.
 - **Difficulty**: ★★★☆☆ (3/5)
 - **Estimated effort**: 5–8 hours
 
-### Selectable ground texture
+### MT-2: Selectable ground texture
 Currently the preview ground is hardcoded to `IDB_GROUND` (`dirt.bmp`).
 Expose a picker — initially a small dropdown of bundled options
 (grass / sand / metal deck / Hoth snow / black void), later expandable to
@@ -71,7 +82,7 @@ any user-supplied texture. Per-session setting, persisted to the registry.
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 2–4 hours
 
-### Selectable skydome backgrounds
+### MT-3: Selectable skydome backgrounds
 Replace the flat background-color rectangle with an optional skydome
 (textured sphere) the camera can rotate inside. Lets you preview a
 particle effect against a representative scene — space, atmosphere, dusk,
@@ -82,7 +93,7 @@ into the exe via resources.
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 8–14 hours
 
-### Adjustable environment lighting in the preview
+### MT-4: Adjustable environment lighting in the preview
 The engine already maintains three `Light` structs (sun + two fill
 lights), but only the values from the loaded particle system can adjust
 them. Add a Lighting panel (probably under View → Lighting…) with
@@ -92,7 +103,7 @@ direction sliders, color pickers, and intensity for each light, plus a
 - **Difficulty**: ★★★☆☆ (3/5)
 - **Estimated effort**: 4–6 hours
 
-### Confirm / extend two-child emitter support
+### MT-5: Confirm / extend two-child emitter support
 The on-disk format and runtime data structures already give every emitter
 both a `spawnOnDeath` and `spawnDuringLife` slot — they're independent
 fields. Verify end-to-end: that the editor lets you set both on one
@@ -104,7 +115,7 @@ implicitly assumes "one child or the other", fix it. Ship test fixture
 - **Difficulty**: ★★☆☆☆ (2/5) — mostly investigation
 - **Estimated effort**: 2–4 hours
 
-### Bloom in the preview renderer
+### MT-6: Bloom in the preview renderer
 Add the game's "fake-HDR" bloom post-process to the editor preview so
 particles that glow in-game also glow in the editor. Today, an emitter
 authored to bloom (e.g. fire / explosion hotspots, energy weapon trails)
@@ -164,7 +175,7 @@ Defaults match the shader. Persisted per-session in the registry.
 Larger features that meaningfully expand what the editor can do. Each is
 roughly on the order of a small project rather than a sitting.
 
-### Programmable particle spawner v2
+### LT-1: Programmable particle spawner v2
 The v1 spawner shipped (see Shipped). v2 fills out the polish and
 extra-mile cases that didn't make the first cut:
 
@@ -190,7 +201,7 @@ complexity for the value they add.
 - **Difficulty**: ★★★☆☆ (3/5)
 - **Estimated effort**: 5–9 hours
 
-### Template particle systems (starter library)
+### LT-2: Template particle systems (starter library)
 Ship a curated set of starter `.alo` files (basic fire, smoke column,
 explosion, sparks, smoke trail, weather, etc.) under `templates/` next to
 the exe. Add a **File → New from Template…** entry that opens a small
@@ -201,7 +212,7 @@ energy for new mod authors.
 - **Difficulty**: ★★★☆☆ (3/5) — most of the work is curating the templates
 - **Estimated effort**: 6–10 hours (excluding template authoring time)
 
-### Import emitters from other particle files
+### LT-3: Import emitters from other particle files
 Currently you can copy a single emitter to the clipboard from one editor
 window and paste into another. Replace this with a proper import flow:
 **File → Import Emitters from File…** opens a `.alo` picker, then a
@@ -213,7 +224,7 @@ of clicks when assembling a complex effect from pieces of existing ones.
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 8–14 hours
 
-### UI overhaul (WebView2 + React chrome)
+### LT-4: UI overhaul (WebView2 + React chrome)
 The current UI is faithful to the original 2009-era tool: native Win32
 controls, plain GDI rendering, the system color scheme, fixed dialog
 layouts that don't reflow. A mockup of a modern design exists in Claude
