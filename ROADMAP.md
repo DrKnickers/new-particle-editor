@@ -175,22 +175,31 @@ Defaults match the shader. Persisted per-session in the registry.
 Larger features that meaningfully expand what the editor can do. Each is
 roughly on the order of a small project rather than a sitting.
 
-### Programmable particle spawner for the preview
-Today the only way to test a particle is to press Shift and spawn a single
-instance at the cursor. Build a configurable test driver:
+### Programmable particle spawner v2
+The v1 spawner shipped (see Shipped). v2 fills out the polish and
+extra-mile cases that didn't make the first cut:
 
-- Adjustable spawn rate (steady, pulsed, one-shot).
-- Initial velocity vector (manual entry or arrow gizmo).
-- Motion path for the spawn point (straight line, arc, user-drawn curve).
-- Optional jitter / randomization on each axis.
+- **Arc paths** — rotate the spawn point around an axis by a
+  configurable angle; useful for orbital / sweep test patterns.
+- **Velocity shorthand** — accept magnitude + azimuth + elevation
+  alongside raw XYZ, for "100 units/s up at 45°"-style inputs.
+- **Path visualization in the preview** — render the spawn position
+  (and any path) as a teal marker / line so the user can see where
+  emissions originate without guessing in 3D space. Deferred from v1
+  because the engine has no simple-line draw helper today.
+- **Named presets** — save a config under a name (e.g. "rocket trail",
+  "explosion debris"), recall later. Stored as additional REG_BINARY
+  blobs `SpawnerPreset_<name>`.
+- **Clear-active-spawns button** — explicit "Kill" button for live
+  spawner-emitted instances when the user wants to wipe and re-tune
+  without waiting for natural decay.
 
-This makes it dramatically faster to assess how a particle reads in
-motion — rocket trails, debris, projectile impacts — without leaving the
-editor for the game. Persisted as part of the editor's session state, not
-saved into the `.alo`.
+Dropped from the original v2 plan: user-drawn curve paths and
+"draw-the-path-in-the-viewport" interactive mode — too much UX
+complexity for the value they add.
 
-- **Difficulty**: ★★★★★ (5/5)
-- **Estimated effort**: 15–25 hours
+- **Difficulty**: ★★★☆☆ (3/5)
+- **Estimated effort**: 5–9 hours
 
 ### Template particle systems (starter library)
 Ship a curated set of starter `.alo` files (basic fire, smoke column,
@@ -350,6 +359,41 @@ the rest of the roadmap.
 Roadmap items that have landed on master. Kept here for traceability —
 PR number, original estimate, and actual effort, so future estimates can
 calibrate against history. New shipped items go at the top.
+
+### ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
+Two modes:
+
+- **Manual** — fires one burst per "Spawn now" click or `Shift+Space`.
+- **Auto** — fires bursts on a recurring schedule when Enabled.
+
+Both modes share **burst** semantics: one burst emits up to 10 instances
+spaced `c` seconds apart. In Auto mode bursts repeat with `d` seconds
+between the END of one and the START of the next (skip rule: bursts
+don't overlap).
+
+Each spawned instance starts at a configurable world-space position,
+moves at constant initial velocity for at most `maxLifetime` seconds
+(0 = no spawner cap; instance lives until particles die naturally).
+Optional ± jitter on position and velocity. The instance self-propels
+via per-frame `position += velocity·dt` inside
+`ParticleSystemInstance::Update`; on lifetime expiry it calls
+`StopSpawning()` so existing particles fade naturally instead of
+popping out. Hard caps: 50 simultaneous spawner-emitted instances,
+≤ 5 emissions/frame (stutter resilience), burst size 1–10.
+
+Spawner config is **session-only** — resets to defaults each launch.
+Dialog window position persists across sessions for ergonomics.
+
+- **Difficulty**: ★★★★★ (5/5)
+- **Estimated effort**: 15–25 hours
+- **Actual**: ~12 hours including two redesign passes (initially
+  STEADY-only with a Stationary/Line path; first redesign added Manual
+  + Auto burst modes; second redesign dropped paths entirely in favor
+  of per-instance ballistic motion + max-lifetime, after the user
+  observed the spawner-moves-vs-instance-moves design choice). The
+  v2-deferred items (arc paths, velocity shorthand, presets, path
+  visualization) are now their own roadmap entry.
 
 ### ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
