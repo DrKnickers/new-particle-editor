@@ -8,6 +8,16 @@ D3DX9).
 Items can land in any order within their tier — the grouping reflects scope
 and risk, not strict dependency.
 
+This file is split into five parts:
+
+1. **[Near term](#near-term)** — quality-of-life polish on existing workflows. Each item is contained, low risk, and doesn't touch the rendering pipeline or file format.
+2. **[Medium term](#medium-term)** — bigger UX investments and modest engine work. Each touches more than one subsystem but stays inside the rendering preview / editor surface.
+3. **[Long term](#long-term)** — larger features that meaningfully expand what the editor can do. Each is roughly on the order of a small project rather than a sitting.
+4. **[Notes on prioritization](#notes-on-prioritization)** — guidance on which tier to pick from next.
+5. **[Shipped](#shipped)** — roadmap items that have landed on master. Kept for traceability with PR number, original estimate, and actual effort.
+
+When a roadmap item ships, it gets struck through with `✅ Shipped (#NN)`, an *Actual:* line is appended under the estimate, **and the entry is moved out of its tier section into [Shipped](#shipped) at the top of that section** (newest first). See [CLAUDE.md](CLAUDE.md) for the full convention.
+
 ---
 
 ## Near term
@@ -24,48 +34,6 @@ save target — the editor never silently overwrites the user's `.alo`.
 
 - **Difficulty**: ★★☆☆☆ (2/5)
 - **Estimated effort**: 3–5 hours
-
-### ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
-Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
-`WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
-dragging them between siblings. Reuses the swap logic from the reorder
-buttons. Visual feedback (insertion cursor / highlighted target) is part
-of the work.
-
-- **Difficulty**: ★★★☆☆ (3/5)
-- **Estimated effort**: 4–6 hours
-- **Actual**: ~5 hours including the planning + risk-mitigation pass.
-  Most of the time went into the cancellation paths (`WM_CAPTURECHANGED`
-  backstop, idempotent `EndDrag`), the no-op detection (drop on the
-  source's own gap mustn't dirty the file), and the accelerator gate at
-  the message pump (Ctrl+Z mid-drag would otherwise free the
-  ParticleSystem under the drag's `Emitter*` pointer). Auto-scroll
-  (16-pixel hot zones, `SetTimer`-driven) was straightforward once the
-  WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
-  re-anchor.
-
-### ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
-Extension of the previous item: dropping an emitter onto another emitter
-turns the source into the target's spawn-during-life or spawn-on-death
-child. Requires a small "what kind of child?" prompt when the target
-already has neither (so the user can pick) and a refusal path when the
-target slot is occupied. Edge cases: dropping onto self, creating a cycle,
-dropping a parent onto its own descendant.
-
-- **Difficulty**: ★★★★☆ (4/5)
-- **Estimated effort**: 6–10 hours
-- **Actual**: ~5 hours including the planning + risk-mitigation pass.
-  The data layer is small (~50 lines for `reparentEmitter` plus the
-  `IsInSubtreeOf` cycle helper); most of the time went into the
-  thirds-based hit-test (top/middle/bottom of each item rect classify
-  as insert-above / drop-onto / insert-below), splitting `EndDrag` into
-  Visual + Logical halves so the modal slot-picker popup can run
-  without disarming the accelerator gate, and chasing down a
-  drag-image ghost-residue artifact (TVIS_DROPHILITED row repaints
-  during the drag clobbered the imagelist's saved background — fixed
-  by wrapping every per-message handler in a single
-  `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
-  wraps inside `UpdateDropFeedback`).
 
 ### Adjustable ground-plane height in the preview
 A spinner (or a small drag-handle in the preview viewport) that moves the
@@ -380,6 +348,48 @@ the rest of the roadmap.
 Roadmap items that have landed on master. Kept here for traceability —
 PR number, original estimate, and actual effort, so future estimates can
 calibrate against history. New shipped items go at the top.
+
+### ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+Extension of the drag-and-drop reorder gesture: dropping an emitter onto
+another emitter turns the source into the target's spawn-during-life or
+spawn-on-death child. Requires a small "what kind of child?" prompt
+when the target already has neither (so the user can pick) and a
+refusal path when the target slot is occupied. Edge cases: dropping
+onto self, creating a cycle, dropping a parent onto its own descendant.
+
+- **Difficulty**: ★★★★☆ (4/5)
+- **Estimated effort**: 6–10 hours
+- **Actual**: ~5 hours including the planning + risk-mitigation pass.
+  The data layer is small (~50 lines for `reparentEmitter` plus the
+  `IsInSubtreeOf` cycle helper); most of the time went into the
+  thirds-based hit-test (top/middle/bottom of each item rect classify
+  as insert-above / drop-onto / insert-below), splitting `EndDrag` into
+  Visual + Logical halves so the modal slot-picker popup can run
+  without disarming the accelerator gate, and chasing down a
+  drag-image ghost-residue artifact (TVIS_DROPHILITED row repaints
+  during the drag clobbered the imagelist's saved background — fixed
+  by wrapping every per-message handler in a single
+  `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
+  wraps inside `UpdateDropFeedback`).
+
+### ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
+`WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
+dragging them between siblings. Reuses the swap logic from the reorder
+buttons. Visual feedback (insertion cursor / highlighted target) is part
+of the work.
+
+- **Difficulty**: ★★★☆☆ (3/5)
+- **Estimated effort**: 4–6 hours
+- **Actual**: ~5 hours including the planning + risk-mitigation pass.
+  Most of the time went into the cancellation paths (`WM_CAPTURECHANGED`
+  backstop, idempotent `EndDrag`), the no-op detection (drop on the
+  source's own gap mustn't dirty the file), and the accelerator gate at
+  the message pump (Ctrl+Z mid-drag would otherwise free the
+  ParticleSystem under the drag's `Emitter*` pointer). Auto-scroll
+  (16-pixel hot zones, `SetTimer`-driven) was straightforward once the
+  WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
+  re-anchor.
 
 ### ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
