@@ -85,6 +85,21 @@ The roadmap also has a top-level table of contents ([ROADMAP.md](ROADMAP.md)
 intro). If you add a new top-level section, update the TOC. If you
 rename one, update both the TOC text and the anchor links.
 
+**ROADMAP item IDs.** Each planned item is prefixed with a stable
+ID of the form `TIER-N` (`NT-1`, `MT-3`, `LT-2`, etc.) for easy
+referencing in PRs, discussion, and commit messages. Rules:
+
+- **Format**: `### NT-1: Title` (tier prefix + number + colon + title).
+- **Stable**: once assigned, IDs don't change. A new item in a tier
+  takes `max+1` of the IDs currently in that tier.
+- **Vacated on ship**: when an item ships and moves to Shipped, its
+  ID is retired. Don't re-assign it; gaps stay so older references
+  (e.g. "we agreed NT-3 was the next one") remain valid.
+- **Shipped items have no ID**: they're authoritatively referenced
+  by PR number once merged. Don't backfill IDs onto shipped entries.
+- **Tier moves are rare**: if an item moves between tiers, treat it
+  as vacating the old ID and taking a fresh one in the new tier.
+
 **`CHANGELOG.md`**: add a section covering three things, in this order:
 
 1. **What ships** — one-paragraph user-facing description. What the user
