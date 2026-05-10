@@ -119,33 +119,58 @@ rediscovering it during testing.
 Whenever a `ROADMAP.md` item lands, update both files — same PR if
 practical, immediate follow-up otherwise.
 
-**`ROADMAP.md`**: strikethrough the item heading, append
-`✅ Shipped (#NN)` with the merge PR number, add an
-*Actual:* line under the estimate so future readers can calibrate,
-**and move the entry from its tier section (Near term / Medium /
-Long) into the [Shipped](ROADMAP.md#shipped) section at the top of
-that section** (newest first). Don't leave shipped items in their
-original tier — readers scanning the tier sections should see only
-unshipped work.
+**`ROADMAP.md`**: when an item ships, do all five:
+
+1. **Strikethrough the title** and append `✅ Shipped (#NN)` with the
+   merge PR number.
+2. **Add an *Actual:* line** under the estimate so future readers can
+   calibrate.
+3. **Move the entry to [Shipped](ROADMAP.md#5-shipped)** at the top
+   of that section (newest first). The entry keeps its `[TIER-K]`
+   tag and takes the new `5.1` position; shift the rest of Shipped
+   down (5.1→5.2, …).
+4. **Renumber the source tier** to close the gap (e.g. if `2.3`
+   ships, what was `2.4` becomes `2.3`, `2.5` becomes `2.4`, …).
+   The `[TIER-K]` tags on those items stay unchanged — only the
+   `N.M` position renumbers.
+5. **Vacate the tag**: the shipped item's `[TIER-K]` is retired
+   permanently. Never reuse it for a new item.
+
+Don't leave shipped items in their original tier — readers scanning
+the tier sections should see only unshipped work.
 
 The roadmap also has a top-level table of contents ([ROADMAP.md](ROADMAP.md)
 intro). If you add a new top-level section, update the TOC. If you
-rename one, update both the TOC text and the anchor links.
+rename one, update both the TOC text and the anchor links (anchors
+use the section number too: `#1-near-term`, `#2-medium-term`, etc.).
 
-**ROADMAP item IDs.** Each planned item is prefixed with a stable
-ID of the form `TIER-N` (`NT-1`, `MT-3`, `LT-2`, etc.) for easy
-referencing in PRs, discussion, and commit messages. Rules:
+**ROADMAP item headings.** Each item appears as
+`### N.M [TIER-K] Title`. Two identifiers in one heading, with
+different stability semantics:
 
-- **Format**: `### NT-1: Title` (tier prefix + number + colon + title).
-- **Stable**: once assigned, IDs don't change. A new item in a tier
-  takes `max+1` of the IDs currently in that tier.
-- **Vacated on ship**: when an item ships and moves to Shipped, its
-  ID is retired. Don't re-assign it; gaps stay so older references
-  (e.g. "we agreed NT-3 was the next one") remain valid.
-- **Shipped items have no ID**: they're authoritatively referenced
-  by PR number once merged. Don't backfill IDs onto shipped entries.
-- **Tier moves are rare**: if an item moves between tiers, treat it
-  as vacating the old ID and taking a fresh one in the new tier.
+- **`N.M` (position)** — purely visual ordering. `N` matches the
+  section number (`1.` Near, `2.` Medium, `3.` Long, `5.` Shipped);
+  `M` is sequential within the section. The position **renumbers
+  freely** when items ship so the list stays gap-free. Never cite
+  the position in PRs, commits, or discussion — it changes underfoot.
+- **`[TIER-K]` (stable tag)** — the permanent identifier. Format
+  `NT-1`, `MT-3`, `LT-2`, etc. Cite this in PRs, commits, and
+  discussion. Rules:
+  - **Format**: `### N.M [TIER-K] Title` (no colon after the tag).
+  - **Stable once assigned**: never changes, never reused.
+  - **`max+1` within tier**: a new item takes the next number above
+    every tag ever used in that tier, including vacated ones.
+  - **Vacated on ship**: when an item ships, its tag is retired.
+    Gaps stay so older references remain valid (e.g. "we agreed
+    NT-3 was the next one").
+  - **Carries into Shipped**: the entry keeps its `[TIER-K]` tag
+    after shipping, giving permanent lineage. Items shipped before
+    this convention was adopted (PRs #16 through #41) have no
+    bracketed tag and are referenced by PR number, which is already
+    permanent — don't backfill tags onto those.
+  - **Tier moves are rare**: if an item moves between tiers, treat
+    it as vacating the old tag and taking a fresh one in the new
+    tier.
 
 **`CHANGELOG.md`**: add a section covering three things, in this order:
 
