@@ -1,248 +1,444 @@
-# Plan: Undo / Redo for the particle editor
+# Plan: Drag-and-drop reordering in the emitter tree
+
+ROADMAP entry: near-term, ★★★☆☆ (3/5), 4-6 hours estimated. Reuses
+the swap logic from the Move Up / Move Down buttons (PR #25).
 
 ## Goal
 
-Ctrl+Z / Ctrl+Y (also Ctrl+Shift+Z) walk the user back and forth through
-edits. Toolbar icons next to File New/Open/Save. An Edit-menu Undo / Redo
-pair. Greyed out at the ends of the stack.
+Let the user pick up a root emitter in the tree, drag it past one or
+more sibling roots, and drop it into a new position. Dropping between
+two siblings reorders. Dragging is **reorder-only** in this PR —
+reparenting (dropping onto another emitter to make it a child) is the
+next roadmap entry and stays out of scope.
 
-## Scope (confirmed with user)
+## Scope (locked in with user)
 
-**Undoable** (anything that survives `.alo` save/load):
+**In:**
 
-- Every emitter property edit (basic / appearance / physics tabs)
-- Every track key add / move / delete
-- Every random-parameter group field
-- Structural ops: add / delete / duplicate / move / paste / rename
-- `leaveParticles` system flag, system name (set on save from filename)
+- Drag a root emitter onto a gap between two other roots, or above
+  the first root, or below the last root. Drop reorders the source's
+  whole subtree as a block.
+- Visual feedback: drag-image ghost (`ImageList_BeginDrag` /
+  `…DragMove`) **and** insertion-mark line (`TVM_SETINSERTMARK`).
+- `IDC_NO` cursor over invalid drop targets.
+- Auto-scroll near top / bottom edges (16-pixel hot zones, timer-
+  driven at 50 ms).
+- Esc cancels mid-drag.
+- One Ctrl+Z reverts the whole drop (already handled — drop fires
+  one `ELN_LISTCHANGED` which our undo capture treats as a structural
+  op, never coalesced).
 
-**Not undoable** (session / UI affordances):
+**Out (deferred):**
 
-- Selection, scroll, expand/collapse, tab-active
-- Per-emitter `visible` flag (already documented as editor-only)
-- Spawner config, camera, background color, ground, mod selection
-- File ops (New / Open / Save) clear the stack instead of being undo
-  steps within it
+- Reparenting (drop-onto-emitter).
+- Dragging child emitters as the source — refuse to start.
+- Dropping a root *onto* an emitter (not a gap) — `IDC_NO`, no-op.
+- Multi-select drag.
 
-## Architecture
+## API changes
 
-**Snapshot the whole `ParticleSystem` per edit boundary.** Reuses the
-existing `ChunkWriter` / `ParticleSystem(IFile*)` round-trip — proven
-correct by save/load and clipboard. `.alo` files are tiny (single-digit
-KB), so a 100-deep stack is comfortably under 10 MB.
-
-Rejected the command pattern: dozens of command classes for every
-spinner / checkbox / combo / track-key op, plus the `Emitter*` pointer
-re-resolution after delete-undo is exactly the landmine the snapshot
-approach sidesteps (whole graph rebuilt fresh; pointers re-resolved by
-index).
-
-## Components
-
-### 1. `src/UndoStack.{h,cpp}` (new)
+### One new `ParticleSystem` method
 
 ```cpp
-class UndoStack {
-    struct Entry {
-        std::vector<char> snapshot;
-        size_t            selectedIndex;  // SIZE_MAX if none
-        DWORD             coalesceKey;    // (notify-code << 16) | emitter-idx
-        DWORD             timestamp;      // GetTickCount()
-        bool              isSavedState;   // matches what's on disk
-    };
-    std::deque<Entry> m_entries;
-    size_t            m_cursor;       // 0..m_entries.size()
-    bool              m_applying;     // re-entrancy guard
-    static const size_t MAX_ENTRIES = 100;
-public:
-    void Capture(const ParticleSystem& sys, size_t selIdx,
-                 DWORD coalesceKey);
-    bool CanUndo() const;
-    bool CanRedo() const;
-    bool Undo(/*out*/ std::vector<char>** snapshot,
-              /*out*/ size_t* selIdx);
-    bool Redo(/*out*/ std::vector<char>** snapshot,
-              /*out*/ size_t* selIdx);
-    void Clear();
-    void MarkSaved();          // current cursor's entry == disk state
-    bool IsAtSavedState() const;
-    bool IsApplying() const { return m_applying; }
-    void BeginApplying() { m_applying = true; }
-    void EndApplying()   { m_applying = false; }
-};
+// Move `emitter` (must be a root) so its position in the root sequence
+// becomes `targetRootIndex` (the N-th root, counting only emitters
+// with parent==NULL). Drags the full subtree as a block, mirroring
+// moveEmitter's behavior but in one shot rather than swap-by-swap.
+//
+// Returns true on success, false if the emitter isn't a root, the
+// target is out of range, or the move would be a no-op (target
+// position == current position).
+bool moveEmitterToRootIndex(Emitter* emitter, size_t targetRootIndex);
 ```
 
-Snapshot helpers in `UndoStack.cpp`:
+### Removal: `TVS_DISABLEDRAGDROP`
+
+In both [`src/ParticleEditor.en.rc:326`](src/ParticleEditor.en.rc:326)
+and [`src/ParticleEditor.de.rc:352`](src/ParticleEditor.de.rc:352).
+
+### One new `APPLICATION_INFO` flag
 
 ```cpp
-static std::vector<char> Serialize(const ParticleSystem& sys) {
-    MemoryFile* mf = new MemoryFile();
-    sys.write(mf);
-    std::vector<char> buf(mf->size());
-    mf->seek(0);
-    mf->read(buf.data(), mf->size());
-    mf->Release();
-    return buf;
-}
-
-static ParticleSystem* Deserialize(const std::vector<char>& buf) {
-    MemoryFile* mf = new MemoryFile();
-    mf->write(buf.data(), (unsigned long)buf.size());
-    mf->seek(0);
-    ParticleSystem* sys = new ParticleSystem(mf);
-    mf->Release();
-    return sys;
-}
+// True while a drag-drop reorder is in progress in the emitter tree.
+// Pump checks before TranslateAccelerator to keep destructive
+// accelerators (Ctrl+Z, Ctrl+S, Ctrl+N, ...) from firing mid-drag —
+// see Risk #8 / mitigation below.
+bool dragInProgress;
 ```
 
-### 2. Edit boundaries in `main.cpp`
+## State machine
 
-Three notification sites already funnel every change. Push a snapshot
-**after** the change has landed in the model:
-
-| Notify           | Source                       | Coalesce |
-|------------------|------------------------------|----------|
-| `EP_CHANGE`      | Property panel field         | yes      |
-| `TE_CHANGE`      | Track key add/move/delete    | yes      |
-| `ELN_LISTCHANGED`| Structural emitter-list op   | **no**   |
-
-Plus `BN_CLICKED` on `hLeaveParticles` (single bool, no coalesce needed).
-
-**Coalesce rule (simple version, time-based):**
-
-> If previous entry's `coalesceKey` matches the new one AND the new
-> timestamp is within 750 ms of the previous, replace the previous
-> entry's snapshot in place instead of pushing a new one.
-
-`coalesceKey = (notifyCode << 16) | selectedEmitterIdx`. Structural ops
-always pass key 0 (never coalesce). For `TE_CHANGE`, fold the track ID
-into the key so cross-track edits don't collapse into one step.
-
-This is intentionally simple; can be tightened later if a particular
-spinner produces too-coarse undo steps.
-
-### 3. Restore path
+`EmitterListControl` gets these fields:
 
 ```cpp
-static void RestoreFromSnapshot(APPLICATION_INFO* info,
-                                 const std::vector<char>& buf,
-                                 size_t selIdx) {
-    info->undoStack.BeginApplying();
+ParticleSystem::Emitter* dragSource;        // emitter being dragged
+HIMAGELIST               dragImageList;     // owned during drag
+HTREEITEM                dragInsertTarget;  // current insertion target
+bool                     dragInsertAfter;   // false = above, true = below
+UINT_PTR                 dragScrollTimer;   // 0 if no autoscroll active
+int                      dragScrollDir;     // -1 = up, +1 = down
+```
 
-    ParticleSystem* sys = UndoStack_Deserialize(buf);
+Idle → Dragging on `TVN_BEGINDRAG`:
 
-    if (info->engine != NULL) info->engine->Clear();
-    delete info->particleSystem;
-    info->particleSystem  = sys;
-    info->selectedEmitter = (selIdx < sys->getEmitters().size())
-                            ? &sys->getEmitter(selIdx) : NULL;
+1. Pull source from `nmtv->itemNew.lParam`.
+2. Refuse if `source->parent != NULL`, or only one root exists, or
+   `TreeView_GetEditControl(hTree) != NULL` (label edit active).
+3. `SetCapture(hTree)`; `TreeView_CreateDragImage` +
+   `ImageList_BeginDrag` + `ImageList_DragEnter`.
+4. Set `info->dragInProgress = true`.
 
-    EmitterList_SetParticleSystem(info->hEmitterList, sys);
-    SendMessage(info->hLeaveParticles, BM_SETCHECK,
-                sys->getLeaveParticles() ? BST_CHECKED : BST_UNCHECKED, 0);
-    SetEmitterInfo(info);
+Dragging tracking on `WM_MOUSEMOVE`:
 
-    if (info->engine != NULL) info->engine->OnParticleSystemChanged(-1);
-    SetFileChanged(info, !info->undoStack.IsAtSavedState());
-    UpdateUndoRedoUI(info);
+1. `ImageList_DragMove(x, y)`.
+2. Auto-scroll hot-zone check — start / kill / leave timer running.
+3. `ComputeDropTarget(...)` (helper — see Mitigation #5).
+4. No-op detection (Mitigation #6) — set `IDC_NO`, clear insertion
+   mark.
+5. Otherwise `TreeView_SetInsertMark`, default cursor.
 
-    info->undoStack.EndApplying();
+Dragging → Idle on `WM_LBUTTONUP`:
+
+1. If valid drop target: `moveEmitterToRootIndex` →
+   `OnParticleSystemChange` → re-select + `ELN_LISTCHANGED`.
+2. `EndDrag(commit)`.
+
+Cancel paths (all → `EndDrag(false)`):
+
+- Esc in `WM_KEYDOWN`.
+- `WM_CAPTURECHANGED`.
+- Drop on invalid target / outside tree.
+
+## Auto-scroll
+
+Hot zones: 16 px from top/bottom of tree client area. `SetTimer` at
+50 ms while cursor is in zone; `KillTimer` on exit / drag end.
+
+`WM_TIMER` handler does **all four updates atomically** so the ghost
+and insertion mark stay synchronized as items scroll under the
+cursor (see Mitigation #10):
+
+```cpp
+case WM_TIMER:
+    if (wParam == AUTOSCROLL_TIMER_ID) {
+        SendMessage(hTree, WM_VSCROLL,
+                    c->dragScrollDir < 0 ? SB_LINEUP : SB_LINEDOWN, 0);
+        POINT pt; GetCursorPos(&pt); ScreenToClient(hTree, &pt);
+        UpdateInsertMark(c, pt);              // hit-test + TVM_SETINSERTMARK
+        ImageList_DragMove(pt.x, pt.y);       // re-anchor ghost to absolute coords
+    }
+```
+
+`WM_VSCROLL` is a no-op when at scroll limits; the timer keeps
+firing harmlessly until cursor leaves the zone.
+
+---
+
+## Risks and mitigations
+
+### 1, 2, 3 — capture / GDI / timer leaks
+
+Single root cause: any exit path that forgets to clean up. **Three
+layered defenses:**
+
+**(a) One canonical cleanup function.** Every exit path —
+`WM_LBUTTONUP`, Esc, `WM_CAPTURECHANGED`, drop-outside, drop-on-self
+— calls exactly one helper. Each step **null-checks first and
+clears after**, so calling `EndDrag` twice is a no-op (handles
+`WM_CAPTURECHANGED` followed by a stray `WM_LBUTTONUP`):
+
+```cpp
+static void EndDrag(EmitterListControl* c) {
+    if (c->dragScrollTimer) { KillTimer(c->hTree, c->dragScrollTimer); c->dragScrollTimer = 0; }
+    if (c->dragImageList)   { ImageList_DragLeave(c->hTree); ImageList_EndDrag();
+                              ImageList_Destroy(c->dragImageList); c->dragImageList = NULL; }
+    TreeView_SetInsertMark(c->hTree, NULL, FALSE);
+    if (GetCapture() == c->hTree) ReleaseCapture();
+    c->dragSource = NULL;
+    c->dragInsertTarget = NULL;
+    /* info->dragInProgress flag also cleared by the caller, who has the info* */
 }
 ```
 
-`engine->Clear()` kills all live `EmitterInstance`s pointing at the old
-graph. `SpawnerDriver` holds no `Emitter*`s itself; its tick passes the
-current `ParticleSystem*` per call, so it's automatically re-pointed.
+**(b) `WM_CAPTURECHANGED` as backstop.** Win32 fires this whenever
+capture is lost (Alt+Tab, focus theft, our own `ReleaseCapture`).
+Even if the rest of our teardown logic has a bug, this leaves the
+system in a clean state.
 
-### 4. UI surface
+**(c) Verification in `#ifndef NDEBUG`.** Snapshot
+`GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS)` at drag start
+and shortly after `EndDrag`; assert equality. Catches image-list
+leaks immediately during smoke testing.
 
-- **Edit menu**: `Undo\tCtrl+Z`, `Redo\tCtrl+Y` — at the **top** of the
-  existing Edit menu, before Cut/Copy/Paste, with a separator.
-- **Accelerators**: `Ctrl+Z` → `ID_EDIT_UNDO`, `Ctrl+Y` → `ID_EDIT_REDO`,
-  `Ctrl+Shift+Z` → `ID_EDIT_REDO` (synonym).
-- **Toolbar icons**: extend `src/Resources/toolbar1.bmp` from 5 cells
-  (80×16) to 7 cells (112×16), reusing the pattern in
-  `tasks/extend_toolbar_bitmap.ps1` — that script extended `toolbar2.bmp`
-  for Move Up / Move Down. The two new cells are undo (counterclockwise
-  curved arrow) and redo (clockwise curved arrow). Add them between the
-  existing File group and the View toggles, with `BTNS_SEP` spacers.
-- **Enable/disable**: refresh on every capture / undo / redo. Both
-  toolbar (`TB_SETSTATE`) and menu (`EnableMenuItem` from
-  `WM_INITMENUPOPUP`).
-- **Tooltips**: `IDS_TOOLTIP_EDIT_UNDO`, `IDS_TOOLTIP_EDIT_REDO`.
+### 4 — `TVS_DISABLEDRAGDROP` removed from only one `.rc` file
 
-### 5. Saved-state asterisk
+Process mitigation: `git diff src/ParticleEditor.en.rc src/ParticleEditor.de.rc | grep TVS_DISABLEDRAGDROP` should show two `-` lines and zero `+` lines before commit. Add to PR self-review checklist.
 
-Each entry has `isSavedState`. On `OnFileChange` (after Open / New) and
-on successful save, call `m_undo.MarkSaved()` which sets the current
-entry's bit and clears the bit on every other entry. After any restore,
-set `info->changed = !current.isSavedState`. Undo back to disk-state
-clears the asterisk; redo past it restores it. Edits past the cursor
-clear the saved-state bit on whatever lay ahead (those snapshots are
-about to be discarded anyway).
+### 5 — insertion-mark math wrong at edges
 
-### 6. Initial baseline
+Pin down the math with a small documented helper rather than
+computing inline:
 
-`OnFileChange` clears the stack and pushes one initial entry with
-`isSavedState = true`, so the first Ctrl+Z after opening rewinds back
-into the loaded file rather than into nothing.
+```cpp
+// "Gap index" 0..numRoots:
+//   gap 0          = above first root
+//   gap numRoots   = below last root
+//   gap K (0<K<N)  = between root K-1 and root K
+struct DropTarget { size_t gap; bool valid; };
+static DropTarget ComputeDropTarget(HWND hTree, POINT pt, size_t numRoots);
+```
 
-## Risks named up front
+Four code paths (above-first / between / below-last / outside),
+each one explicitly tested. The four-zone enumeration lives in one
+function, not scattered across the WM_MOUSEMOVE handler.
 
-1. **Dangling `info->selectedEmitter` after swap.** Captured as index
-   beforehand; re-resolved against the new system's `m_emitters`.
-2. **Re-entrancy.** `EmitterProps_SetEmitter` and `EmitterList_SetPS`
-   may dispatch their own `EP_CHANGE` / `ELN_LISTCHANGED` during
-   restore. `m_applying` flag in the capture function guards against it.
-3. **Coalescing across structural ops.** A spinner edit then a delete
-   must not collapse together — so the rule is "structural ops pass
-   coalesceKey = 0, which never matches anything".
-4. **Visibility toggle.** Confirmed: `EmitterList_ToggleEmitterVisibility`
-   does NOT send `ELN_LISTCHANGED`, so it correctly stays out of the
-   undo stack. (There's a stale-feeling pre-existing call in
-   `main.cpp:1554` that calls `SetFileChanged(true)` on rename — that's
-   a separate concern; not our problem here.)
-5. **Track-key drag** in CurveEditor fires many `TE_CHANGE`s; coalescing
-   collapses them into one step. Mouse-up doesn't currently fire a
-   distinct event, so the 750 ms timer is what closes the entry.
-6. **Memory.** 100-entry cap × typical `.alo` size (10–50 KB) = a few
-   MB worst case. Drop oldest on overflow.
+### 6 — drop-into-same-gap dirties the file
+
+Source at root index S occupies the gap range [S, S+1]. Drop at
+gap S or S+1 leaves the layout unchanged:
+
+```cpp
+if (target.gap == sourceRootIdx || target.gap == sourceRootIdx + 1) {
+    // No-op: cursor IDC_NO, clear insertion mark, EndDrag(false) on mouse-up.
+}
+```
+
+Source's root index uses **the root-only sequence**, not the flat
+`m_emitters` index (children sit between roots and would skew the
+count):
+
+```cpp
+size_t RootIndexOf(const ParticleSystem*, const Emitter* root);
+```
+
+### 7 — coexistence with F2 label edit
+
+Win32's drag threshold (`SM_CXDRAG`/`SM_CYDRAG`) handles
+click-pause-click rename for free — `TVN_BEGINDRAG` doesn't fire
+until cursor moves past the threshold. Two belt-and-braces
+additions:
+
+- In `TVN_BEGINDRAG`, refuse to start if
+  `TreeView_GetEditControl(hTree) != NULL`.
+- Smoke test: F2 to start rename, type, click outside (commits),
+  then drag the same item — both gestures still work.
+
+### 8 — accelerator translation mid-drag *(the dangerous one)*
+
+Hazard: Ctrl+Z mid-drag → pump translates → `DoUndo` →
+`RestoreFromSnapshot` → `delete info->particleSystem` while we
+hold `dragSource` pointing into the freed object. Use-after-free
+on the next mouse-move's hit-test.
+
+**Three layers, smallest blast radius first:**
+
+**(a) Block at the pump.** One `if` at
+[`main.cpp:3143`](src/main.cpp:3143):
+
+```cpp
+if (!consumed
+    && (info->dragInProgress || !TranslateAccelerator(info->hMainWnd, hAccel, &msg))
+    && !IsDialogMessage(info->hMainWnd, &msg))
+{
+    TranslateMessage(&msg);
+    DispatchMessage(&msg);
+}
+```
+
+When `dragInProgress` is true, we skip `TranslateAccelerator`
+entirely. Catches Ctrl+Z, Ctrl+Y, Ctrl+N, Ctrl+O, Ctrl+S, Delete,
+F5, F6, F7 — all destructive accelerators in one stroke.
+
+**(b) Defense in depth at `DoUndo` / `DoRedo`.**
+
+```cpp
+static void DoUndo(APPLICATION_INFO* info) {
+    if (info->dragInProgress) return;   // belt-and-braces
+    /* ... */
+}
+```
+
+Two lines, value is "we don't crash even if the pump regresses."
+
+**(c) Esc routing.** The pump skip means Esc still reaches
+`IsDialogMessage` and `DispatchMessage`. Main window isn't a dialog
+(registered class), so `IsDialogMessage` returns FALSE without
+eating Esc. Confirmed by reading
+[`main.cpp:3143`](src/main.cpp:3143). Debug-build assertion: print
+"[DnD] esc reached WM_KEYDOWN" the first time, sanity-check.
+
+### 9 — undo restoration of selection
+
+Already handled by `EmitterList_SelectEmitter` (PR #31). Smoke
+checklist explicit: drop a parent-bearing root (sparks → smoke
+trail), Ctrl+Z, confirm sparks selected and smoke trail child still
+under it.
+
+### 10 — auto-scroll fights insertion-mark math
+
+The pattern from the Auto-scroll section above: WM_TIMER does all
+four updates atomically (scroll, refresh cursor coords, recompute
+insertion mark, re-anchor ghost). The critical bit is
+`GetCursorPos` (not the timer-message coords) so the ghost
+re-anchors to absolute screen coords and doesn't smear as items
+scroll under it.
+
+Verification: "hold cursor in hot zone for 2 s" — ghost stays
+attached to cursor, insertion mark moves to track newly-visible
+items.
+
+### 11 — resize during drag
+
+Explicitly accepted; document in the code comment so a future
+contributor doesn't waste time on it.
+
+### 12 — collapsed source
+
+Comparison logic uses root indices, not tree-visible position.
+`RootIndexOf` walks `m_emitters` filtering on `parent == NULL` —
+collapsed-ness of the tree view is irrelevant.
+
+---
+
+## Process-level mitigations spanning multiple risks
+
+- **Single `EndDrag` exit + `WM_CAPTURECHANGED` backstop** — covers
+  #1, #2, #3 simultaneously.
+- **`#ifndef NDEBUG` GDI-handle-count snapshot** — catches all
+  leak-class regressions (#1, #2, #3, plus future ones).
+- **Helper functions with documented contracts** (`ComputeDropTarget`,
+  `RootIndexOf`) — make #5, #6, #12 testable in isolation rather
+  than as state-machine emergent behavior.
+
+---
+
+## Testing & verification
+
+Drive interactively on `P_explosion_med06.alo` (8 emitters with one
+parent/child pair: sparks → smoke trail) plus a synthetic file with
+≥6 standalone roots and no children.
+
+### Happy paths
+
+- [ ] Drag root #2 above root #0 → list reordered; selection
+      follows; title-bar asterisk appears.
+- [ ] Drag root #0 below root #4 (last) → reordered.
+- [ ] Drag a root with a child subtree (sparks → smoke trail) past
+      another root → both move; smoke trail's `parent` still
+      resolves to sparks; sparks's `spawnDuringLife` still points at
+      smoke trail's new index.
+- [ ] Drag-drop past one neighbor produces the same final layout as
+      `Alt+Up` / `Alt+Down`.
+- [ ] Multi-step drag past 3 siblings reorders to the exact target
+      gap.
+- [ ] Drop on the gap above first / below last works.
+
+### Cancel / no-op paths
+
+- [ ] Esc mid-drag → tree unchanged, no asterisk, no capture leak.
+- [ ] Drop outside tree client area → tree unchanged.
+- [ ] Drop in same gap as source → no-op, no asterisk, no
+      `ELN_LISTCHANGED`.
+- [ ] Quick click without crossing system drag threshold → no drag.
+- [ ] Drop on the source itself → no-op.
+
+### Refused sources
+
+- [ ] Drag-press on a child emitter → no drag starts.
+- [ ] Drag-press on a root in a single-root system → no drag starts.
+- [ ] Drag-press while F2 label edit is active → no drag starts.
+
+### Refused targets
+
+- [ ] Drag onto a child emitter → `IDC_NO`, no insertion mark,
+      drop is a no-op.
+- [ ] Drag onto itself → `IDC_NO`.
+- [ ] Drag onto the tree's vertical scrollbar / non-client area →
+      `IDC_NO`, drop is a no-op.
+
+### Coexistence with existing UI
+
+- [ ] F2 in-place rename still works.
+- [ ] Right-click context menu still works.
+- [ ] Selection click still works.
+- [ ] Toolbar Move Up / Move Down state correct after drop.
+- [ ] Visibility-toggle click on eye icon still works.
+
+### Undo / redo
+
+- [ ] One Ctrl+Z reverts the move (selection back on source at
+      original position; subtree intact).
+- [ ] Ctrl+Y redoes.
+- [ ] Drop, save, drop again, Ctrl+Z back to saved state →
+      asterisk clears.
+
+### Auto-scroll
+
+- [ ] Scroll-down: tall list scrolled to top, drag a root, hold
+      cursor in bottom hot zone → tree scrolls smoothly.
+- [ ] Scroll-up: same but bottom-anchored.
+- [ ] Hot-zone exit stops scroll mid-stream.
+- [ ] Drop while auto-scrolling lands at the visible insertion
+      target.
+- [ ] Esc while auto-scrolling stops the timer and cancels.
+- [ ] Reaching scroll limits doesn't crash or busy-loop.
+- [ ] Short list (no scrollbar) — cursor in hot zone is harmless
+      no-op.
+
+### Edge cases — accelerator interaction (Risk #8)
+
+- [ ] **Ctrl+Z mid-drag** → blocked; cursor stays in drag mode;
+      no crash.
+- [ ] Ctrl+S mid-drag → blocked.
+- [ ] Ctrl+N mid-drag → blocked.
+- [ ] After drag ends, accelerators work normally.
+
+### Edge cases — focus / capture
+
+- [ ] Alt+Tab away mid-drag → `WM_CAPTURECHANGED` fires; clean
+      cancellation.
+- [ ] Click another window mid-drag (Spawner if open) → clean
+      cancellation.
+- [ ] Mouse leaves window during drag, returns → drag continues.
+
+### Edge cases — repeated drags / leaks
+
+- [ ] 20 drags in a row → GDI handle count stable in Debug build's
+      `GetGuiResources` snapshot.
+- [ ] Drag, then close the editor mid-drag (Alt+F4) → no leak.
+- [ ] Drop, immediately File → Open another file → tree rebuilds
+      cleanly; no stale drag state.
+- [ ] Drag in a German build (`de.rc`) — same code path, just
+      checking the `.rc` edit didn't typo the style flags.
 
 ## Implementation order
 
-1. Build UndoStack (header + cpp), no UI yet.
-2. Plumb capture in `WM_NOTIFY` for the three notify sites + the
-   `leaveParticles` BN_CLICKED, gated by `m_applying`.
-3. Implement RestoreFromSnapshot + selection re-resolution. Wire one
-   debug hotkey first to validate end-to-end before menu.
-4. Add `ID_EDIT_UNDO` / `ID_EDIT_REDO` IDs + tooltip string IDs in
-   `resource.en.h` / `resource.de.h`.
-5. Edit menu items, accelerators, en + de string tables.
-6. Extend `toolbar1.bmp` (script in `tasks/`) and update toolbar
-   button list in `main.cpp`.
-7. Enable/disable on `WM_INITMENUPOPUP` + after each capture.
-8. Saved-state asterisk + MarkSaved on save.
-9. Smoke test (manual checklist below). Hand off to user.
-
-## Smoke-test checklist
-
-- [ ] Open a real `.alo`. Edit a spinner. Ctrl+Z → reverts. Ctrl+Y → redoes.
-- [ ] Drag a track-key. One Ctrl+Z reverts the whole drag.
-- [ ] Add an emitter. Undo → emitter gone. Redo → it's back. Selection
-      lands on the right thing.
-- [ ] Delete an emitter with children. Undo restores children too.
-- [ ] Move emitter up. Undo. Redo.
-- [ ] Toggle leaveParticles. Undo.
-- [ ] Toggle visibility on an emitter. Ctrl+Z does NOT undo it.
-- [ ] Open a different `.alo`. Stack cleared (Ctrl+Z is greyed out).
-- [ ] Edit, save, edit, Ctrl+Z to saved state — title-bar asterisk gone.
-      Ctrl+Y past saved state — asterisk back.
-- [ ] Make >100 edits (rapid-fire), confirm no crash and oldest fall off.
-- [ ] Edit, then redo-history is clipped after a new edit.
+1. Remove `TVS_DISABLEDRAGDROP` from both `.rc` files. Build,
+   confirm `TVN_BEGINDRAG` fires (printf to verify).
+2. Add `ParticleSystem::moveEmitterToRootIndex`. Smoke-test
+   indirectly via the new DnD path; can also re-implement
+   `EmitterList_MoveEmitter` in terms of it for confidence.
+3. `info->dragInProgress` flag + accelerator gate at
+   [`main.cpp:3143`](src/main.cpp:3143) + `DoUndo`/`DoRedo`
+   guards.
+4. Wire `TVN_BEGINDRAG` (refuse children / single-root / active
+   label edit; capture; image list begin; set
+   `dragInProgress`).
+5. Subclass handlers for `WM_MOUSEMOVE`, `WM_LBUTTONUP`,
+   `WM_KEYDOWN` (Esc), `WM_CAPTURECHANGED`. Centralized cleanup
+   in `EndDrag(control)`.
+6. `ComputeDropTarget` + `RootIndexOf` helpers; no-op detection.
+7. `TreeView_CreateDragImage` + ghost wiring.
+8. Auto-scroll: timer + WM_TIMER handler with atomic
+   scroll/hit-test/ghost-move.
+9. `#ifndef NDEBUG` GDI-handle leak check around drag start/end.
+10. Verify undo round-trip on a parent-bearing drop.
+11. Run full smoke checklist above.
+12. Hand off to user. CHANGELOG entry only after user confirms.
 
 ## Estimate
 
-3/5 difficulty, 8–14 hours.
+3/5 difficulty, **4-6 hours** consistent with the roadmap.
 
 ---
 
