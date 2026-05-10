@@ -43,6 +43,53 @@ shorter answer that opens dialogue beats a longer one that closes it.
   push through with the current plan when the assumptions it rested on
   have shifted.
 
+#### Plan structure
+
+Every plan in `tasks/todo.md` must include all five of:
+
+1. **Goal + scope.** One paragraph on what the user gets when this
+   ships. An explicit *In* / *Out* list — what's included, what's
+   deferred, and why. Out-of-scope items name their reason
+   ("separate ROADMAP entry", "out-of-scope slot-switch", "future
+   PR if anyone asks") so a future reader can tell whether the
+   omission was deliberate or just forgotten.
+2. **What the codebase already gives us.** A short survey of the
+   existing functions, helpers, structs, and patterns the plan
+   leans on. Concrete file:line references where useful. Forces
+   exploration before design and prevents reinventing what's
+   already there.
+3. **Architecture / implementation approach.** The new APIs (with
+   signatures and brief docstrings), data flow, state machine, key
+   design decisions. Address the questions a reviewer would ask:
+   why this approach over the obvious alternatives, what's the
+   structural shape, where do new files / functions live.
+4. **Risks named up front + mitigations.** A numbered list. For
+   each risk, one paragraph naming the hazard concretely (what
+   breaks, when, why) and the specific mitigation. Risks that
+   would only matter under unrealistic conditions get explicitly
+   accepted ("not worth designing around"). The mitigation isn't
+   "be careful" — it's a code-level intervention or a documented
+   process step.
+5. **Testing & verification.** A manual checklist organized by
+   category (happy paths / edge cases / cancellation / refused
+   inputs / undo round-trip / cleanup / debug instrumentation).
+   Each line is a verifiable claim, not a vague intent. Items that
+   need a separate file or scenario name them. Debug instrumentation
+   (`#ifndef NDEBUG` printfs) is part of this section, with the
+   tag prefix to grep for.
+
+After writing the plan, **summarize for the user before starting
+work** — the summary leads with the architectural decisions, calls
+out the biggest risks and mitigations, and asks any remaining
+clarifying questions. Don't proceed until the user confirms or
+adjusts the scope. The cost of misaligned scope is higher than the
+cost of a 2-minute check-in.
+
+For larger plans (anything ★★★★ or ★★★★★) iterate the risks list
+with the user *before* writing code — a planning conversation that
+surfaces a sharp risk pre-coding is dramatically cheaper than
+rediscovering it during testing.
+
 ### Verification before done
 
 - Never mark a task complete without proving it works.
