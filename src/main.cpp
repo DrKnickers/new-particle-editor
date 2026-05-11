@@ -1417,9 +1417,9 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     info->engine->SetGround(true);
                     info->engine->SetGroundZ(0.0f);
                     info->engine->SetBloom(false);
-                    info->engine->SetBloomStrength(0.1f);
-                    info->engine->SetBloomCutoff(1.0f);
-                    info->engine->SetBloomSize(0.25f);
+                    info->engine->SetBloomStrength(1.0f);
+                    info->engine->SetBloomCutoff(0.90f);
+                    info->engine->SetBloomSize(1.0f);
                     ColorButton_SetColor(info->hBackgroundBtn, info->engine->GetBackground());
                     SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_SHOWGROUND,
                                 MAKELONG(info->engine->GetGround(), 0));
