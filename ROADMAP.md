@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (TODO #NN)
+### 5.1 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
