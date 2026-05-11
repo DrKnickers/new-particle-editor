@@ -596,6 +596,7 @@ BEGIN
     IDS_TOOLTIP_FILE_SAVE   "Save particle system"
     IDS_TOOLTIP_TOGGLE_GROUND "Toggle ground"
     IDS_TOOLTIP_DEBUG_HEAT  "Debug Heat"
+    IDS_TOOLTIP_TOGGLE_BLOOM "Toggle bloom"
     IDS_LABEL_BACKGROUND    "Background:"
     IDS_LABEL_GROUND_Z      "Ground Height:"
     IDS_LABEL_LEAVE_PARTICLES "Leave particles after instance death"

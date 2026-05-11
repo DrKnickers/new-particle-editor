@@ -248,10 +248,12 @@
 // Bloom dialog
 #define IDD_BLOOM                        151
 #define ID_VIEW_BLOOM                   40112
+#define ID_VIEW_BLOOM_TOGGLE            40113
 #define IDC_BLOOM_ENABLE                1400
 #define IDC_BLOOM_STRENGTH              1401
 #define IDC_BLOOM_CUTOFF                1402
 #define IDC_BLOOM_SIZE                  1403
+#define IDS_TOOLTIP_TOGGLE_BLOOM        187
 
 // Next default values for new objects
 // 
