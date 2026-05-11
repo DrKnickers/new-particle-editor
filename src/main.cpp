@@ -1384,6 +1384,25 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
             ToggleBloomDialog(info);
             break;
 
+        case ID_VIEW_BLOOM_TOGGLE:
+            if (info->engine != NULL && info->engine->IsBloomAvailable())
+            {
+                bool newState = !info->engine->GetBloom();
+                info->engine->SetBloom(newState);
+                WriteBloomEnabled(newState);
+                SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_BLOOM_TOGGLE,
+                            MAKELONG(newState ? TRUE : FALSE, 0));
+                // Keep the dialog's "Enable bloom" checkbox in lockstep
+                // so a user with the dialog open isn't confused by a
+                // toolbar toggle. WM_USER re-seeds all bloom controls.
+                if (info->hBloomDlg != NULL)
+                {
+                    SendMessage(info->hBloomDlg, WM_USER, 0, 0);
+                }
+                RedrawWindow(info->hRenderWnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+            }
+            break;
+
         case ID_SPAWNER_TRIGGER:
             // Shift+Space global hotkey. In Manual mode, fires a single
             // burst from the current path-anchor with the configured
@@ -1438,6 +1457,9 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     {
                         SendMessage(info->hBloomDlg, WM_USER, 0, 0);
                     }
+                    // Sync the bloom-toggle toolbar button.
+                    SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_BLOOM_TOGGLE,
+                                MAKELONG(FALSE, 0));
                     RedrawWindow(info->hRenderWnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
                 }
                 COLORREF zero[16] = {0};
@@ -1589,10 +1611,11 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			SendMessage(info->hToolbar, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
 
 			HBITMAP hBmpToolbar = LoadBitmap(pcs->hInstance, MAKEINTRESOURCE(IDR_TOOLBAR1));
-			// 7 cells now: file new/open/save (0..2), ground/heat (3..4),
-			// undo/redo (5..6). See tasks/extend_toolbar1_bmp.ps1 for the
+			// 8 cells now: file new/open/save (0..2), ground/heat (3..4),
+			// undo/redo (5..6), bloom (7). See tasks/extend_toolbar1_bmp.ps1
+			// and tasks/extend_toolbar1_bmp_bloom.ps1 for the
 			// bitmap-extension pattern.
-			HIMAGELIST hImgList = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 7, 0);
+			HIMAGELIST hImgList = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 8, 0);
 			ImageList_AddMasked(hImgList, hBmpToolbar, RGB(0,128,128));
 			DeleteObject(hBmpToolbar);
 			SendMessage(info->hToolbar, TB_SETIMAGELIST, 0, (LPARAM)hImgList);
@@ -1606,10 +1629,11 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				{5, ID_EDIT_UNDO, 0,                BTNS_BUTTON},
 				{6, ID_EDIT_REDO, 0,                BTNS_BUTTON},
 				{0, 0, 0, BTNS_SEP},
-				{3, ID_VIEW_SHOWGROUND, TBSTATE_ENABLED | TBSTATE_CHECKED, BTNS_CHECK},
-				{4, ID_VIEW_DEBUGHEAT,  TBSTATE_ENABLED, BTNS_CHECK},
+				{3, ID_VIEW_SHOWGROUND,     TBSTATE_ENABLED | TBSTATE_CHECKED, BTNS_CHECK},
+				{4, ID_VIEW_DEBUGHEAT,      TBSTATE_ENABLED,                   BTNS_CHECK},
+				{7, ID_VIEW_BLOOM_TOGGLE,   TBSTATE_ENABLED,                   BTNS_CHECK},
 			};
-			SendMessage(info->hToolbar, TB_ADDBUTTONS, 10, (LPARAM)&buttons);
+			SendMessage(info->hToolbar, TB_ADDBUTTONS, 11, (LPARAM)&buttons);
 			
 			if ((info->hRebar = CreateWindow(REBARCLASSNAME, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
 				0, 0, 0, 0, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
@@ -2042,6 +2066,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                         {ID_EDIT_REDO,       IDS_TOOLTIP_EDIT_REDO},
                         {ID_VIEW_SHOWGROUND, IDS_TOOLTIP_TOGGLE_GROUND},
                         {ID_VIEW_DEBUGHEAT,  IDS_TOOLTIP_DEBUG_HEAT},
+                        {ID_VIEW_BLOOM_TOGGLE, IDS_TOOLTIP_TOGGLE_BLOOM},
                         {0}
 					};
 
@@ -3171,6 +3196,11 @@ static INT_PTR CALLBACK BloomDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM
                 bool enabled = (IsDlgButtonChecked(hDlg, IDC_BLOOM_ENABLE) == BST_CHECKED);
                 info->engine->SetBloom(enabled);
                 WriteBloomEnabled(enabled);
+                // Sync the toolbar's bloom-toggle button so all three
+                // entry points (toolbar button, dialog checkbox, menu)
+                // agree on the current state.
+                SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_BLOOM_TOGGLE,
+                            MAKELONG(enabled ? TRUE : FALSE, 0));
                 RedrawWindow(info->hRenderWnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
                 return TRUE;
             }
@@ -3786,6 +3816,15 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
             }
             EnableWindow(info->hGroundZLabel,   info->engine->GetGround());
             EnableWindow(info->hGroundZSpinner, info->engine->GetGround());
+
+            // Sync the bloom-toggle toolbar button to engine state.
+            // Grey out the button when bloom can't run (shader missing
+            // / unsupported); otherwise reflect the persisted enable.
+            const bool bloomAvail = info->engine->IsBloomAvailable();
+            SendMessage(info->hToolbar, TB_ENABLEBUTTON, ID_VIEW_BLOOM_TOGGLE,
+                        MAKELONG(bloomAvail ? TRUE : FALSE, 0));
+            SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_BLOOM_TOGGLE,
+                        MAKELONG(info->engine->GetBloom() ? TRUE : FALSE, 0));
         }
         catch (exception&)
         {
