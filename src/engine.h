@@ -107,6 +107,15 @@ public:
 	bool     GetGround() const		{ return m_showGround; }
 	float    GetGroundZ() const		{ return m_groundZ; }
 	bool     GetHeatDebug() const   { return m_debugHeat; }
+	bool     GetBloom()         const { return m_bloomEnabled;  }
+	float    GetBloomStrength() const { return m_bloomStrength; }
+	float    GetBloomCutoff()   const { return m_bloomCutoff;   }
+	float    GetBloomSize()     const { return m_bloomSize;     }
+	// True iff a real `SceneBloom.fx` is loaded and its expected
+	// parameter / technique surface was found. False means the
+	// shader resolved to the default fallback or the file was
+	// missing — UI should disable the bloom controls.
+	bool     IsBloomAvailable() const { return m_bloomReady;    }
     COLORREF GetBackground() const  { return m_background; }
 	const D3DXVECTOR3& GetGravity() const { return m_gravity; }
 	const D3DXVECTOR3& GetWind() const    { return m_wind; }
@@ -149,6 +158,10 @@ public:
 	void SetGround(bool enable);
 	void SetGroundZ(float z);
 	void SetHeatDebug(bool debug);
+	void SetBloom(bool enable);
+	void SetBloomStrength(float v);
+	void SetBloomCutoff(float v);
+	void SetBloomSize(float v);
 
 	void				Reset();
 	Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShaderManager& shaderManager);
@@ -163,6 +176,16 @@ private:
 	// freshly-loaded shader's parameters for "texture_filename" annotations
 	// and binds the named textures.
 	void				BindShaderTextures(Effect* shader);
+
+	// Introspects the freshly-loaded SceneBloom effect to (a) verify it
+	// isn't the ShaderManager default fallback, (b) cache D3DXHANDLEs
+	// for the parameters we drive each frame, and (c) classify each
+	// technique by name pattern. Sets m_bloomReady on success.
+	void				InitBloomEffect();
+
+	// Releases any half-resolution bloom RTs. Called from Reset() and
+	// from ResetParameters() before reallocation.
+	void				ReleaseBloomTargets();
 
 	//
 	// Data members
@@ -186,6 +209,14 @@ private:
 	bool		m_showGround;
 	float		m_groundZ;
 	bool		m_debugHeat;
+	// Bloom post-process state. Shader, RTs, and parameter handles
+	// live in the Resources block below. Master enable + three
+	// tunables here so they survive shader reload.
+	bool		m_bloomEnabled;
+	bool		m_bloomReady;       // shader loaded + introspection passed
+	float		m_bloomStrength;
+	float		m_bloomCutoff;
+	float		m_bloomSize;
 	D3DXVECTOR3 m_wind;
 	D3DXVECTOR3	m_gravity;
     D3DXVECTOR4 m_ambient;
@@ -200,6 +231,24 @@ private:
 	IDirect3DTexture9*	m_pDistortTexture;
 	Effect*             m_pDistortShader;
     Effect*             m_pShaders[NUM_SHADERS];
+
+	// Bloom resources. m_pBloomEffect is owned (AddRef'd by
+	// ShaderManager::getShader and SAFE_RELEASE'd on destroy /
+	// reload). The two half-resolution RTs ping-pong during blur.
+	Effect*             m_pBloomEffect;
+	IDirect3DTexture9*  m_pBloomPing;
+	IDirect3DTexture9*  m_pBloomPong;
+	// D3DXHANDLEs cached by InitBloomEffect. They reference handles
+	// owned by m_pBloomEffect's underlying ID3DXEffect, so they're
+	// invalidated whenever the effect is released.
+	D3DXHANDLE          m_hBloomStrength;
+	D3DXHANDLE          m_hBloomCutoff;
+	D3DXHANDLE          m_hBloomSize;
+	D3DXHANDLE          m_hBloomTextureParam;
+	D3DXHANDLE          m_hBloomSceneTextureParam;
+	D3DXHANDLE          m_hBloomTechBright;
+	D3DXHANDLE          m_hBloomTechBlur;
+	D3DXHANDLE          m_hBloomTechCombine;
 
 	ITextureManager&				m_textureManager;
 	IShaderManager&					m_shaderManager;
