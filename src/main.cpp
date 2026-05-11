@@ -2146,14 +2146,18 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 const int GROUND_SPINNER_W = 70;
                 const int GROUND_SPINNER_H = 20;
                 MoveWindow(info->hLeaveParticles, props.right + 8, top + 4 + (height - checkbox.bottom) / 2, checkbox.right, label.bottom, TRUE);
-                // Ground Z spinner + label sit just to the right of the
-                // Leave-particles checkbox, separated by 16 px so the row
-                // doesn't read as one run-on group.
-                int gx = props.right + 8 + checkbox.right + 16;
-                MoveWindow(info->hGroundZLabel,   gx,                                  top + 4 + (height - groundLabel.bottom) / 2, groundLabel.right, groundLabel.bottom, TRUE);
-                MoveWindow(info->hGroundZSpinner, gx + groundLabel.right + 4,          top + 4 + (height - GROUND_SPINNER_H) / 2,   GROUND_SPINNER_W,  GROUND_SPINNER_H,   TRUE);
+                // Right side of the header strip, from right to left:
+                //   [Ground Z label] [Ground Z spinner]  · · ·  [Background label] [Background btn]
+                // Background button is anchored 4 px from the right edge; the
+                // Ground Z group sits 16 px to the left of the background
+                // label so the two groups read as distinct.
+                int bgLabelX = LOWORD(lParam) - 32 - label.right;
+                int gzSpinnerX = bgLabelX - 16 - GROUND_SPINNER_W;
+                int gzLabelX   = gzSpinnerX - 4 - groundLabel.right;
 				MoveWindow(info->hBackgroundBtn,   LOWORD(lParam) - 28, top + 4 + (height - 24) / 2, 24, 24, TRUE);
-				MoveWindow(info->hBackgroundLabel, LOWORD(lParam) - 32 - label.right, top + 4 + (height - label.bottom) / 2, label.right, label.bottom, TRUE);
+				MoveWindow(info->hBackgroundLabel, bgLabelX, top + 4 + (height - label.bottom) / 2, label.right, label.bottom, TRUE);
+                MoveWindow(info->hGroundZSpinner,  gzSpinnerX, top + 4 + (height - GROUND_SPINNER_H) / 2, GROUND_SPINNER_W,  GROUND_SPINNER_H,   TRUE);
+                MoveWindow(info->hGroundZLabel,    gzLabelX,   top + 4 + (height - groundLabel.bottom) / 2, groundLabel.right, groundLabel.bottom, TRUE);
 
 				// Move render window
 				MoveWindow(info->hRenderWnd, props.right + 8, top + 32, LOWORD(lParam) - (props.right + 8), HIWORD(lParam) - tabs.bottom - 36, TRUE);
