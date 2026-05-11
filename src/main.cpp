@@ -1683,11 +1683,23 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             SendMessage(info->hGroundZLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
 
             if ((info->hGroundZSpinner = CreateWindowEx(WS_EX_CLIENTEDGE, L"Spinner", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                0, 0, 70, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
+                0, 0, 80, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
             {
                 return -1;
             }
             SendMessage(info->hGroundZSpinner, WM_SETFONT, (WPARAM)hFont, FALSE);
+            // Add 4 px right margin on the edit child so the digits don't
+            // crowd the spinner chevrons. EM_SETMARGINS sets a text-inset;
+            // ES_RIGHT then flushes the number to that inset edge instead
+            // of all the way to the buttons. The first child of a Spinner
+            // is its EDIT (see Spinner.cpp WM_CREATE).
+            {
+                HWND hEdit = GetWindow(info->hGroundZSpinner, GW_CHILD);
+                if (hEdit != NULL)
+                {
+                    SendMessage(hEdit, EM_SETMARGINS, EC_RIGHTMARGIN, MAKELPARAM(0, 4));
+                }
+            }
             {
                 SPINNER_INFO si;
                 si.Mask        = SPIF_ALL;
@@ -2143,7 +2155,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 GetClientRect(info->hBackgroundLabel, &label);
                 GetClientRect(info->hGroundZLabel, &groundLabel);
                 int height = max(max(24, checkbox.bottom), label.bottom);
-                const int GROUND_SPINNER_W = 70;
+                const int GROUND_SPINNER_W = 80;
                 const int GROUND_SPINNER_H = 20;
                 MoveWindow(info->hLeaveParticles, props.right + 8, top + 4 + (height - checkbox.bottom) / 2, checkbox.right, label.bottom, TRUE);
                 // Right side of the header strip, from right to left:
