@@ -336,7 +336,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#TBD)
+### 5.1 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
