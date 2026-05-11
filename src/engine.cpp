@@ -981,13 +981,15 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_debugHeat      = false;
 	m_bloomEnabled   = false;
 	m_bloomReady     = false;
-	// Defaults match what the canonical EAW Terrain Editor ships
-	// for a typical map (e.g. Agriworld at 0.90 / 1.00 / 1.00).
-	// The shader's source defaults (1.0 / 0.1 / 0.25) are
-	// placeholders the game overwrites at runtime.
-	m_bloomStrength  = 1.00f;
+	// Defaults match the canonical EAW Terrain Editor's brand-new
+	// (Untitled) map — the blank-slate values the editor ships
+	// when no specific map's been authored yet. The shader's
+	// source defaults (1.0 / 0.1 / 0.25) are placeholders the
+	// game overwrites at runtime and aren't the canonical
+	// "fresh start" values.
+	m_bloomStrength  = 0.00f;
 	m_bloomCutoff    = 0.90f;
-	m_bloomSize      = 1.00f;
+	m_bloomSize      = 0.10f;
 	m_gravity        = D3DXVECTOR3(0,0,-1);
 	m_wind           = D3DXVECTOR3(0,0,0);
 	m_eye.Position   = D3DXVECTOR3(0,-250,125);
