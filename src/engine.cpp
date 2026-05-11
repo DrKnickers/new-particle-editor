@@ -118,6 +118,103 @@ void Engine::BindShaderTextures(Effect* shader)
 	SAFE_RELEASE(pEffect);
 }
 
+// Introspect the freshly-loaded SceneBloom effect. Confirms the shader
+// isn't the ShaderManager default fallback (we'd render garbage through
+// it), caches the parameter / technique handles we drive each frame,
+// and flips m_bloomReady to true on success.
+//
+// Probes for an expected bloom-only parameter (BloomStrength) before
+// trusting the effect — if absent, the loader resolved to the default
+// shader and bloom is unavailable this session.
+void Engine::InitBloomEffect()
+{
+	m_bloomReady              = false;
+	m_hBloomStrength          = NULL;
+	m_hBloomCutoff            = NULL;
+	m_hBloomSize              = NULL;
+	m_hBloomTextureParam      = NULL;
+	m_hBloomSceneTextureParam = NULL;
+	m_hBloomTechBright        = NULL;
+	m_hBloomTechBlur          = NULL;
+	m_hBloomTechCombine       = NULL;
+
+	if (m_pBloomEffect == NULL) return;
+
+	ID3DXEffect* pFx = m_pBloomEffect->getD3DEffect();
+	if (pFx == NULL) return;
+
+	// Parameter handles — probe by name. Missing BloomStrength means
+	// this isn't a real bloom shader (loader fell back to default).
+	m_hBloomStrength          = pFx->GetParameterByName(NULL, "BloomStrength");
+	m_hBloomCutoff            = pFx->GetParameterByName(NULL, "BloomCutoff");
+	m_hBloomSize              = pFx->GetParameterByName(NULL, "BloomSize");
+	m_hBloomTextureParam      = pFx->GetParameterByName(NULL, "BloomTexture");
+	m_hBloomSceneTextureParam = pFx->GetParameterByName(NULL, "SceneTexture");
+
+	// Technique discovery — classify by name pattern. Real bloom
+	// shaders typically expose techniques named BrightFilter,
+	// GaussianBlur (or *Blur*), and AddSmooth (or *Combine*).
+	D3DXEFFECT_DESC desc;
+	if (SUCCEEDED(pFx->GetDesc(&desc)))
+	{
+		for (UINT i = 0; i < desc.Techniques; ++i)
+		{
+			D3DXHANDLE hTech = pFx->GetTechnique(i);
+			D3DXTECHNIQUE_DESC td;
+			if (FAILED(pFx->GetTechniqueDesc(hTech, &td)) || td.Name == NULL) continue;
+
+			string name(td.Name);
+			transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+			if (name.find("bright") != string::npos && m_hBloomTechBright == NULL)
+			{
+				m_hBloomTechBright = hTech;
+			}
+			else if ((name.find("blur") != string::npos
+			       || name.find("gauss") != string::npos)
+			      && m_hBloomTechBlur == NULL)
+			{
+				m_hBloomTechBlur = hTech;
+			}
+			else if ((name.find("addsmooth") != string::npos
+			       || name.find("combine") != string::npos
+			       || name.find("composite") != string::npos)
+			      && m_hBloomTechCombine == NULL)
+			{
+				m_hBloomTechCombine = hTech;
+			}
+		}
+	}
+
+	SAFE_RELEASE(pFx);
+
+	// Verdict: usable iff we found everything we need.
+	m_bloomReady = (m_hBloomStrength     != NULL)
+	            && (m_hBloomCutoff       != NULL)
+	            && (m_hBloomSize         != NULL)
+	            && (m_hBloomTechBright   != NULL)
+	            && (m_hBloomTechBlur     != NULL)
+	            && (m_hBloomTechCombine  != NULL);
+
+#ifndef NDEBUG
+	if (m_bloomReady)
+	{
+		printf("[bloom] SceneBloom.fx loaded; bright/blur/combine techniques bound\n");
+	}
+	else
+	{
+		printf("[bloom] SceneBloom.fx unavailable — shader missing or parameters/techniques don't match expected bloom surface\n");
+	}
+	fflush(stdout);
+#endif
+}
+
+void Engine::ReleaseBloomTargets()
+{
+	SAFE_RELEASE(m_pBloomPing);
+	SAFE_RELEASE(m_pBloomPong);
+}
+
 // Hot-reload all 14 entries from ShaderNames[]. All-or-nothing: load every
 // new shader into a temporary array first, only swap into m_pShaders[] once
 // every one succeeds. On failure the previous set stays alive untouched, so
@@ -151,6 +248,15 @@ bool Engine::ReloadShaders()
 		m_pShaders[i] = tmp[i];
 		BindShaderTextures(m_pShaders[i]);
 	}
+
+	// Bloom shader is optional — loaded separately so a missing
+	// SceneBloom.fx never blocks particle rendering. ShaderManager
+	// resolution chain (mod path → game roots → MEG archives) does
+	// the work; we just call getShader. On failure or fallback-to-
+	// default, InitBloomEffect detects it and disables bloom.
+	SAFE_RELEASE(m_pBloomEffect);
+	m_pBloomEffect = m_shaderManager.getShader(m_pDevice, "Engine\\SceneBloom.fx");
+	InitBloomEffect();
 
 	printf("[Shaders] Reload complete: %d ok\n", NUM_SHADERS); fflush(stdout);
 	return true;
@@ -298,6 +404,99 @@ bool Engine::Render()
 	}
     m_pDevice->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
 
+	// Bloom post-process. Runs after the scene is drawn but before
+	// the heat/distortion pass, so distortion smears the bloomed
+	// image (matches in-game order). Skipped entirely when bloom
+	// is disabled, unavailable, or RTs failed to allocate — no
+	// perf cost in those cases.
+	if (m_bloomEnabled && m_bloomReady && m_pBloomEffect != NULL
+	    && m_pBloomPing != NULL && m_pBloomPong != NULL)
+	{
+		ID3DXEffect* pBloom = m_pBloomEffect->getD3DEffect();
+		if (pBloom != NULL)
+		{
+			pBloom->SetFloat(m_hBloomStrength, m_bloomStrength);
+			pBloom->SetFloat(m_hBloomCutoff,   m_bloomCutoff);
+			pBloom->SetFloat(m_hBloomSize,     m_bloomSize);
+
+			// Fullscreen quad in clip space, same vertex layout as the
+			// existing distortion compose quad below.
+			static const EmitterInstance::Vertex bloomQuad[4] = {
+				{D3DXVECTOR3(-1,-1,0), D3DXVECTOR2(0, 1), D3DXVECTOR4(1,1,1,1)},
+				{D3DXVECTOR3( 1,-1,0), D3DXVECTOR2(1, 1), D3DXVECTOR4(1,1,1,1)},
+				{D3DXVECTOR3(-1, 1,0), D3DXVECTOR2(0, 0), D3DXVECTOR4(1,1,1,1)},
+				{D3DXVECTOR3( 1, 1,0), D3DXVECTOR2(1, 0), D3DXVECTOR4(1,1,1,1)}
+			};
+
+			IDirect3DSurface9* pPingSurface = NULL;
+			IDirect3DSurface9* pPongSurface = NULL;
+			IDirect3DSurface9* pSceneRT = NULL;
+			m_pBloomPing->GetSurfaceLevel(0, &pPingSurface);
+			m_pBloomPong->GetSurfaceLevel(0, &pPongSurface);
+			m_pSceneTexture->GetSurfaceLevel(0, &pSceneRT);
+
+			UINT nPasses = 0;
+
+			// Pass 1: bright filter — sample scene, threshold, write to ping.
+			m_pDevice->SetRenderTarget(0, pPingSurface);
+			m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0,0,0), 1.0f, 0);
+			pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
+			pBloom->SetTechnique(m_hBloomTechBright);
+			pBloom->Begin(&nPasses, 0);
+			for (UINT i = 0; i < nPasses; ++i)
+			{
+				pBloom->BeginPass(i);
+				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
+				pBloom->EndPass();
+			}
+			pBloom->End();
+
+			// Pass 2: blur — ping → pong. Bind ping as the bloom-input
+			// sampler. The shader's own technique decides H vs V or
+			// runs both internally; we just hand it a texture.
+			m_pDevice->SetRenderTarget(0, pPongSurface);
+			m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0,0,0), 1.0f, 0);
+			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, m_pBloomPing);
+			pBloom->SetTechnique(m_hBloomTechBlur);
+			pBloom->Begin(&nPasses, 0);
+			for (UINT i = 0; i < nPasses; ++i)
+			{
+				pBloom->BeginPass(i);
+				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
+				pBloom->EndPass();
+			}
+			pBloom->End();
+
+			// Pass 3: AddSmooth combine — scene + pong → scene RT.
+			// Writes back into m_pSceneTexture; the heat compose
+			// below picks up the bloomed image unchanged.
+			m_pDevice->SetRenderTarget(0, pSceneRT);
+			pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
+			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, m_pBloomPong);
+			pBloom->SetTechnique(m_hBloomTechCombine);
+			pBloom->Begin(&nPasses, 0);
+			for (UINT i = 0; i < nPasses; ++i)
+			{
+				pBloom->BeginPass(i);
+				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
+				pBloom->EndPass();
+			}
+			pBloom->End();
+
+			// Unbind textures we sourced from to avoid driver warnings
+			// about a texture being bound as both RT and sampler on the
+			// next pass (the heat pass that follows binds its own RT
+			// immediately, but be defensive).
+			pBloom->SetTexture(m_hBloomSceneTextureParam, NULL);
+			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, NULL);
+
+			SAFE_RELEASE(pSceneRT);
+			SAFE_RELEASE(pPongSurface);
+			SAFE_RELEASE(pPingSurface);
+			SAFE_RELEASE(pBloom);
+		}
+	}
+
 	// Now render to the heat texture
 	IDirect3DSurface9* pDistortSurface;
 	m_pDistortTexture->GetSurfaceLevel(0, &pDistortSurface);
@@ -392,6 +591,10 @@ void Engine::SetGround(bool enable)			        { m_showGround = enable; }
 void Engine::SetGroundZ(float z)			        { m_groundZ    = z;      }
 void Engine::SetBackground(COLORREF color)		    { m_background = color; }
 void Engine::SetHeatDebug(bool debug)		        { m_debugHeat  = debug;  }
+void Engine::SetBloom(bool enable)                  { m_bloomEnabled  = enable; }
+void Engine::SetBloomStrength(float v)              { m_bloomStrength = v; }
+void Engine::SetBloomCutoff(float v)                { m_bloomCutoff   = v; }
+void Engine::SetBloomSize(float v)                  { m_bloomSize     = v; }
 void Engine::SetWind(const D3DXVECTOR3& wind)       { m_wind = wind; }
 void Engine::SetGravity(const D3DXVECTOR3& gravity) { D3DXVec3Normalize(&m_gravity, &gravity); }
 void Engine::SetLight(LightType which, const Light& light)
@@ -426,6 +629,7 @@ void Engine::SetAmbient(const D3DXVECTOR4& color)
 
 void Engine::Reset()
 {
+	ReleaseBloomTargets();
 	SAFE_RELEASE(m_pDistortTexture);
 	SAFE_RELEASE(m_pSceneTexture);
     SAFE_RELEASE(m_pDepthStencilSurface);
@@ -441,6 +645,7 @@ void Engine::Reset()
     {
         m_pShaders[i]->OnLostDevice();
     }
+	if (m_pBloomEffect != NULL) m_pBloomEffect->OnLostDevice();
 	if (FAILED(m_pDevice->Reset(&m_presentationParameters)))
 	{
 		throw wruntime_error(LoadString(IDS_ERROR_RENDERER_RESET));
@@ -450,6 +655,7 @@ void Engine::Reset()
     {
         m_pShaders[i]->OnResetDevice();
     }
+	if (m_pBloomEffect != NULL) m_pBloomEffect->OnResetDevice();
 
 	ResetParameters();
 }
@@ -482,6 +688,20 @@ void Engine::ResetParameters()
 			SAFE_RELEASE(m_pSceneTexture);
 			throw runtime_error("Unable to create depth buffer");
         }
+
+		// Half-resolution ping-pong RTs for the bloom blur. Failure to
+		// create them disables bloom for this session but doesn't
+		// block the rest of the renderer — particles still draw fine.
+		ReleaseBloomTargets();
+		UINT bloomW = max<UINT>(2, m_presentationParameters.BackBufferWidth  / 2);
+		UINT bloomH = max<UINT>(2, m_presentationParameters.BackBufferHeight / 2);
+		if (FAILED(m_pDevice->CreateTexture(bloomW, bloomH, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_pBloomPing, NULL))
+		 || FAILED(m_pDevice->CreateTexture(bloomW, bloomH, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_pBloomPong, NULL)))
+		{
+			// Don't throw — bloom is an optional post-process. Just
+			// disable it for this device-reset cycle and continue.
+			ReleaseBloomTargets();
+		}
 
 		// Reset states
 		m_pDevice->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
@@ -569,11 +789,22 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	// Zero shader pointers up front so partial-failure cleanup is safe
 	m_pDistortShader = NULL;
 	for (int i = 0; i < NUM_SHADERS; i++) m_pShaders[i] = NULL;
+	m_pBloomEffect = NULL;
+	m_pBloomPing   = NULL;
+	m_pBloomPong   = NULL;
+	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
+	m_hBloomTextureParam = m_hBloomSceneTextureParam = NULL;
+	m_hBloomTechBright = m_hBloomTechBlur = m_hBloomTechCombine = NULL;
 
 	// Initialize members
 	m_showGround     = true;
 	m_groundZ        = 0.0f;
 	m_debugHeat      = false;
+	m_bloomEnabled   = false;
+	m_bloomReady     = false;
+	m_bloomStrength  = 0.1f;   // matches game default
+	m_bloomCutoff    = 1.0f;   // matches game default
+	m_bloomSize      = 0.25f;  // matches game default
 	m_gravity        = D3DXVECTOR3(0,0,-1);
 	m_wind           = D3DXVECTOR3(0,0,0);
 	m_eye.Position   = D3DXVECTOR3(0,-250,125);
@@ -690,6 +921,8 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 
 Engine::~Engine()
 {
+	ReleaseBloomTargets();
+	SAFE_RELEASE(m_pBloomEffect);
     for (int i = 0; i < NUM_SHADERS; i++)
     {
         SAFE_RELEASE(m_pShaders[i]);
