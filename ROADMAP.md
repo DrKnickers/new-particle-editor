@@ -283,7 +283,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#TBD)
+### 5.1 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
