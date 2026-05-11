@@ -24,9 +24,9 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-*(No items currently queued. NT-1 and NT-2 have both shipped — see
-[Shipped](#5-shipped). When the next near-term idea lands, it takes
-position `1.1` and the next vacated `NT-N` tag.)*
+*(No items currently queued. NT-1, NT-2, and NT-3 have all shipped —
+see [Shipped](#5-shipped). When the next near-term idea lands, it
+takes position `1.1` and the next vacated `NT-N` tag.)*
 
 ---
 
@@ -271,7 +271,45 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
+### 5.1 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#TODO)
+Press F8 to freeze the preview at the current simulation tick; press
+it again to resume from exactly where time left off. While paused, F9
+steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
+three actions also live under View → Pause Preview / Step 1 Frame /
+Step 10 Frames and as three dedicated toolbar buttons (pause check
+button in cell 8, step-1 ▷| in cell 9, step-10 ▷▷| in cell 10). The
+step entries and toolbar buttons grey out when not paused. A
+` · PAUSED` suffix on the FPS pane in the status bar makes the state
+glanceable. The clock is process-local — pause always starts off on
+launch.
+
+Implementation hooks into `GetTimeF()` in [`src/engine.cpp`](src/engine.cpp:37)
+as the single time source — emitter spawn time, particle Update dt,
+shader `hTime` uniform, and the spawner driver dt all funnel through
+that one function. Three new free functions
+(`SetPreviewPaused` / `IsPreviewPaused` / `StepPreviewFrames`)
+maintain a small clock-offset state, and the resume path re-derives
+the offset from the (possibly stepped) anchor so frame-stepping
+during a pause persists past the resume.
+
+Spawner manual-fire shortcut also moved from `Shift+Space` to
+`Ctrl+Space` in the same PR (the rebind keeps `Shift` available for
+future "modify gesture" semantics and uses the more idiomatic Win32
+`Ctrl` for "trigger discrete action"). The "Spawn now" dialog button
+was relabeled to match.
+
+- **Difficulty**: ★★☆☆☆ (2/5)
+- **Estimated effort**: 2–4 hours
+- **Actual**: ~2 hours including planning. Almost all of the engine
+  work is concentrated in seven lines around `GetTimeF()`; the rest
+  is UI plumbing (one new toolbar bitmap cell, three menu items in
+  each language, three new resource IDs, three accelerator entries,
+  one status-bar suffix). One bug caught pre-merge: the initial
+  resume-offset accumulation used the wall-time delta and lost any
+  frame-stepping done during the pause; fixed by re-deriving the
+  offset from the current anchor at resume time.
+
+### 5.2 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
@@ -297,7 +335,7 @@ No new ROADMAP entry filed; no UI change needed.
   one pointer per slot anyway. Reused the Ghidra + JDK install from
   MT-6; auto-analysis on both binaries was the dominant cost.
 
-### 5.2 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
+### 5.3 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
@@ -334,7 +372,7 @@ listing exactly what was found.
   count is engine-side and hardcoded to 4 in our build pending
   further empirical tuning.
 
-### 5.3 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.4 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -352,7 +390,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.4 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.5 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -374,7 +412,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.5 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.6 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -397,7 +435,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.6 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.7 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -416,7 +454,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.7 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.8 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
 
@@ -451,7 +489,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.8 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.9 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -473,7 +511,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.9 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.10 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -487,7 +525,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.10 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.11 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.
