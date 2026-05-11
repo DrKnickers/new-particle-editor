@@ -158,11 +158,10 @@ void Engine::InitBloomEffect()
 	m_hBloomStrength          = NULL;
 	m_hBloomCutoff            = NULL;
 	m_hBloomSize              = NULL;
-	m_hBloomTextureParam      = NULL;
+	m_hBloomIteration         = NULL;
 	m_hBloomSceneTextureParam = NULL;
-	m_hBloomTechBright        = NULL;
-	m_hBloomTechBlur          = NULL;
-	m_hBloomTechCombine       = NULL;
+	m_hBloomTechnique         = NULL;
+	m_bloomPassCount          = 0;
 
 	// Open the diagnostic file. Failure here is non-fatal; we'll
 	// still try to introspect and just skip the file output.
@@ -270,38 +269,35 @@ void Engine::InitBloomEffect()
 		     i, td.Name, td.Passes, valid ? "valid on this device" : "NOT valid on this device");
 	}
 
-	// Now run the actual matching to bind handles.
+	// Now run the actual matching to bind handles. The game's
+	// SceneBloom.fx exposes BloomStrength / BloomCutoff / BloomSize
+	// as float scalars, BloomIteration as a per-pass control float,
+	// and SceneTexture as the single input that's rebound between
+	// passes (bright filter reads scene, blur reads bright-pass
+	// output, combine reads blurred output and additively writes
+	// onto the existing scene RT).
 	m_hBloomStrength          = pFx->GetParameterByName(NULL, "BloomStrength");
 	m_hBloomCutoff            = pFx->GetParameterByName(NULL, "BloomCutoff");
 	m_hBloomSize              = pFx->GetParameterByName(NULL, "BloomSize");
-	m_hBloomTextureParam      = pFx->GetParameterByName(NULL, "BloomTexture");
+	m_hBloomIteration         = pFx->GetParameterByName(NULL, "BloomIteration");
 	m_hBloomSceneTextureParam = pFx->GetParameterByName(NULL, "SceneTexture");
 
+	// Pick the first technique that validates on this device. The
+	// game's shader has a single technique with three passes —
+	// bright filter (0), blur (1), combine (2) — driven by the
+	// vs_/ps_bright_filter_bin / vs_/ps_bloom_bin /
+	// vs_/ps_combine_bin precompiled blobs the .fx ships with.
 	for (UINT i = 0; i < desc.Techniques; ++i)
 	{
 		D3DXHANDLE hTech = pFx->GetTechnique(i);
 		D3DXTECHNIQUE_DESC td;
-		if (FAILED(pFx->GetTechniqueDesc(hTech, &td)) || td.Name == NULL) continue;
+		if (FAILED(pFx->GetTechniqueDesc(hTech, &td))) continue;
 
-		string name(td.Name);
-		transform(name.begin(), name.end(), name.begin(), ::tolower);
-
-		if (name.find("bright") != string::npos && m_hBloomTechBright == NULL)
+		if (SUCCEEDED(pFx->ValidateTechnique(hTech)))
 		{
-			m_hBloomTechBright = hTech;
-		}
-		else if ((name.find("blur") != string::npos
-		       || name.find("gauss") != string::npos)
-		      && m_hBloomTechBlur == NULL)
-		{
-			m_hBloomTechBlur = hTech;
-		}
-		else if ((name.find("addsmooth") != string::npos
-		       || name.find("combine") != string::npos
-		       || name.find("composite") != string::npos)
-		      && m_hBloomTechCombine == NULL)
-		{
-			m_hBloomTechCombine = hTech;
+			m_hBloomTechnique = hTech;
+			m_bloomPassCount  = td.Passes;
+			break;
 		}
 	}
 
@@ -311,18 +307,20 @@ void Engine::InitBloomEffect()
 	logf("[bloom]     BloomStrength    -> %s\n", m_hBloomStrength     ? "found" : "MISSING");
 	logf("[bloom]     BloomCutoff      -> %s\n", m_hBloomCutoff       ? "found" : "MISSING");
 	logf("[bloom]     BloomSize        -> %s\n", m_hBloomSize         ? "found" : "MISSING");
-	logf("[bloom]     SceneTexture     -> %s\n", m_hBloomSceneTextureParam ? "found" : "missing (optional)");
-	logf("[bloom]     BloomTexture     -> %s\n", m_hBloomTextureParam      ? "found" : "missing (optional)");
-	logf("[bloom]     Technique bright -> %s\n", m_hBloomTechBright   ? "found" : "MISSING");
-	logf("[bloom]     Technique blur   -> %s\n", m_hBloomTechBlur     ? "found" : "MISSING");
-	logf("[bloom]     Technique combine-> %s\n", m_hBloomTechCombine  ? "found" : "MISSING");
+	logf("[bloom]     BloomIteration   -> %s\n", m_hBloomIteration    ? "found" : "missing (optional)");
+	logf("[bloom]     SceneTexture     -> %s\n", m_hBloomSceneTextureParam ? "found" : "MISSING");
+	logf("[bloom]     Active technique -> %s (%u passes)\n",
+	     m_hBloomTechnique ? "found" : "MISSING", m_bloomPassCount);
 
-	m_bloomReady = (m_hBloomStrength     != NULL)
-	            && (m_hBloomCutoff       != NULL)
-	            && (m_hBloomSize         != NULL)
-	            && (m_hBloomTechBright   != NULL)
-	            && (m_hBloomTechBlur     != NULL)
-	            && (m_hBloomTechCombine  != NULL);
+	// We need the technique, the scene-texture param, the three
+	// tunable scalars, and at least 3 passes (bright + blur +
+	// combine). BloomIteration is optional — set when present.
+	m_bloomReady = (m_hBloomStrength          != NULL)
+	            && (m_hBloomCutoff            != NULL)
+	            && (m_hBloomSize              != NULL)
+	            && (m_hBloomSceneTextureParam != NULL)
+	            && (m_hBloomTechnique         != NULL)
+	            && (m_bloomPassCount          >= 3);
 
 	logf("[bloom]   Verdict: bloom is %s.\n",
 	     m_bloomReady ? "READY — UI enabled" : "UNAVAILABLE — UI greyed");
@@ -527,9 +525,17 @@ bool Engine::Render()
 
 	// Bloom post-process. Runs after the scene is drawn but before
 	// the heat/distortion pass, so distortion smears the bloomed
-	// image (matches in-game order). Skipped entirely when bloom
-	// is disabled, unavailable, or RTs failed to allocate — no
-	// perf cost in those cases.
+	// image (matches in-game order). The game's SceneBloom.fx
+	// exposes one technique with three sequential passes:
+	//
+	//   pass 0  bright filter   scene  -> ping  (clear ping first)
+	//   pass 1  Gaussian blur   ping   -> pong  (clear pong first)
+	//   pass 2  combine         pong   -> scene (additive blend onto
+	//                                            existing scene RT;
+	//                                            do NOT clear)
+	//
+	// Skipped entirely when bloom is off, unavailable, or RTs
+	// failed to alloc — no perf cost in those cases.
 	if (m_bloomEnabled && m_bloomReady && m_pBloomEffect != NULL
 	    && m_pBloomPing != NULL && m_pBloomPong != NULL)
 	{
@@ -551,65 +557,56 @@ bool Engine::Render()
 
 			IDirect3DSurface9* pPingSurface = NULL;
 			IDirect3DSurface9* pPongSurface = NULL;
-			IDirect3DSurface9* pSceneRT = NULL;
+			IDirect3DSurface9* pSceneRT     = NULL;
 			m_pBloomPing->GetSurfaceLevel(0, &pPingSurface);
 			m_pBloomPong->GetSurfaceLevel(0, &pPongSurface);
 			m_pSceneTexture->GetSurfaceLevel(0, &pSceneRT);
 
+			pBloom->SetTechnique(m_hBloomTechnique);
 			UINT nPasses = 0;
-
-			// Pass 1: bright filter — sample scene, threshold, write to ping.
-			m_pDevice->SetRenderTarget(0, pPingSurface);
-			m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0,0,0), 1.0f, 0);
-			pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
-			pBloom->SetTechnique(m_hBloomTechBright);
-			pBloom->Begin(&nPasses, 0);
-			for (UINT i = 0; i < nPasses; ++i)
+			if (SUCCEEDED(pBloom->Begin(&nPasses, 0)) && nPasses >= 3)
 			{
-				pBloom->BeginPass(i);
+				// Pass 0: bright filter — scene RT to ping.
+				m_pDevice->SetRenderTarget(0, pPingSurface);
+				m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0,0,0,0), 1.0f, 0);
+				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
+				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 0.0f);
+				pBloom->BeginPass(0);
+				pBloom->CommitChanges();
 				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
 				pBloom->EndPass();
-			}
-			pBloom->End();
 
-			// Pass 2: blur — ping → pong. Bind ping as the bloom-input
-			// sampler. The shader's own technique decides H vs V or
-			// runs both internally; we just hand it a texture.
-			m_pDevice->SetRenderTarget(0, pPongSurface);
-			m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0,0,0), 1.0f, 0);
-			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, m_pBloomPing);
-			pBloom->SetTechnique(m_hBloomTechBlur);
-			pBloom->Begin(&nPasses, 0);
-			for (UINT i = 0; i < nPasses; ++i)
-			{
-				pBloom->BeginPass(i);
+				// Pass 1: blur — ping to pong.
+				m_pDevice->SetRenderTarget(0, pPongSurface);
+				m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0,0,0,0), 1.0f, 0);
+				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pBloomPing);
+				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 1.0f);
+				pBloom->BeginPass(1);
+				pBloom->CommitChanges();
 				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
 				pBloom->EndPass();
-			}
-			pBloom->End();
 
-			// Pass 3: AddSmooth combine — scene + pong → scene RT.
-			// Writes back into m_pSceneTexture; the heat compose
-			// below picks up the bloomed image unchanged.
-			m_pDevice->SetRenderTarget(0, pSceneRT);
-			pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
-			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, m_pBloomPong);
-			pBloom->SetTechnique(m_hBloomTechCombine);
-			pBloom->Begin(&nPasses, 0);
-			for (UINT i = 0; i < nPasses; ++i)
-			{
-				pBloom->BeginPass(i);
+				// Pass 2: combine — pong additively blends back onto
+				// the scene RT. No Clear here — we want the existing
+				// scene pixels to remain so the additive blend defined
+				// by the pass's render state lifts highlights without
+				// destroying the rest of the image.
+				m_pDevice->SetRenderTarget(0, pSceneRT);
+				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pBloomPong);
+				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 2.0f);
+				pBloom->BeginPass(2);
+				pBloom->CommitChanges();
 				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
 				pBloom->EndPass();
+
+				pBloom->End();
 			}
-			pBloom->End();
 
 			// Unbind textures we sourced from to avoid driver warnings
 			// about a texture being bound as both RT and sampler on the
 			// next pass (the heat pass that follows binds its own RT
 			// immediately, but be defensive).
 			pBloom->SetTexture(m_hBloomSceneTextureParam, NULL);
-			if (m_hBloomTextureParam != NULL) pBloom->SetTexture(m_hBloomTextureParam, NULL);
 
 			SAFE_RELEASE(pSceneRT);
 			SAFE_RELEASE(pPongSurface);
@@ -914,8 +911,9 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_pBloomPing   = NULL;
 	m_pBloomPong   = NULL;
 	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
-	m_hBloomTextureParam = m_hBloomSceneTextureParam = NULL;
-	m_hBloomTechBright = m_hBloomTechBlur = m_hBloomTechCombine = NULL;
+	m_hBloomIteration = m_hBloomSceneTextureParam = NULL;
+	m_hBloomTechnique = NULL;
+	m_bloomPassCount  = 0;
 
 	// Initialize members
 	m_showGround     = true;
