@@ -492,3 +492,99 @@ negligible.
   effect-load-success-or-not at startup so a hostile-driver case is
   obvious in the debugger. Removed for Release builds. Grep tag:
   `[bloom]`.
+
+---
+
+## Review
+
+**Outcome.** Bloom is live and visually identical to the game's own
+bloom (modulo iteration count, see below). The "use the game's
+own shader" approach paid off — zero shader authoring needed on
+our side, and mod overrides are picked up automatically through the
+existing FileManager chain.
+
+**What changed from the plan:**
+
+- **Two matcher revisions** before bloom rendered correctly:
+  - v1 looked for three separate techniques named bright / blur /
+    combine. The canonical shader actually has one technique with
+    three passes. Diagnostic dump on the user's install surfaced
+    this in one pass.
+  - v2 forgot `m_resolutionConstants` — the engine-global the
+    shader reads for half-pixel offset AND for the blur kernel
+    base spacing. Without it the blur kernel collapses to zero
+    and "bloom enabled" renders the same as "bloom off." Reading
+    the canonical `SceneBloom.fx` source (found loose in the
+    user's Chelmod folder, not in a MEG) revealed this and led
+    to v3 which works.
+- **Diagnostic file (`bloom-diagnostic.log`).** Not in the original
+  plan but added when the shader appeared greyed-out on the user's
+  install. Dumps every parameter and technique the loaded effect
+  exposes so a future matcher tweak doesn't need code instrumentation
+  to debug. Always-on (no NDEBUG gate) because the user runs
+  Release builds.
+- **Defaults switched twice.** Started at the shader-source
+  defaults (`1.0 / 0.1 / 0.25`), bumped to Agriworld values
+  (`0.90 / 1.00 / 1.00`) to make bloom visible, then settled on
+  the canonical Terrain Editor's new-map defaults
+  (`0.90 / 0.00 / 0.10`) at the user's instruction. The new-map
+  defaults match the canonical editor's blank-slate; user dials
+  `Strength` up to see bloom.
+- **Toolbar toggle button added** late in the cycle (not in the
+  original plan). Mirrors the Show Ground toggle's UX — one-click
+  on/off, sunburst icon, greys out when bloom is unavailable.
+  Added `tasks/extend_toolbar1_bmp_bloom.ps1` to extend the
+  toolbar bitmap from 7 cells to 8.
+- **Full-resolution ping/pong RTs** (originally planned half-res).
+  Half-res made the blur kernel half-scale relative to scene
+  space and added another variable while tuning. Full-res
+  matches the canonical engine and eliminates the question.
+- **`BLOOM_BLUR_ITERATIONS = 4`** is a tuning constant in
+  `engine.cpp Render`. The canonical Terrain Editor doesn't
+  expose an iteration count — it's engine-side hardcoded in the
+  game's binary. Visual A/B against the canonical editor is the
+  refinement path; 4 is a reasonable middle.
+
+**Risks revisited:**
+
+1. *Effect compile failure on user hardware.* No instances reported.
+2. *Half-resolution RT desync.* Moot — switched to full-res.
+3. *Alpha-as-luminance-boost.* Source revealed the shader's
+   luminance dot product gives alpha weight 0, so the comment in
+   the shader header is aspirational. No code action needed.
+4. *Pipeline order.* Bloom before distortion — correct, matches
+   the game's render flow.
+5. *Spurious GPU cost.* Bloom skipped entirely when not enabled or
+   not ready; one branch.
+6. *Effect parameter handles on Reload Shaders.* `InitBloomEffect`
+   re-runs after every `ReloadShaders` call so the cached handles
+   refresh.
+7. *`ResetViewSettings` forgetting bloom keys.* Four `RegDeleteValue`
+   calls present, confirmation prompt mentions bloom.
+8. *Shader-missing fallback.* The default-fallback shader produces
+   visual garbage if used as bloom; `InitBloomEffect` probes for
+   `BloomStrength` to detect this case and disables the UI.
+
+**What I didn't do (deliberately):**
+
+- No UI for blur iteration count — the canonical Terrain Editor
+  doesn't expose one, and matching its surface keeps us aligned.
+  The constant is one line in `Engine::Render` for when we have
+  a definitive in-game count.
+- No tone-mapping, multi-scale, or per-emitter override. Not in
+  the canonical shader.
+- No bundled fallback `SceneBloom.fx`. The graceful-degrade UI
+  is the right answer for missing-shader installs.
+
+**Outstanding manual test items:**
+
+- Visual A/B against the canonical Terrain Editor on a known-bloom
+  map (Agriworld at Cutoff=0.90, Strength=1.00, Size=1.00) to
+  refine `BLOOM_BLUR_ITERATIONS`.
+- F5 (Reload Shaders) round-trip — bloom should keep working after
+  reload; handles re-cache.
+- Mod switch round-trip — switching mods should hot-swap any
+  mod-provided `SceneBloom.fx`.
+- Toolbar button greys correctly when `IsBloomAvailable` is false
+  (test by renaming the shader file or pointing at a clean install
+  with no game path configured).

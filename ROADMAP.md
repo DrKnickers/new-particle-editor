@@ -88,59 +88,6 @@ implicitly assumes "one child or the other", fix it. Ship test fixture
 - **Difficulty**: ★★☆☆☆ (2/5) — mostly investigation
 - **Estimated effort**: 2–4 hours
 
-### 2.6 [MT-6] Bloom in the preview renderer
-Add the game's "fake-HDR" bloom post-process to the editor preview so
-particles that glow in-game also glow in the editor. Today, an emitter
-authored to bloom (e.g. fire / explosion hotspots, energy weapon trails)
-renders flat in the preview, which means lighting decisions get made
-against the wrong reference image.
-
-The reference shader is the game's
-`SHADERS/Source/Engine/SceneBloom.fx` — three passes (bright filter →
-ping-pong Gaussian-ish blur → AddSmooth combine) with three tunables:
-
-- **`BloomStrength`** (game default `0.1`) — final multiplier on the
-  blurred bright-pass result before it's blended back onto the scene.
-  The primary knob the user wants.
-- **`BloomCutoff`** (default `1.0`) — luminance threshold for the
-  bright-pass filter. Pixels above it pass through unchanged; pixels
-  below are suppressed by `pixel⁵`.
-- **`BloomSize`** (default `0.25`) — blur kernel radius.
-
-Plus a non-obvious detail from the shader comments worth mirroring:
-*"the alpha channel can pull the luminance up for this formula"* — the
-game lets specific particles opt into bloom by writing non-zero alpha
-into the frame buffer alpha channel, which is then folded into the
-luminance dot product. We should preserve this behavior so editor
-preview matches in-game contribution per-particle, not just per-scene.
-
-UI: a new **View → Bloom…** dialog (or a panel under View) with a
-master enable checkbox plus three sliders matching the shader inputs.
-Defaults match the shader. Persisted per-session in the registry.
-
-**Implementation notes:**
-
-- Requires render-to-texture infrastructure the editor doesn't have
-  today. The current preview renders directly to the swap chain. We'd
-  need at least three off-screen targets at half-resolution: the
-  scene, plus two ping-pong targets for the blur passes. Then the
-  combine pass blends the ping-pong result onto the back buffer.
-- DXSDK ships D3DX9 helpers for offscreen RT creation
-  (`IDirect3DDevice9::CreateTexture` with `D3DUSAGE_RENDERTARGET`).
-  No new dependency.
-- Port the three shader programs from `SceneBloom.fx`. They compile
-  to vs_1_1 / ps_1_3 — well within the editor's existing shader
-  pipeline. `ShaderManager` already has the all-or-nothing reload
-  semantics we'd want for bloom shaders too.
-- The "fake-HDR alpha-as-luminance-boost" trick assumes the back
-  buffer is a format that preserves alpha through the particle
-  blends. Need to verify that's true for the editor's current swap
-  chain config; if not, an intermediate FP / `D3DFMT_A8R8G8B8` RT
-  fixes it.
-
-- **Difficulty**: ★★★★☆ (4/5)
-- **Estimated effort**: 8–12 hours
-
 ---
 
 ## 3. Long term
@@ -336,7 +283,44 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.1 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#TBD)
+The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
+(mod overlay → game roots → MEG archives, same chain the editor
+already uses for particle shaders), so the editor's bloom is
+byte-identical to in-game bloom and automatically picks up any
+mod's customised bloom. Engine inserts a single-technique 3-pass
+loop (bright filter → blur ping-pong × 4 iterations → AddSmooth
+combine) into `Engine::Render` between the scene draw and the
+heat/distortion compose, writing back into `m_pSceneTexture` so
+downstream passes are untouched. Configurable via
+**View → Bloom… / Ctrl+B** (master enable + Strength/Cutoff/Size
+spinners) and a new toolbar toggle button (sunburst icon, mirrors
+the Show Ground toggle). All four values persist across sessions
+via the same registry pattern as other view settings. Greys out
+gracefully on installs that lack `SceneBloom.fx` or where the
+shader's parameter surface doesn't match the canonical layout —
+the diagnostic writes a `bloom-diagnostic.log` next to the .exe
+listing exactly what was found.
+
+- **Difficulty**: ★★★★☆ (4/5)
+- **Estimated effort**: 8–12 hours
+- **Actual**: ~6 hours, of which substantial time went into two
+  matcher revisions after live introspection. The first cut
+  looked for three separate techniques (bright/blur/combine);
+  the game's shader is actually one technique with three passes
+  driven by `BloomIteration`. The second iteration also missed
+  `m_resolutionConstants` — required by every VS for the half-pixel
+  offset and the blur kernel's base spacing; without it the
+  kernel collapses and no blooming happens. Reading the canonical
+  `SceneBloom.fx` source (found loose in the user's mod folder)
+  resolved both, plus revealed that the blur is a 4-tap diagonal
+  cross run iteratively with the per-tap offset widening each
+  iteration. The canonical Terrain Editor's UI (3 sliders, no
+  iteration count) confirmed the user-facing shape; the iteration
+  count is engine-side and hardcoded to 4 in our build pending
+  further empirical tuning.
+
+### 5.2 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -354,7 +338,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.2 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.3 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -376,7 +360,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.3 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.4 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -399,7 +383,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.4 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.5 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -418,7 +402,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.5 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.6 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
 
@@ -453,7 +437,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.6 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.7 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -475,7 +459,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.7 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.8 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -489,7 +473,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.8 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.9 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.
