@@ -8,42 +8,14 @@ D3DX9).
 Items can land in any order within their tier — the grouping reflects scope
 and risk, not strict dependency.
 
-This file is split into five parts:
+This file is split into six parts:
 
 1. **[Near term](#1-near-term)** — quality-of-life polish on existing workflows. Each item is contained, low risk, and doesn't touch the rendering pipeline or file format.
 2. **[Medium term](#2-medium-term)** — bigger UX investments and modest engine work. Each touches more than one subsystem but stays inside the rendering preview / editor surface.
 3. **[Long term](#3-long-term)** — larger features that meaningfully expand what the editor can do. Each is roughly on the order of a small project rather than a sitting.
 4. **[Notes on prioritization](#4-notes-on-prioritization)** — guidance on which tier to pick from next.
 5. **[Shipped](#5-shipped)** — roadmap items that have landed on master. Kept for traceability with PR number, original estimate, and actual effort.
-
-**Item headings.** Each item is shown as `### N.M [TIER-K] Title`.
-Two identifiers in one heading:
-
-- **`N.M` (position)** — purely visual ordering. `N` matches the
-  section number (`1.` Near, `2.` Medium, `3.` Long, `5.` Shipped);
-  `M` is sequential within the section. The position **renumbers
-  freely** when items ship so the list stays gap-free. Don't cite
-  the position in PRs, commits, or discussion — it changes underfoot.
-- **`[TIER-K]` (stable tag)** — the permanent identifier (`NT-1`,
-  `MT-3`, `LT-2`, etc.). Assigned at creation as `max+1` within the
-  tier, never reused, vacated permanently on ship. **Cite the tag**
-  anywhere a reference needs to survive future renumbering.
-
-**Shipping convention.** When a roadmap item ships:
-
-1. Its title is struck through with `✅ Shipped (#NN)` and an *Actual:*
-   line is appended under the estimate.
-2. The entry moves to [Shipped](#5-shipped) at the top of that section
-   (newest first), keeping its `[TIER-K]` tag and taking the new `5.1`
-   position; the rest of Shipped shifts down (5.1→5.2, …).
-3. The source tier renumbers to close the gap left behind (e.g. if
-   `2.3` ships, what was `2.4` becomes `2.3`, `2.5` becomes `2.4`).
-   The vacated `[TIER-K]` tag stays retired.
-
-Items shipped before this convention was adopted (PRs #16 through #41)
-have no bracketed tag in the Shipped section — they're referenced by
-PR number, which is already permanent. See [CLAUDE.md](CLAUDE.md) for
-the full convention.
+6. **[Notes on roadmap conventions](#6-notes-on-roadmap-conventions)** — how item headings are numbered and tagged, and the renumbering rules that fire when an item ships.
 
 ---
 
@@ -512,3 +484,39 @@ Self-contained change to `src/UI/Spinner.cpp`.
 - **Difficulty**: ★☆☆☆☆ (1/5)
 - **Estimated effort**: 1–2 hours
 - **Actual**: ~30 min, single file
+
+---
+
+## 6. Notes on roadmap conventions
+
+How item headings are numbered and tagged, and the renumbering rules
+that fire when an item ships. See [CLAUDE.md](CLAUDE.md) for the
+authoritative version of these rules.
+
+**Item headings.** Each item is shown as `### N.M [TIER-K] Title`.
+Two identifiers in one heading:
+
+- **`N.M` (position)** — purely visual ordering. `N` matches the
+  section number (`1.` Near, `2.` Medium, `3.` Long, `5.` Shipped);
+  `M` is sequential within the section. The position **renumbers
+  freely** when items ship so the list stays gap-free. Don't cite
+  the position in PRs, commits, or discussion — it changes underfoot.
+- **`[TIER-K]` (stable tag)** — the permanent identifier (`NT-1`,
+  `MT-3`, `LT-2`, etc.). Assigned at creation as `max+1` within the
+  tier, never reused, vacated permanently on ship. **Cite the tag**
+  anywhere a reference needs to survive future renumbering.
+
+**Shipping convention.** When a roadmap item ships:
+
+1. Its title is struck through with `✅ Shipped (#NN)` and an *Actual:*
+   line is appended under the estimate.
+2. The entry moves to [Shipped](#5-shipped) at the top of that section
+   (newest first), keeping its `[TIER-K]` tag and taking the new `5.1`
+   position; the rest of Shipped shifts down (5.1→5.2, …).
+3. The source tier renumbers to close the gap left behind (e.g. if
+   `2.3` ships, what was `2.4` becomes `2.3`, `2.5` becomes `2.4`).
+   The vacated `[TIER-K]` tag stays retired.
+
+Items shipped before this convention was adopted (PRs #16 through #41)
+have no bracketed tag in the Shipped section — they're referenced by
+PR number, which is already permanent.
