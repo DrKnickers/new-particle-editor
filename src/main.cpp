@@ -1682,8 +1682,8 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             }
             SendMessage(info->hGroundZLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
 
-            if ((info->hGroundZSpinner = CreateWindowEx(0, L"Spinner", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                0, 0, 64, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
+            if ((info->hGroundZSpinner = CreateWindowEx(WS_EX_CLIENTEDGE, L"Spinner", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                0, 0, 70, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
             {
                 return -1;
             }
@@ -2143,7 +2143,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 GetClientRect(info->hBackgroundLabel, &label);
                 GetClientRect(info->hGroundZLabel, &groundLabel);
                 int height = max(max(24, checkbox.bottom), label.bottom);
-                const int GROUND_SPINNER_W = 64;
+                const int GROUND_SPINNER_W = 70;
                 const int GROUND_SPINNER_H = 20;
                 MoveWindow(info->hLeaveParticles, props.right + 8, top + 4 + (height - checkbox.bottom) / 2, checkbox.right, label.bottom, TRUE);
                 // Ground Z spinner + label sit just to the right of the
