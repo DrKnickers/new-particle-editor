@@ -1676,7 +1676,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             // Ground Z spinner + label. Final position is set in WM_SIZE
             // alongside the other header-strip controls.
             if ((info->hGroundZLabel = CreateWindowEx(0, L"STATIC", LoadString(IDS_LABEL_GROUND_Z).c_str(), WS_CHILD | WS_VISIBLE,
-                0, 0, 60, 16, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
+                0, 0, 90, 16, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
             {
                 return -1;
             }

@@ -337,8 +337,9 @@ convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
 ### 5.1 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#TBD)
-"Ground Z:" spinner on the editor's header strip (just to the right of
-"Leave particles") moves the preview ground plane up or down along Z.
+"Ground Height:" spinner on the editor's header strip (just left of
+the Background color picker) moves the preview ground plane up or down
+along Z.
 Range is ±100 units in 0.1-unit steps; scroll-wheel adjusts (Shift = ×10,
 Ctrl = ×0.1). Persists across sessions in the registry; greys out when
 "Show Ground" is toggled off; resets to 0 via View → Reset View Settings.
