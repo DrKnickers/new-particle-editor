@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#TODO)
+### 5.1 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
 Press F8 to freeze the preview at the current simulation tick; press
 it again to resume from exactly where time left off. While paused, F9
 steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
