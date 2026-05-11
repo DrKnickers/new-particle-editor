@@ -249,6 +249,13 @@ private:
 	D3DXHANDLE          m_hBloomSize;
 	D3DXHANDLE          m_hBloomIteration;
 	D3DXHANDLE          m_hBloomSceneTextureParam;
+	// Engine-globals the shader reads via its AlamoEngine.fxh
+	// include. m_resolutionConstants packs (1/w, 1/h, 0.5/w, 0.5/h)
+	// where w,h is the source RT being sampled. The .zw is read by
+	// every VS as the half-pixel offset AND by the blur VS as the
+	// per-tap base spacing — if it stays at the default zero, the
+	// blur kernel collapses and no blooming happens.
+	D3DXHANDLE          m_hBloomResolutionConstants;
 	D3DXHANDLE          m_hBloomTechnique;
 	UINT                m_bloomPassCount;
 

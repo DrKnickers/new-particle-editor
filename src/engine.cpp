@@ -154,14 +154,15 @@ static std::wstring ExeDirectory()
 // uses without guessing.
 void Engine::InitBloomEffect()
 {
-	m_bloomReady              = false;
-	m_hBloomStrength          = NULL;
-	m_hBloomCutoff            = NULL;
-	m_hBloomSize              = NULL;
-	m_hBloomIteration         = NULL;
-	m_hBloomSceneTextureParam = NULL;
-	m_hBloomTechnique         = NULL;
-	m_bloomPassCount          = 0;
+	m_bloomReady                = false;
+	m_hBloomStrength            = NULL;
+	m_hBloomCutoff              = NULL;
+	m_hBloomSize                = NULL;
+	m_hBloomIteration           = NULL;
+	m_hBloomSceneTextureParam   = NULL;
+	m_hBloomResolutionConstants = NULL;
+	m_hBloomTechnique           = NULL;
+	m_bloomPassCount            = 0;
 
 	// Open the diagnostic file. Failure here is non-fatal; we'll
 	// still try to introspect and just skip the file output.
@@ -276,11 +277,12 @@ void Engine::InitBloomEffect()
 	// passes (bright filter reads scene, blur reads bright-pass
 	// output, combine reads blurred output and additively writes
 	// onto the existing scene RT).
-	m_hBloomStrength          = pFx->GetParameterByName(NULL, "BloomStrength");
-	m_hBloomCutoff            = pFx->GetParameterByName(NULL, "BloomCutoff");
-	m_hBloomSize              = pFx->GetParameterByName(NULL, "BloomSize");
-	m_hBloomIteration         = pFx->GetParameterByName(NULL, "BloomIteration");
-	m_hBloomSceneTextureParam = pFx->GetParameterByName(NULL, "SceneTexture");
+	m_hBloomStrength            = pFx->GetParameterByName(NULL, "BloomStrength");
+	m_hBloomCutoff              = pFx->GetParameterByName(NULL, "BloomCutoff");
+	m_hBloomSize                = pFx->GetParameterByName(NULL, "BloomSize");
+	m_hBloomIteration           = pFx->GetParameterByName(NULL, "BloomIteration");
+	m_hBloomSceneTextureParam   = pFx->GetParameterByName(NULL, "SceneTexture");
+	m_hBloomResolutionConstants = pFx->GetParameterByName(NULL, "m_resolutionConstants");
 
 	// Pick the first technique that validates on this device. The
 	// game's shader has a single technique with three passes —
@@ -304,23 +306,25 @@ void Engine::InitBloomEffect()
 	SAFE_RELEASE(pFx);
 
 	logf("[bloom]   Matcher results:\n");
-	logf("[bloom]     BloomStrength    -> %s\n", m_hBloomStrength     ? "found" : "MISSING");
-	logf("[bloom]     BloomCutoff      -> %s\n", m_hBloomCutoff       ? "found" : "MISSING");
-	logf("[bloom]     BloomSize        -> %s\n", m_hBloomSize         ? "found" : "MISSING");
-	logf("[bloom]     BloomIteration   -> %s\n", m_hBloomIteration    ? "found" : "missing (optional)");
-	logf("[bloom]     SceneTexture     -> %s\n", m_hBloomSceneTextureParam ? "found" : "MISSING");
-	logf("[bloom]     Active technique -> %s (%u passes)\n",
+	logf("[bloom]     BloomStrength          -> %s\n", m_hBloomStrength            ? "found" : "MISSING");
+	logf("[bloom]     BloomCutoff            -> %s\n", m_hBloomCutoff              ? "found" : "MISSING");
+	logf("[bloom]     BloomSize              -> %s\n", m_hBloomSize                ? "found" : "MISSING");
+	logf("[bloom]     BloomIteration         -> %s\n", m_hBloomIteration           ? "found" : "missing (optional)");
+	logf("[bloom]     SceneTexture           -> %s\n", m_hBloomSceneTextureParam   ? "found" : "MISSING");
+	logf("[bloom]     m_resolutionConstants  -> %s\n", m_hBloomResolutionConstants ? "found" : "MISSING");
+	logf("[bloom]     Active technique       -> %s (%u passes)\n",
 	     m_hBloomTechnique ? "found" : "MISSING", m_bloomPassCount);
 
 	// We need the technique, the scene-texture param, the three
 	// tunable scalars, and at least 3 passes (bright + blur +
 	// combine). BloomIteration is optional — set when present.
-	m_bloomReady = (m_hBloomStrength          != NULL)
-	            && (m_hBloomCutoff            != NULL)
-	            && (m_hBloomSize              != NULL)
-	            && (m_hBloomSceneTextureParam != NULL)
-	            && (m_hBloomTechnique         != NULL)
-	            && (m_bloomPassCount          >= 3);
+	m_bloomReady = (m_hBloomStrength            != NULL)
+	            && (m_hBloomCutoff              != NULL)
+	            && (m_hBloomSize                != NULL)
+	            && (m_hBloomSceneTextureParam   != NULL)
+	            && (m_hBloomResolutionConstants != NULL)
+	            && (m_hBloomTechnique           != NULL)
+	            && (m_bloomPassCount            >= 3);
 
 	logf("[bloom]   Verdict: bloom is %s.\n",
 	     m_bloomReady ? "READY — UI enabled" : "UNAVAILABLE — UI greyed");
@@ -526,16 +530,25 @@ bool Engine::Render()
 	// Bloom post-process. Runs after the scene is drawn but before
 	// the heat/distortion pass, so distortion smears the bloomed
 	// image (matches in-game order). The game's SceneBloom.fx
-	// exposes one technique with three sequential passes:
+	// exposes one technique with three passes:
 	//
-	//   pass 0  bright filter   scene  -> ping  (clear ping first)
-	//   pass 1  Gaussian blur   ping   -> pong  (clear pong first)
-	//   pass 2  combine         pong   -> scene (additive blend onto
-	//                                            existing scene RT;
-	//                                            do NOT clear)
+	//   pass 0  bright filter   scene  -> ping
+	//   pass 1  4-tap blur      src    -> dst    (ping-pong, N iters,
+	//                                             BloomIteration grows
+	//                                             the kernel each time)
+	//   pass 2  combine         final  -> scene  (AddSmooth blend, no
+	//                                             clear — shader pass
+	//                                             state handles it)
 	//
 	// Skipped entirely when bloom is off, unavailable, or RTs
 	// failed to alloc — no perf cost in those cases.
+	//
+	// BLOOM_BLUR_ITERATIONS is the count we don't know from the
+	// shader source or the canonical editor UI. Start at 4 and
+	// tune empirically against the canonical look. The shader's
+	// header comment talks about "a series of bloom passes" but
+	// the count is engine-side hardcoded in the game's binary.
+	static const UINT BLOOM_BLUR_ITERATIONS = 4;
 	if (m_bloomEnabled && m_bloomReady && m_pBloomEffect != NULL
 	    && m_pBloomPing != NULL && m_pBloomPong != NULL)
 	{
@@ -545,6 +558,16 @@ bool Engine::Render()
 			pBloom->SetFloat(m_hBloomStrength, m_bloomStrength);
 			pBloom->SetFloat(m_hBloomCutoff,   m_bloomCutoff);
 			pBloom->SetFloat(m_hBloomSize,     m_bloomSize);
+
+			// m_resolutionConstants = (1/w, 1/h, 0.5/w, 0.5/h).
+			// Used by every VS for half-pixel UV correction; the
+			// .zw is also the blur's per-tap base spacing, so a
+			// missing or zero value collapses the blur kernel.
+			const float bloomW = (float)m_presentationParameters.BackBufferWidth;
+			const float bloomH = (float)m_presentationParameters.BackBufferHeight;
+			const D3DXVECTOR4 resCon(1.0f / bloomW, 1.0f / bloomH,
+			                         0.5f / bloomW, 0.5f / bloomH);
+			pBloom->SetVector(m_hBloomResolutionConstants, &resCon);
 
 			// Fullscreen quad in clip space, same vertex layout as the
 			// existing distortion compose quad below.
@@ -566,34 +589,66 @@ bool Engine::Render()
 			UINT nPasses = 0;
 			if (SUCCEEDED(pBloom->Begin(&nPasses, 0)) && nPasses >= 3)
 			{
-				// Pass 0: bright filter — scene RT to ping.
+				// ---------- Pass 0: bright filter (scene -> ping) ----------
 				m_pDevice->SetRenderTarget(0, pPingSurface);
 				m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0,0,0,0), 1.0f, 0);
 				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pSceneTexture);
-				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 0.0f);
 				pBloom->BeginPass(0);
 				pBloom->CommitChanges();
 				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
 				pBloom->EndPass();
 
-				// Pass 1: blur — ping to pong.
-				m_pDevice->SetRenderTarget(0, pPongSurface);
-				m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0,0,0,0), 1.0f, 0);
-				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pBloomPing);
-				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 1.0f);
-				pBloom->BeginPass(1);
-				pBloom->CommitChanges();
-				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
-				pBloom->EndPass();
+				// ---------- Pass 1: blur loop, ping/pong N iterations ----------
+				// After bright filter the result lives in PING. Each
+				// iteration alternates the source and destination and
+				// bumps BloomIteration; the shader uses it to widen the
+				// 4-tap diagonal kernel:
+				//
+				//   delta = BloomSize * half_pixel * (1 + 2 * BloomIteration)
+				//
+				// so iteration 0 has the smallest kernel and each
+				// subsequent iteration spreads the highlights wider.
+				IDirect3DTexture9* srcTex = m_pBloomPing;
+				IDirect3DSurface9* dstSurf = pPongSurface;
+				IDirect3DTexture9* dstTex = m_pBloomPong;
+				for (UINT it = 0; it < BLOOM_BLUR_ITERATIONS; ++it)
+				{
+					m_pDevice->SetRenderTarget(0, dstSurf);
+					m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0,0,0,0), 1.0f, 0);
+					pBloom->SetTexture(m_hBloomSceneTextureParam, srcTex);
+					if (m_hBloomIteration != NULL)
+					{
+						pBloom->SetFloat(m_hBloomIteration, (float)it);
+					}
+					pBloom->BeginPass(1);
+					pBloom->CommitChanges();
+					m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
+					pBloom->EndPass();
 
-				// Pass 2: combine — pong additively blends back onto
-				// the scene RT. No Clear here — we want the existing
-				// scene pixels to remain so the additive blend defined
-				// by the pass's render state lifts highlights without
-				// destroying the rest of the image.
+					// Swap for the next iteration. After the loop ends,
+					// `srcTex` points at the texture holding the final
+					// blurred result.
+					if (it + 1 < BLOOM_BLUR_ITERATIONS)
+					{
+						IDirect3DTexture9* tmpTex = srcTex;
+						IDirect3DSurface9* tmpSurf = (dstSurf == pPongSurface) ? pPingSurface : pPongSurface;
+						srcTex = dstTex;
+						dstTex = tmpTex;
+						dstSurf = tmpSurf;
+					}
+					else
+					{
+						srcTex = dstTex; // final result is here
+					}
+				}
+
+				// ---------- Pass 2: combine (final blurred -> scene RT) ----------
+				// AddSmooth blend (SrcBlend=ONE, DestBlend=INVSRCCOLOR)
+				// is declared inside the .fx pass block, so we don't
+				// Clear the scene RT — the shader's pass state mixes
+				// bloom over the existing image.
 				m_pDevice->SetRenderTarget(0, pSceneRT);
-				pBloom->SetTexture(m_hBloomSceneTextureParam, m_pBloomPong);
-				if (m_hBloomIteration != NULL) pBloom->SetFloat(m_hBloomIteration, 2.0f);
+				pBloom->SetTexture(m_hBloomSceneTextureParam, srcTex);
 				pBloom->BeginPass(2);
 				pBloom->CommitChanges();
 				m_pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bloomQuad, sizeof(EmitterInstance::Vertex));
@@ -807,12 +862,16 @@ void Engine::ResetParameters()
 			throw runtime_error("Unable to create depth buffer");
         }
 
-		// Half-resolution ping-pong RTs for the bloom blur. Failure to
-		// create them disables bloom for this session but doesn't
-		// block the rest of the renderer — particles still draw fine.
+		// Full-resolution ping-pong RTs for the bloom blur. The
+		// shader's blur kernel is measured in source-texel units
+		// via m_resolutionConstants.zw — keeping these at full
+		// scene resolution means one set of values drives all
+		// passes and matches what the canonical EAW engine does.
+		// Failure to allocate disables bloom for this session but
+		// doesn't block the rest of the renderer.
 		ReleaseBloomTargets();
-		UINT bloomW = max<UINT>(2, m_presentationParameters.BackBufferWidth  / 2);
-		UINT bloomH = max<UINT>(2, m_presentationParameters.BackBufferHeight / 2);
+		UINT bloomW = m_presentationParameters.BackBufferWidth;
+		UINT bloomH = m_presentationParameters.BackBufferHeight;
 		if (FAILED(m_pDevice->CreateTexture(bloomW, bloomH, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_pBloomPing, NULL))
 		 || FAILED(m_pDevice->CreateTexture(bloomW, bloomH, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &m_pBloomPong, NULL)))
 		{
@@ -912,6 +971,7 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_pBloomPong   = NULL;
 	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
 	m_hBloomIteration = m_hBloomSceneTextureParam = NULL;
+	m_hBloomResolutionConstants = NULL;
 	m_hBloomTechnique = NULL;
 	m_bloomPassCount  = 0;
 
@@ -921,9 +981,13 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_debugHeat      = false;
 	m_bloomEnabled   = false;
 	m_bloomReady     = false;
-	m_bloomStrength  = 0.1f;   // matches game default
-	m_bloomCutoff    = 1.0f;   // matches game default
-	m_bloomSize      = 0.25f;  // matches game default
+	// Defaults match what the canonical EAW Terrain Editor ships
+	// for a typical map (e.g. Agriworld at 0.90 / 1.00 / 1.00).
+	// The shader's source defaults (1.0 / 0.1 / 0.25) are
+	// placeholders the game overwrites at runtime.
+	m_bloomStrength  = 1.00f;
+	m_bloomCutoff    = 0.90f;
+	m_bloomSize      = 1.00f;
 	m_gravity        = D3DXVECTOR3(0,0,-1);
 	m_wind           = D3DXVECTOR3(0,0,0);
 	m_eye.Position   = D3DXVECTOR3(0,-250,125);
