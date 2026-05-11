@@ -240,15 +240,17 @@ private:
 	IDirect3DTexture9*  m_pBloomPong;
 	// D3DXHANDLEs cached by InitBloomEffect. They reference handles
 	// owned by m_pBloomEffect's underlying ID3DXEffect, so they're
-	// invalidated whenever the effect is released.
+	// invalidated whenever the effect is released. The game's
+	// SceneBloom.fx exposes a single technique with three passes
+	// (bright filter, blur, combine) — we cache one technique
+	// handle and step through its passes during Render.
 	D3DXHANDLE          m_hBloomStrength;
 	D3DXHANDLE          m_hBloomCutoff;
 	D3DXHANDLE          m_hBloomSize;
-	D3DXHANDLE          m_hBloomTextureParam;
+	D3DXHANDLE          m_hBloomIteration;
 	D3DXHANDLE          m_hBloomSceneTextureParam;
-	D3DXHANDLE          m_hBloomTechBright;
-	D3DXHANDLE          m_hBloomTechBlur;
-	D3DXHANDLE          m_hBloomTechCombine;
+	D3DXHANDLE          m_hBloomTechnique;
+	UINT                m_bloomPassCount;
 
 	ITextureManager&				m_textureManager;
 	IShaderManager&					m_shaderManager;
