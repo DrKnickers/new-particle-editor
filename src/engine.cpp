@@ -118,14 +118,40 @@ void Engine::BindShaderTextures(Effect* shader)
 	SAFE_RELEASE(pEffect);
 }
 
+// Helper: appends a line to both the diagnostic file and the debug
+// output stream. Always-on (no NDEBUG gate) so a user reporting
+// "bloom is greyed out" has a paper trail.
+static void BloomLog(FILE* f, const char* line)
+{
+	if (f != NULL) { fputs(line, f); }
+	OutputDebugStringA(line);
+	printf("%s", line);
+}
+
+// Returns the .exe's directory with trailing backslash, e.g.
+// "C:\Modding\Particle Editor\". Used to place the bloom diagnostic
+// file next to the executable where the user is most likely to look.
+static std::wstring ExeDirectory()
+{
+	wchar_t path[MAX_PATH] = {0};
+	GetModuleFileNameW(NULL, path, MAX_PATH);
+	std::wstring s(path);
+	size_t pos = s.find_last_of(L"\\/");
+	if (pos != std::wstring::npos) s.resize(pos + 1);
+	return s;
+}
+
 // Introspect the freshly-loaded SceneBloom effect. Confirms the shader
 // isn't the ShaderManager default fallback (we'd render garbage through
 // it), caches the parameter / technique handles we drive each frame,
 // and flips m_bloomReady to true on success.
 //
-// Probes for an expected bloom-only parameter (BloomStrength) before
-// trusting the effect — if absent, the loader resolved to the default
-// shader and bloom is unavailable this session.
+// Writes a diagnostic file `bloom-diagnostic.log` next to the editor
+// .exe on every run, dumping every parameter and technique name the
+// loaded effect exposes. If bloom comes up greyed for a user, they
+// can read that file to see what's actually in their game's shader —
+// and the matcher strings below can be updated to whatever the game
+// uses without guessing.
 void Engine::InitBloomEffect()
 {
 	m_bloomReady              = false;
@@ -138,57 +164,159 @@ void Engine::InitBloomEffect()
 	m_hBloomTechBlur          = NULL;
 	m_hBloomTechCombine       = NULL;
 
-	if (m_pBloomEffect == NULL) return;
+	// Open the diagnostic file. Failure here is non-fatal; we'll
+	// still try to introspect and just skip the file output.
+	std::wstring logPath = ExeDirectory() + L"bloom-diagnostic.log";
+	FILE* f = NULL;
+	_wfopen_s(&f, logPath.c_str(), L"w");
+
+	auto logf = [&](const char* fmt, ...)
+	{
+		char buf[1024];
+		va_list ap;
+		va_start(ap, fmt);
+		vsnprintf(buf, sizeof(buf), fmt, ap);
+		va_end(ap);
+		BloomLog(f, buf);
+	};
+
+	logf("[bloom] InitBloomEffect — Engine\\SceneBloom.fx via ShaderManager\n");
+
+	if (m_pBloomEffect == NULL)
+	{
+		logf("[bloom]   getShader returned NULL — no shader was loaded.\n");
+		logf("[bloom]   Verify game install path is configured (Mods menu) and that\n");
+		logf("[bloom]   Data\\Art\\Shaders\\Engine\\SceneBloom.fx (.fxo) exists either\n");
+		logf("[bloom]   loose on disk or in a Shaders MEG archive.\n");
+		if (f) fclose(f);
+		return;
+	}
 
 	ID3DXEffect* pFx = m_pBloomEffect->getD3DEffect();
-	if (pFx == NULL) return;
+	if (pFx == NULL)
+	{
+		logf("[bloom]   ID3DXEffect pointer is NULL inside the Effect wrapper.\n");
+		if (f) fclose(f);
+		return;
+	}
 
-	// Parameter handles — probe by name. Missing BloomStrength means
-	// this isn't a real bloom shader (loader fell back to default).
+	D3DXEFFECT_DESC desc;
+	if (FAILED(pFx->GetDesc(&desc)))
+	{
+		logf("[bloom]   GetDesc failed — the effect is in a bad state.\n");
+		SAFE_RELEASE(pFx);
+		if (f) fclose(f);
+		return;
+	}
+
+	logf("[bloom]   Effect loaded: %u parameters, %u techniques, %u functions\n",
+	     desc.Parameters, desc.Techniques, desc.Functions);
+
+	// Enumerate every parameter — names + types, so a future bloom-
+	// matcher tweak knows exactly what the shader actually exposes.
+	logf("[bloom]   Parameters:\n");
+	for (UINT i = 0; i < desc.Parameters; ++i)
+	{
+		D3DXHANDLE hParam = pFx->GetParameter(NULL, i);
+		D3DXPARAMETER_DESC pd;
+		if (FAILED(pFx->GetParameterDesc(hParam, &pd)) || pd.Name == NULL) continue;
+
+		const char* className = "?";
+		switch (pd.Class)
+		{
+			case D3DXPC_SCALAR:        className = "scalar";        break;
+			case D3DXPC_VECTOR:        className = "vector";        break;
+			case D3DXPC_MATRIX_ROWS:   className = "matrix_rows";   break;
+			case D3DXPC_MATRIX_COLUMNS:className = "matrix_cols";   break;
+			case D3DXPC_OBJECT:        className = "object";        break;
+			case D3DXPC_STRUCT:        className = "struct";        break;
+			default:                   className = "?";             break;
+		}
+		const char* typeName = "?";
+		switch (pd.Type)
+		{
+			case D3DXPT_BOOL:    typeName = "bool";    break;
+			case D3DXPT_INT:     typeName = "int";     break;
+			case D3DXPT_FLOAT:   typeName = "float";   break;
+			case D3DXPT_STRING:  typeName = "string";  break;
+			case D3DXPT_TEXTURE: typeName = "texture"; break;
+			case D3DXPT_TEXTURE1D:
+			case D3DXPT_TEXTURE2D:
+			case D3DXPT_TEXTURE3D:
+			case D3DXPT_TEXTURECUBE: typeName = "tex_nD"; break;
+			case D3DXPT_SAMPLER:
+			case D3DXPT_SAMPLER1D:
+			case D3DXPT_SAMPLER2D:
+			case D3DXPT_SAMPLER3D:
+			case D3DXPT_SAMPLERCUBE: typeName = "sampler"; break;
+			default: typeName = "?"; break;
+		}
+		logf("[bloom]     [%u] %s %s %s\n", i, className, typeName, pd.Name);
+	}
+
+	// Enumerate every technique by name.
+	logf("[bloom]   Techniques:\n");
+	for (UINT i = 0; i < desc.Techniques; ++i)
+	{
+		D3DXHANDLE hTech = pFx->GetTechnique(i);
+		D3DXTECHNIQUE_DESC td;
+		if (FAILED(pFx->GetTechniqueDesc(hTech, &td)) || td.Name == NULL) continue;
+		// ValidateTechnique returns S_OK only if the technique works
+		// on the current hardware. A "valid name, invalid for this
+		// device" technique tells us the shader compiles but the
+		// hardware can't run the bloom pass.
+		BOOL valid = SUCCEEDED(pFx->ValidateTechnique(hTech)) ? TRUE : FALSE;
+		logf("[bloom]     [%u] %s (%u passes, %s)\n",
+		     i, td.Name, td.Passes, valid ? "valid on this device" : "NOT valid on this device");
+	}
+
+	// Now run the actual matching to bind handles.
 	m_hBloomStrength          = pFx->GetParameterByName(NULL, "BloomStrength");
 	m_hBloomCutoff            = pFx->GetParameterByName(NULL, "BloomCutoff");
 	m_hBloomSize              = pFx->GetParameterByName(NULL, "BloomSize");
 	m_hBloomTextureParam      = pFx->GetParameterByName(NULL, "BloomTexture");
 	m_hBloomSceneTextureParam = pFx->GetParameterByName(NULL, "SceneTexture");
 
-	// Technique discovery — classify by name pattern. Real bloom
-	// shaders typically expose techniques named BrightFilter,
-	// GaussianBlur (or *Blur*), and AddSmooth (or *Combine*).
-	D3DXEFFECT_DESC desc;
-	if (SUCCEEDED(pFx->GetDesc(&desc)))
+	for (UINT i = 0; i < desc.Techniques; ++i)
 	{
-		for (UINT i = 0; i < desc.Techniques; ++i)
+		D3DXHANDLE hTech = pFx->GetTechnique(i);
+		D3DXTECHNIQUE_DESC td;
+		if (FAILED(pFx->GetTechniqueDesc(hTech, &td)) || td.Name == NULL) continue;
+
+		string name(td.Name);
+		transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+		if (name.find("bright") != string::npos && m_hBloomTechBright == NULL)
 		{
-			D3DXHANDLE hTech = pFx->GetTechnique(i);
-			D3DXTECHNIQUE_DESC td;
-			if (FAILED(pFx->GetTechniqueDesc(hTech, &td)) || td.Name == NULL) continue;
-
-			string name(td.Name);
-			transform(name.begin(), name.end(), name.begin(), ::tolower);
-
-			if (name.find("bright") != string::npos && m_hBloomTechBright == NULL)
-			{
-				m_hBloomTechBright = hTech;
-			}
-			else if ((name.find("blur") != string::npos
-			       || name.find("gauss") != string::npos)
-			      && m_hBloomTechBlur == NULL)
-			{
-				m_hBloomTechBlur = hTech;
-			}
-			else if ((name.find("addsmooth") != string::npos
-			       || name.find("combine") != string::npos
-			       || name.find("composite") != string::npos)
-			      && m_hBloomTechCombine == NULL)
-			{
-				m_hBloomTechCombine = hTech;
-			}
+			m_hBloomTechBright = hTech;
+		}
+		else if ((name.find("blur") != string::npos
+		       || name.find("gauss") != string::npos)
+		      && m_hBloomTechBlur == NULL)
+		{
+			m_hBloomTechBlur = hTech;
+		}
+		else if ((name.find("addsmooth") != string::npos
+		       || name.find("combine") != string::npos
+		       || name.find("composite") != string::npos)
+		      && m_hBloomTechCombine == NULL)
+		{
+			m_hBloomTechCombine = hTech;
 		}
 	}
 
 	SAFE_RELEASE(pFx);
 
-	// Verdict: usable iff we found everything we need.
+	logf("[bloom]   Matcher results:\n");
+	logf("[bloom]     BloomStrength    -> %s\n", m_hBloomStrength     ? "found" : "MISSING");
+	logf("[bloom]     BloomCutoff      -> %s\n", m_hBloomCutoff       ? "found" : "MISSING");
+	logf("[bloom]     BloomSize        -> %s\n", m_hBloomSize         ? "found" : "MISSING");
+	logf("[bloom]     SceneTexture     -> %s\n", m_hBloomSceneTextureParam ? "found" : "missing (optional)");
+	logf("[bloom]     BloomTexture     -> %s\n", m_hBloomTextureParam      ? "found" : "missing (optional)");
+	logf("[bloom]     Technique bright -> %s\n", m_hBloomTechBright   ? "found" : "MISSING");
+	logf("[bloom]     Technique blur   -> %s\n", m_hBloomTechBlur     ? "found" : "MISSING");
+	logf("[bloom]     Technique combine-> %s\n", m_hBloomTechCombine  ? "found" : "MISSING");
+
 	m_bloomReady = (m_hBloomStrength     != NULL)
 	            && (m_hBloomCutoff       != NULL)
 	            && (m_hBloomSize         != NULL)
@@ -196,17 +324,10 @@ void Engine::InitBloomEffect()
 	            && (m_hBloomTechBlur     != NULL)
 	            && (m_hBloomTechCombine  != NULL);
 
-#ifndef NDEBUG
-	if (m_bloomReady)
-	{
-		printf("[bloom] SceneBloom.fx loaded; bright/blur/combine techniques bound\n");
-	}
-	else
-	{
-		printf("[bloom] SceneBloom.fx unavailable — shader missing or parameters/techniques don't match expected bloom surface\n");
-	}
-	fflush(stdout);
-#endif
+	logf("[bloom]   Verdict: bloom is %s.\n",
+	     m_bloomReady ? "READY — UI enabled" : "UNAVAILABLE — UI greyed");
+
+	if (f) fclose(f);
 }
 
 void Engine::ReleaseBloomTargets()
