@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#TODO)
+### 5.1 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
 
 Two new entries in the emitter right-click context menu directly below
 *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the
