@@ -1,29 +1,37 @@
 # Plan: MT-7 follow-up work
 
-Three items were deferred from the MT-7 link-emitters PR ([#58](https://github.com/DrKnickers/new-particle-editor/pull/58)):
+**Status as of 2026-05-12**:
+- ✅ **MT-7** — [shipped (#58)](https://github.com/DrKnickers/new-particle-editor/pull/58). See [`ROADMAP.md` §5.2](../ROADMAP.md) + the `Linked emitters` CHANGELOG entry.
+- ✅ **MT-8 Tree multi-select** — [shipped (#60)](https://github.com/DrKnickers/new-particle-editor/pull/60). See [`ROADMAP.md` §5.1](../ROADMAP.md) + the `Multi-select for the emitter list` CHANGELOG entry. Plan still in this file for reference. **MT-8 review section is at the bottom of the §3.5 architecture; the rest of the plan below is reference material for future bracket / exempt work.**
+- 🚧 **MT-9 Visual link-group bracket** — pending. See §3.3 / §3.4 / §3.5 in the architecture section below.
+- 🚧 **MT-10 Configurable exempt set** — pending. See its dedicated section at the bottom of this file.
 
-1. Tree multi-select on the emitter list
-2. Visual link-group bracket in the tree's right margin
-3. Per-field configurable exempt set
+Three items were originally deferred from the MT-7 link-emitters PR ([#58](https://github.com/DrKnickers/new-particle-editor/pull/58)):
+
+1. ✅ Tree multi-select on the emitter list — shipped as MT-8
+2. 🚧 Visual link-group bracket in the tree's right margin — MT-9
+3. 🚧 Per-field configurable exempt set — MT-10
 
 These ship as three separate PRs under three tier tags:
 
-- **[MT-8] Tree multi-select on the emitter list** — item #1. Adds
+- **[MT-8] Tree multi-select on the emitter list** — ✅ shipped. The
   `multiSelection` state, modifier-aware click semantics, "Link
-  selected" menu item, secondary-select background paint. Foundation
-  for the bracket work below (shares the `NM_CUSTOMDRAW` handler) but
-  independently valuable on its own.
-- **[MT-9] Visual link-group bracket** — item #2. Custom-draw bracket
+  selected" menu item, and secondary-select paint are all in the
+  codebase ([src/UI/EmitterList.cpp](src/UI/EmitterList.cpp)). The
+  `NM_CUSTOMDRAW` handler is wired in but only handles the multi-set
+  background paint and the marquee rectangle frame — bracket painting
+  hooks in at `CDDS_ITEMPOSTPAINT` and `CDDS_POSTPAINT` for MT-9.
+- **[MT-9] Visual link-group bracket** — pending. Custom-draw bracket
   in the tree's right margin, lane-allocated via greedy interval
   scheduling, with hover-highlight and click-to-select-group. Builds
-  on MT-8's custom-draw infrastructure.
-- **[MT-10] Configurable exempt set per link group** — item #3.
+  on MT-8's custom-draw infrastructure (which is already in place).
+- **[MT-10] Configurable exempt set per link group** — pending.
   Orthogonal to the UI work; touches the data model + file format.
 
 Estimates and difficulty below. The ordering reflects user value
-(multi-select is the biggest UX win for the shipped feature), risk
-(MT-8 and MT-9 change no file-format chunks; MT-10 does), and
-dependency (MT-9 reuses MT-8's tree custom-draw plumbing).
+(multi-select was the biggest UX win for the shipped feature — done),
+risk (MT-9 changes no file-format chunks; MT-10 does), and
+dependency (MT-9 reuses MT-8's tree custom-draw plumbing — now landed).
 
 ---
 
@@ -745,3 +753,122 @@ on dialog OK; existing MT-7 tags continue to fire.
    hard-coded exempts cover the user's stated use case ("textures
    different, motion same"). Per-field configurability is a power-
    user feature. Touches data model + file format.
+
+---
+
+# Post-MT-8 lessons that inform MT-9 / MT-10
+
+Captured here so a future session can resume without re-discovering
+them. The full gotcha-by-gotcha log is in the MT-8 CHANGELOG entry;
+this section is the executive summary.
+
+## Win32 overlay over a tree's children
+
+- `WS_EX_LAYERED` child windows lose the paint race against custom
+  controls that schedule their own `WM_PAINT` (Spinner, ColorButton,
+  EmitterProps's EDIT children). Use a `WS_POPUP` top-level layered
+  window owned by the main window instead. DWM composites it above
+  child controls of any window underneath.
+- `WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT` is the
+  right flag set for a passive overlay: stays out of taskbar/Alt-Tab,
+  doesn't steal focus, lets clicks pass through to disabled controls
+  underneath.
+- `SS_BLACKRECT` static doesn't paint reliably under `LWA_ALPHA`.
+  Register a one-off `WNDCLASS` with `hbrBackground =
+  GetStockObject(BLACK_BRUSH)` instead.
+- `SetWindowRgn` with `CombineRgn(RGN_OR)` of two rects gives a
+  non-rectangular overlay — used here to exclude the viewport gap
+  between property tabs and track tabs. The region uses overlay-local
+  coords (subtract overlay's top-left from screen coords).
+- Reposition the overlay in both `WM_SIZE` and `WM_MOVE` since it's
+  top-level (doesn't move with the main window automatically).
+
+## Tree control multi-select / marquee implementation
+
+- `EmitterTreeViewWindowProc` is the existing tree subclass — hook
+  `WM_LBUTTONDOWN` there to intercept clicks before the default
+  selection runs. The original wndproc lives in the `"Old_WindowProc"`
+  window property.
+- Tree primary selection is greyed (focus-dependent) when the tree
+  doesn't have focus. For multi-select to stay visibly bright,
+  `NM_CUSTOMDRAW`'s `CDDS_ITEMPREPAINT` must paint *every* multi-set
+  member (including the primary) with `COLOR_HIGHLIGHT` when the set
+  has ≥ 2 entries. Don't rely on the tree's default paint for the
+  primary in multi-select mode.
+- `TVS_EX_DOUBLEBUFFER` (via `TVM_SETEXTENDEDSTYLE`) suppresses
+  flicker during `NM_CUSTOMDRAW` and is cheap to leave on.
+- Marquee `WM_LBUTTONUP`: flip `marqueeActive = false` BEFORE
+  `ReleaseCapture`. `ReleaseCapture` fires `WM_CAPTURECHANGED`
+  synchronously and the cancellation branch will roll the multi-set
+  back to `marqueePreCtrl` if it still sees `marqueeActive == true`.
+- Marquee sticky semantics: accumulate `marqueeSweptHits` and compose
+  `multi-set = marqueePreCtrl ∪ sweptHits` per frame. Don't replace
+  multi-set with "rows currently in the rect" — that deselects rows
+  the user briefly over-shot and pulled back from.
+- Final `WM_LBUTTONUP` hit-test pass using `lParam` release coords —
+  `WM_MOUSEMOVE` doesn't fire for the exact release pixel, so the
+  bottommost swept row gets missed without this final pass.
+- Gate marquee start to the left half of the tree (where labels are),
+  then use the full-row rect (`TreeView_GetItemRect ... FALSE`) for
+  the hit-test. The earlier "label rect for X, full-row for Y"
+  combination missed rows whose label X was offset slightly.
+- `InvalidateRect(hTree, NULL, TRUE)` on every marquee move — not
+  just the marquee rect — so secondary highlights repaint everywhere
+  when multi-set changes. With double-buffering this is cheap.
+
+## State + notification plumbing
+
+- `multiSelection` lives on `EmitterListControl`. The invariant is
+  *"non-empty iff primary != NULL, and primary ∈ multiSelection."*
+  Repair in `TVN_SELCHANGED` when programmatic selection drifts the
+  primary out of the set (e.g. drag-drop completion).
+- `ELN_SELCHANGED` is the right notification to fire after any
+  multi-set mutation — even when the primary didn't change. Otherwise
+  the inspector's lock-out (`SetEmitterInfo`) doesn't update. Fire
+  it from: modifier-click handler, marquee mouse-move when the set
+  size crosses the 1↔2 threshold, marquee `WM_LBUTTONUP`.
+- `selectionAnchor` is the canonical-source rule: "the emitter you
+  most recently plain- or Ctrl-clicked governs the group on Link
+  selected." Marquee doesn't change the anchor (only initial /
+  Ctrl click does). MT-10's explicit picker dialog can override.
+- `EmitterList_GetMultiSelectionSize(HWND)` is the public accessor
+  the inspector uses to decide lock-out + overlay visibility.
+
+## What this means for MT-9
+
+- The `NM_CUSTOMDRAW` handler is already in place. Adding the
+  bracket paint at `CDDS_ITEMPOSTPAINT` (per-row dot + stub) and
+  `CDDS_POSTPAINT` (vertical lines connecting members) is purely
+  additive — won't break the multi-set background paint or the
+  marquee frame paint that already share the handler.
+- The bracket layout cache pattern from the original MT-7 plan
+  (compute lane assignment once at `CDDS_PREPAINT`, store in
+  `EmitterListControl::bracketLayout`, reuse for hover/click
+  hit-tests) is still the right approach.
+- Hover state will need `WM_MOUSEMOVE` + `WM_MOUSELEAVE` +
+  `TrackMouseEvent` on the tree. The tree wndproc is already
+  subclassed, so it's just another case in
+  `EmitterTreeViewWindowProc`. Defensive: clear hover on
+  `WM_KILLFOCUS` and `WM_CAPTURECHANGED` too, since the marquee
+  code already uses both paths.
+- Click-to-select-group: hit-test against the cached bracket
+  layout in `WM_LBUTTONDOWN` BEFORE the marquee/multi-select
+  dispatch. If hit, replace `multiSelection` with the group's
+  members, set primary to topmost visible, fire `ELN_SELCHANGED`,
+  eat the message.
+
+## What this means for MT-10
+
+- The data model already has `LinkExemptFlags` as a struct. Growing
+  it from 4 bools to ~40 (one per emitter field) is mechanical.
+- Per-group storage on `ParticleSystem` (`std::map<uint32_t,
+  LinkExemptFlags>`) is straightforward. Default if not in the map =
+  `GetLinkExemptFlags()` v1 defaults — no on-disk migration needed.
+- New system-body chunk `0x0901` (after `0x0900`) for persistence.
+  Verify chunk-ID isn't used by the game engine before shipping.
+- Dialog UI: `SysListView32` with `LVS_REPORT | LVS_EX_CHECKBOXES`,
+  fields grouped by category. The mockup from the plan is still the
+  reference.
+- Propagation hook in `CaptureUndo` consults
+  `info->particleSystem->getLinkExemptFlags(linkGroup)` instead of
+  the static `GetLinkExemptFlags()`. One-line change.
