@@ -271,7 +271,46 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
+### 5.1 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (TODO-PR)
+
+Two or more emitters in a particle system can be linked into a *link
+group*. Editing any non-exempt field on a linked emitter propagates the
+change to every sibling instantly, in a single undo step. The exempt
+set (kept per-emitter) is `colorTexture`, `normalTexture`, the
+`TRACK_INDEX` atlas-frame curve, and the emitter's name. Group
+management lives in the emitter-list right-click menu — *Link with…*
+creates a new pair, *Add to link group…* joins an existing group,
+*Remove* / *Dissolve* break the link. Confirmation dialogs spell out
+which emitter will be overwritten when params differ. Minimum group
+size is two; removing the second-to-last member auto-dissolves. The
+`[L<n>]` prefix on tree rows identifies group membership at a glance.
+Persistence rides a new optional editor-only chunk (`0x0100`) that the
+game engine ignores; files without link groups remain byte-identical
+to pre-feature output.
+
+Three follow-up pieces are deferred to a future PR: tree multi-select
+with a "Link selected" command, a visual link-group bracket in the
+right margin of the emitter list (lane-allocated colour-coded
+bracket, hover-highlight, click-to-select-group), and per-field
+configurable exempt sets. The current persistence and undo paths are
+designed so each can land as a UI-only addition.
+
+- **Difficulty**: ★★★★☆ (4/5)
+- **Estimated effort**: 16–24 hours (revised upward from 10–16h
+  after deciding to include the dialog UX clarity work)
+- **Actual**: ~5 hours. The data-model + serialisation slice was
+  about an hour, the `LinkGroup.cpp` helpers and the propagation
+  hook another hour, the menu UI plus tree-text affordance two
+  hours, and audit + dialog rewording (Option A) the rest. The
+  `Emitter::copySharedParamsFrom` reuse-the-copy-constructor
+  pattern saved an estimated 3–4 hours over hand-writing the
+  field-by-field copy with track-aliasing reconstruction; the
+  load-time initial `CaptureUndo` already wired in
+  [`main.cpp:976`](src/main.cpp:976) saved another 1–2 hours by
+  removing the need to add an explicit pre-action capture in every
+  link-menu handler.
+
+### 5.2 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
 
 Two new entries in the emitter right-click context menu directly below
 *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the
@@ -287,7 +326,7 @@ right-click-duplicate through the full sprite sheet in seconds.
   added to `EmitterList_DuplicateEmitter`, menu items + dialog template in
   both `.en.rc` and `.de.rc`, and four resource IDs in both headers.
 
-### 5.2 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
+### 5.3 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
 Press F8 to freeze the preview at the current simulation tick; press
 it again to resume from exactly where time left off. While paused, F9
 steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
@@ -325,7 +364,7 @@ was relabeled to match.
   frame-stepping done during the pause; fixed by re-deriving the
   offset from the current anchor at resume time.
 
-### 5.3 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
+### 5.4 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
@@ -351,7 +390,7 @@ No new ROADMAP entry filed; no UI change needed.
   one pointer per slot anyway. Reused the Ghidra + JDK install from
   MT-6; auto-analysis on both binaries was the dominant cost.
 
-### 5.4 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
+### 5.5 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
@@ -388,7 +427,7 @@ listing exactly what was found.
   count is engine-side and hardcoded to 4 in our build pending
   further empirical tuning.
 
-### 5.5 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.6 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -406,7 +445,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.6 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.7 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -428,7 +467,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.7 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.8 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -451,7 +490,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.8 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.9 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -470,7 +509,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.9 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.10 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
 
@@ -505,7 +544,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.10 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.11 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -527,7 +566,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.11 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.12 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -541,7 +580,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.12 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.13 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.
