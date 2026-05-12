@@ -24,9 +24,24 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-*(No items currently queued. NT-1, NT-2, and NT-3 have all shipped —
-see [Shipped](#5-shipped). When the next near-term idea lands, it
-takes position `1.1` and the next vacated `NT-N` tag.)*
+### 1.1 [NT-4] Duplicate with index increment
+
+Two new entries in the emitter right-click context menu, directly below
+the existing *Duplicate*:
+
+- **Duplicate (increment index)** — duplicates the selected emitter and
+  adds +1 to every keyframe value on the `TRACK_INDEX` track (the atlas
+  frame index). No prompt; one click.
+- **Duplicate (increment index…)** — same, but first asks *"Increment
+  by: [N]"* so larger atlas jumps are one step.
+
+Useful for atlas-texture variation: start with one base emitter pinned
+to frame 0, then rapidly generate copies each targeting a different
+sprite-sheet cell. Eliminates the current manual loop of duplicate →
+open track editor → change value → close → repeat.
+
+- **Difficulty**: ★★☆☆☆ (2/5)
+- **Estimated effort**: 2–4 hours
 
 ---
 
