@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (TODO-PR)
+### 5.1 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
 
 Two or more emitters in a particle system can be linked into a *link
 group*. Editing any non-exempt field on a linked emitter propagates the
