@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (TODO-PR)
+### 5.1 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
 
 Multi-emitter selection via **Ctrl-click** (toggle individual emitters),
 **Shift-click** (select tree-order range from the anchor), and **click-
