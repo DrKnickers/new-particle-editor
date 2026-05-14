@@ -271,7 +271,41 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
+### 5.1 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#TODO)
+
+A coloured bracket painted in the emitter tree's right margin makes
+link-group membership legible at scroll-speed. Each link group claims a
+lane (greedy interval scheduling by topmost member's Y), a 12-colour
+Tableau-derived palette is mapped via `groupId % 12`, and dots mark
+each member row with horizontal stubs pointing toward the row text.
+**Hover** any dot or line and the group's member rows pick up a ~15%
+alpha tint in the group's colour while the lane line thickens to 2 px
+— the line is the primary "you're over group N" cue and the tint
+confirms which rows are members. **Click** any dot or line and the
+multi-selection becomes the full group's member list with primary set
+to the topmost viewport-visible member (Ctrl-click extends instead of
+replacing). The bracket lives strictly in a 4–9 px right-edge gutter so
+it never overlaps label text at any sane tree width.
+
+**High-Contrast theme**: under Windows HC, all brackets paint in
+`COLOR_HIGHLIGHT` instead of the palette; lane position + the existing
+`[L<n>]` text prefix carry group identity. The user's HC theme intent
+is respected — we don't override it with custom RGB. `WM_THEMECHANGED`
+and `WM_SETTINGCHANGE(SPI_SETHIGHCONTRAST)` invalidate the tree so the
+switch is live.
+
+**Q4 follow-up shipped in the same PR**: `EmitterList_DeleteEmitter`
+now iterates `multiSelection` rather than acting only on the primary,
+so bracket-select → Delete kills the whole group in one undo step. The
+prior single-emitter behaviour was an MT-8 gap; the bracket interaction
+made it the most visible UX cliff and it was cheaper to fix once than
+have every reviewer ask about it.
+
+- **Difficulty**: ★★★★☆ (4/5)
+- **Estimated effort**: 6–10 hours
+- **Actual**: TODO (backfill after merge)
+
+### 5.2 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
 
 Multi-emitter selection via **Ctrl-click** (toggle individual emitters),
 **Shift-click** (select tree-order range from the anchor), and **click-
@@ -313,7 +347,7 @@ user intended.
   resolutions* in the CHANGELOG so the next contributor working with
   layered overlays or marquee selection has a paper trail.
 
-### 5.2 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
+### 5.3 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
 
 Two or more emitters in a particle system can be linked into a *link
 group*. Editing any non-exempt field on a linked emitter propagates the
@@ -352,7 +386,7 @@ designed so each can land as a UI-only addition.
   removing the need to add an explicit pre-action capture in every
   link-menu handler.
 
-### 5.3 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
+### 5.4 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
 
 Two new entries in the emitter right-click context menu directly below
 *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the
@@ -368,7 +402,7 @@ right-click-duplicate through the full sprite sheet in seconds.
   added to `EmitterList_DuplicateEmitter`, menu items + dialog template in
   both `.en.rc` and `.de.rc`, and four resource IDs in both headers.
 
-### 5.4 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
+### 5.5 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
 Press F8 to freeze the preview at the current simulation tick; press
 it again to resume from exactly where time left off. While paused, F9
 steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
@@ -406,7 +440,7 @@ was relabeled to match.
   frame-stepping done during the pause; fixed by re-deriving the
   offset from the current anchor at resume time.
 
-### 5.5 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
+### 5.6 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
@@ -432,7 +466,7 @@ No new ROADMAP entry filed; no UI change needed.
   one pointer per slot anyway. Reused the Ghidra + JDK install from
   MT-6; auto-analysis on both binaries was the dominant cost.
 
-### 5.6 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
+### 5.7 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
@@ -469,7 +503,7 @@ listing exactly what was found.
   count is engine-side and hardcoded to 4 in our build pending
   further empirical tuning.
 
-### 5.7 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.8 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -487,7 +521,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.8 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.9 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -509,7 +543,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.9 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.10 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -532,7 +566,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.10 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.11 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -551,7 +585,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.11 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.12 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
 
@@ -586,7 +620,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.12 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.13 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -608,7 +642,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.13 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.14 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -622,7 +656,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.14 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.15 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.
