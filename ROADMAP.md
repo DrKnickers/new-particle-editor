@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#TODO)
+### 5.1 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
 
 A coloured bracket painted in the emitter tree's right margin makes
 link-group membership legible at scroll-speed. Each link group claims a
@@ -303,7 +303,18 @@ have every reviewer ask about it.
 
 - **Difficulty**: ★★★★☆ (4/5)
 - **Estimated effort**: 6–10 hours
-- **Actual**: TODO (backfill after merge)
+- **Actual**: ~5 hours. Planning + rigorous-testing additions were the
+  largest slice (the §Verification section grew to 84 named tripwires
+  across 13 categories before any code was written). Implementation
+  built clean across all six milestones first try. Two paint glitches
+  surfaced in live testing and were fixed in-session: the
+  `WM_MOUSEMOVE` hover branch had been pasted inside `WM_TIMER`
+  instead of the mouse-move case (silent-fail because the bracket-
+  hover code was syntactically valid in any switch arm), and renames
+  whose new label changed the row's pixel width caused stale
+  "ghost" brackets at the old X position when the tree only
+  invalidated the renamed row — fixed by detecting bracket geometry
+  shifts between paints and queuing a full-tree invalidate.
 
 ### 5.2 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
 
