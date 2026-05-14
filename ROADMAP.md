@@ -263,7 +263,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#TODO)
+### 5.1 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#67)
 
 The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground Texture:`** label + 24×24 owner-drawn preview button in the top toolbar shows the currently-selected texture as a thumbnail; clicking it opens a modal **Ground Texture** picker with a 4×2 grid of slot thumbnails (each 64×64). Bundled defaults are **Dirt** (preserved from pre-MT-2), **Grass** / **Sand** / **Snow** (vanilla EaW textures `W_TEMPGRND00.DDS` / `W_SAND00.DDS` / `W_SNOW_RGH.DDS` bundled via RCDATA), and a special **Solid Color** slot that's procedurally generated from a user-chosen `COLORREF` (default flat grey RGB(128,128,128)). The remaining three slots (Custom 1 / Custom 2 / Custom 3) start empty.
 
