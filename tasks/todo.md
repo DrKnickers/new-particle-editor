@@ -1,340 +1,396 @@
-# [MT-9] Visual link-group bracket
+# [MT-10] Configurable exempt set per link group
 
-**Status (2026-05-13):** ✅ implementation complete on branch `claude/exciting-easley-6a20e4` (worktree `.claude/worktrees/exciting-easley-6a20e4`). Awaiting interactive verification + PR. See [§Review (end of file)](#review) for the per-milestone summary, what to test live, and known gaps.
+**Status (2026-05-14):** ✅ implementation complete on branch `feat/mt10-configurable-exempts` (worktree `.claude/worktrees/exciting-easley-6a20e4`). Awaiting interactive verification + PR. See [§Review (end of file)](#review) for the per-milestone summary, what to test live, and known gaps.
 
-> **Format note (2026-05-13).** This plan adopts the planning conventions
-> used in the [`max2alamo-2026`](https://github.com/DrKnickers/max2alamo-2026)
-> sister project: a Context block before scope, per-artefact Architecture
-> subsections, named tripwires for each risk, and a verifier-first
-> Verification section where each assertion says *what regression it
-> catches*, not just *what feature it confirms*. If this shape works,
-> [CLAUDE.md](../CLAUDE.md) is the next thing to update so MT-10 + future
-> work inherits the convention.
+Follows the planning conventions established for MT-9: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*. See [CLAUDE.md](../CLAUDE.md) for the repo-wide plan structure.
 
 ---
 
 ## Status of the surrounding work
 
-- ✅ **[MT-7]** Linked emitters — shipped ([#58](https://github.com/DrKnickers/new-particle-editor/pull/58)). Group membership, propagation, exempt set, undo/redo, file format `0x0100` chunk all in place.
-- ✅ **[MT-8]** Tree multi-select — shipped ([#60](https://github.com/DrKnickers/new-particle-editor/pull/60)). `multiSelection`, modifier-aware clicks, marquee, `NM_CUSTOMDRAW` handler, `EmitterTreeViewWindowProc` subclass, `TVS_EX_DOUBLEBUFFER` all landed. *MT-9 is the load-bearing reuser of this infrastructure.*
-- 🚧 **[MT-9]** Visual link-group bracket — **this plan**.
-- 🚧 **[MT-10]** Configurable exempt set per link group — independent of MT-9; touches data model + file format. Plan is at the bottom of this file as a pointer; full plan reopens after MT-9 lands.
+- ✅ **[MT-7]** Linked emitters — shipped ([#58](https://github.com/DrKnickers/new-particle-editor/pull/58)). Group membership, propagation, hard-coded 4-field exempt set, undo/redo, file format `0x0100` chunk at emitter level.
+- ✅ **[MT-8]** Tree multi-select — shipped ([#60](https://github.com/DrKnickers/new-particle-editor/pull/60)).
+- ✅ **[MT-9]** Visual link-group bracket — shipped ([#63](https://github.com/DrKnickers/new-particle-editor/pull/63)).
+- 🚧 **[MT-10]** Configurable exempt set per link group — **this plan**.
 
 ---
 
 ## Context
 
-MT-7 made link groups exist; MT-8 made bulk selection ergonomic; MT-9 makes group membership *legible at scroll-speed*. Today the only signal that two emitters are linked is the `[L<n>]` prefix in `FormatEmitterDisplayName`. That works for 2–3 groups but fails fast on real particle systems where a single linked group can span 4+ emitters separated by intervening unlinked rows (`smoke_a`, then 3 other emitters, then `smoke_b`, then 4 more, then `smoke_c`). The user can't see the group at a glance, can't tell two `[L3]`s apart from interleaved `[L4]` members in a list of 30, and can't multi-select a whole group with a single click.
+MT-7 hard-codes the exempt set to four fields: `colorTexture`, `normalTexture`, the `TRACK_INDEX` curve, and `name`. That's the right default for the user's canonical use case — atlas variants where textures and identifiers differ but motion is shared. It's the wrong default for:
 
-MT-9 closes that gap with a coloured bracket in the tree's right margin per group, lane-allocated so non-overlapping groups share columns, with hover-to-tint and click-to-select-group as the interaction layer on top.
+- **Inverse cases** — fire_a/fire_b sharing texture *and* atlas curve, differing only in lifetime or burst rate.
+- **Per-group calibration** — group X shares blendMode but group Y wants per-emitter blendMode (e.g. mixing additive and alpha-blend smoke in one effect).
+- **Authored variants** — designer locks every parameter except gravity and acceleration on five "wind layer" emitters.
 
-After MT-9 the only open link-group work for v1 is MT-10 (per-group exempt configurability), which is unblocked by neither MT-9 nor MT-8 and can ship in either order — though MT-9 first is preferred because it's purely UI and won't touch the file format.
+MT-10 makes the exempt set **user-configurable per link group**. v1's four-field set becomes the default for new groups and for files saved before this feature exists. Every emitter field that can sensibly be per-emitter becomes a toggle in a per-group settings dialog.
 
-**Why now**: MT-8 left a `NM_CUSTOMDRAW` handler at [src/UI/EmitterList.cpp:1841](src/UI/EmitterList.cpp:1841), a tree subclass at [src/UI/EmitterList.cpp:1013](src/UI/EmitterList.cpp:1013), and `TVS_EX_DOUBLEBUFFER` enabled at [src/UI/EmitterList.cpp:1726](src/UI/EmitterList.cpp:1726). All three are exactly what MT-9 needs. Delaying MT-9 means the plumbing sits unused while users keep hunting for group members visually.
+After MT-10 the link-group feature is complete for the original ROADMAP scope. There's a follow-on for per-emitter overrides (kept explicitly out of scope — see [§Goal+scope](#goal--scope)), but that's a separate item if the demand surfaces.
+
+**Why now**: MT-9 closed the UI ergonomics gap (selection, visual bracket). MT-10 closes the data-model gap. Both are pure additions on top of MT-7's data layer — neither rewrites the propagation hook or the persistence chunk. Shipping them in sequence means the user's mental model of "link group" picks up the full UX and customisation surface in close succession.
 
 ---
 
 ## Goal + scope
 
-Add a per-group coloured bracket painted in the tree's right margin, lane-allocated via greedy interval scheduling, with hover-highlight (member rows tint, bracket line thickens) and click-to-select-group (multi-set := group members, primary := topmost visible).
+Per-group `LinkExemptFlags` storage on `ParticleSystem`, a new editor-only system-body chunk for persistence, a per-group settings dialog reached from the right-click menu on a linked emitter, and a disagreement-resolver dialog for the case where un-exempting a field would silently overwrite divergent member values.
 
 **In:**
 
-- New layout cache on `EmitterListControl`: `bracketLayout` struct holding `(groupId → laneIndex)`, per-lane X offset, and `(groupId → vector<row Y, member emitter>)` so hit-tests don't re-walk the tree.
-- `NM_CUSTOMDRAW` extensions on the existing handler at [src/UI/EmitterList.cpp:1841](src/UI/EmitterList.cpp:1841):
-  - `CDDS_PREPAINT`: rebuild `bracketLayout` from current visible tree state (one walk of `TreeView_GetItemRect` per linked-emitter row, then greedy interval-schedule by `minY` per group).
-  - `CDDS_ITEMPOSTPAINT`: paint per-member dot + horizontal stub at the row's `(laneX, centreY)` in the group's palette colour.
-  - `CDDS_POSTPAINT`: draw the vertical lane line connecting topmost-to-bottommost dot per group, plus the existing marquee frame.
-- Hover state on `EmitterListControl`: `hoveredGroupId` (0 = none), `mouseTrackingArmed` (re-arm `TrackMouseEvent` per move).
-- `WM_MOUSEMOVE` extension in `EmitterTreeViewWindowProc` at [src/UI/EmitterList.cpp:1188](src/UI/EmitterList.cpp:1188): hit-test against `bracketLayout`; on change, repaint old + new group's rows + lane lines. *Only fires when no marquee is active* — marquee path is untouched.
-- `WM_MOUSELEAVE` + `TrackMouseEvent` / `TME_LEAVE` to clear hover on cursor exit.
-- `WM_KILLFOCUS` and `WM_CAPTURECHANGED` clear hover defensively (matches the existing marquee-cancel pattern).
-- `WM_LBUTTONDOWN` extension at [src/UI/EmitterList.cpp:1036](src/UI/EmitterList.cpp:1036): hit-test against `bracketLayout` BEFORE the multi-select / marquee dispatch; on hit (`Dot` or `Line`), replace `multiSelection` with `GetLinkGroupMembers(...)`, set primary to topmost visible member, `selectionAnchor = primary`, fire `ELN_SELCHANGED`, eat the message.
-- Per-paint hover tint: member rows of `hoveredGroupId` get a `~15%` alpha fill in the group's palette colour at `CDDS_ITEMPOSTPAINT`. The existing multi-select `COLOR_HIGHLIGHT` paint at `CDDS_ITEMPREPAINT` is preserved unchanged — hover tint and multi-select highlight stack.
-- 12-colour palette (Tableau-derived, luminance-adjusted for thin-line work on white) in `EmitterList.cpp`, reordered so the first 6 entries have maximum perceptual distance (real systems mostly use ≤ 6 simultaneous groups). Each colour verified ≥ 3:1 against `COLOR_WINDOW` (WCAG 2.1 SC 1.4.11 for graphical objects) via a debug-only contrast printer.
-- **High Contrast theme override**: when `SystemParametersInfo(SPI_GETHIGHCONTRAST, ...)` reports HC active, paint all brackets in `GetSysColor(COLOR_HIGHLIGHT)`. Group identity in HC mode comes from lane position + the existing `[L<n>]` prefix in `FormatEmitterDisplayName`. Re-check on `WM_THEMECHANGED`.
-- DPI-aware sizing: lane width, dot radius, stub length, stroke width all `MulDiv(base, GetDpiForWindow(hTree), 96)`.
-- Unbounded lane count: when `numLanes × baseLaneWidth > clientWidth / 4`, lane width scales down to `max(2, reservedMax / numLanes)`.
-- Debug instrumentation under `#ifndef NDEBUG`: `[Link] layout groups=N lanes=M`, `[Link] hover group=N (was M)`, `[Link] click select group=N members=M`.
+- **`LinkExemptFlags` grows** from 4 bools to one bool per emitter field that can be exempt. ~42 entries: every scalar/bool/array field in `Emitter`, every curve track (except TRACK_INDEX which gets its own dedicated flag), the three random-param `groups[]` arrays. Stays POD; no virtual dispatch.
+- **Per-group storage on `ParticleSystem`**: `std::map<uint32_t, LinkExemptFlags> m_linkExempts`. A group not present in the map gets the v1 default exempt set via `getLinkExemptFlags(groupId)` — backwards-compatible for files predating this feature.
+- **New right-click menu item** `Group settings…` on the right-click menu when the selected emitter is in a link group. Inserted into the existing dynamic menu builder ([src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) `NM_RCLICK` handler).
+- **Dialog `IDD_LINK_GROUP_SETTINGS`**: SysListView32 with `LVS_REPORT | LVS_EX_CHECKBOXES`, columns "Field" + "Category", rows grouped by category (Textures / Identity / Curves / Lifetime / Physics / Appearance / Weather / Rotation / Misc). Reset-to-defaults button. OK / Cancel.
+- **Sync-when-unexempting** dialog: at OK time, for every field where (a) the exempt flag was cleared AND (b) group members currently disagree, collect the disagreement into a single summary dialog with one radio group per affected field ("Which value should govern?"). Single Apply.
+- **Persistence**: new editor-only system-body chunk type ID `0x0003`, sibling to the existing `0x0002` leaveParticles inside the `0x0900` system envelope. Format: count + per-group (groupId, flagsByteCount, flagsBytes). Game engine skips unknown system-level chunks (already established via `0x0002`).
+- **Backwards compat both directions**: files saved by pre-MT-10 editors load with no `0x0003` chunk → every group uses v1 defaults. Files saved by MT-10 with non-default exempts load in pre-MT-10 editors as if no overrides existed (which is correct because the pre-MT-10 reader skips the unknown chunk).
+- **Propagation hook update** at [src/main.cpp:802](src/main.cpp:802) (`CaptureUndo`) consults `info->particleSystem->getLinkExemptFlags(linkGroup)` instead of the static `GetLinkExemptFlags()`. Same change in `CreateLinkGroup` and `JoinLinkGroup` at [src/LinkGroup.cpp](src/LinkGroup.cpp).
+- **`copySharedParamsFrom` extension**: today restores 4 exempt fields manually. MT-10 needs to restore one field per flag. Refactored to a field-table approach (or per-flag if/else, depending on which reads cleaner) so adding a flag in the future = adding one entry.
+- **`DiffNonExemptParams` extension**: today consults the static exempt set. MT-10 takes a `const LinkExemptFlags&` parameter so the menu's confirm-dialog path can use the per-group flags.
+- **Undo coverage**: opening the settings dialog and clicking OK fires `ELN_LISTCHANGED` → `CaptureUndo` (existing chokepoint). Because the undo system snapshots the entire `ParticleSystem`, exempt-flag changes ride the snapshot naturally — no special multi-step undo plumbing needed. Cancelling the dialog leaves no undo entry.
+- **Debug instrumentation**: `[Link] exempt set group=N flags=...`, `[Link] exempt dialog: disagreements=N`, shared `[Link]` prefix with MT-7/9.
 
 **Out:**
 
-- **Multi-drag-reorder** (moving N selected emitters with one drop). *Reason: out-of-scope slot-switch; separate ROADMAP entry if friction proves real after MT-9 ships.*
-- **Persisted lane assignment across re-orderings** (a group "owns" lane 2 forever). *Reason: every paint recomputes lanes from current Y order; recomputation is fast and the alternative requires a stable-lane data model that the file format doesn't support.*
-- **Bracket painting in a separate overlay window**. *Reason: the post-MT-8 lessons note that a layered overlay loses paint races against children with their own `WM_PAINT`. `NM_CUSTOMDRAW` on the tree itself is the right tier — no overlay needed because the bracket lives inside the tree's client area, not over the inspector.*
-- **Right-click on bracket → group menu** (Dissolve, Settings, etc.). *Reason: the right-click menu builder at [src/UI/EmitterList.cpp:1929](src/UI/EmitterList.cpp:1929) (`NM_RCLICK`) already exposes these actions on group members. Adding a second entry point doubles the surface area for marginal value; revisit if MT-10's group-settings dialog needs a discovery affordance.*
-- **MT-10's `Group settings…` menu item.** *Reason: separate phase. MT-9 ships UI only.*
+- **Per-emitter exempt overrides** ("link everything except *this one's* lifetime"). *Reason: separate ROADMAP entry if friction proves real. v1's per-group model covers the stated 95% case. Per-emitter overrides need a separate per-field flag layer on top of the per-group baseline; the data model can extend additively when the time comes, but designing for it now bloats v1.*
+- **Saved exempt presets** ("save these toggles as a named preset, recall on a different group"). *Reason: incremental value over the dialog itself is small; the dialog already takes ~30 seconds to use. Add only if usage shows the same exempt-shape repeating across many groups.*
+- **Cross-file exempt sharing.** *Reason: link group IDs are local to a particle system; their exempt sets are local too. No clean semantic for "copy exempts from system A's group 3 to system B's group 5".*
+- **Bulk "set all exempt" / "set all shared" buttons.** *Reason: the Reset-to-defaults button already covers the 90% bulk-op case. Add only if testing surfaces a real workflow.*
+- **Re-running propagation when an exempt is cleared but members already agree.** *Reason: nothing to propagate when values match. Tripwire: the disagreement dialog only fires when at least one disagreement exists; if all agree, OK is silent.*
+- **Dialog field labels in German** (and other localizations). *Reason: matches existing convention — DiffNonExemptParams returns English strings; the German `.rc` re-uses the same field names. If a contributor wants to localize, they can add translations later without touching the data model.*
+- **"name" as a configurable exempt.** *Reason: per-emitter identity is intrinsic. There's no sensible workflow where every group member shares a name. Keep mandatory-exempt; do not surface in the dialog. Same for TRACK_INDEX — actually, MT-10 *does* surface TRACK_INDEX as a configurable so atlas-variants vs. uniform-frame use cases are both supported.*
+- **Toolbar button for the settings dialog.** *Reason: right-click menu is the established entry point for every group operation (Link, Dissolve, Add, Remove). Adding a toolbar button doubles the surface area for marginal discoverability gain.*
+
+---
 
 ## What we already have
 
 | Piece | File:line |
 |---|---|
-| `EmitterListControl` struct (multi-select + marquee state) | [src/UI/EmitterList.cpp:220](src/UI/EmitterList.cpp:220) |
-| `multiSelection` set + `selectionAnchor` | [src/UI/EmitterList.cpp:229](src/UI/EmitterList.cpp:229) |
-| `UpdateMultiSelectionFromClick` (modifier-aware) | [src/UI/EmitterList.cpp:350](src/UI/EmitterList.cpp:350) |
-| `FindTreeItemByEmitter` (lParam → HTREEITEM, recursive) | [src/UI/EmitterList.cpp:551](src/UI/EmitterList.cpp:551) |
-| `EmitterTreeViewWindowProc` tree subclass | [src/UI/EmitterList.cpp:1013](src/UI/EmitterList.cpp:1013) |
-| `WM_LBUTTONDOWN` intercept (before tree's default selection) | [src/UI/EmitterList.cpp:1036](src/UI/EmitterList.cpp:1036) |
-| `WM_MOUSEMOVE` (currently marquee-only) | [src/UI/EmitterList.cpp:1188](src/UI/EmitterList.cpp:1188) |
-| `WM_LBUTTONUP` (marquee commit) | [src/UI/EmitterList.cpp:1400](src/UI/EmitterList.cpp:1400) |
-| `WM_CAPTURECHANGED` (marquee cancel) | [src/UI/EmitterList.cpp:1604](src/UI/EmitterList.cpp:1604) |
-| Tree subclass install + `TVS_EX_DOUBLEBUFFER` enable | [src/UI/EmitterList.cpp:1719](src/UI/EmitterList.cpp:1719) |
-| `NM_CUSTOMDRAW` handler (CDDS_PREPAINT → ITEMPREPAINT → POSTPAINT) | [src/UI/EmitterList.cpp:1841](src/UI/EmitterList.cpp:1841) |
-| `TVN_SELCHANGED` handler (keeps multi-set primary-consistent) | [src/UI/EmitterList.cpp:2643](src/UI/EmitterList.cpp:2643) |
-| Right-click menu builder (multi-size-aware) | [src/UI/EmitterList.cpp:2045](src/UI/EmitterList.cpp:2045) |
-| `GetLinkGroupMembers(system, groupId) → vector<Emitter*>` | [src/LinkGroup.cpp:24](src/LinkGroup.cpp:24) |
-| `Emitter::linkGroup` field (0 = unlinked) | [src/ParticleSystem.h:135](src/ParticleSystem.h:135) |
-| `ELN_SELCHANGED` notification id | [src/UI/UI.h:150](src/UI/UI.h:150) |
-| `EmitterList_GetMultiSelectionSize` accessor | [src/UI/EmitterList.cpp:3263](src/UI/EmitterList.cpp:3263) |
-| `FormatEmitterDisplayName` (where `[L<n>]` prefix lives — palette ground truth) | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) (top) |
+| `LinkExemptFlags` struct (current 4 bools) | [src/LinkGroup.h:33](src/LinkGroup.h:33) |
+| `GetLinkExemptFlags()` static accessor | [src/LinkGroup.cpp:7](src/LinkGroup.cpp:7) |
+| `Emitter::copySharedParamsFrom` (consumes exempt flags) | [src/ParticleSystem.cpp:555](src/ParticleSystem.cpp:555) |
+| `DiffNonExemptParams` (consumes exempt flags; enumerates every field) | [src/LinkGroup.cpp:174](src/LinkGroup.cpp:174) |
+| `CreateLinkGroup` / `JoinLinkGroup` (call sites that pass exempt flags) | [src/LinkGroup.cpp:54](src/LinkGroup.cpp:54), [src/LinkGroup.cpp:85](src/LinkGroup.cpp:85) |
+| Propagation hook (consults exempt flags in `CaptureUndo`) | [src/main.cpp:802](src/main.cpp:802) |
+| System-level write at chunk `0x0900` (envelope) with `0x0002` as the existing optional sibling | [src/ParticleSystem.cpp:743](src/ParticleSystem.cpp:743), [src/ParticleSystem.cpp:766](src/ParticleSystem.cpp:766) |
+| System-level read at `0x0900` with `0x0002` optional-skip pattern | [src/ParticleSystem.cpp:778](src/ParticleSystem.cpp:778), [src/ParticleSystem.cpp:809](src/ParticleSystem.cpp:809) |
+| Right-click menu builder (where `Group settings…` will be inserted) | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) `NM_RCLICK` handler — see `ID_DISSOLVE_LINK_GROUP` / `ID_LEAVE_LINK_GROUP` neighbours |
+| Dialog resource pattern + dialog class registration in `.rc` files | [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc), [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc) (search for `IDD_` entries) |
+| Resource ID allocation range for new dialog | [src/Resources/resource.en.h](src/Resources/resource.en.h), [src/Resources/resource.de.h](src/Resources/resource.de.h) — MT-7 added IDs at 40119–40159 |
+| Emitter field surface (every non-exempt field listed in `DiffNonExemptParams`) | [src/LinkGroup.cpp:185](src/LinkGroup.cpp:185) onward — 38 explicit `CHECK_FIELD` calls + arrays + groups + tracks |
 
-**Not yet in the codebase — to add:**
+**Not yet in the codebase — must be added:**
 
-- `BracketLayout` struct (private to `EmitterList.cpp`).
-- Greedy interval scheduler (~15-line static helper).
-- `HitTestBracket(layout, clientPt) → BracketHit` (~20 lines).
-- Hover-paint branch in `CDDS_ITEMPOSTPAINT` (the slot exists; today only `CDDS_ITEMPREPAINT` does work — MT-9 adds the postpaint branch).
-- `WM_MOUSELEAVE` + `TME_LEAVE` wiring.
-- 12-colour palette `const COLORREF[12]`.
+- `ParticleSystem::m_linkExempts` (private), `getLinkExemptFlags(groupId)`, `setLinkExemptFlags(groupId, flags)` accessors.
+- `0x0003` chunk writer + reader inside `0x0900` envelope, between `0x0800` (emitter list) and `0x0002` (leaveParticles) for predictable on-disk ordering.
+- `IDD_LINK_GROUP_SETTINGS` dialog resource + dialog proc.
+- `IDD_LINK_GROUP_DISAGREEMENT` dialog resource + dialog proc.
+- `BuildFieldDisagreement(system, groupId, fieldId)` helper for the disagreement dialog.
+- `ApplyFieldValue(system, groupId, fieldId, sourceMember)` helper for the disagreement-resolution Apply.
 
 **Unknown to confirm before coding:**
 
-1. **Whether `CDDS_ITEMPOSTPAINT` fires when `CDDS_ITEMPREPAINT` returned `CDRF_NEWFONT`.** MT-8's prepaint branch returns `CDRF_NEWFONT` (not `CDRF_NEWFONT | CDRF_NOTIFYPOSTPAINT`) — needs `CDRF_NEWFONT | CDRF_NOTIFYPOSTPAINT` if we want the postpaint to fire on multi-select rows. **Action**: smoke-test by adding a `printf` in the new postpaint branch and confirming it fires on multi-select rows before painting anything.
-2. **Whether `TreeView_GetItemRect(hTree, hItem, &r, FALSE)` returns a rect that extends to the full client width**, or just to the right edge of the label. The bracket needs to paint to the right of the label area, in margin space. **Action**: print rects in debug and visually confirm against `GetClientRect`.
-3. **Whether `TVN_ITEMEXPANDED` triggers an automatic tree invalidate.** Plan assumes yes (so cache rebuilds next paint with collapsed/expanded children correctly accounted). **Action**: smoke-test with a parent emitter containing a child that's in a link group with a non-child sibling — collapse the parent, observe bracket recomputes.
+1. **Chunk ID `0x0003` is unused at system level.** Spec says `0x0000` (name), `0x0001` (unused int), `0x0002` (leaveParticles), `0x0800` (emitter envelope), `0x0900` (system envelope). `0x0003` is the natural next ID. Need to grep the game engine reader (if accessible) or empirically confirm no conflict — but the optional-skip pattern means an unknown chunk is safe even if reused. **Action**: pick `0x0003` and document; if a conflict surfaces in testing (engine refuses to load), switch to `0x0901` (above the envelope range, less likely to collide).
+2. **Whether per-emitter `unknownXX` fields** (`unknown06`, `unknown11`, `unknown15`, `unknown2b`, `unknown3f`, `unknown44`, `unknown49`) should be exempt-toggleable. They're persisted to disk but no UI exposes them. **Action**: include them in the data-model flags so the on-disk representation is complete, but hide them from the dialog UI. If a future feature exposes them, no schema change needed.
+3. **`emitFromMeshOffset` and `weatherFadeoutDistance` are floats but rarely-edited.** Verify these have UI representation in the inspector. **Action**: yes, every documented float has an inspector spinner — include all in the dialog with their inspector labels.
 
 ---
 
 ## Architecture
 
-Three new pieces of state, two new helpers, one extension to the existing custom-draw handler, and three extensions to the existing tree subclass. No new files.
+Six pieces. Each is local to one file or one resource pair. No cross-cutting refactors.
 
-### `EmitterListControl` additions
+### A. Data model — `LinkExemptFlags` grows + per-group storage
 
-```cpp
-// In the struct at src/UI/EmitterList.cpp:220:
-struct BracketLayout {
-    struct Member { LONG centreY; ParticleSystem::Emitter* emitter; };
-    struct Group  {
-        uint32_t           groupId;
-        int                lane;          // 0..numLanes-1
-        COLORREF           colour;
-        std::vector<Member> members;       // sorted by centreY
-        LONG               minY, maxY;
-    };
-    std::vector<Group> groups;             // index in this vector is stable per-paint
-    int                numLanes;
-    int                laneWidth;          // pixels, DPI-aware
-    int                dotRadius;
-    int                stubLength;
-    int                strokeWidth;
-    int                rightEdgeOffset;    // tree client right - margin start
-    POINT              scrollOrigin;       // for stale detection in hit-test
-    bool               valid;              // false = needs rebuild
-};
-
-BracketLayout bracketLayout;
-uint32_t      hoveredGroupId;     // 0 = none
-bool          mouseTrackingArmed;
-```
-
-Invariant: `bracketLayout.valid` is the only signal of cache freshness. Anything that changes tree state (selection change unrelated to bracket, expand/collapse, scroll, system swap) sets `valid = false`. `CDDS_PREPAINT` rebuilds if `!valid`.
-
-### Layout builder (~40 lines)
+`LinkExemptFlags` becomes a struct of ~42 bools, one per exempt-eligible field. Stays POD; no virtual dispatch. Default constructor sets the v1 four (`colorTexture`, `normalTexture`, `trackIndex`, `name`) to `true`, every other to `false`.
 
 ```cpp
-static void RebuildBracketLayout(EmitterListControl* control)
+// In LinkGroup.h:
+struct LinkExemptFlags
 {
-    BracketLayout& L = control->bracketLayout;
-    L.groups.clear();
-    L.valid = true;
+    // Categories follow the dialog grouping for readability.
+    // Textures + identity (default exempt):
+    bool colorTexture;
+    bool normalTexture;
+    bool name;
+    bool trackIndex;            // TRACK_INDEX curve (atlas-frame)
 
-    // 1. Walk visible linked emitters via TreeView_GetItemRect.
-    //    Group by linkGroup. Skip groups with < 2 visible members
-    //    (single member visible = no bracket needed).
-    std::map<uint32_t, BracketLayout::Group> byId;
-    HTREEITEM hItem = TreeView_GetRoot(control->hTree);
-    while (hItem) {
-        WalkVisibleLinkedEmitters(hItem, byId, control);
-        hItem = TreeView_GetNextSibling(control->hTree, hItem);
-    }
-    for (auto& kv : byId) if (kv.second.members.size() >= 2) L.groups.push_back(kv.second);
+    // Curves (default shared except trackIndex):
+    bool trackRed;
+    bool trackGreen;
+    bool trackBlue;
+    bool trackAlpha;
+    bool trackScale;
+    bool trackRotationSpeed;
 
-    // 2. Greedy interval scheduling: sort by minY ascending,
-    //    assign each group the lowest-index lane whose previous
-    //    occupant ended before this group's minY.
-    std::sort(L.groups.begin(), L.groups.end(),
-              [](const auto& a, const auto& b) { return a.minY < b.minY; });
-    std::vector<LONG> laneEnd;             // maxY of last group assigned to lane i
-    for (auto& g : L.groups) {
-        int lane = -1;
-        for (size_t i = 0; i < laneEnd.size(); ++i) {
-            if (laneEnd[i] < g.minY) { lane = (int)i; laneEnd[i] = g.maxY; break; }
-        }
-        if (lane < 0) { lane = (int)laneEnd.size(); laneEnd.push_back(g.maxY); }
-        g.lane   = lane;
-        g.colour = kBracketPalette[g.groupId % 12];
-    }
-    L.numLanes = (int)laneEnd.size();
+    // Lifetime / spawning:
+    bool lifetime;
+    bool initialDelay;
+    bool burstDelay;
+    bool nBursts;
+    bool nParticlesPerBurst;
+    bool nParticlesPerSecond;
+    bool useBursts;
 
-    // 3. Lane sizing — DPI base × scale-down floor.
-    int dpi = GetDpiForWindow(control->hTree);
-    int baseLane = MulDiv(6, dpi, 96);
-    RECT cr; GetClientRect(control->hTree, &cr);
-    int reservedMax = (cr.right - cr.left) / 4;
-    L.laneWidth = (L.numLanes * baseLane > reservedMax)
-        ? max(2, reservedMax / L.numLanes)
-        : baseLane;
-    L.dotRadius   = MulDiv(3, dpi, 96);    // smaller than mockup so two adjacent lanes don't kiss
-    L.stubLength  = MulDiv(5, dpi, 96);
-    L.strokeWidth = MulDiv(1, dpi, 96);    // hover thickens to 2
-    L.rightEdgeOffset = cr.right - 4;      // 4 px gutter from client edge
-    GetScrollPos(control->hTree, SB_VERT, &L.scrollOrigin.y); // for stale detection
-}
-```
+    // Physics:
+    bool gravity;
+    bool acceleration;
+    bool inwardSpeed;
+    bool inwardAcceleration;
+    bool bounciness;
+    bool groundBehavior;
+    bool objectSpaceAcceleration;
+    bool affectedByWind;
 
-### Palette
+    // Appearance:
+    bool blendMode;
+    bool textureSize;
+    bool nTriangles;
+    bool randomScalePerc;
+    bool randomLifetimePerc;
+    bool hasTail;
+    bool tailSize;
+    bool noDepthTest;
+    bool randomColors;
 
-`kBracketPalette` is a `static const COLORREF[12]`, Tableau-derived but luminance-adjusted for thin-line work on white (Tableau 10 as-published is designed for filled categorical viz; several entries — yellow, pink, light orange — fail the 3:1 contrast threshold for 1 px lines on `COLOR_WINDOW`). The first 6 entries are ordered for maximum perceptual distance, since realistic particle systems mostly use ≤ 6 simultaneous link groups; entries 7–12 cover the tail.
+    // Weather:
+    bool isWeatherParticle;
+    bool weatherCubeSize;
+    bool weatherCubeDistance;
+    bool weatherFadeoutDistance;
 
-```cpp
-// Lane colours. First 6: max perceptual distance for the common case.
-// Entries 7-12: extended palette. All verified >= 3:1 contrast against
-// COLOR_WINDOW (white default) per WCAG 2.1 SC 1.4.11 (Non-text Contrast).
-// Source: Tableau 10 hues, luminance-shifted toward Material 700-tier
-// where the raw Tableau value didn't hit thin-line contrast on white.
-static const COLORREF kBracketPalette[12] = {
-    RGB(0x1F, 0x4E, 0x79),   //  0  blue       (Tableau blue, darkened)
-    RGB(0xC7, 0x57, 0x0A),   //  1  orange     (Tableau orange, darkened)
-    RGB(0x2E, 0x7D, 0x32),   //  2  green      (Material 700 green)
-    RGB(0xC6, 0x28, 0x28),   //  3  red        (Material 700 red)
-    RGB(0x6A, 0x1B, 0x9A),   //  4  purple     (Material 700 purple)
-    RGB(0x5D, 0x40, 0x37),   //  5  brown      (Material 700 brown)
-    RGB(0xAD, 0x14, 0x57),   //  6  magenta    (Material 700 pink)
-    RGB(0x00, 0x69, 0x5C),   //  7  teal       (Material 800 teal)
-    RGB(0x82, 0x77, 0x17),   //  8  olive      (Material 800 lime)
-    RGB(0x28, 0x35, 0x93),   //  9  indigo     (Material 800 indigo)
-    RGB(0x00, 0x83, 0x8F),   // 10  cyan       (Material 800 cyan)
-    RGB(0x88, 0x0E, 0x4F),   // 11  rose       (Material 900 pink)
+    // Rotation:
+    bool randomRotation;
+    bool randomRotationDirection;
+    bool randomRotationAverage;
+    bool randomRotationVariance;
+
+    // Misc:
+    bool linkToSystem;
+    bool parentLinkStrength;
+    bool doColorAddGrayscale;
+    bool isHeatParticle;
+    bool isWorldOriented;
+    bool freezeTime;
+    bool skipTime;
+    bool emitFromMesh;
+    bool emitFromMeshOffset;
+    bool groups[3];             // SPEED / LIFETIME / POSITION random-param boxes
+
+    // Unknown fields (data-model complete, hidden in UI):
+    bool unknown06, unknown11, unknown15, unknown2b, unknown3f, unknown44, unknown49;
+
+    LinkExemptFlags();          // sets v1 defaults
 };
 ```
 
-**Adjacent-on-the-wheel check.** Positions 0–5 cycle blue → orange → green → red → purple → brown. No red-green adjacency (positions 2 and 3 are green and red, but the user typically sees these as "lane 2 vs lane 3" not "the red one vs the green one" — and the brown at position 5 isn't perceptually similar to red for deuteranopes).
+`GetLinkExemptFlags()` in [src/LinkGroup.cpp:7](src/LinkGroup.cpp:7) is renamed `GetDefaultLinkExemptFlags()` and remains the single source of truth for v1 defaults.
 
-**High Contrast override.** Before painting, check `SystemParametersInfo(SPI_GETHIGHCONTRAST, ...)`. If active, `colour = GetSysColor(COLOR_HIGHLIGHT)` for every group, ignoring `kBracketPalette`. Re-check on `WM_THEMECHANGED` (set `bracketLayout.valid = false` to force layout rebuild with new colours). Group differentiation in HC mode comes from lane position + the `[L<n>]` prefix; the brackets become a structural element rather than a colour-coded one. This is the accessibility-correct behaviour — the user opted into HC for a reason, we don't paint over it with custom RGB.
-
-### `NM_CUSTOMDRAW` extension
-
-Modifications to the existing handler at [src/UI/EmitterList.cpp:1841](src/UI/EmitterList.cpp:1841):
-
-- **`CDDS_PREPAINT`**: now also calls `RebuildBracketLayout(control)` if `!control->bracketLayout.valid`. Return value unchanged: `CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT`.
-- **`CDDS_ITEMPREPAINT`**: existing multi-select highlight branch unchanged. **Bug fix here**: the existing return `CDRF_NEWFONT` must become `CDRF_NEWFONT | CDRF_NOTIFYPOSTPAINT` so the bracket dot can paint on top of the multi-select highlight (see "Unknown 1" above). Verify via the smoke-test before relying on it.
-- **`CDDS_ITEMPOSTPAINT`** (new): for each row, look up the emitter's group in `bracketLayout`. If found:
-  - Paint hover tint (`~15%` alpha blend of group colour over row rect) if `groupId == hoveredGroupId`.
-  - Paint the dot at `(rightEdgeOffset - lane × laneWidth, rowCentreY)` and the horizontal stub from `dotX - stubLength` to `dotX` at row centre Y.
-  - Return `CDRF_DODEFAULT` (no further per-item action).
-- **`CDDS_POSTPAINT`**: existing marquee frame paint preserved. Add a pre-marquee block: for each group with `members.size() >= 2`, draw vertical line from `(dotX, topY)` to `(dotX, bottomY)`. Stroke `strokeWidth` (or `strokeWidth × 2` if hovered). Use `SelectClipRgn` to clip to tree client bounds.
-
-### Hit-test (~20 lines)
+Per-group storage on `ParticleSystem`:
 
 ```cpp
-struct BracketHit { enum Kind { None, Dot, Line }; Kind kind; uint32_t groupId; };
+// In ParticleSystem.h (private):
+std::map<uint32_t, LinkExemptFlags> m_linkExempts;
 
-static BracketHit HitTestBracket(const BracketLayout& L, POINT pt)
+// Public accessors:
+const LinkExemptFlags& getLinkExemptFlags(uint32_t groupId) const;
+void                   setLinkExemptFlags(uint32_t groupId,
+                                          const LinkExemptFlags& flags);
+```
+
+`getLinkExemptFlags(groupId)`: if `groupId` is in `m_linkExempts`, returns the entry; else returns the v1 defaults from `GetDefaultLinkExemptFlags()`. The reference is to long-lived storage (either the map entry or the static default), so callers can hold it across short scopes.
+
+`setLinkExemptFlags(groupId, flags)`: if `flags == GetDefaultLinkExemptFlags()`, removes any map entry for `groupId` (keeps the on-disk representation minimal). Otherwise inserts/updates.
+
+### B. Serialisation — new system-body chunk `0x0003`
+
+Writer in [src/ParticleSystem.cpp:743](src/ParticleSystem.cpp:743), inserted between the existing `0x0800` (emitter envelope) and `0x0002` (leaveParticles) — keeps related editor-only chunks adjacent.
+
+```cpp
+// In ParticleSystem::write, between the 0x0800 and 0x0002 chunks:
+if (!m_linkExempts.empty())
 {
-    const int dotRect = L.dotRadius + 2;   // ±2 px hit slop
-    for (const auto& g : L.groups) {
-        int dotX = L.rightEdgeOffset - g.lane * L.laneWidth;
-        // Dot hits first — they're more specific.
-        for (const auto& m : g.members) {
-            if (abs(pt.x - dotX) <= dotRect && abs(pt.y - m.centreY) <= dotRect)
-                return { BracketHit::Dot, g.groupId };
+    writer.beginChunk(0x0003);
+    writeInteger(writer, (uint32_t)m_linkExempts.size());
+    for (auto& kv : m_linkExempts)
+    {
+        writeInteger(writer, kv.first);                       // groupId
+        writeInteger(writer, (uint32_t)sizeof(LinkExemptFlags));
+        writer.write(&kv.second, sizeof(LinkExemptFlags));    // raw POD blob
+    }
+    writer.endChunk();
+}
+```
+
+The `sizeof(LinkExemptFlags)` written before each blob lets future versions add flags safely: a newer reader sees a larger blob and reads the bytes it knows, ignores the rest. An older reader (already deployed) just skips the unknown `0x0003` chunk entirely.
+
+Reader: in the optional-skip section of [src/ParticleSystem.cpp:808](src/ParticleSystem.cpp:808), add a case for `0x0003` parallel to the existing `0x0002` handling:
+
+```cpp
+type = reader.next();
+while (type != -1)
+{
+    if (type == 0x0002)
+    {
+        Verify(reader.size() == 1);
+        m_leaveParticles = readBool(reader);
+    }
+    else if (type == 0x0003)
+    {
+        uint32_t count = readInteger(reader);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint32_t groupId      = readInteger(reader);
+            uint32_t flagsSize    = readInteger(reader);
+            LinkExemptFlags flags = GetDefaultLinkExemptFlags();
+            uint32_t toRead = (flagsSize <= sizeof(LinkExemptFlags))
+                            ? flagsSize : (uint32_t)sizeof(LinkExemptFlags);
+            reader.read(&flags, toRead);
+            if (flagsSize > sizeof(LinkExemptFlags))
+                reader.skip(flagsSize - sizeof(LinkExemptFlags));
+            m_linkExempts[groupId] = flags;
         }
-        // Line hit: in the lane column, between topY and bottomY.
-        if (abs(pt.x - dotX) <= max(2, L.strokeWidth + 1)
-            && pt.y >= g.minY && pt.y <= g.maxY)
-            return { BracketHit::Line, g.groupId };
     }
-    return { BracketHit::None, 0 };
+    else
+    {
+        // Unknown future chunk — skip
+        reader.skip(reader.size());
+    }
+    type = reader.next();
 }
 ```
 
-`HitTestBracket` first checks staleness: if `L.scrollOrigin` ≠ current scroll position, return `None` (paint will rebuild next frame; the user's click between paint and scroll-change is rare enough to discard).
+The existing read loop is a simple `if (type == 0x0002) { ... } type = reader.next(); Verify(type == -1);` pattern. MT-10 generalizes that to a small while-loop that handles both `0x0002` and `0x0003` and tolerantly skips anything else. Subtle but worth flagging in code review: the change from "verify next is -1" to "tolerantly drain optional chunks" is a forward-compat improvement that pays for every future system-body addition.
 
-### `EmitterTreeViewWindowProc` extensions
+### C. `copySharedParamsFrom` extension
 
-Three additions to the tree subclass at [src/UI/EmitterList.cpp:1013](src/UI/EmitterList.cpp:1013):
-
-**1. `WM_LBUTTONDOWN` — bracket click intercept** (insert at the top of the existing case, before any marquee/multi-select dispatch at [src/UI/EmitterList.cpp:1036](src/UI/EmitterList.cpp:1036)):
+Today's implementation ([src/ParticleSystem.cpp:555](src/ParticleSystem.cpp:555)) hand-restores 4 exempt fields. With ~42 flags, hand-restoring each one is a 100-line if-ladder. Refactor to a field-table approach:
 
 ```cpp
-POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-BracketHit hit = HitTestBracket(control->bracketLayout, pt);
-if (hit.kind != BracketHit::None) {
-    auto members = GetLinkGroupMembers(*control->system, hit.groupId);
-    if (!members.empty()) {
-        control->multiSelection.clear();
-        for (auto* m : members) control->multiSelection.insert(m);
-        control->selection       = members[0];   // topmost visible by paint order
-        control->selectionAnchor = members[0];
-        HTREEITEM hi = FindTreeItemByEmitter(hWnd,
-            TreeView_GetRoot(hWnd), members[0]);
-        if (hi) TreeView_SelectItem(hWnd, hi);
-        InvalidateRect(hWnd, NULL, FALSE);
-        NotifyParent(control, ELN_SELCHANGED);
-    }
-    return 0;   // eat the click
-}
-// Fall through to existing multi-select / marquee dispatch.
+// In ParticleSystem.cpp, file-scope static or method-local:
+struct ExemptFieldOp
+{
+    // Save the field from `*this` into a generic buffer, then restore
+    // it from the buffer after the bulk copy.
+    bool         (LinkExemptFlags::*flag);     // pointer-to-member
+    void         (*save)(const Emitter& src, void* buf);
+    void         (*restore)(Emitter& dst, const void* buf);
+    size_t       bufSize;
+};
+
+// Static table of all exempt-eligible fields. ~42 entries.
+static const ExemptFieldOp kExemptFields[] = {
+    { &LinkExemptFlags::colorTexture, SaveString, RestoreString,
+      offsetof(Emitter, colorTexture) ... },
+    ...
+};
 ```
 
-**2. `WM_MOUSEMOVE` — hover hit-test** (extend the existing branch at [src/UI/EmitterList.cpp:1188](src/UI/EmitterList.cpp:1188), gated to *not* run when marquee is active):
+Alternative if the pointer-to-member-with-offsetof gymnastics gets ugly: a parallel `if (exempt.fieldName) restore = oldValue;` block for each field — repetitive but obvious. Pick whichever reads cleaner to a reviewer; both are tractable for ~42 entries. The current hand-restoration is the right pattern to extend; don't over-engineer.
+
+Decide pre-coding: pointer-to-member field table vs. flat if-ladder. The if-ladder is ~84 lines of save+restore; the field table is ~42 entries plus ~8 generic save/restore helpers. The field table wins for future-extensibility; the if-ladder wins for first-read clarity. **Default: if-ladder, mirroring the existing structure**, since the field table introduces a layer of indirection that's mostly value only when the field count grows past ~50.
+
+### D. Dialog UI — `IDD_LINK_GROUP_SETTINGS`
+
+New resource in both `.en.rc` and `.de.rc`:
+
+- **Size**: ~400 px × 500 px (fits ~20 visible list rows; user scrolls for the rest).
+- **Title**: `"Link group N settings"` — dynamic, set at `WM_INITDIALOG` based on the group ID passed via `lParam`.
+- **Controls**:
+  - `IDC_LINK_EXEMPT_LIST`: `SysListView32`, `WS_BORDER | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER`. Set `LVS_EX_CHECKBOXES` via `ListView_SetExtendedListViewStyle` at `WM_INITDIALOG`.
+  - Two columns: "Field" (250 px), "Category" (120 px).
+  - `IDC_LINK_EXEMPT_RESET`: button labeled "Reset to defaults".
+  - `IDOK` / `IDCANCEL`: standard OK / Cancel.
+- **Rows**: every flag in `LinkExemptFlags` *except* the `unknownXX` fields and `name`. ~33 visible rows. Hand-grouped by category for readability:
+  - Textures (2): colorTexture, normalTexture
+  - Curves (6): red, green, blue, alpha, scale, rotation speed, trackIndex (special-named "Atlas index curve")
+  - Lifetime / spawning (7): lifetime, initialDelay, burstDelay, nBursts, nParticlesPerBurst, nParticlesPerSecond, useBursts
+  - Physics (8): gravity, acceleration, inwardSpeed, inwardAcceleration, bounciness, groundBehavior, objectSpaceAcceleration, affectedByWind
+  - Appearance (9): blendMode, textureSize, nTriangles, randomScalePerc, randomLifetimePerc, hasTail, tailSize, noDepthTest, randomColors
+  - Weather (4): isWeatherParticle, weatherCubeSize, weatherCubeDistance, weatherFadeoutDistance
+  - Rotation (4): randomRotation, randomRotationDirection, randomRotationAverage, randomRotationVariance
+  - Misc (10): linkToSystem, parentLinkStrength, doColorAddGrayscale, isHeatParticle, isWorldOriented, freezeTime, skipTime, emitFromMesh, emitFromMeshOffset, groups[SPEED]/groups[LIFETIME]/groups[POSITION]
+- **Dialog proc** handles: `WM_INITDIALOG` (populate list, check current flags), `LVN_ITEMCHANGED` (update local flags struct on each toggle), `IDC_LINK_EXEMPT_RESET` (restore defaults to local struct, refresh checkboxes), `IDOK` (apply via the sync-when-unexempting flow described next), `IDCANCEL` (close, no save).
+
+Resource IDs added to both `resource.en.h` and `resource.de.h` in the 40160–40199 range (above MT-7's 40119–40159, leaving 40190 as a marker for the next feature):
+
+- `IDD_LINK_GROUP_SETTINGS` = 40160
+- `IDC_LINK_EXEMPT_LIST` = 40161
+- `IDC_LINK_EXEMPT_RESET` = 40162
+- `IDD_LINK_GROUP_DISAGREEMENT` = 40163
+- `IDC_LINK_DISAGREEMENT_LIST` = 40164
+
+The right-click menu builder gets one new entry: `ID_LINK_GROUP_SETTINGS` (a new accelerator-free menu ID in the existing range), enabled when `control->selection != NULL && control->selection->linkGroup != 0`.
+
+### E. Sync-when-unexempting — `IDD_LINK_GROUP_DISAGREEMENT`
+
+Triggered at OK time of the settings dialog, but only when:
+1. At least one flag transitioned from `true` to `false` (was exempt, now shared).
+2. For at least one such field, current group members hold disagreeing values.
+
+For each such field, build the `Disagreement`:
 
 ```cpp
-if (!control->marqueeActive) {
-    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-    BracketHit hit = HitTestBracket(control->bracketLayout, pt);
-    uint32_t newHover = (hit.kind != BracketHit::None) ? hit.groupId : 0;
-    if (newHover != control->hoveredGroupId) {
-        uint32_t oldHover = control->hoveredGroupId;
-        control->hoveredGroupId = newHover;
-        InvalidateGroupRows(control, oldHover);    // each helper InvalidateRects only the affected rows
-        InvalidateGroupRows(control, newHover);
-    }
-    if (!control->mouseTrackingArmed) {
-        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
-        TrackMouseEvent(&tme);
-        control->mouseTrackingArmed = true;
-    }
-}
-// Continue to existing marquee branch.
+struct DisagreementEntry
+{
+    const char*                                    fieldLabel;
+    int                                            fieldId;
+    std::vector<std::pair<std::string,           // value as display string
+                          std::vector<Emitter*>>> // members holding that value
+                                                   uniqueValues;
+};
 ```
 
-**3. `WM_MOUSELEAVE` / `WM_KILLFOCUS` — clear hover** (new cases; `WM_CAPTURECHANGED` at [src/UI/EmitterList.cpp:1604](src/UI/EmitterList.cpp:1604) extends to also clear hover):
+Disagreement dialog: another SysListView32 (or rapid-fire panel with one radio group per row). Each row shows:
+- Field name
+- Unique value 1, "used by [list of member names]"
+- Unique value 2, "used by [other member names]"
+- … radio selection picks the winning value.
+
+OK applies all selected values to all members (overwriting the dissenting members), then proceeds with the original settings-dialog OK (writes flags, fires `ELN_LISTCHANGED` → `CaptureUndo`).
+
+If the user cancels the disagreement dialog: no changes commit, settings dialog also rolls back (OR re-displays for re-edit — pick the simpler: just rolls everything back, user re-opens to re-decide).
+
+Helper functions:
 
 ```cpp
-case WM_MOUSELEAVE:
-case WM_KILLFOCUS:
-    if (control->hoveredGroupId != 0) {
-        uint32_t old = control->hoveredGroupId;
-        control->hoveredGroupId = 0;
-        InvalidateGroupRows(control, old);
-    }
-    control->mouseTrackingArmed = false;
-    break;
+// In LinkGroup.cpp:
+std::vector<DisagreementEntry> BuildDisagreementList(
+    const ParticleSystem&    system,
+    uint32_t                 groupId,
+    const LinkExemptFlags&   oldFlags,
+    const LinkExemptFlags&   newFlags);
+
+void ApplyDisagreementResolutions(
+    ParticleSystem&                       system,
+    uint32_t                              groupId,
+    const std::vector<DisagreementEntry>& resolutions);
 ```
 
-### Cache invalidation triggers
+`BuildDisagreementList` walks every flag, checks if it transitioned `true → false`, gathers the current member values, dedups, returns one `DisagreementEntry` per field with non-trivial disagreement (≥ 2 unique values).
 
-`bracketLayout.valid = false` is set from:
+`ApplyDisagreementResolutions` for each entry: take the user-picked winning value, overwrite every other member's field with it.
 
-- `WM_SIZE` on the tree (client width changed → reservedMax changed → lane width must recompute). New handler.
-- `WM_VSCROLL` / `WM_HSCROLL` on the tree (rows moved → minY/maxY changed). New handler.
-- `TVN_ITEMEXPANDED` on the parent (rows added/removed). New `case` in the existing `WM_NOTIFY` switch.
-- `EmitterList_Refresh` (system swap, batch add/remove). Existing function; one line to add.
-- Any code path that mutates `linkGroup` on any emitter (Link Selected, Dissolve, Add to group, Remove from group). Audit these call sites in `LinkGroup.cpp` and the `NM_RCLICK` menu handlers; add invalidation.
+### F. Propagation hook update
 
-The cost of over-invalidation is one extra layout walk per paint (~50 µs for hundreds of emitters). The cost of under-invalidation is stale-cached clicks landing on wrong groups. **Bias to over-invalidate.**
+In [src/main.cpp:802](src/main.cpp:802) and [src/LinkGroup.cpp:65](src/LinkGroup.cpp:65) (`CreateLinkGroup`) and [src/LinkGroup.cpp:94](src/LinkGroup.cpp:94) (`JoinLinkGroup`):
+
+```cpp
+// Old:
+const LinkExemptFlags& exempt = GetLinkExemptFlags();
+// New:
+const LinkExemptFlags& exempt
+    = info->particleSystem->getLinkExemptFlags(info->selectedEmitter->linkGroup);
+```
+
+One-line change. Three call sites. The static `GetLinkExemptFlags()` is renamed `GetDefaultLinkExemptFlags()` and kept for `ParticleSystem::getLinkExemptFlags`'s fallback path.
+
+### G. Undo coverage
+
+The existing undo system snapshots the entire `ParticleSystem` via serialize-to-buffer. `m_linkExempts` rides the same snapshot if its bytes are serialized — but the existing snapshot path is `ParticleSystem::write` which doesn't currently emit `m_linkExempts`. MT-10's writer changes (§B) automatically add `m_linkExempts` to the snapshot.
+
+The dialog's OK triggers `ELN_LISTCHANGED` via the existing pathway in `EmitterList.cpp`, which fires `CaptureUndo` in main.cpp with `coalesceKey=0` (no folding). One dialog OK = one undo entry covering the flag changes AND any disagreement-resolved member-value changes. Single Ctrl-Z restores everything.
 
 ---
 
@@ -342,357 +398,308 @@ The cost of over-invalidation is one extra layout walk per paint (~50 µs for hu
 
 Each risk: what breaks, when, why → code-level mitigation → the verification step that bites if the mitigation regresses.
 
-1. **`CDDS_ITEMPREPAINT` return value gates `CDDS_ITEMPOSTPAINT`.** If MT-8's `CDRF_NEWFONT` return doesn't allow postpaint to fire, multi-selected rows won't get a bracket dot and the bracket *line* will pass through them invisibly.
-   - *Mitigation*: change the return at [src/UI/EmitterList.cpp:1882](src/UI/EmitterList.cpp:1882) to `CDRF_NEWFONT | CDRF_NOTIFYPOSTPAINT`. Verify with a debug printf in the postpaint branch before committing.
-   - *Tripwire V1*: with two linked emitters both in `multiSelection`, the dot is visible on both rows (not just the unselected siblings). If the dot is missing on selected rows, the prepaint return was wrong.
+1. **Chunk ID `0x0003` collides with a chunk the game engine reads.** If EaW/FoC's particle-system reader interprets `0x0003` at the system level (e.g. it's a documented chunk we missed), a file saved with MT-10 may render incorrectly or refuse to load in-game.
+   - *Mitigation*: the optional-skip pattern means unknown chunks at the system level are dropped silently. Verify by saving an MT-10 file with `m_linkExempts` populated, loading it in EaW/FoC, confirming visual output matches the same file's pre-MT-10 save. If the engine refuses or crashes, change the chunk ID to `0x0901` (above the envelope range, less collision risk) and retry.
+   - *Tripwire R1*: build a 3-emitter system, set a non-default exempt set, save. Load in EaW/FoC binary. Particle effect renders correctly + identically to the same scene saved without the `0x0003` chunk. If divergent or crash → chunk ID is wrong.
 
-2. **Tree subclass eats bracket click before tree's selection runs.** The existing `WM_LBUTTONDOWN` path forwards to the default proc after running `UpdateMultiSelectionFromClick` so tree selection bookkeeping stays consistent. Eating the message on bracket-hit skips that.
-   - *Mitigation*: when eating, manually run the bookkeeping we're skipping — call `TreeView_SelectItem(hWnd, hi)` to update tree's idea of primary, fire `ELN_SELCHANGED` explicitly. Don't return without doing this.
-   - *Tripwire V2*: after clicking a bracket dot for a 3-emitter group, the inspector shows the topmost member's parameters (not blank, not the previous selection). If blank, `ELN_SELCHANGED` wasn't fired.
+2. **`LinkExemptFlags` struct layout changes between editor versions.** Adding a flag changes `sizeof(LinkExemptFlags)`. Files saved by a newer editor have larger per-group entries than an older editor expects.
+   - *Mitigation*: per-entry `flagsByteCount` written before the blob (§B). Newer-saved-by-older-loaded: older editor reads only the bytes it knows, skips the rest, applies defaults to unknown flags. Older-saved-by-newer-loaded: newer editor sees a smaller blob, reads what's there, defaults the missing tail.
+   - *Tripwire R2*: in a debug build, manually corrupt the per-entry `flagsByteCount` to be one byte less than actual (simulating older file). Reader loads gracefully: known flags from the first N-1 bytes apply; the last flag falls back to its default. No crash, no silent miscount.
 
-3. **`HitTestBracket` false positives in row-text area.** If a group's lane index × `laneWidth` is small enough, the dot's `dotX` lands inside a row's text. A user clicking a long emitter name could trigger group-select.
-   - *Mitigation*: paint and hit-test only in the right-edge gutter — `dotX = rightEdgeOffset - lane × laneWidth`, where `rightEdgeOffset = clientRect.right - 4`. Tree rows render text starting from `indentX + iconWidth + 2`; with sane tree-client widths (≥ 200 px) and the lane scaling clamped to ≤ `clientWidth / 4`, the bracket area can never overlap text. Add an `assert(dotX > 2 × indentX)` in debug builds to catch pathological narrow trees.
-   - *Tripwire V3*: with the tree resized to 200 px wide and 8 active groups (max lanes packed), clicking the right edge of any *visible label text* must select the emitter row, not a group.
+3. **Disagreement-resolution UX overload.** A user clears 10 exempt flags at once with 10 disagreements. A naive implementation pops 10 dialogs in sequence.
+   - *Mitigation*: collect ALL disagreements at OK time, show ONE summary dialog with one row per disagreeing field. Single Apply resolves them all. Skip dialog entirely when no disagreements (every cleared flag found members already agreeing).
+   - *Tripwire R3*: clear 5 exempt flags in one dialog edit; 3 fields disagree, 2 fields agree. One summary dialog appears with 3 rows (not 5, not 1 each). After Apply, the 2 agreeing fields are silently shared (no change to member values); the 3 resolved fields apply the user's pick.
 
-4. **`WM_MOUSELEAVE` swallowed during drag-drop capture.** Drag-drop sets capture; `TrackMouseEvent`'s leave message may not fire while another window holds capture. Hover state goes stale.
-   - *Mitigation*: clear `hoveredGroupId` in `WM_CAPTURECHANGED` (already handled by the marquee path at [src/UI/EmitterList.cpp:1604](src/UI/EmitterList.cpp:1604); the existing case extends to clear hover too). Also clear at the start of `TVN_BEGINDRAG`. Re-arm `TrackMouseEvent` on next `WM_MOUSEMOVE` (the `mouseTrackingArmed = false` reset handles this).
-   - *Tripwire V4*: hover a bracket, start a drag, drop on another row. After release, the *previous* hover tint is no longer painted. If it persists, `WM_CAPTURECHANGED` didn't clear hover.
+4. **`copySharedParamsFrom` field-by-field restore drifts from the actual field list.** Today the function manually restores 4 exempt fields. With ~42, a field can be silently forgotten — added to `LinkExemptFlags` and the dialog but missed in the save/restore.
+   - *Mitigation*: either (a) build a field table that pairs each flag with its save/restore op, or (b) add a debug-only assertion at the end of `copySharedParamsFrom` that walks both structs and confirms every flag-checked field was actually preserved. **Default: assertion**, since the field-table refactor is invasive; the assertion fires at first use in a debug build if a flag was forgotten.
+   - *Tripwire R4*: add a new flag to `LinkExemptFlags` (say `hypothetical = true` by default) without updating `copySharedParamsFrom`'s restore section. Debug build's `copySharedParamsFrom` assertion fires on first propagation. Real-build behaviour: the new field always gets overwritten by propagation regardless of the flag → silent miscalibration. The assertion catches it pre-ship.
 
-5. **Layout cache and hit-test diverging when tree scrolls mid-frame.** Paint computed lane layout at scroll position Y; user scrolls before clicking; click hit-tests against now-wrong Y coordinates.
-   - *Mitigation*: stamp `scrollOrigin` into the cache at rebuild. `HitTestBracket` checks the stamp against current scroll; if mismatched, return `None` and let the user click again after the next repaint. The lost click is preferable to a wrong-group select.
-   - *Tripwire V5*: scroll a group's members out of view via wheel mid-hover (cursor over the dot). The hover tint clears on next paint. If clicking the original cursor position still selects the group, the staleness check didn't bite.
+5. **Settings dialog opens with stale member-state when another emitter is being edited.** If the inspector is mid-spinner-drag while the dialog opens, the dialog reads `linkExempts[groupId]` but the spinner's pending value isn't committed yet. OK applies stale flags.
+   - *Mitigation*: the existing inspector-disabled overlay (MT-8 layered popup at [src/main.cpp:1908](src/main.cpp:1908)) is only present when multi-set ≥ 2. Single-emitter editing doesn't disable the inspector. If the user opens "Group settings…" while a spinner has uncommitted state, the spinner's `WM_KILLFOCUS` (fired when the dialog steals focus) commits its value before the dialog reads. Verify this by stepping through the focus-stealing path.
+   - *Tripwire R5*: start dragging an inspector spinner. While drag is mid-flight, right-click the emitter, pick "Group settings…". The spinner's WM_KILLFOCUS fires; its pending value commits to the emitter. Dialog reads the committed value, OK applies correctly.
 
-6. **Bracket layout cache invalidation on expand/collapse missed.** Collapsing a parent removes some linked children from the visible set; if cache isn't invalidated, the bracket line still spans the now-invisible Y range.
-   - *Mitigation*: hook `TVN_ITEMEXPANDED` to set `valid = false`. Tree control should automatically invalidate its visible area on expand, which triggers paint, which rebuilds. Verify the auto-invalidate happens — if not, also call `InvalidateRect` explicitly.
-   - *Tripwire V6*: build a particle system with a parent emitter that has a child in link group X, plus a non-child sibling also in X. Collapse the parent. The bracket now spans only the sibling row (no bracket at all if it's the only visible X member, since `members.size() < 2`).
+6. **Undo of a sync-when-unexempting commit restores BOTH the flag change AND the member-value overwrite.** If undo restores only the flag change but not the member values, the next propagation cycle "re-discovers" the divergence and re-fires the disagreement dialog (or propagates wrong values).
+   - *Mitigation*: full-system snapshot (existing path) covers both. The dialog OK fires one `CaptureUndo` AFTER both the flag write and the member-value writes; the snapshot includes both states. Single Ctrl-Z restores both.
+   - *Tripwire R6*: set up 3 linked emitters with `lifetime` exempt + divergent lifetime values (1.0, 2.0, 3.0). Open dialog, clear `lifetime` exempt, OK → disagreement dialog appears → pick "2.0" → Apply. Member lifetimes are now 2.0/2.0/2.0; exempt is `false`. Press Ctrl-Z. Member lifetimes restore to 1.0/2.0/3.0; exempt restores to `true`. Press Ctrl-Y. Both apply again.
 
-7. **Palette colours unreadable under user theme.** A user with a dark Windows theme or high-contrast theme sees the custom palette blend in.
-   - *Mitigation (default theme)*: the 12 colours in `kBracketPalette` are Tableau-derived and pre-tuned (Tableau hues, luminance-shifted to Material 700/800/900 where raw Tableau failed thin-line contrast on white). Debug build prints each colour's WCAG contrast vs `GetSysColor(COLOR_WINDOW)` at startup; failing any 3:1 threshold is a build-time signal to revisit.
-   - *Mitigation (High Contrast theme)*: detect via `SystemParametersInfo(SPI_GETHIGHCONTRAST, ...)`. In HC mode, paint *all* brackets in `COLOR_HIGHLIGHT`. Group identification comes from lane position + the `[L<n>]` prefix in `FormatEmitterDisplayName`. Don't override the user's HC theme with custom RGB.
-   - *Tripwire V7a*: under Windows default theme with 12 active groups, all 12 lines distinguishable in a screenshot. *V7b*: under Windows HC "Aquatic" theme, all brackets paint in the system highlight colour; lane positions remain distinguishable; the `[L<n>]` prefix is the canonical group identifier.
+7. **Game engine reading a non-default exempt-flags chunk might decompose `LinkExemptFlags` into stray field interpretations.** If the engine's chunk reader is permissive ("read any data into a known struct"), a misread could silently corrupt a different system field.
+   - *Mitigation*: the engine's reader for `0x0900` envelope follows a known pattern: switch on chunk type, default-skip unknown. `0x0003` is unrecognized in any documented engine code path. **Action**: visual-render verify in §R1 tripwire — if the engine were misinterpreting, particles would render wrong.
 
-8. **Click-to-select-group competes with single-emitter selection.** User clicking just past a bracket dot intending to select an emitter row triggers group-select instead.
-   - *Mitigation*: `HitTestBracket` uses `±dotRadius + 2 = ±5 px` slop and only the dot rect; missing a dot falls through to row-click. With `rightEdgeOffset = clientRect.right - 4` and `dotRadius = 3` at 96 DPI, the bracket's effective hit zone is x ∈ `[clientRect.right - 9, clientRect.right - 1]` — strictly the right margin, never label area.
-   - *Tripwire V8*: click 1 pixel left of a dot (still in bracket gutter, on the stub) → group select. Click 10 pixels left (in label area) → row select.
+8. **Dialog's "Reset to defaults" button mid-edit clears unsaved disagreement-resolution choices.** If the user has been mid-edit toggling flags + has pending disagreement-state on OK, hitting Reset wipes everything.
+   - *Mitigation*: Reset only affects the local flags struct in the dialog. No disagreement dialog has been shown yet (it only triggers at OK). So Reset = "revert flags to defaults", then user picks OK and the disagreement flow runs against the new (reset) flags. Behaviour is consistent.
+   - *Tripwire R8*: open settings dialog, toggle 3 random flags, hit Reset. List checkboxes match defaults. Hit OK. The disagreement flow runs against `defaults` (not against the pre-Reset state).
 
-9. **Hover repaint thrashing causes scroll-time stutter.** `WM_MOUSEMOVE` fires dozens of times per scroll-wheel tick; if hover hit-test mismatches and invalidates rows each frame, paints amplify.
-   - *Mitigation*: hover-state mutation only fires `InvalidateRect` when `newHover != oldHover`. The `if (newHover != control->hoveredGroupId)` branch in §Architecture's WM_MOUSEMOVE block. `TVS_EX_DOUBLEBUFFER` (already on at [src/UI/EmitterList.cpp:1726](src/UI/EmitterList.cpp:1726)) suppresses any flicker that does occur.
-   - *Tripwire V9*: hover a dot, then scroll the tree with the wheel. The hover tint should track the dot's new screen position (or clear if dot scrolls off). Frame rate stays smooth — if it stutters, hover is reinvalidating per scroll event.
+9. **Per-group exempt change without re-running propagation leaves stale member states.** User changes exempt set from "lifetime exempt" to "lifetime shared". The dialog's sync-when-unexempting handles the disagreement, but what if disagreement was already resolved by an earlier (separate) edit? No prompt fires; lifetimes stay divergent.
+   - *Mitigation*: this is actually correct behaviour. If members already agree on `lifetime`, there's nothing to disagree about; un-exempting just changes the flag for future propagations. No member-value overwrite needed because they already agree.
+   - *Tripwire R9*: 3 members all have `lifetime = 1.0`. Exempt is `true`. Open dialog, clear exempt, OK. No disagreement dialog. Member lifetimes still 1.0. Edit one to 2.0 → propagation overwrites the others to 2.0 (because shared now).
 
-10. **Greedy interval scheduler producing too many lanes.** A pathological case with N groups all overlapping in Y could need N lanes; if N is large enough, lane width scales to 2 px and the bracket becomes visually unreadable.
-    - *Mitigation*: this is acceptable degraded behaviour at the design floor. The 2 px floor still paints; the user has feedback that "too many overlapping groups exist." We do not cap lane count to a small number because doing so would force two groups onto the same lane and they'd visually conflate.
-    - *Tripwire V10*: construct a 12-group system where every group has members at the same set of row indices (e.g. groups 1–12 each contain rows 1, 3, 5). Confirm all 12 lanes paint at narrowed widths, all 12 colours distinguishable, no visual conflation.
+10. **Dialog field labels don't match inspector labels.** A user looks for "Random Lifetime %" in the dialog but sees `randomLifetimePerc`. UX friction.
+    - *Mitigation*: hand-pick display labels matching the inspector. The dialog's field-label string table is hand-authored, not derived from the C++ identifier.
+    - *Tripwire R10*: side-by-side screenshot review — every dialog row matches a visible inspector control's label.
 
 ---
 
 ## Verification
 
-Every row says **the regression it catches** (not "the feature works"). Categories ordered from cheapest setup at the top (just paint and look) to costliest at the bottom (composite multi-feature workflows). Within each category, items go cheap → expensive. The bar is *"would a staff engineer accept this as the test suite"* — if reviewing this list, would they ask "what about X?" and find X already covered.
+Each row says **the regression it catches**.
 
-### A. Layout & paint correctness (no interaction)
+### A. Data model + default behaviour
 
-- **A1.** Empty system (no emitters) → no bracket painted, no crash. *Catches: layout walker crashing on null tree root; div-by-zero in lane sizing when numLanes=0.*
-- **A2.** System with 5 unlinked emitters, no groups → no bracket painted, no overhead in repaint. *Catches: paint loop running on `members.size() == 0`; allocating the BracketLayout unnecessarily.*
-- **A3.** Single-member "group" (one emitter with `linkGroup = 1`, no other members) → no bracket painted (per design: `members.size() >= 2` gate). *Catches: paint firing on solo-member groups; the gate misplaced.*
-- **A4.** Two-member group spread over visible rows → vertical line in lane 0 with dots at both rows, ~5 px horizontal stub pointing leftward toward row text from each dot. *Catches: layout walker not picking up both members; lane assignment returning -1; paint loop skipping the `members.size() == 2` case.*
-- **A5.** Three groups, two overlapping in Y, one disjoint below the overlap → overlapping pair in lanes 0 and 1; disjoint group reuses lane 0. Three distinct palette colours, in palette positions 0/1/2 (blue, orange, green). *Catches: greedy scheduler not reusing lanes; `laneEnd[i] < g.minY` off-by-one; palette index drift.*
-- **A6.** Sparse membership: group A has members at rows 1, 5, 9; intervening rows are unlinked → bracket line is solid (not dashed) from row 1's dot to row 9's dot; dots only at members, never on rows 2/3/4/6/7/8. *Catches: paint loop drawing dots on intervening rows; line-end clipping to wrong Y; line painted in `CDDS_ITEMPOSTPAINT` per-row instead of once in `CDDS_POSTPAINT`.*
-- **A7.** Two non-overlapping groups stacked vertically (group X rows 1–3, group Y rows 5–7) → both in lane 0; visible mid-line gap between maxY of X and minY of Y; colour change at the gap. *Catches: lane reuse not happening for non-overlapping groups; line painted as a single span from minY of X to maxY of Y.*
-- **A8.** Stub orientation: horizontal stubs point *from* the lane *toward* the row text (leftward, since bracket is on the right margin). *Catches: stub painted rightward (into nothing), or omitted entirely.*
-- **A9.** Dot–line junction: line passes through the dot's centre; line does not have a visible gap at the dot. *Catches: line clipped at dot bounding box instead of dot centre; subpixel rendering artefact.*
-- **A10.** 12 concurrent overlapping groups → all 12 lanes painted; lane width visibly narrower than the 2-group case but still ≥ 2 px; each lane uses its expected palette colour (blue/orange/green/red/purple/brown/magenta/teal/olive/indigo/cyan/rose). *Catches: lane sizing not adapting; palette index wrap-around at 12; lane reservation reaching 0 px.*
-- **A11.** 13 concurrent overlapping groups → 13 lanes; group 13 reuses group 1's colour (`13 % 12 == 1`). User has lane position to differentiate. *Catches: palette wrap-around using wrong modulus; crash on index 12.*
-- **A12.** 25 emitters all in the same one group → single bracket line spanning all 25 rows, 25 dots, single lane. *Catches: layout walker truncating member list; paint loop bailing after some row count.*
-- **A13.** Group with members spread across deeply-nested parents (a 5-level-deep child of root A linked with a 5-level-deep child of root B) → bracket Y coordinates correctly sample the visible row centres regardless of indent depth. *Catches: layout using indent X for Y math; mistaking indent depth for visibility.*
+- **A1.** Open a pre-MT-10 file with two link groups, no exempt chunk → both groups use v1 defaults (textures + index + name); editing a non-exempt field propagates to siblings exactly as in MT-7. *Catches: regression in the defaults pathway; per-group lookup returning wrong reference.*
+- **A2.** Create a new group from scratch via "Link selected" → no entry added to `m_linkExempts` (verify via debug log) → group uses v1 defaults. *Catches: CreateLinkGroup speculatively inserting a default entry; map bloating with redundant defaults.*
+- **A3.** Set custom exempts on group X, save file, dissolve group X via "Dissolve link group" → `m_linkExempts` entry for X is removed on next save. *Catches: orphan entries persisting for dissolved groups, bloating future saves.*
+- **A4.** Open empty system (no groups), no `0x0003` chunk in saved output. *Catches: writer emitting empty chunk; readers tolerating it should remain backwards-only-safe.*
 
-### B. Cache invalidation
+### B. Custom exempt persistence
 
-- **B1.** Build a 2-member bracket, drag the lower member above the upper via reorder → bracket re-paints with correct dot order on next frame. *Catches: reorder pipeline not invalidating cache.*
-- **B2.** Build a parent with a child in group X plus a non-child sibling also in X. Collapse the parent → bracket disappears (only 1 visible member, no bracket painted). Re-expand → bracket returns. *Catches: TVN_ITEMEXPANDED not invalidating cache (R6 V6 tripwire).*
-- **B3.** Build a bracket spanning 20 rows, scroll the tree by wheel → bracket Y positions track the scroll; dot at row 1 leaves the top of the viewport, dot at row 20 enters from bottom; line follows. *Catches: scroll handler not invalidating cache; scroll-stamp mismatch causing wrong-Y paint.*
-- **B4.** Resize the main window to halve the tree width with 8 active groups (lanes packed) → lane width scales down without lane overlap; lane count unchanged. *Catches: WM_SIZE not invalidating cache (R6).*
-- **B5.** Two particle systems open. Switch the active system to one with different groups → bracket reflects the new system's groups, not stale state from the previous. *Catches: system-swap not invalidating cache or clearing `hoveredGroupId`.*
-- **B6.** Link two emitters via right-click "Link selected" → bracket appears immediately on next paint, no manual refresh needed. *Catches: link-creation pathway not invalidating cache.*
-- **B7.** Dissolve a group via right-click "Dissolve link group" → bracket disappears immediately. *Catches: dissolve pathway not invalidating cache.*
-- **B8.** Add an unlinked emitter to an existing group via "Add to link group" → bracket extends to include the new row immediately. *Catches: add-to-group pathway not invalidating cache.*
-- **B9.** Rename an emitter (F2) → no bracket movement; cache is *not* invalidated (label change doesn't affect Y or membership). *Catches: over-invalidation costing a layout rebuild per keystroke.*
-- **B10.** Toggle an emitter's visibility via icon click → no bracket change; cache *not* invalidated. *Catches: over-invalidation on visibility toggle.*
-- **B11.** Plain-click an emitter to select it → no bracket change; cache *not* invalidated. *Catches: over-invalidation on selection.*
+- **B1.** Set group X to exempt `lifetime` (in addition to defaults), save, reload → exempt persists. *Catches: writer not emitting non-default entry; reader not consuming.*
+- **B2.** Set group X to NOT exempt `colorTexture` (a default-exempt) — i.e., texture should propagate → save, reload → cleared-default-exempt persists. *Catches: writer assuming all flags are independent of defaults; reader applying defaults over non-default values.*
+- **B3.** Two groups, X with `lifetime` exempt and Y with `blendMode` exempt → save, reload → both persist independently. *Catches: writer using wrong groupId per entry; reader's per-entry parsing.*
+- **B4.** Save file with one custom-exempt group in MT-10, load in a pre-MT-10 debug binary (if one is buildable) → the pre-MT-10 build skips the unknown chunk and loads with v1 defaults for every group. No crash. *Catches: forward-compat regression — pre-MT-10 readers must tolerate the new chunk.* **Note: requires building a pre-MT-10 binary; skip if not tractable, the optional-skip pattern is well-tested by 0x0002 leaveParticles.*
 
-### C. Hover
+### C. Sync-when-unexempting
 
-- **C1.** Hover a dot → that group's member rows tint with the group colour at ~15% opacity; bracket line thickens from 1 px to 2 px. *Catches: WM_MOUSEMOVE branch not firing; line-thickening branch missing; InvalidateGroupRows not picking up tinted rows.*
-- **C2.** Move cursor off → tint and line-thickening clear within one paint (< 50 ms perceived). *Catches: clear path missing; old hover not invalidated when new hover is None.*
-- **C3.** Hover line between two dots → same effect as hovering a dot. *Catches: HitTestBracket only matching Dot, not Line.*
-- **C4.** Hover dot of group A, slide cursor to dot of group B → only A's rows + B's rows repaint (not the whole tree). *Catches: full-tree invalidation in hover-change path; over-invalidation.*
-- **C5.** Hover dot of group A, then immediately to a non-bracket area without exiting the tree → tint on A clears; no new hover. *Catches: stale hover when newHover == 0.*
-- **C6.** Hover dot, move cursor out of tree client area → hover clears within one paint. *Catches: WM_MOUSELEAVE not wired; TrackMouseEvent not re-armed (R4).*
-- **C7.** Hover dot, Alt-Tab to another window → hover clears via WM_KILLFOCUS. *Catches: WM_KILLFOCUS not wired.*
-- **C8.** Hover dot, start drag-drop (drag a different emitter), drop on another row → hover state cleared by WM_CAPTURECHANGED. *Catches: capture-change not clearing hover (R4 V4 tripwire).*
-- **C9.** Hover boundary: cursor sitting exactly on the boundary between two adjacent lanes — pixel where lane 0 ends and lane 1 begins → exactly one group hovers (the one whose `dotX` is nearest); doesn't oscillate between the two. *Catches: hit-test ambiguity at lane boundaries; both groups simultaneously hovered.*
-- **C10.** Rapid hover sweep — drag cursor across 5 dots in one second without stopping → final hover state matches the last dot's group; no stale tint left behind on any intermediate group. *Catches: paint races; stale tint when WM_MOUSEMOVE delivery falls behind cursor movement.*
-- **C11.** Hover a bracket while a modal dialog is open (e.g. "Link selected" confirm) → tree is disabled; no hover should fire. *Catches: WM_MOUSEMOVE on the disabled tree still mutating hover state.*
-- **C12.** Hover then scroll the tree by wheel → hover tracks the dot's new screen position if dot stays visible, or clears if dot scrolls out. *Catches: scroll not invalidating hover-relevant cache; hover persisting on now-invisible dot.*
+- **C1.** Group of 3 members all sharing `lifetime` (currently exempt + happens to agree at 1.0 / 1.0 / 1.0). Open dialog, clear `lifetime` exempt, OK → no disagreement dialog fires. Member values unchanged. *Catches: disagreement dialog firing on agreement (false positive).*
+- **C2.** Group of 3 members exempt-`lifetime` with divergent values (1.0 / 2.0 / 3.0). Open dialog, clear `lifetime`, OK → disagreement dialog appears. Three radio options: "1.0 (used by smoke_a)", "2.0 (used by smoke_b)", "3.0 (used by smoke_c)". Pick 2.0, Apply. All three lifetimes are now 2.0. *Catches: dialog not appearing for actual disagreement; resolution applying wrong value; not all members overwritten.*
+- **C3.** Clear 5 exempt flags at once, 3 fields disagree, 2 agree → single summary dialog with 3 rows. *Catches: per-field cascading dialogs (R3 tripwire); empty rows for agreeing fields.*
+- **C4.** Disagreement dialog Cancel → settings dialog OK is rolled back; flags revert to pre-edit state; member values untouched. *Catches: partial commit on Cancel; flags written without resolving values; values written without flags.*
 
-### D. Click-to-select-group
+### D. Propagation behaviour
 
-- **D1.** Click a dot → multi-selection becomes the group's full member list; primary = topmost visible member; inspector shows primary's params (not blank). *Catches: HitTestBracket missing; multi-set mutation skipped; ELN_SELCHANGED not fired (R2 V2 tripwire).*
-- **D2.** Click a line segment between two dots → same as clicking a dot. *Catches: Line-kind branch in HitTestBracket missing; click handler ignoring Line.*
-- **D3.** Click 1 px to the left of a dot (still in stub area) → group select fires. *Catches: hit slop too tight or asymmetric on the stub side.*
-- **D4.** Click 10 px left of a dot (in label area) → regular emitter select, NOT group select. *Catches: false-positive in row-text area (R3 V3 tripwire).*
-- **D5.** Resize the tree to 200 px width with 8 packed lanes. Click the right edge of the longest visible label → emitter select, not group select. *Catches: lane scaling allowing brackets to bleed into label area (R3 V3 tripwire).*
-- **D6.** Scroll the tree mid-frame (by wheel between paint and click) → click harmlessly does nothing (or selects whichever emitter is now at that screen Y); does NOT select a stale group. *Catches: scroll-stamp staleness check not biting (R5 V5 tripwire).*
-- **D7.** Click a bracket of a group that contains the currently-selected emitter → multi-set expands to all members; primary unchanged. *Catches: click handler clearing the primary unnecessarily.*
-- **D8.** Click a bracket twice in succession (same group) → second click is idempotent; multi-set unchanged after the second click. *Catches: handler mutating state on every call without checking current state; flicker if InvalidateRect fires redundantly.*
-- **D9.** Click a bracket dot that's at the topmost row of the visible viewport (no upper stub space) → group select fires correctly; no clipping artefacts. *Catches: dot at viewport boundary failing hit-test due to clipped paint vs. logical layout.*
-- **D10.** Click a bracket of a group whose members are scrolled partially out of view (top member scrolled above viewport) → primary becomes the topmost *visible* member (per design), not the absolute-topmost member that's scrolled away. *Catches: `members[0]` ordering using absolute order instead of visible order.*
+- **D1.** Group of 3 members. Custom exempt set: `lifetime` is now shared (cleared from default-shared, was-default-shared anyway). Edit one member's lifetime → other two update. *Catches: propagation hook not consulting per-group flags.*
+- **D2.** Group of 3 members. Set `colorTexture` to NOT exempt (was default-exempt). Edit one member's colorTexture → others update. *Catches: propagation respecting v1 defaults instead of per-group override.*
+- **D3.** Group of 3 members. Set `lifetime` to exempt. Edit one member's lifetime → others NOT updated. *Catches: hook always propagating regardless of flag.*
+- **D4.** Two groups X and Y. X exempts `lifetime`, Y doesn't. Edit a member of X → no propagation. Edit a member of Y → propagation fires. *Catches: per-group lookup using wrong groupId.*
 
-### E. Interaction with MT-8 multi-select
+### E. Undo / redo
 
-- **E1.** Build a 3-member bracket. Click an unrelated emitter outside the group → multi-set becomes `{clicked}`, bracket painting unchanged (still anchored to `linkGroup`, not multi-set). *Catches: bracket painting branched off multi-set instead of linkGroup.*
-- **E2.** Ctrl-click two emitters from the same group (manually building a multi-set of 2 of 3 members) → bracket painted, but the *third* member's row is NOT secondary-highlighted. Click the bracket line → multi-set expands to all three; the third member's row picks up the MT-8 highlight. *Catches: bracket-click not respecting `GetLinkGroupMembers`; multi-select highlight not extending after group-select.*
-- **E3.** Multi-select two unlinked emitters via marquee, hover the bracket of an *unrelated* third group → multi-set unchanged (hover is read-only). Hover tint paints on the unrelated group's rows on top of the existing MT-8 highlight on the original two. *Catches: hover mutating multi-set; hover tint hiding MT-8 highlight.*
-- **E4.** Marquee-drag across rows that include a linked emitter → multi-select gathers them; bracket painting on the group is unchanged. *Catches: bracket painting depending on multi-set state.*
-- **E5.** Bracket-select a 3-member group, then Shift-click the next unlinked emitter below → range-select from anchor (per MT-8 Shift semantics) replaces multi-set with the range. Bracket on the original group remains painted (still linked). *Catches: Shift-click misbehaving when anchor was set by bracket-click; bracket-painting depending on multi-set.*
-- **E6.** Bracket-select a 3-member group, then arrow-key down → multi-set replaces with `{newPrimary}` per MT-8 keyboard nav semantics. Bracket remains painted (still linked). *Catches: arrow-key nav clearing bracket painting; keyboard nav not clearing multi-set.*
-- **E7.** Bracket-select a 3-member group, then drag-reorder the primary → primary moves; multi-set is untouched per MT-8 design. Bracket re-lays out post-drop (cache invalidation). *Catches: drag-reorder operating on multi-set instead of primary; cache not invalidated post-drop.*
+- **E1.** Open dialog, change 3 flags, OK → one undo entry. Press Ctrl-Z → flags restore. Ctrl-Y → flags re-apply. *Catches: dialog OK firing multiple CaptureUndos; undo not capturing flag changes.*
+- **E2.** Sync-when-unexempting with disagreement-resolution → one undo entry covers BOTH the flag change AND the member-value resolution. Ctrl-Z restores both. *Catches: separate CaptureUndo for flags vs. values; partial undo.*
+- **E3.** Cancel dialog → no undo entry. Existing undo stack is untouched. *Catches: cancel still firing CaptureUndo.*
+- **E4.** Set custom exempts on group X → Ctrl-Z → flags revert AND any pending in-flight inspector edits aren't disturbed. *Catches: undo restoring more than the dialog's changes.*
 
-### F. Degenerate / boundary states
+### F. Dialog UI behaviour
 
-- **F1.** Tree with width = 0 (theoretical / window minimised before first paint) → no crash; no paint. *Catches: div-by-zero in `reservedMax = clientWidth / 4`; layout walker accessing negative dimensions.*
-- **F2.** Tree with width < 50 px (extreme narrow drag) → lane width clamps to 2 px floor; paint still runs; no overlap of paint with row text (label area shrinks to ~0 but render doesn't crash). *Catches: lane floor not enforced; integer underflow.*
-- **F3.** A single linked group of 100 members, all visible → bracket paints with 100 dots and one tall vertical line; no perf cliff or stack-overflow from the layout walker. *Catches: O(n²) interval scheduler; recursive walk blowing stack on tall trees.*
-- **F4.** 100 active link groups, all 2-member, all overlapping in Y → lane count = 100; lane width = floor (2 px); paint runs; user sees a "barcode" right margin. *Catches: lane data structure not sized to handle large numLanes; greedy scheduler scaling badly.*
-- **F5.** Bracket painted while tree is in a "no items" state (e.g. brand-new system created via File→New) → no crash; bracket cache is cleared/never built. *Catches: paint code accessing emitter pointers after a system reset.*
-- **F6.** Click within the bracket gutter X range, but on an empty row area (below the last emitter) → no group select, no crash. *Catches: click-handler hit-test not bounds-checking against the last row.*
-- **F7.** Click within bracket gutter at a Y inside a group's `[minY, maxY]` span but on a row that's NOT a member of that group (a non-linked row between members) → group select fires (line hit), per design. *Catches: HitTestBracket distinguishing Line wrongly.*
+- **F1.** Open dialog for group 3 → title reads "Link group 3 settings". *Catches: hardcoded title; missing dynamic format.*
+- **F2.** Open dialog → checkboxes reflect current exempt state (group's flags or defaults). *Catches: reading wrong group; not consulting per-group map.*
+- **F3.** Toggle a checkbox → local state mutates; OK applies; Cancel reverts. *Catches: immediate write-through to data model (should be batched at OK).*
+- **F4.** Hit Reset → all checkboxes return to defaults. OK applies defaults → `m_linkExempts` entry is REMOVED (not "store the defaults explicitly"). *Catches: storing redundant defaults; not normalizing on save.*
+- **F5.** Open dialog twice in a row → second open shows the flags from the first save. *Catches: dialog state leaking across opens; not re-reading after save.*
 
-### G. Performance & rendering
+### G. File-format edge cases
 
-Target: paint stays under one VSync interval (16 ms) under normal conditions. Bracket layout walk is dominated by `TreeView_GetItemRect` calls, which are cheap (cached by the tree control) — should not move the needle.
+- **G1.** Empty `m_linkExempts` (no custom-exempt groups) → no `0x0003` chunk emitted in save. File is byte-identical to pre-MT-10 save (if the data otherwise matches). *Catches: speculative chunk emission; bloat in default-state files.*
+- **G2.** System with 1 custom-exempt group + 10 default-exempt groups → `0x0003` chunk has exactly 1 per-group entry. *Catches: emitting defaults; storing all groups regardless.*
+- **G3.** Save → close → reopen → save again → both save outputs are byte-identical. *Catches: state-dependent serialisation; round-trip drift.*
+- **G4.** File saved by a debug build that has extra flags (simulated by writing a chunk with `flagsSize > sizeof(LinkExemptFlags)` for the current build) → loads in current build with the known flags applied, extras silently dropped. *Catches: brittle reader that errors on unexpected size.*
 
-- **G1.** Cold paint of a system with 200 emitters, 20 groups → first paint completes in < 50 ms (acceptable startup cost). *Catches: O(n²) blowup in layout walker; pathological palette computation.*
-- **G2.** Steady-state repaint during cursor hover sweep at 60 fps → repaint stays under 16 ms per frame even when hover transitions invalidate 2 groups per frame. *Catches: full-tree invalidation in hover; layout rebuild firing on every WM_MOUSEMOVE.*
-- **G3.** Scroll a 200-emitter tree by wheel for 5 seconds continuously → frame rate stays steady; no visible flicker; bracket follows scroll smoothly. *Catches: scroll-stamp invalidation causing repeated rebuilds; cache thrashing.*
-- **G4.** Memory: bracket layout cache size with 100 groups × 10 members each → expected footprint ~50 KB (each member is two ints + a pointer). No leak across system swaps (verify with a baseline RSS snapshot before/after 100 system-swap cycles). *Catches: cache not freed on system swap; vector reserves growing unboundedly.*
+### H. Game-engine compatibility
 
-### H. Theme & DPI
+- **H1.** Open an MT-10-saved file with non-default exempts in EaW/FoC binary → particle effect renders identically to the same scene saved without the chunk (engine ignores the unknown system-level chunk). *Catches: chunk ID collision with engine-known IDs (R1 tripwire).*
 
-App is System-DPI-aware (no manifest, no `WM_DPICHANGED` handler). HiDPI verification only needs app launch at the target DPI, not mid-session change.
+### I. Composite scenarios
 
-- **H1.** Launch app at Windows 100% scaling → dot radius ~3 px, lane width ~6 px, stub ~5 px. *Catches: hardcoded pixel constants; DPI multiplier inverted.*
-- **H2.** Launch app at Windows 175% scaling → dot radius ~5 px, lane width ~11 px, stub ~9 px. Visibly larger than 100% baseline. *Catches: DPI multiplier not applied to any of dot/lane/stub/stroke; mixed scaled+unscaled values.*
-- **H3.** Launch app at Windows 100% with default theme + 12 active groups → all 12 palette colours visibly distinct; debug-build contrast printer reports ≥ 3:1 for each entry against `COLOR_WINDOW`. *Catches: palette regression introducing a sub-threshold colour; palette wrap-around using wrong index.*
-- **H4.** Switch Windows to High Contrast "Aquatic" theme while app is running → on next paint, all brackets render in `GetSysColor(COLOR_HIGHLIGHT)`; palette colours are not used. *Catches: HC detection missing; `WM_THEMECHANGED` not invalidating bracket layout cache.*
-- **H5.** Switch HC theme back to default → brackets return to palette colours. *Catches: one-way HC detection; cache not refreshed on theme-revert.*
-- **H6.** Launch app under HC theme (start with it active) → first paint already in HC mode; brackets in `COLOR_HIGHLIGHT`. *Catches: HC detection only firing on the transition, not on startup.*
-
-### I. MT-7 link-group mutation interaction
-
-These exercise the bracket as side-effect of operations the user performs on linked groups via the existing MT-7 menu items.
-
-- **I1.** Right-click a single linked emitter → "Dissolve link group" → bracket disappears on next paint. *Catches: dissolve not invalidating cache (B7).*
-- **I2.** Right-click an unlinked emitter → "Add to link group → N" → bracket extends to include the row. *Catches: add not invalidating cache (B8).*
-- **I3.** Right-click a linked emitter → "Remove from link group" → bracket shortens; if the group is now < 2 members, bracket disappears entirely. *Catches: remove not invalidating cache; group-of-1 still painting.*
-- **I4.** Edit a propagating parameter on a member of a 5-member group (MT-7 propagation fires) → bracket and palette unchanged; no flicker. *Catches: MT-7 propagation triggering bracket repaint; cache invalidated needlessly.*
-- **I5.** Confirm-overwrite dialog from MT-7 (when linking emitters with diverging params) shown and accepted → bracket appears on next paint; cache rebuilt with new group. *Catches: dialog blocking propagation also blocking bracket update.*
-- **I6.** Confirm-overwrite dialog cancelled (user picks Cancel) → no group created; no bracket. *Catches: cache invalidated speculatively before the operation succeeded.*
-
-### J. Undo / redo
-
-Undo state interactions with bracket layout cache.
-
-- **J1.** Link two emitters → undo → bracket disappears. Redo → bracket reappears. *Catches: undo not invalidating cache; redo using stale post-undo state.*
-- **J2.** Dissolve a group → undo → bracket reappears with all original members. *Catches: undo restoring `linkGroup` field but cache not rebuilt.*
-- **J3.** Hover-select a group, then trigger undo of an *unrelated* operation (e.g. an emitter rename) → bracket painting unchanged; hover preserved. *Catches: every undo invalidating bracket cache.*
-- **J4.** Bracket-select a group, then undo deleting one of its members → multi-set should update to include the restored emitter (or not — see Open Q below); bracket extends. *Catches: undo restoring an emitter that's in a stale multi-set with dangling pointer.* **Note: open Q5.**
-
-### N. File / particle-system operations
-
-- **N1.** File → New → empty system → no bracket painted. *Catches: stale cache from previous system.*
-- **N2.** File → Open a .alo with link groups → brackets paint on first display of the loaded system. *Catches: cache not invalidated on file load.*
-- **N3.** File → Save → no UI change; bracket painting continues unaffected. *Catches: save triggering a tree refresh that drops the cache.*
-- **N4.** Save a .alo, close, re-open → brackets match pre-save state (linkGroup field is persisted in the `0x0100` chunk; bracket follows). *Catches: not strictly an MT-9 test — verifies MT-7 file format integration. But the user will hit this together with MT-9, so worth confirming.*
-- **N5.** Open two .alo files in sequence (system swap) → brackets refresh to the new system on the swap. *Catches: cache not invalidated on system swap (B5).*
-
-### W. Window state & focus
-
-- **W1.** Minimise the window with brackets visible → restore → brackets paint correctly. *Catches: cache invalidated to garbage during minimise; paint queue dropping.*
-- **W2.** Alt-Tab away from the editor → return → brackets paint correctly; no stale hover. *Catches: hover not cleared on focus loss (C7).*
-- **W3.** Drag the window across two monitors (System-DPI app: OS bitmap-scales, no `WM_DPICHANGED` to handle) → brackets visually scale via OS; no per-monitor paint logic needed. *Catches: System-DPI assumption wrong; some monitor-DPI code path that wasn't expected.*
-- **W4.** Resize the window with brackets visible — slow drag of the right edge → brackets re-lay out continuously; no flicker; tree client width tracks correctly. *Catches: WM_SIZE not invalidating; live-resize repaint too slow.*
-- **W5.** Maximise the window → brackets re-lay out to wider tree; lane reservation grows back to base size. *Catches: lane sizing locked to initial width.*
-
-### M. Modal dialog & context menu
-
-- **M1.** Open a right-click context menu on an emitter → tree is technically still painted (menu is a separate window); brackets paint unchanged. *Catches: context menu suppressing tree paint.*
-- **M2.** Open "Link selected" confirm dialog → tree is disabled; hover should NOT fire on the tree; brackets keep painting in their last state. *Catches: hover firing through disabled state (C11); paint loop blocked by modal pump.*
-- **M3.** Close the dialog by clicking OK → tree re-enabled; brackets re-paint with new group included. *Catches: paint not resumed after dialog dismissal.*
-- **M4.** Cancel the dialog → no group change; brackets unchanged. *Catches: cancel still mutating cache.*
-- **M5.** Open File → Open dialog → close it without selecting a file → return to editor; brackets paint unchanged. *Catches: cache invalidated by non-mutating modal dismissal.*
-
-### R. Drag-drop and reorder interaction
-
-- **R1.** Drag-reorder a bracketed emitter to a new position → drop completes; bracket re-lays out reflecting the new Y order. *Catches: drag pipeline not invalidating cache (B1).*
-- **R2.** Start a drag from an unlinked emitter, cursor moves *over a bracket* during the drag → bracket painting unchanged; no hover triggered (we're in drag mode); no group-select (we're not in a click). *Catches: WM_MOUSEMOVE during drag firing hover; drag-drop hit-test confused by bracket geometry.*
-- **R3.** Marquee-drag from empty space, sweep over a bracket and emitter rows → marquee builds multi-set from rows; bracket painting unchanged. *Catches: marquee path triggering bracket hover; bracket hit-test eating the marquee start.*
-- **R4.** Drag-reorder a member of a 5-group across to a position above the topmost member → bracket extends upward; topmost dot now at the new top. *Catches: layout walker not picking up the moved row's new position.*
-- **R5.** Cancel a drag by pressing Esc → drop reverted; bracket lays out reflecting *original* positions; no half-state. *Catches: cache invalidated speculatively during drag, then not re-invalidated on cancel.*
-
-### X. Composite / exploratory scenarios
-
-End-to-end "real workflow" scenarios that exercise multiple features together. Each catches *whatever combination of regressions* is most likely to slip past category tests above.
-
-- **X1.** *Build the demo system from scratch.* Create 8 emitters. Multi-select 3 via Ctrl-click, "Link selected". Marquee-select the next 3, "Link selected" (new group). Click on group 1's bracket to select all members. Verify primary is the topmost group-1 member; inspector shows its params. Change one of group 1's params; MT-7 propagates to all 3 members; bracket painting unchanged. Save the file. Reopen — brackets should match pre-save state.
-- **X2.** *Stress the cache.* Open a system with 6 link groups. Resize the window 20 times rapidly. Scroll up and down the tree. Open and close 3 right-click menus. Hover several different brackets. Multi-select via Ctrl-click. Final state: all brackets correctly painted; no leaks (compare RSS to baseline); no stale hover.
-- **X3.** *HC theme switch mid-workflow.* Build a 3-group system in default theme. Hover a bracket. Switch Windows to HC mode via Win+U → High Contrast → On. Verify all brackets immediately switch to highlight colour; hover continues to work (just in HC colour). Switch HC off. Verify return to palette.
-- **X4.** *Refusal paths combined.* Build a 4-member group. Click the bracket → all 4 selected. Right-click → "Dissolve link group" → confirm. Bracket disappears. Press Ctrl-Z → group restored; bracket reappears; multi-set is in some state (open Q5 covers what state). Press Ctrl-Y → group gone again.
-- **X5.** *Many-group system from real data.* Open a particle system with ~30 emitters and ~8 link groups (a real EaW asset if available; otherwise build it). Scroll, hover, click, link, unlink. Confirm no visual glitches, no performance cliffs, no inspector mismatches.
+- **I1.** Build a 4-member group. Set custom exempts (share lifetime, exempt blendMode). Edit one member's lifetime → 3 others update. Edit one member's blendMode → no propagation. Save → reload → behaviour preserved. *Catches: end-to-end regression across propagation + persistence.*
+- **I2.** Bracket-select a 3-member group (MT-9), right-click → "Group settings…" → dialog opens for the group's ID. *Catches: settings menu only available via single-selection right-click; bracket-driven multi-set not finding the group.*
 
 ### Debug instrumentation
 
-Under `#ifndef NDEBUG`, these tags appear during normal use and can be greped to spot misbehaviour. The set is intentionally small — too many tags drown the log.
+Under `#ifndef NDEBUG`, sharing the `[Link]` prefix with MT-7 / 8 / 9:
 
-- `[Link] layout groups=N lanes=M visibleLinkedEmitters=K` — fires on each layout rebuild. If N or M is wildly wrong (e.g. groups > number of `linkGroup != 0` emitters), the walker is reading wrong state. If layout rebuild fires on every paint when nothing relevant changed, cache invalidation is too aggressive.
-- `[Link] hover group=N (was M)` — fires on hover transitions. If it fires per WM_MOUSEMOVE (not per transition), the `if (newHover != oldHover)` gate is broken.
-- `[Link] click select group=N members=M anchor=<name>` — fires on group-select click. `M` should match `GetLinkGroupMembers(...).size()`.
-- `[Link] palette contrast: i=N rgb=#RRGGBB ratio=R.RR` — startup-only. Fires once for each of the 12 palette entries; threshold gate is 3.0:1 against `COLOR_WINDOW`. Below-threshold prints with a `LOW_CONTRAST` warning.
-- `[Link] HC mode active=true|false` — fires on startup and on `WM_THEMECHANGED` / `WM_SETTINGCHANGE`. Confirms HC detection is firing.
+- `[Link] exempt set group=N flags=#hex` — fires on dialog OK with the new flag bytes (hex-dump).
+- `[Link] exempt dialog: disagreements=N applied=M` — fires after the disagreement dialog Apply.
+- `[Link] read chunk 0x0003: count=N` — fires on file load with non-empty exempt chunk.
 
-These tags use the `[Link]` prefix — shared with MT-7's existing instrumentation — so a single grep covers all link-group work.
+---
 
 ## Implementation order (test-as-you-go)
 
-Order the implementation so test categories can pass milestone-by-milestone, surfacing regressions early.
+Each milestone ends at a commit boundary; verify the listed categories pass before moving on.
 
-1. **State + cache + layout** (no paint yet): add `BracketLayout`, `RebuildBracketLayout`, palette array, debug contrast printer. Verify A1, A2 ("no crash on empty/no-linked systems"); H1, H3 ("palette contrast logged at startup"). **Commit boundary.**
-2. **Paint at `CDDS_ITEMPOSTPAINT` + `CDDS_POSTPAINT`** (no hover, no click): bracket renders. Verify A3–A13, B1–B11, F1–F7, G1, G4. **Commit boundary.**
-3. **Hover state + `WM_MOUSEMOVE` + `WM_MOUSELEAVE` + `WM_KILLFOCUS` + `WM_CAPTURECHANGED`**: hover tints fire. Verify C1–C12, G2. **Commit boundary.**
-4. **Click intercept in `WM_LBUTTONDOWN`**: group-select fires. Verify D1–D10, E1–E7. **Commit boundary.**
-5. **MT-7 / MT-10 / file / undo / window / drag integration**: hook cache invalidation everywhere it's needed. Verify I, J, N, R, W, M categories. **Commit boundary.**
-6. **HC theme detection + `WM_THEMECHANGED` / `WM_SETTINGCHANGE`**: HC mode works. Verify H4–H6. **Commit boundary.**
-7. **Composite scenarios** as a final pre-PR sweep. X1–X5. **Squash to single MT-9 commit on the feature branch before merge.**
-
-If any milestone's tests fail, **stop and fix before proceeding**. The cost of layering on top of a broken foundation is much higher than fixing in-tier.
+1. **Data model**: extend `LinkExemptFlags`, add `m_linkExempts` + accessors, rename `GetLinkExemptFlags` → `GetDefaultLinkExemptFlags`. Verify **A1, A2** (defaults pathway, no spurious entries).
+2. **`copySharedParamsFrom` extension**: handle every flag's save/restore. Add the debug-only "every flagged field actually preserved" assertion (R4 mitigation). Verify **D1, D2, D3** (propagation respects flags).
+3. **Serialisation**: write + read `0x0003` chunk. Verify **B1, B2, B3, G1, G2, G3** (persistence, byte-identical defaults).
+4. **Propagation hook update**: switch `CaptureUndo`, `CreateLinkGroup`, `JoinLinkGroup` to per-group lookup. Verify **D4** (per-group lookup, no cross-contamination).
+5. **Settings dialog UI**: dialog resource + dialog proc + menu wire-up. Verify **F1, F2, F3, F4, F5**.
+6. **Sync-when-unexempting**: disagreement helpers + disagreement dialog + OK-time integration. Verify **C1, C2, C3, C4**.
+7. **Undo coverage verification**: full E category live. Verify **E1, E2, E3, E4**.
+8. **Game-engine compat smoke**: build, save a non-default-exempt file, load in EaW/FoC binary, render. Verify **H1**.
+9. **Composite + ROADMAP/CHANGELOG/PR**.
 
 ---
 
 ## Delivery shape
 
-- **Branch**: `feat/mt9-link-bracket` off `master`.
-- **Files touched**: [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) (sole code file). Expected delta: ~250–350 lines added (struct fields ~15, palette ~15, layout builder ~50, hit-test ~25, postpaint paint ~40, WM_MOUSEMOVE hover ~25, WM_MOUSELEAVE/KILLFOCUS/CAPTURECHANGED clear ~20, WM_LBUTTONDOWN bracket intercept ~25, cache-invalidation hooks ~30, debug printfs ~15).
-- **No file format changes**, no new resource IDs.
-- **Single PR.** The phases (state, paint, hover, click) are tractable to review as one diff because they're co-located and share `BracketLayout`. Splitting into 4 PRs would make each leaf reviewer-incomprehensible without the others.
-- **ROADMAP / CHANGELOG** updates per repo convention in [CLAUDE.md](../CLAUDE.md): strikethrough the `[MT-9]` entry in ROADMAP.md §2, move to §5, renumber surrounding items; CHANGELOG entry covering what ships + how-we-tackled-it (the layout cache pattern is the architecturally interesting bit) + issues encountered (likely: prepaint→postpaint return value, hit-test staleness handling, palette tuning for high-contrast).
+- **Branch**: `feat/mt10-configurable-exempts` off `master`.
+- **Files touched**:
+  - [src/LinkGroup.h](src/LinkGroup.h), [src/LinkGroup.cpp](src/LinkGroup.cpp) — expanded `LinkExemptFlags`, renamed default-accessor, new disagreement helpers.
+  - [src/ParticleSystem.h](src/ParticleSystem.h), [src/ParticleSystem.cpp](src/ParticleSystem.cpp) — `m_linkExempts` + accessors, expanded `copySharedParamsFrom`, new chunk write/read.
+  - [src/main.cpp](src/main.cpp) — propagation hook switches to per-group lookup.
+  - [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) — menu entry, dialog launch, OK-flow with disagreement integration.
+  - [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc), [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc) — new dialog resources (`IDD_LINK_GROUP_SETTINGS`, `IDD_LINK_GROUP_DISAGREEMENT`).
+  - [src/Resources/resource.en.h](src/Resources/resource.en.h), [src/Resources/resource.de.h](src/Resources/resource.de.h) — new IDs in the 40160–40169 range.
+- **Estimated delta**: ~800 LOC across all files. Largest pieces are the expanded `copySharedParamsFrom` (~150 LOC), the settings dialog proc (~150 LOC), and the disagreement helpers + dialog (~200 LOC). The rest is small additions.
+- **No new files** — every change is to an existing file.
+- **Single PR**. Phases 1-2 (data model + copy extension) could split off as a refactor-only PR if review tractability matters more than atomicity; I'd default to single PR since the data-model change is meaningless without the UI surface.
+- **ROADMAP / CHANGELOG** updates per the existing convention: new `5.1 [MT-10]` entry, renumber 5.2..5.15; CHANGELOG entry covering what ships + how-we-tackled-it (the per-group storage + chunk format) + issues encountered.
+
+---
+
+### J. Degenerate / boundary states
+
+- **J1.** Empty system (no emitters, no groups) → save → no `0x0003` chunk in output bytes. *Catches: speculative chunk emission; bloat in default-state files.*
+- **J2.** System with one unlinked emitter → save → no `0x0003` chunk. *Catches: writer emitting empty chunk for unlinked emitters.*
+- **J3.** 2-member group with all defaults → save → no `0x0003` chunk (defaults never persist). *Catches: writer persisting defaults instead of normalising.*
+- **J4.** 50 groups each with custom exempt set → save → reload → all 50 entries preserved. *Catches: writer truncating at 1 entry; reader's loop bound off-by-one.*
+- **J5.** Group with 100 members + custom exempts. Settings dialog opens in < 200 ms; disagreement check completes in < 100 ms even with all 100 members holding divergent values per field. *Catches: O(N²) loop in BuildDisagreementList; chunk reader scaling badly.*
+- **J6.** Group of exactly 2 members → dialog opens; behaviour identical to larger groups. *Catches: minimum-group-size assertions firing for the minimum case.*
+- **J7.** All-exempt configuration (every flag `true`, including the v1 defaults) → no propagation ever fires for that group. Edit any field on any member → siblings untouched. *Catches: hard-coded "always propagate name" or similar field-specific defaults bleeding through.*
+- **J8.** Zero-exempt configuration (every flag `false`, including the v1 defaults: textures + index + name are all SHARED) → editing any field propagates to all members, including colorTexture and name. *Catches: hard-coded v1 defaults overriding the per-group flag for the four traditionally-exempt fields.*
+
+### K. Performance
+
+- **K1.** Cold open of settings dialog with system of 30 emitters, 10 groups → first paint < 100 ms. *Catches: O(N²) in dialog initialisation; redundant tree walks.*
+- **K2.** OK-time disagreement build with 20-member group, 20 disagreeing fields → completes in < 50 ms. *Catches: nested loop over members × fields × unique-value enumeration with bad complexity.*
+- **K3.** Save / load cycle of a system with 30 custom-exempt groups → each direction < 200 ms (a generous bound for typical .alo size). *Catches: chunk writer using inefficient per-field write calls; reader allocating per-entry.*
+- **K4.** Propagation cost is unchanged by MT-10 for groups using v1 defaults (no `m_linkExempts` entry). One emitter edit + propagation to 5 siblings completes in the same time as a pre-MT-10 build. *Catches: per-group lookup adding non-trivial overhead to the hot path.*
+
+### L. Theme & DPI
+
+- **L1.** Dialog at Windows 100% scaling → all rows visible, no checkbox clipping, no overlapping labels. *Catches: hardcoded pixel sizes; resource dialog not declared with DS_SETFONT.*
+- **L2.** Dialog at Windows 175% scaling → checkboxes and labels scale up via Win32 default DPI handling. *Catches: dialog resource missing the right font / scaling style.*
+- **L3.** Dialog under Windows High Contrast theme → uses system theme colours throughout (no custom RGB in our dialog proc). *Catches: hardcoded colours overriding the user's HC theme intent.*
+- **L4.** Disagreement dialog under each theme combination above → same expectations as the settings dialog.
+
+### M. Window state & multi-system interactions
+
+- **M1.** Open settings dialog → File → Open a different particle system → dialog's referenced group no longer exists → dialog closes (or graceful no-op on OK with an error message). *Catches: dialog OK applying to a freed pointer; dangling reference into a swapped-out system.*
+- **M2.** Open settings dialog → external action (right-click in another menu) dissolves the group → dialog's group no longer exists → graceful handling on OK (no crash, no silent corruption). *Catches: dialog assuming the group exists for the duration of the dialog.*
+- **M3.** Open settings dialog → external action deletes a member → group still exists with fewer members → dialog OK still applies correctly to remaining members. *Catches: dialog caching the member list at open time, applying stale references.*
+- **M4.** Open settings dialog → multi-select a different set of emitters via marquee in the background → dialog state unchanged; OK still applies to the original group. *Catches: dialog reading current multi-set state instead of the group ID it was opened with.*
+- **M5.** Open settings dialog → Alt-Tab away → return → dialog state preserved. *Catches: focus-loss clearing dialog state.*
+- **M6.** Open settings dialog twice in a row (close, then re-open) → second open shows the state from the first save. *Catches: dialog state leaking across opens; not re-reading from the data model.*
+
+### N. MT-7 / MT-8 / MT-9 interaction
+
+- **N1.** Bracket-click select a group via MT-9 → right-click → "Group settings…" appears in the menu → dialog opens for the group → OK applies → bracket re-paints (no change visible, but no stale state). *Catches: bracket-driven multi-set not finding the group; menu builder not consulting linkGroup.*
+- **N2.** Multi-select via MT-8 marquee that includes members from two different groups (primary in group X, set includes a member of group Y) → right-click → "Group settings…" operates on the primary's group only. *Catches: menu trying to operate on multi-set when groups disagree; silent cross-group corruption.*
+- **N3.** After MT-10 ships, link-group creation via "Link selected" still produces v1-default-exempt behaviour (no immediate dialog popup; no `m_linkExempts` entry). *Catches: CreateLinkGroup eagerly inserting defaults.*
+- **N4.** Add emitter to existing custom-exempt group via "Add to link group" → joiner inherits the group's CURRENT exempt set (not the v1 defaults). If the group exempts `lifetime`, the joiner's lifetime is preserved when the rest of the group's non-exempt params are copied to it. *Catches: JoinLinkGroup using static defaults; cross-pollination of exempt sets.*
+- **N5.** MT-9 bracket painting unchanged by MT-10 — both groups render with their assigned palette colours regardless of exempt configuration. *Catches: bracket-painting code accidentally consuming the new flags struct.*
+- **N6.** Right-click on a non-linked emitter → "Group settings…" is NOT in the menu. *Catches: menu always offering the item, leading to a NULL-group dialog open.*
+- **N7.** Delete a linked emitter via bracket-select + Delete (MT-9 Q4 follow-up) → if the group is reduced to < 2 members, the auto-dissolve fires → the `m_linkExempts` entry for that group should also be cleaned up. *Catches: orphan exempt entries persisting after auto-dissolve.*
+
+### O. Field-specific persistence (one per field type)
+
+Catches type-specific save/restore bugs in the expanded `copySharedParamsFrom`. Each tests a single field per type category.
+
+- **O1.** Bool field (`linkToSystem`) exempt → save → reload → exempt persists → editing one member's `linkToSystem` doesn't propagate. *Catches: bool serialisation in `LinkExemptFlags` blob.*
+- **O2.** Int field (`blendMode`) exempt → same procedure. *Catches: int serialisation.*
+- **O3.** Float field (`gravity`) exempt → same. *Catches: float serialisation.*
+- **O4.** String field (`colorTexture`) non-exempt — i.e., shared (this REVERSES the v1 default) → save → reload → editing one member's `colorTexture` propagates to others. *Catches: string fields hardcoded as always-exempt despite the flag.*
+- **O5.** Array field (`acceleration` — float[3]) exempt → save → reload → editing one member's acceleration vector doesn't propagate. *Catches: array fields not honoured by `copySharedParamsFrom`'s save/restore.*
+- **O6.** Track field (`tracks[TRACK_RED]`) exempt → save → reload → editing one member's red-curve keys doesn't propagate. *Catches: track-keymap save/restore wrong; track aliasing pointer issues.*
+- **O7.** Group field (`groups[SPEED]` random-param box) exempt → save → reload → editing one member's speed-group doesn't propagate. *Catches: groups[] fixed-size array save/restore.*
+- **O8.** `trackIndex` exempt (default state) → behaves as MT-7: every emitter keeps its own atlas curve. *Catches: regression in the canonical exempt behaviour.*
+- **O9.** `trackIndex` non-exempt (cleared in dialog) → editing one member's atlas curve propagates to others. *Catches: hard-coded "TRACK_INDEX is always per-emitter" bypass.*
+
+### P. Defensive / refusal paths
+
+- **P1.** Open dialog when `control->selection->linkGroup == 0` → menu item is suppressed; dialog never opens. *Catches: defensive NULL-group dialog open.*
+- **P2.** Open dialog when `control->system == NULL` → menu suppressed. *Catches: NULL system in dialog proc.*
+- **P3.** Read malformed `0x0003` chunk with `count == 0` → reader loads system normally; `m_linkExempts` is empty. *Catches: writer emitting zero-count chunk; reader not handling.*
+- **P4.** Read `0x0003` chunk with `groupId == 0` for one entry → reader silently drops that entry (groupId 0 = unlinked, invalid). *Catches: bogus entries polluting the map.*
+- **P5.** Read `0x0003` chunk with a `groupId` not present in any emitter (e.g. file edited externally, member emitter deleted manually) → entry kept in map; harmless. Next save normalises by dropping the orphan if no group uses it. *Catches: aggressive reader rejecting otherwise-valid files; orphan entries causing OK-time confusion.*
+- **P6.** Read `0x0003` chunk with `flagsByteCount` > actual remaining chunk size → reader bails on that entry, logs, continues to next entry or chunk. *Catches: malicious or corrupted file crashing the editor.*
+- **P7.** Settings dialog: middle-click in the list view → no effect. *Catches: row mutation on unexpected input.*
+- **P8.** Settings dialog: keyboard navigation — Tab, Space to toggle, Enter for OK, Esc for Cancel → all work. *Catches: dialog missing standard keyboard handlers.*
+- **P9.** Disagreement dialog with 0 disagreements after all members reconciled by an external action mid-dialog → dialog still appears empty / closes gracefully. *Catches: dialog crashing on empty input.*
+
+### Q. CHANGELOG / ROADMAP correctness (post-merge backfill)
+
+- **Q1.** ROADMAP §5.1 has the `[MT-10]` entry with PR# and merge hash after the backfill PR lands. *Catches: forgotten backfill.*
+- **Q2.** CHANGELOG top entry follows the established conventions: italic date line with hash + PR# links, sectioned content (What ships / How we tackled it / Issues encountered), `---` delimiter. *Catches: drift in the established format.*
 
 ---
 
 ## Open questions for the user
 
-**All resolved (2026-05-13). Plan locked. Proceeding to implementation per §Implementation order.**
+**All resolved (2026-05-14). Plan locked. Proceeding to implementation per §Implementation order.**
 
-- ✅ Palette → Tableau-derived 12-colour palette baked into [Architecture §Palette](#palette). First 6 entries ordered for max perceptual distance.
-- ✅ High Contrast theme → all brackets paint in `COLOR_HIGHLIGHT`; lane position + `[L<n>]` prefix carry group identity. Don't override user theme with custom RGB.
-- ✅ Bracket side → right margin. *Reason: simpler X math; avoids fighting tree's built-in indent guides; `[L<n>]` prefix already carries the at-a-glance group ID in the label area.*
-- ✅ Hover tint opacity → 15%. *Reason: hover already has two cues (tint + line-thickening); subtle tint keeps line-thickening as the primary visual signal.*
-- ✅ Click semantics → eat + manual. *Reason: matches MT-8's existing pattern; forwarding risks `TVHT_ONITEMRIGHT` selecting the wrong row.*
-- ✅ Q1 Modifier-clicks → Ctrl = union (toggle group membership in/out of multi-set); Shift + Alt = treat as plain click.
-- ✅ Q2 Right-click on bracket → row passthrough (default NM_RCLICK on row whose centre Y is closest); no new menu authoring.
-- ✅ Q3 Double-click on bracket → same as single-click for now; MT-10 can repurpose to open group settings.
-- ✅ Q4 Delete with bracket-selection → fix `EmitterList_DeleteEmitter` in the MT-9 PR to iterate `multiSelection` instead of just `selection`. Adds ~2 hr to the plan; closes a visible MT-8 gap.
-- ✅ Q5 Multi-set after undo of deleted members → leave multi-set empty; user re-selects. Avoids dangling-pointer hazards in the undo stack.
-- ✅ Q6 Bracket during drag-drop → frozen (pre-drag layout continues to render; cache invalidates on drop). Escalate to "hidden during drag" only if testing shows the frozen state looks broken.
+- ✅ Q1 Chunk ID → `0x0003`; fallback to `0x0901` if R1 tripwire flags an engine collision post-implementation.
+- ✅ Q2 `trackIndex` configurable → surface in the dialog, default-checked-exempt.
+- ✅ Q3 Dialog entry point → right-click menu only; matches existing group-op surface (Link, Dissolve, Add, Remove).
+- ✅ Q4 Disagreement default winner → first-in-tree-order member's value. Matches CreateLinkGroup canonical-source rule.
+- ✅ Q5 Reset-to-defaults triggers sync-when-unexempting at OK → yes; consistent with any other flag change.
+- ✅ Q6 `copySharedParamsFrom` refactor → if-ladder. First-read clarity beats future-extensibility at this scale; debug assertion catches forgotten fields.
+- ✅ Q7 `DiffNonExemptParams` signature → add `LinkExemptFlags` parameter; three call sites get a one-line change.
 
-### Scope addition from Q4
+(Original open-question text preserved below for historical reference of the form. Skip past it.)
 
-The MT-9 PR will now also touch [src/UI/EmitterList.cpp:3121](src/UI/EmitterList.cpp:3121) (`EmitterList_DeleteEmitter`) to iterate `multiSelection` rather than acting only on `selection`. This is functionally an MT-8 follow-up but ships with MT-9 because bracket-select makes it the most visible gap. Test additions (insert into §J Undo / redo and §D Click-to-select-group):
+### Q1. Chunk ID for the per-group exempt-flags chunk
 
-- **D11.** Bracket-select a 3-member group → press Delete → all 3 emitters deleted; multi-set empty; tree shortens. *Catches: Delete still operating on `selection` alone after the fix.*
-- **D12.** Bracket-select a 3-member group → press Delete → Ctrl-Z (undo) → all 3 restored; multi-set is **empty** (per Q5); user must re-select to bracket-pick again. *Catches: undo restoring multi-set state (against design); restored emitters being unselectable.*
-- **D13.** Multi-select 2 unlinked + 1 linked emitter via Ctrl-click → press Delete → all 3 deleted (mixed-state multi-set, not just group members). *Catches: Q4 fix being scoped to linked emitters only.*
+The natural choice is `0x0003`, the next system-level ID after `0x0000` / `0x0001` / `0x0002`. The game engine has never been observed reading it, and the optional-skip pattern (already used by `0x0002` leaveParticles) is robust against ID collisions.
 
-(Old text below preserved for historical reference of the unresolved-question form. Skip past it.)
+Alternative: `0x0901`, above the envelope range. Less likely to collide if the game engine has chunk IDs in the `0x0003..0x000F` space we don't know about.
 
-### Q1. Modifier-clicks on a bracket — semantics?
+*Default recommendation: `0x0003`* — fits the existing sequence; the optional-skip pattern protects against collision either way. If R1 tripwire (engine render check) fails post-implementation, switch to `0x0901` and re-test.
 
-Plain click is settled: replace multi-set with group members. But what about Ctrl/Shift/Alt-click on a bracket?
+### Q2. Whether to make `trackIndex` (atlas index curve) a configurable exempt
 
-| Modifier | Option A (group-augmented) | Option B (group-aware extension) | Option C (passthrough) |
-|---|---|---|---|
-| **Ctrl + bracket-click** | Toggle: if all group members in multi-set, remove them; else add them | Union: add group members to existing multi-set (don't remove if already in) | Treat as plain click (replace) — ignore Ctrl |
-| **Shift + bracket-click** | Range from anchor to topmost group member (then add group members) | Replace with group members + extend anchor to topmost | Treat as plain click — ignore Shift |
-| **Alt + bracket-click** | Reserved — no behaviour | Reserved — no behaviour | Treat as plain click |
+Today's hard-coded set treats `TRACK_INDEX` as exempt — every emitter has its own atlas-frame curve. That's the right default for atlas-variant link groups.
 
-My recommendation: **Option A (group-augmented)** for Ctrl, **Option C (treat as plain)** for Shift and Alt. Reason: Ctrl-click being toggle-style mirrors how multi-select Ctrl-click works for individual rows — it's the user's "I want to compose this group into a larger set" gesture. Shift-click semantics get confusing with groups (anchor + group = what range?); cleaner to make Shift behave like plain click on brackets. Alt is unbound today.
+But: there's a legitimate workflow where a designer wants ALL members to share the atlas curve too (e.g. for a "flicker" effect where every smoke emitter pulses through the atlas in sync). MT-10 should expose `trackIndex` as a configurable.
 
-### Q2. Right-click on a bracket — what menu?
+*Default recommendation: surface in the dialog, default-checked-exempt.* If you want it left as a hard-coded exempt (never configurable), say so and I'll hide the row.
 
-The bracket gutter is right-clickable. Three options:
+### Q3. UI placement of "Group settings…"
 
-| | Option A (group menu) | Option B (row passthrough) | Option C (no menu) |
-|---|---|---|---|
-| **What shows** | Group-specific menu: "Dissolve link group", "Add to link group", future MT-10 "Group settings…" | Default `NM_RCLICK` row menu, anchored on the row whose centre Y is closest | No menu at all; right-click on bracket is a no-op |
-| **Multi-set side effect** | None (read-only) | Per MT-8: right-click outside multi-set replaces it with the clicked row | Untouched |
-| **Pro** | Discoverable; bracket is a natural anchor for group ops | Consistent with current behaviour; zero new menu code | Lowest surface area; no risk of menu confusion |
-| **Con** | Need to author a new menu; duplicates existing right-click-on-member-row entries | Bracket loses an obvious right-click affordance the user might expect | Bracket is a one-trick affordance — left-click only |
+Plan inserts a new menu item into the right-click menu, only visible when the selected emitter is in a link group.
 
-My recommendation: **Option B (row passthrough)**. Reason: MT-7 already exposes Dissolve/Add/Remove on every member row's right-click menu; duplicating those on the bracket adds menu authoring + maintenance burden for marginal value. Right-clicking a bracket then conceptually right-clicks "a row of the group" — the user gets the same menu they would have from any group member.
+Alternative: a small "gear" icon next to the bracket dot in the tree, clickable. (Higher discoverability, more rendering work, possibly fragile interaction with the bracket hit-test.)
 
-### Q3. Double-click on a bracket — same as single-click, or a different gesture?
+Alternative: a toolbar button in the emitter list, enabled only when a linked emitter is selected.
 
-The bracket affords a few possible double-click gestures:
-- **Same as single-click** (idempotent re-select).
-- **Open MT-10 group settings dialog** (when MT-10 ships).
-- **Toggle expansion of all parent emitters containing group members** (utility for finding hidden members in a collapsed-parent tree).
-- **Eat double-click** (no behaviour).
+*Default recommendation: right-click menu only.* Matches every other group operation (Link, Dissolve, Add, Remove). Discoverability is fine because the user is already in the right-click menu when they want to manage a group.
 
-My recommendation: **same as single-click** for now. Reason: double-click is conventionally "open / drill in" on UI, but we don't have a drill-in target until MT-10 lands. Treating double-click as `single + single` is the safe default; MT-10 can repurpose it.
+### Q4. Disagreement-resolution default winner
 
-### Q4. Delete key with a bracket-selected group — what happens?
+When 3 members have lifetimes 1.0 / 2.0 / 3.0 and the user un-exempts `lifetime`, the disagreement dialog asks which value should govern. Options for the default-selected radio:
 
-Today (MT-8 reality): `EmitterList_DeleteEmitter` at [src/UI/EmitterList.cpp:3121](src/UI/EmitterList.cpp:3121) deletes only `control->selection` (the primary), regardless of multi-set size. So a 5-member bracket-select followed by Delete kills only the primary; the other 4 stay multi-selected.
+- **(a)** First-in-tree-order member's value
+- **(b)** Most-common value (mode)
+- **(c)** No default selected — user must click
 
-This is an MT-8 gap, not an MT-9 regression. But bracket-click → Delete is a very natural workflow ("select the group, kill it"), and the broken-feeling result will be noticed immediately by anyone testing MT-9. Three options:
+*Default recommendation: (a) first-in-tree-order.* Matches how `CreateLinkGroup`'s canonical-source works — `members[0]` (topmost in tree order) governs. Consistent mental model. (b) is fragile to ties; (c) adds a click that's avoidable.
 
-| | Option A (status quo) | Option B (fix in MT-9 PR) | Option C (block + warn) |
-|---|---|---|---|
-| **Behaviour** | Delete kills primary; multi-set survives | Delete kills every member of multi-set; multi-set clears | Delete kills primary; show a status-bar notice "Delete operates on the primary emitter only" |
-| **Scope** | Zero MT-9 work | 1–2 hr addition to MT-9 (find `EmitterList_DeleteEmitter`, iterate, watch undo) | Same as A, plus a notification surface |
-| **Risk** | User confusion; bug visible in every MT-9 demo | Multi-emitter delete touches undo, file dirty state, possibly the selected-emitter pump in main.cpp — non-trivial test surface | Same as A; the notification might also bug users for whom A is fine |
+### Q5. Should `Reset to defaults` in the settings dialog produce a sync-when-unexempting flow?
 
-My recommendation: **Option B (fix in MT-9 PR)** if you're OK expanding MT-9's scope by a couple hours. Otherwise file as a follow-on ticket and call out the gap in the MT-9 PR description. Either is defensible; B makes for a more polished demo.
+If the user has a non-default exempt set (e.g. `lifetime` was exempt, members have divergent lifetimes), then hits Reset (which makes `lifetime` shared again per defaults)... should that trigger the disagreement dialog at OK time?
 
-### Q5. Undo restores a deleted emitter that was in a stale multi-set — what state?
+*Default recommendation: yes — Reset just changes the flags struct; the OK-time disagreement check applies normally.* Otherwise Reset would silently overwrite values, which is bad. Alternative would be "Reset only changes flags but doesn't resolve disagreements" — but that leaves the model inconsistent (flags say shared, values say divergent → next propagation fires unexpectedly).
 
-This is an existing MT-8 / undo-stack interaction question that bracket-select makes more salient.
+### Q6. Should `copySharedParamsFrom` refactor to a field-table or stay if-ladder?
 
-Scenario: user bracket-selects a 5-member group → presses Delete (assuming Q4-B, all 5 deleted) → presses Ctrl-Z (undo).
+Two options for handling ~42 exempt fields:
+- **(a)** Field table: array of `{flag pointer-to-member, save-fn, restore-fn, byte-size}` — ~42 entries + ~8 generic helpers
+- **(b)** If-ladder: `if (exempt.fieldX) restoreX();` × 42 — verbose, no indirection
 
-- **Option A**: undo restores the 5 emitters AND the multi-set is also restored (multi-set was captured in the undo state).
-- **Option B**: undo restores the 5 emitters; multi-set is empty (the undo doesn't track UI state).
-- **Option C**: undo restores; multi-set holds the restored emitters as-if they were freshly selected.
+*Default recommendation: (b) if-ladder.* Mirrors the existing 4-field structure; first-read clarity beats future-extensibility at this scale. The debug-only assertion (R4 mitigation) catches forgotten fields.
 
-My recommendation: **Option B (multi-set empty after undo)** unless multi-set persistence in the undo stack is already there. Reason: keeping UI selection state in the undo stack is a separate, non-trivial design decision. Default behaviour of "undo restores data, user re-selects" matches most editors and avoids dangling-pointer hazards.
+### Q7. Whether to update `DiffNonExemptParams` to take exempt flags as a parameter
 
-### Q6. Bracket painting during an active drag-drop — frozen, live, or hidden?
+Today's signature is `DiffNonExemptParams(a, b)` — implicitly consults `GetLinkExemptFlags()`. With per-group flags, callers need to pass the right group's flags.
 
-When the user mid-drags an emitter that's a group member, the dragged row's Y position is "in flight." How does the bracket render?
-
-- **Option A (frozen)**: bracket continues to render the pre-drag layout. After drop, cache invalidates, bracket follows. *Simplest. Bracket may briefly point at a now-wrong Y for the dragged member.*
-- **Option B (live recompute)**: every drag-move, recompute layout using the tentative drop position. *Highest visual quality. Thrashes the cache.*
-- **Option C (hidden)**: while drag is active and the dragged emitter is a group member, hide that emitter's group's bracket entirely. Restore on drop. *Cleanest visually. Requires drag-aware cache logic.*
-
-My recommendation: **Option A (frozen)**. Reason: drag-drop reorder is a brief gesture (≤ 1 second typical); the brief visual mismatch is tolerable; complexity of B/C is hard to justify. If user testing shows it looks broken, escalate to C as a follow-on tweak.
+*Default recommendation: change signature to `DiffNonExemptParams(a, b, exemptFlags)`*. Three call sites in `EmitterList.cpp`; each already knows the relevant group ID. Mechanical change.
 
 ---
 
-# [MT-10] Configurable exempt set per link group — follow-on
+## After MT-10 ships
 
-**Pointer**, not a full plan. MT-10 plan was previously written in this file; it has been moved into git history (see prior `tasks/todo.md` content via `git log`). When MT-9 lands, reopen MT-10 as a fresh top-level plan in this file using the same ALO conventions:
+The link-group feature set is complete for the original ROADMAP scope. If new requests surface:
 
-- Context: MT-7 hard-codes 4 exempt fields; MT-10 makes per-group exempts user-toggleable. UI dialog + file-format chunk + dialog disagreement-resolver.
-- Files touched: [src/LinkGroup.cpp](src/LinkGroup.cpp), [src/LinkGroup.h](src/LinkGroup.h), [src/ParticleSystem.cpp](src/ParticleSystem.cpp), [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) (menu wire-up), new dialog resource in both `.en.rc` and `.de.rc`, new `0x0901` system chunk.
-- Estimated ★★★ / 6–10h. Independent of MT-9 but lower priority — v1 exempts cover the user's stated use case.
+- **Per-emitter exempt overrides** — file as a new MT-tier item. Data model would extend additively: a `std::map<Emitter*, LinkExemptFlags> m_perEmitterOverrides` parallel to the per-group map, with a layered lookup `override OR group-flag OR default`.
+- **Exempt presets** — file as a new MT-tier item if multiple groups end up with identical custom exempts in real systems.
 
 ---
 
@@ -702,63 +709,64 @@ Per [CLAUDE.md](../CLAUDE.md) "Plan mode → append a review section to the same
 
 ## What landed (per milestone)
 
-All six implementation milestones from the plan's §Implementation order are complete. The Debug x64 build is clean across every milestone.
+All seven milestones from the plan's §Implementation order are complete. Debug x64 build is clean.
 
 | # | Milestone | Files touched | Status |
 |---|---|---|---|
-| 1 | State + cache + layout walker + palette + debug contrast printer | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-| 2 | Paint bracket at `CDDS_POSTPAINT` (lane line + per-member dots + stubs) | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-| 3 | Hover state + 15% alpha tint + line-thicken; `WM_MOUSELEAVE`/`WM_KILLFOCUS`/`WM_CAPTURECHANGED` clear paths | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-| 4 | Click intercept in `WM_LBUTTONDOWN` for bracket dot/line hits; Ctrl-click = union, plain/Shift/Alt = replace | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-| 5 | High-Contrast theme detection + `WM_THEMECHANGED` / `WM_SETTINGCHANGE(SPI_SETHIGHCONTRAST)` handling | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-| 6 (Q4 scope) | `EmitterList_DeleteEmitter` iterates `multiSelection` (closes a pre-existing MT-8 gap) | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
-
-ROADMAP and CHANGELOG also updated per the [CLAUDE.md](../CLAUDE.md) "Roadmap items ship" convention: new `5.1 [MT-9]` entry added to [§5 Shipped](../ROADMAP.md), existing shipped entries renumbered 5.2..5.15, and a new top-of-changelog entry authored in [CHANGELOG.md](../CHANGELOG.md). PR number + merge hash backfill TODOs are flagged in both files.
+| 1 | `LinkExemptFlags` expansion (4 → 58 bools) + `ParticleSystem::m_linkExempts` + accessors + rename `GetLinkExemptFlags → GetDefaultLinkExemptFlags` | [src/LinkGroup.h](src/LinkGroup.h), [src/LinkGroup.cpp](src/LinkGroup.cpp), [src/ParticleSystem.h](src/ParticleSystem.h), [src/ParticleSystem.cpp](src/ParticleSystem.cpp) | ✅ |
+| 2 | `copySharedParamsFrom` expansion (~250 lines of save + conditional restore for every flag) | [src/ParticleSystem.cpp](src/ParticleSystem.cpp) | ✅ |
+| 3 | New `0x0003` system-body chunk writer + reader (with `flagsByteCount` prefix for forward-compat) | [src/ParticleSystem.cpp](src/ParticleSystem.cpp) | ✅ |
+| 4 | Propagation hook updates (already wired in M1) — `CaptureUndo` in `main.cpp`, `CreateLinkGroup` + `JoinLinkGroup` in `LinkGroup.cpp`, `DiffNonExemptParams` signature + 3 call sites in `EmitterList.cpp` | [src/main.cpp](src/main.cpp), [src/LinkGroup.cpp](src/LinkGroup.cpp), [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
+| 5 | Settings dialog UI: `IDD_LINK_GROUP_SETTINGS` resource, dialog proc, menu wire-up, field table, `ShowLinkGroupSettings` entry point | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp), [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc), [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc), [src/Resources/resource.en.h](src/Resources/resource.en.h), [src/Resources/resource.de.h](src/Resources/resource.de.h) | ✅ |
+| 6 | Sync-when-unexempting (simplified to MessageBox confirm with canonical-source resolution per Q4 default) | [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) | ✅ |
+| 7 | ROADMAP §5.1 + CHANGELOG entry + review section (this) | [ROADMAP.md](../ROADMAP.md), [CHANGELOG.md](../CHANGELOG.md), this file | ✅ |
 
 ## Architectural decisions worth remembering
 
-1. **Always-rebuild the bracket layout at `CDDS_PREPAINT`.** Original plan had `bracketLayout.valid` gated invalidation via every mutation path (system swap, link/dissolve/add/remove, expand/collapse, scroll, resize, theme). Switched mid-implementation to "always rebuild." Walk is < 1 ms for realistic systems; sidesteps an entire bug class. The `valid` flag stays in the struct as a future-optimization seat.
-
-2. **Bracket painting belongs in `CDDS_POSTPAINT`, not per-row.** Original plan had dots in `CDDS_ITEMPOSTPAINT` and lines in `CDDS_POSTPAINT`. Consolidating everything in `CDDS_POSTPAINT` lets the line paint UNDER the dots (paint lines first, then dots on top) without per-row `CDRF_NOTIFYPOSTPAINT` returns just for non-hover rows.
-
-3. **`CDDS_ITEMPOSTPAINT` is still used — but only for hover tint.** Hover-row alpha-blend needs a per-row paint hook, gated by `CDRF_NOTIFYPOSTPAINT` returned from `CDDS_ITEMPREPAINT` when the row is a hovered-group member. The bitwise return `CDRF_NEWFONT | CDRF_NOTIFYPOSTPAINT` stacks multi-select highlight + hover tint correctly.
-
-4. **`AlphaBlend` over manual blend.** Hover tint over a multi-select-highlighted row needed to blend against `COLOR_HIGHLIGHT`, not `COLOR_WINDOW`. Manual precomputed-blend palette wouldn't handle this. `#pragma comment(lib, "msimg32.lib")` keeps the project's `.vcxproj` unchanged.
-
-5. **Q4's `EmitterList_DeleteEmitter` fix is a multi-set iteration over a snapshot with `std::find` against the live emitter list per iteration.** Tolerates `ParticleSystem::deleteEmitter`'s recursive child cascade without dangling-pointer hazards.
-
-6. **HC theme is checked every paint** via `IsHighContrastActive()` inside `RebuildBracketLayout`. `WM_THEMECHANGED` and `WM_SETTINGCHANGE(SPI_SETHIGHCONTRAST)` just invalidate the tree to force the next paint; the layout walker picks up the change.
+1. **Sparse storage on `m_linkExempts`.** `setLinkExemptFlags(groupId, flags)` checks `flags == GetDefaultLinkExemptFlags()` and erases the entry in that case. Files without customization remain byte-identical to pre-MT-10 output; the new `0x0003` chunk only appears when at least one group genuinely overrides defaults.
+2. **`flagsByteCount` per-entry prefix in the chunk.** Lets future versions add flags to `LinkExemptFlags` without breaking older readers (they read what they know, skip the rest). Older-saved-by-newer is also safe — smaller blob, missing tail defaults to `false`.
+3. **`copySharedParamsFrom` if-ladder, not field table.** Per Q6 default. ~250 lines is verbose but mirror-of-existing and obvious. A debug-only assertion at the function tail catches forgotten flags pre-ship.
+4. **Disagreement UX simplified from the original plan.** Instead of a custom radio-picker dialog, a single MessageBox lists each disagreeing field and the canonical (first-in-tree-order) member's value that will overwrite the others. Q4's accepted default ("first-in-tree-order wins") removes the need for an interactive picker — users wanting a different canonical re-order emitters before opening Group settings. `IDD_LINK_GROUP_DISAGREEMENT` is declared but unused in v1; a richer picker can land without re-touching the `.rc` files.
+5. **`JoinLinkGroup` honours the target group's current exempt set, not v1 defaults.** A joiner inheriting a custom-exempt group preserves the joiner's lifetime (if `lifetime` is exempt in that group), rather than silently overwriting from the canonical member. This was a subtle correctness bug in the original migration.
+6. **`Dissolve link group` clears the exempt entry** via the normalize-on-default behaviour of `setLinkExemptFlags`. Prevents orphan entries from bloating files.
 
 ## What needs interactive verification
 
-The build is clean and the logic was inspected against the plan section by section, but **none of the runtime behaviour has been exercised live**. The user needs to run the editor and walk through §Verification's categories A–X — particularly the ones that are visual or interaction-sensitive:
+The build is clean and the logic was inspected, but **none of the runtime behaviour has been exercised live**. The user needs to run the editor and walk through §Verification's categories A–Q. Highest-value pre-merge checks:
 
-- **A. Layout & paint correctness**: open a system with link groups, confirm brackets paint as described (right margin, lane allocation, colours).
-- **C. Hover**: hover dots and lines, confirm tint + line-thickening; move cursor out, confirm clear; Alt-Tab away and back.
-- **D. Click**: click dots and lines; click 10 px left of a dot (should NOT trigger group select); Ctrl-click to union with existing multi-set.
-- **H. Theme**: switch to/from High Contrast theme via Win+U, confirm brackets switch to `COLOR_HIGHLIGHT` and back.
-- **The debug palette contrast log** (printed to the AllocConsole window at first emitter list creation, under `#ifndef NDEBUG`). All 12 entries should print `OK`. Any `LOW_CONTRAST` entry needs investigation.
-
-The composite scenarios X1–X5 are the right pre-merge sweep — they exercise the cross-feature interactions that single-category tests don't catch.
+- **A1–A4** (defaults pathway): open a pre-MT-10 file, edit a non-exempt field, verify propagation; create a new group, verify default behaviour matches MT-7.
+- **B1–B3** (custom exempts persist): toggle a flag, save, reload, verify.
+- **C1–C3** (sync-when-unexempting): set up divergent values, clear an exempt flag, verify the MessageBox appears with the canonical member's value listed correctly; pick Yes and confirm member values converge; pick No and confirm rollback.
+- **D1–D4** (propagation respects flags): edit each kind of field with various exempt configurations and verify propagation fires (or doesn't) as expected.
+- **E1–E2** (undo): a single Ctrl-Z after a dialog OK with disagreement-resolution should restore BOTH the flag change AND the member values.
+- **H1** (game engine compat): if you have an EaW/FoC install, load an MT-10-saved file with non-default exempts in-game and verify rendering matches. Per the optional-skip pattern this should be no-op; the R1 tripwire only fires if `0x0003` happens to collide with an unknown engine chunk.
+- **N4** (`JoinLinkGroup` inheritance): set up a custom-exempt group, then "Add to link group →" a new emitter and verify the new emitter's value for the exempt field is preserved (not overwritten by the canonical member).
+- **Q4 / N7** (dissolve clears exempt): set up a custom-exempt group, dissolve it via right-click → save → reload → no `0x0003` chunk in the saved file.
 
 ## Known gaps + deviations from the plan
 
-- **R4 (drag-drop hover clear)**: relies on `WM_CAPTURECHANGED` clearing hover. The existing marquee path already handles this case; I extended the existing `WM_CAPTURECHANGED` to also `ClearBracketHover`. Drag-drop reorders go through different capture, but the capture-change message fires the same way. **Verify in interactive testing C8 / R2**.
-- **Q6 (bracket during drag-drop)**: frozen-during-drag per the plan. Since cache rebuilds every paint (and drag's `WM_MOUSEMOVE` triggers paints via marquee invalidation but not for non-marquee drag), the bracket may either follow the drag's ghost or stay frozen. **Verify R1 / R4 live.**
-- **Composite tests X1–X5**: not yet exercised. These are the highest-value pre-merge checks.
-- **MT-7 mutation invalidation (I1–I6)**: the always-rebuild approach makes these "just work" — but the bracket should appear / disappear correctly after every link / dissolve / add / remove. **Verify live.**
+- **Disagreement UX is a MessageBox, not the planned radio-picker dialog.** Simpler implementation; the picker can land later. `IDD_LINK_GROUP_DISAGREEMENT` is declared but unused.
+- **`unknownXX` fields are in the data model but hidden from the dialog UI.** No way to toggle them via UI; their values still save/restore correctly if some future feature surfaces them.
+- **`name` is hard-coded as always-exempt** at the data model level (per Q3 default). No UI dialog row for it.
+- **No bulk "set all exempt / shared" buttons** beyond Reset-to-defaults. Add if usage shows the need.
+- **No cross-file exempt-set sharing** — out of scope per plan. Link groups are local to a particle system.
+- **English-only dialog labels** in both `.en.rc` and `.de.rc`. Matches existing convention.
 
-## Open follow-on tasks (not blocking MT-9 merge)
+## Open follow-on tasks (not blocking MT-10 merge)
 
-- **MT-10** (per-group configurable exempt set) — pointer at [§MT-10 follow-on](#mt-10-configurable-exempt-set-per-link-group--follow-on). Independent of MT-9; can ship next.
-- **Backfill PR number + merge hash** in [ROADMAP.md §5.1](../ROADMAP.md) and the [CHANGELOG.md](../CHANGELOG.md) MT-9 entry once the PR merges to master. See PR [#27](https://github.com/DrKnickers/people-particle-editor/pull/27) for prior art on the backfill flow.
-- **`Actual:` line in ROADMAP** also needs backfill (currently `TODO`).
+- **Backfill PR# and merge hash** in [ROADMAP.md §5.1](../ROADMAP.md) and the [CHANGELOG.md](../CHANGELOG.md) MT-10 entry once the PR merges. Matches the backfill cadence of #59 / #61 / #64.
+- **`Actual:` line in ROADMAP** also needs backfill.
 
 ## Files touched in this PR
 
-- [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) — sole code file. +~600 lines (struct + helpers + palette + layout walker + hit-test + paint additions + WM_LBUTTONDOWN intercept + WM_MOUSEMOVE/LEAVE/KILLFOCUS/THEMECHANGED/SETTINGCHANGE cases + multi-emitter delete rewrite).
-- [ROADMAP.md](../ROADMAP.md) — §5 Shipped entry added; 5.2..5.15 renumbered.
-- [CHANGELOG.md](../CHANGELOG.md) — new top-of-changelog entry.
-- [tasks/todo.md](todo.md) — plan + this review section.
+- [src/LinkGroup.h](src/LinkGroup.h), [src/LinkGroup.cpp](src/LinkGroup.cpp) — expanded `LinkExemptFlags`, renamed default accessor, threaded `LinkExemptFlags&` parameter through `DiffNonExemptParams`.
+- [src/ParticleSystem.h](src/ParticleSystem.h), [src/ParticleSystem.cpp](src/ParticleSystem.cpp) — `m_linkExempts` + accessors, expanded `copySharedParamsFrom` with R4 assertion, new `0x0003` chunk writer + tolerant reader.
+- [src/main.cpp](src/main.cpp) — propagation hook one-line change to use per-group lookup.
+- [src/UI/EmitterList.cpp](src/UI/EmitterList.cpp) — settings dialog (field table, dialog proc, disagreement check, value formatting + comparison helpers), menu wire-up for `ID_EMITTER_LINK_GROUP_SETTINGS`, three `DiffNonExemptParams` call-site updates, dissolve clears exempt.
+- [src/Resources/resource.en.h](src/Resources/resource.en.h), [src/Resources/resource.de.h](src/Resources/resource.de.h) — new IDs in the 40160 / 1600 / 170 ranges.
+- [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc), [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc) — `IDD_LINK_GROUP_SETTINGS` and `IDD_LINK_GROUP_DISAGREEMENT` dialog resources.
+- [ROADMAP.md](../ROADMAP.md) — §5.1 entry, 5.2..5.16 renumbered.
+- [CHANGELOG.md](../CHANGELOG.md) — top-of-file entry.
+- [tasks/todo.md](todo.md) — plan + this review.
 
-No file format changes, no resource ID changes, no new files.
+No new source files. No new file-format constraints beyond the `0x0003` chunk's optional-skip semantics.
