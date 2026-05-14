@@ -271,7 +271,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#TODO)
+### 5.1 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#65)
 
 The hard-coded v1 exempt set (textures + atlas-index curve + name) is now a per-group default, overridable via a new **Group settings…** dialog reached from the right-click menu when a linked emitter is selected. The dialog lists ~50 emitter fields grouped by category (Textures / Curves / Lifetime / Physics / Appearance / Weather / Rotation / Misc); checking a row marks that field per-emitter (exempt from propagation), unchecking marks it shared. A *Reset to defaults* button restores the v1 set without leaving the dialog.
 
@@ -283,7 +283,15 @@ The propagation hook in `CaptureUndo` consults `ParticleSystem::getLinkExemptFla
 
 - **Difficulty**: ★★★☆☆ (3/5)
 - **Estimated effort**: 6–10 hours
-- **Actual**: TODO (backfill after merge)
+- **Actual**: ~5 hours. The biggest slices were the `copySharedParamsFrom`
+  expansion (~250 lines of save + conditional restore for every flag,
+  written as an if-ladder per Q6 default) and the settings dialog's
+  field-table machinery (one `bool LinkExemptFlags::*` pointer-to-
+  member per row, threaded through populate / read / disagreement
+  detection / value formatting / canonical-value application). A
+  post-implementation revision flipped the dialog's checkbox semantics
+  ("checked = shared" instead of "checked = exempt") — UI-only inversion
+  at the data/UI boundary, so the data model stayed intact.
 
 ### 5.2 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
 
