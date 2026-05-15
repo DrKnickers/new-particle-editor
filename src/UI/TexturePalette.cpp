@@ -414,11 +414,11 @@ void DrawStar(HDC hdc, int x, int y, bool filled)
 void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
               const Entry& e, bool selected, bool hovered)
 {
-    // Cell background. Hover tints the whole cell warm yellow so it
-    // stands out unambiguously against any thumbnail palette — the
-    // prior subtle blue tint blended too quietly with grey on some
-    // displays/themes.
-    const COLORREF bgColor = hovered ? RGB(255, 240, 170) : RGB(240, 240, 240);
+    // Cell background. Hover tints the whole cell saturated light
+    // blue so it stands out unambiguously against any thumbnail
+    // palette. The prior pale blue (215, 232, 250) blended too
+    // quietly with grey; this is several shades more saturated.
+    const COLORREF bgColor = hovered ? RGB(160, 200, 250) : RGB(240, 240, 240);
     HBRUSH bg = CreateSolidBrush(bgColor);
     FillRect(hdc, &cell, bg);
     DeleteObject(bg);
