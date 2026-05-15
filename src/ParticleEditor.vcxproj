@@ -211,6 +211,7 @@
     <ClCompile Include="UI\Emitter.cpp" />
     <ClCompile Include="UI\EmitterList.cpp" />
     <ClCompile Include="UI\RandomParam.cpp" />
+    <ClCompile Include="UI\PaletteStore.cpp" />
     <ClCompile Include="UI\Spinner.cpp" />
     <ClCompile Include="UI\TexturePalette.cpp" />
     <ClCompile Include="UI\TrackEditor.cpp" />
