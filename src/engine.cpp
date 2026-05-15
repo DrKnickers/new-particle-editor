@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <assert.h>
+#include <vector>
+#include <cstdint>
 #include "engine.h"
 #include "exceptions.h"
 #include "resource.h"
@@ -1273,6 +1275,86 @@ D3DMULTISAMPLE_TYPE Engine::GetMultiSampleType(DWORD* MultiSampleQuality, D3DFOR
 	return D3DMULTISAMPLE_NONE;
 }
 
+// MT-3: Build the UV sphere vertex + index buffers used by the skydome render pass.
+// Called once from the Engine constructor after m_pDevice is created.
+// D3DPOOL_MANAGED means these survive device Reset and only need cleanup in ~Engine.
+void Engine::InitSkydomeMesh()
+{
+    const int lon = kSkydomeLongSegments;
+    const int lat = kSkydomeLatSegments;
+    const int vertCount = (lon + 1) * (lat + 1);
+    const int triCount  = lon * lat * 2;
+    m_skydomeIndexCount = triCount * 3;
+
+    // Generate vertices: U wraps lon segments [0,1], V is lat segments [0,1].
+    // Sphere radius is 1; the shader will push depth to the far plane.
+    std::vector<SkydomeVertex> verts(vertCount);
+    for (int j = 0; j <= lat; ++j)
+    {
+        const float v     = float(j) / float(lat);
+        const float theta = v * D3DX_PI;             // 0..pi (south to north)
+        const float sinTheta = sinf(theta);
+        const float cosTheta = cosf(theta);
+        for (int i = 0; i <= lon; ++i)
+        {
+            const float u   = float(i) / float(lon);
+            const float phi = u * 2.0f * D3DX_PI;   // 0..2pi
+            const float sinPhi = sinf(phi);
+            const float cosPhi = cosf(phi);
+            SkydomeVertex& vx = verts[j * (lon + 1) + i];
+            vx.Position = D3DXVECTOR3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi);
+            vx.Normal   = vx.Position;
+            vx.TexCoord = D3DXVECTOR2(u, v);
+        }
+    }
+
+    std::vector<uint16_t> idx(m_skydomeIndexCount);
+    int k = 0;
+    for (int j = 0; j < lat; ++j)
+    {
+        for (int i = 0; i < lon; ++i)
+        {
+            uint16_t a = uint16_t(j * (lon + 1) + i);
+            uint16_t b = a + 1;
+            uint16_t c = uint16_t((j + 1) * (lon + 1) + i);
+            uint16_t d = c + 1;
+            idx[k++] = a; idx[k++] = c; idx[k++] = b;
+            idx[k++] = b; idx[k++] = c; idx[k++] = d;
+        }
+    }
+
+    // Vertex declaration
+    D3DVERTEXELEMENT9 decl[] = {
+        {0, offsetof(SkydomeVertex, Position),  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, offsetof(SkydomeVertex, Normal),    D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0},
+        {0, offsetof(SkydomeVertex, TexCoord),  D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END()
+    };
+    m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl);
+
+    // VB
+    m_pDevice->CreateVertexBuffer(
+        UINT(verts.size() * sizeof(SkydomeVertex)),
+        D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &m_pSkydomeVB, NULL);
+    void* pVB = NULL;
+    m_pSkydomeVB->Lock(0, 0, &pVB, 0);
+    memcpy(pVB, verts.data(), verts.size() * sizeof(SkydomeVertex));
+    m_pSkydomeVB->Unlock();
+
+    // IB
+    m_pDevice->CreateIndexBuffer(
+        UINT(idx.size() * sizeof(uint16_t)),
+        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_pSkydomeIB, NULL);
+    void* pIB = NULL;
+    m_pSkydomeIB->Lock(0, 0, &pIB, 0);
+    memcpy(pIB, idx.data(), idx.size() * sizeof(uint16_t));
+    m_pSkydomeIB->Unlock();
+
+#ifndef NDEBUG
+    fprintf(stdout, "[Skydome] sphere mesh init verts=%d tris=%d\n", vertCount, triCount);
+#endif
+}
+
 Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShaderManager& shaderManager)
     : m_textureManager(textureManager), m_shaderManager(shaderManager)
 {
@@ -1282,6 +1364,11 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_pBloomEffect = NULL;
 	m_pBloomPing   = NULL;
 	m_pBloomPong   = NULL;
+	// MT-3: skydome geometry — pre-init so partial-failure cleanup is safe
+	m_pSkydomeVB        = NULL;
+	m_pSkydomeIB        = NULL;
+	m_pSkydomeDecl      = NULL;
+	m_skydomeIndexCount = 0;
 	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
 	m_hBloomIteration = m_hBloomSceneTextureParam = NULL;
 	m_hBloomResolutionConstants = NULL;
@@ -1424,6 +1511,10 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
     SetLight(LT_FILL1, fill);
     SetLight(LT_FILL2, fill);
 	ResetParameters();
+
+	// MT-3: build the UV sphere mesh used by the skydome render pass.
+	// m_pDevice is guaranteed valid at this point.
+	InitSkydomeMesh();
 }
 
 Engine::~Engine()
@@ -1439,6 +1530,10 @@ Engine::~Engine()
 	SAFE_RELEASE(m_pDistortTexture);
 	SAFE_RELEASE(m_pSceneTexture);
 	SAFE_RELEASE(m_pGroundTexture);
+	// MT-3: skydome geometry (D3DPOOL_MANAGED — only released here, not on Reset)
+	SAFE_RELEASE(m_pSkydomeVB);
+	SAFE_RELEASE(m_pSkydomeIB);
+	SAFE_RELEASE(m_pSkydomeDecl);
 	SAFE_RELEASE(m_pDeclaration);
 	SAFE_RELEASE(m_pDevice);
 	SAFE_RELEASE(m_pDirect3D);

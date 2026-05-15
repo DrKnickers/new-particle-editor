@@ -260,6 +260,9 @@ private:
 	// from ResetParameters() before reallocation.
 	void				ReleaseBloomTargets();
 
+	// MT-3: build the UV sphere VB/IB/Decl once at engine init.
+	void				InitSkydomeMesh();
+
 	//
 	// Data members
 	//
@@ -309,6 +312,22 @@ private:
     Light       m_lights[3];
     D3DXMATRIX  m_sphLightFill[3];
     D3DXMATRIX  m_sphLightAll[3];
+
+	// MT-3: Skydome UV sphere geometry (D3DPOOL_MANAGED; survives device Reset)
+	struct SkydomeVertex
+	{
+	    D3DXVECTOR3 Position;
+	    D3DXVECTOR3 Normal;
+	    D3DXVECTOR2 TexCoord; // (U, V) for equirectangular sampling
+	};
+
+	static const int kSkydomeLongSegments = 32;
+	static const int kSkydomeLatSegments  = 16;
+
+	IDirect3DVertexBuffer9*      m_pSkydomeVB;
+	IDirect3DIndexBuffer9*       m_pSkydomeIB;
+	IDirect3DVertexDeclaration9* m_pSkydomeDecl;
+	DWORD                        m_skydomeIndexCount;
 
 	// Resources
 	IDirect3DTexture9*	m_pGroundTexture;
