@@ -517,17 +517,17 @@ Each task is a self-contained slice — engine code + UI plumbing kept separate 
 
 **Files:**
 - Create: `tools/generate_skydome_textures.py` (procedural gradient generator)
-- Create: `src/Resources/skydomes/{space,atmosphere,sunset,dawn,night,overcast,studio,indoor}.dds`
+- Create: `src/Resources/skydomes/{space,atmosphere,sunset,dawn,night,overcast,studio,indoor}.tga`
 
-**Format decision: DDS (BC1/DXT1 compressed)** — same family as EaW's own environment textures, loaded via `D3DXCreateTextureFromFileInMemory` directly with no conversion. Custom slots accept `.dds` and `.tga` (the other native EaW format) for the same reason.
+**Format decision: TGA (24-bit RGB)** for the procedural placeholders — Pillow writes TGA natively, no external tooling required, and TGA is one of the two native EaW texture formats so the file picker filter (`.dds;.tga`) accepts the same shape. Production-quality BC1 DDS assets (smaller bundle size) are a follow-up PR after v1 ships. `D3DXCreateTextureFromFileInMemory` loads both formats identically, so the engine doesn't care.
 
-- [ ] **Step 1: Write `tools/generate_skydome_textures.py`** — generates 8 equirectangular DDS files at 1024×512 with simple colour ramps representing each scene. Reuse the pattern from `tools/generate_pin_badge.py` (Python + Pillow + numpy + a DDS writer like `imageio` with the `bc1` compression flag).
+- [ ] **Step 1: Write `tools/generate_skydome_textures.py`** — generates 8 equirectangular TGA files at 1024×512 with simple colour ramps representing each scene. Pillow `Image.save("...tga")` handles the encoding.
 
 ```python
-# generate_skydome_textures.py — placeholder skydome generator
+# tools/generate_skydome_textures.py — placeholder skydome generator
+import os
 import numpy as np
 from PIL import Image
-import imageio.v3 as iio
 
 # Each tuple: (name, top_color RGB, mid_color, bottom_color)
 SCENES = [
@@ -542,10 +542,12 @@ SCENES = [
 ]
 
 W, H = 1024, 512
+out_dir = "src/Resources/skydomes"
+os.makedirs(out_dir, exist_ok=True)
 for name, top, mid, bot in SCENES:
     img = np.zeros((H, W, 3), dtype=np.uint8)
     for y in range(H):
-        t = y / (H-1)
+        t = y / (H - 1)
         if t < 0.5:
             a = t * 2.0
             c = np.array(top) * (1.0 - a) + np.array(mid) * a
@@ -553,24 +555,24 @@ for name, top, mid, bot in SCENES:
             a = (t - 0.5) * 2.0
             c = np.array(mid) * (1.0 - a) + np.array(bot) * a
         img[y, :, :] = c.astype(np.uint8)
-    iio.imwrite(f"src/Resources/skydomes/{name}.dds", img,
-                extension=".dds", compression="bc1")
+    Image.fromarray(img, "RGB").save(os.path.join(out_dir, f"{name}.tga"))
+    print(f"wrote {name}.tga")
 ```
 
-- [ ] **Step 2: Run the generator**, verify 8 DDS files land in `src/Resources/skydomes/`.
+- [ ] **Step 2: Run the generator**, verify 8 TGA files land in `src/Resources/skydomes/`.
 
 ```bash
 python tools/generate_skydome_textures.py
-ls src/Resources/skydomes/*.dds
+ls src/Resources/skydomes/*.tga
 ```
 
-Expected: 8 files, ~256KB-1MB each.
+Expected: 8 files, ~1.5 MB each (uncompressed 24-bit RGB TGA).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tools/generate_skydome_textures.py src/Resources/skydomes/*.dds
-git commit -m "asset(MT-3): procedural placeholder skydome DDS textures + generator"
+git add tools/generate_skydome_textures.py src/Resources/skydomes/*.tga
+git commit -m "asset(MT-3): procedural placeholder skydome TGA textures + generator"
 ```
 
 ### Task 1: Sphere mesh
@@ -941,14 +943,14 @@ git commit -m "feat(MT-3): render skydome pass between clear and ground"
 - [ ] **Step 2: Add RCDATA entries** to `src/ParticleEditor.rc` (block after `IDB_GROUND_SNOW`):
 
 ```rc
-IDR_SKYDOME_SPACE       RCDATA                  "Resources\\skydomes\\space.dds"
-IDR_SKYDOME_ATMOSPHERE  RCDATA                  "Resources\\skydomes\\atmosphere.dds"
-IDR_SKYDOME_SUNSET      RCDATA                  "Resources\\skydomes\\sunset.dds"
-IDR_SKYDOME_DAWN        RCDATA                  "Resources\\skydomes\\dawn.dds"
-IDR_SKYDOME_NIGHT       RCDATA                  "Resources\\skydomes\\night.dds"
-IDR_SKYDOME_OVERCAST    RCDATA                  "Resources\\skydomes\\overcast.dds"
-IDR_SKYDOME_STUDIO      RCDATA                  "Resources\\skydomes\\studio.dds"
-IDR_SKYDOME_INDOOR      RCDATA                  "Resources\\skydomes\\indoor.dds"
+IDR_SKYDOME_SPACE       RCDATA                  "Resources\\skydomes\\space.tga"
+IDR_SKYDOME_ATMOSPHERE  RCDATA                  "Resources\\skydomes\\atmosphere.tga"
+IDR_SKYDOME_SUNSET      RCDATA                  "Resources\\skydomes\\sunset.tga"
+IDR_SKYDOME_DAWN        RCDATA                  "Resources\\skydomes\\dawn.tga"
+IDR_SKYDOME_NIGHT       RCDATA                  "Resources\\skydomes\\night.tga"
+IDR_SKYDOME_OVERCAST    RCDATA                  "Resources\\skydomes\\overcast.tga"
+IDR_SKYDOME_STUDIO      RCDATA                  "Resources\\skydomes\\studio.tga"
+IDR_SKYDOME_INDOOR      RCDATA                  "Resources\\skydomes\\indoor.tga"
 ```
 
 - [ ] **Step 3: Build, verify .rc compiles and .exe size grew by ~12 MB** (R1 — sanity-check the bloat).
