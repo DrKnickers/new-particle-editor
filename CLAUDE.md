@@ -97,6 +97,52 @@ rediscovering it during testing.
   logs, demonstrate correctness.
 - Quote the proof in the summary, not just "done".
 
+### Pre-handoff testing — exhaustive, before asking the user to look
+
+Before saying "take a look", "let me know what you see", or anything
+that asks the user to verify a build, do the most rigorous test pass
+you can without their involvement. Their time is much more expensive
+than yours; iteration cycles where they boot the editor, hit an
+obvious problem, and report back are the worst failure mode in this
+project. **One of those round-trips costs more than any amount of
+your own static review.**
+
+For every change, before handoff:
+
+1. **Build the binary yourself.** Always. A clean compile is the
+   floor, not a goal.
+2. **Walk every code path mentally.** Every branch, every edge case
+   (empty input, missing file, first-run state, mod-switch mid-action,
+   focus loss, repeated rapid clicks). Imagine the worst user you can
+   and try to break it.
+3. **Verify rendered geometry, not design intent.** Compute pixel
+   positions yourself; match against what the user will see. The
+   "radios sit at (8,10) under content at (0,0,W,H) and get painted
+   over" class of bug is preventable in a 30-second mental walk.
+4. **Static-analyse for the canonical failure modes.** Win32:
+   `WS_CLIPSIBLINGS` / `WS_CLIPCHILDREN`, sibling z-order, font
+   defaults (`WM_SETFONT` propagation), message routing through
+   subclasses, stale HWND handles, focus on child controls swallowing
+   keystrokes meant for the parent. C++: uninitialized state, lifetime
+   at module boundaries, leaks, sloppy casts. Across mod / tab /
+   selection switches: stale indices, stale caches, stale pointers.
+5. **Run the binary** if you can — even a cold launch + smoke check
+   catches startup crashes. GUI apps you can't fully drive still
+   benefit from this minimum.
+6. **Document the test pass in your handoff message.** The user
+   should never have to re-verify checks you already ran. List what
+   you tested, what you fixed in the process, AND what you couldn't
+   verify (so they know exactly where to focus).
+
+If the same class of bug bites twice, it goes in `tasks/lessons.md`.
+
+**Anti-patterns:** "should work, let me know if not"; asking the user
+to verify rendering correctness when a careful read of the layout
+math would catch it; iterating on obvious failure modes (sibling
+overlap, missing font, off-by-one, untracked cache key) that a single
+mental walk-through would surface. Every iteration of this kind is a
+failure of pre-handoff discipline, not a normal collaboration cost.
+
 ### Self-improvement loop
 
 - After **any** correction the user makes, update `tasks/lessons.md`
