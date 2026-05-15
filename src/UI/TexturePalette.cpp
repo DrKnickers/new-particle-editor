@@ -629,11 +629,13 @@ namespace {
 // line filename strip below, ellipsis-clipped for long names.
 const int THUMB_PX       = 48;
 const int NAME_H         = 14;
-const int CELL_PADDING_X =  4;                              // horizontal padding inside cell
-const int CELL_W         = THUMB_PX + CELL_PADDING_X * 2;   // 56 — wider than thumb so filename has breathing room
-const int CELL_H         = THUMB_PX + 2 + NAME_H;           // 64 — thumb + 2 px gap + name strip
+const int CELL_W         = 120;                              // wide enough for ~20-char filenames at 8pt
+const int CELL_H         = THUMB_PX + 2 + NAME_H;            // 64 — thumb + 2 px gap + name strip
 const int THUMB_GAP_PX   =  4;
-const int THUMBS_PER_ROW =  8;
+const int THUMBS_PER_ROW =  4;                               // cells per visual sub-row
+const int SECTION_ROWS   =  2;                               // sub-rows per logical section (pin / recent)
+const int SUBROW_GAP     =  4;                               // gap between sub-rows within a section
+const int MAX_PER_SECTION = THUMBS_PER_ROW * SECTION_ROWS;   // 8 — matches MAX_PINS/MAX_RECENTS in PaletteStore
 
 // Popup layout (client area).
 const int POPUP_MARGIN_X   = 12;
@@ -642,14 +644,15 @@ const int FILTER_ROW_H     = 20;
 const int LABEL_H          = 14;
 const int ROW_GAP          =  8;
 const int STATUS_H         = 14;
+const int SECTION_CELLS_H  = SECTION_ROWS * CELL_H + (SECTION_ROWS - 1) * SUBROW_GAP;  // 132
 const int CONTENT_W        = POPUP_MARGIN_X * 2 + THUMBS_PER_ROW * CELL_W
-                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // ~500
+                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // ~516
 const int CONTENT_H        = POPUP_MARGIN_Y
                             + FILTER_ROW_H + ROW_GAP
-                            + LABEL_H + CELL_H + ROW_GAP
-                            + LABEL_H + CELL_H + ROW_GAP
+                            + LABEL_H + SECTION_CELLS_H + ROW_GAP
+                            + LABEL_H + SECTION_CELLS_H + ROW_GAP
                             + STATUS_H
-                            + POPUP_MARGIN_Y;                              // ~230
+                            + POPUP_MARGIN_Y;                              // ~366
 
 // Hover-star geometry (inside each thumb area, not the whole cell).
 const int STAR_PX = 10;
@@ -878,11 +881,17 @@ HBITMAP GetCachedThumbnail(const std::wstring& filename)
 // Geometry helpers
 
 // Full cell rect (thumb area + filename strip).
-void GetCellRect(int row /*0=pin,1=rec*/, int col, RECT* out)
+//   section: 0 = Pinned, 1 = Recent
+//   idx:     0..MAX_PER_SECTION-1, laid out left-to-right then
+//            top-to-bottom across SECTION_ROWS sub-rows of
+//            THUMBS_PER_ROW cells each.
+void GetCellRect(int section /*0=pin,1=rec*/, int idx, RECT* out)
 {
-    const int yBase = POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP
-                    + LABEL_H
-                    + (row * (CELL_H + ROW_GAP + LABEL_H));
+    const int subRow = idx / THUMBS_PER_ROW;
+    const int col    = idx % THUMBS_PER_ROW;
+    const int sectionTop = POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP + LABEL_H
+                         + section * (SECTION_CELLS_H + ROW_GAP + LABEL_H);
+    const int yBase = sectionTop + subRow * (CELL_H + SUBROW_GAP);
     const int xBase = POPUP_MARGIN_X + col * (CELL_W + THUMB_GAP_PX);
     out->left   = xBase;
     out->top    = yBase;
@@ -892,9 +901,9 @@ void GetCellRect(int row /*0=pin,1=rec*/, int col, RECT* out)
 
 // Just the thumb area within the cell (thumb is centered horizontally,
 // top-aligned vertically). Star icon is hit-tested against this rect.
-void GetThumbRect(int row, int col, RECT* out)
+void GetThumbRect(int section, int idx, RECT* out)
 {
-    RECT cell; GetCellRect(row, col, &cell);
+    RECT cell; GetCellRect(section, idx, &cell);
     const int xBase = cell.left + (CELL_W - THUMB_PX) / 2;
     out->left   = xBase;
     out->top    = cell.top;
@@ -902,16 +911,16 @@ void GetThumbRect(int row, int col, RECT* out)
     out->bottom = cell.top + THUMB_PX;
 }
 
-bool HitTestCells(int x, int y, int* outRow, int* outCol)
+bool HitTestCells(int x, int y, int* outSection, int* outIdx)
 {
-    for (int r = 0; r < 2; ++r)
+    for (int s = 0; s < 2; ++s)
     {
-        for (int c = 0; c < THUMBS_PER_ROW; ++c)
+        for (int i = 0; i < MAX_PER_SECTION; ++i)
         {
-            RECT rc; GetCellRect(r, c, &rc);
+            RECT rc; GetCellRect(s, i, &rc);
             if (x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom)
             {
-                *outRow = r; *outCol = c;
+                *outSection = s; *outIdx = i;
                 return true;
             }
         }
@@ -919,16 +928,16 @@ bool HitTestCells(int x, int y, int* outRow, int* outCol)
     return false;
 }
 
-bool HitTestStar(int x, int y, int* outRow, int* outCol)
+bool HitTestStar(int x, int y, int* outSection, int* outIdx)
 {
-    int r, c;
-    if (!HitTestCells(x, y, &r, &c)) return false;
-    RECT t; GetThumbRect(r, c, &t);
+    int s, i;
+    if (!HitTestCells(x, y, &s, &i)) return false;
+    RECT t; GetThumbRect(s, i, &t);
     const int sx = t.right - STAR_INSET - STAR_PX;
     const int sy = t.top   + STAR_INSET;
     if (x >= sx && x < sx + STAR_PX && y >= sy && y < sy + STAR_PX)
     {
-        *outRow = r; *outCol = c;
+        *outSection = s; *outIdx = i;
         return true;
     }
     return false;
@@ -1052,24 +1061,24 @@ void OnContentPaint(HWND hWnd)
     DrawLabel(hdc, POPUP_MARGIN_X, POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP - 2,
               L"Pinned");
     DrawLabel(hdc, POPUP_MARGIN_X,
-              POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP + LABEL_H + CELL_H + ROW_GAP - 2,
+              POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP + LABEL_H + SECTION_CELLS_H + ROW_GAP - 2,
               L"Recent");
 
     const SlotMask filter = Store::Instance().ActiveFilter();
     const std::vector<Entry> pins    = Store::Instance().Pins(filter);
     const std::vector<Entry> recents = Store::Instance().Recents(filter);
 
-    auto drawRow = [&](int rowIdx, const std::vector<Entry>& entries)
+    auto drawSection = [&](int section, const std::vector<Entry>& entries)
     {
-        for (int c = 0; c < THUMBS_PER_ROW; ++c)
+        for (int i = 0; i < MAX_PER_SECTION; ++i)
         {
-            RECT cell;  GetCellRect (rowIdx, c, &cell);
-            RECT thumb; GetThumbRect(rowIdx, c, &thumb);
-            if (c < (int)entries.size())
+            RECT cell;  GetCellRect (section, i, &cell);
+            RECT thumb; GetThumbRect(section, i, &thumb);
+            if (i < (int)entries.size())
             {
-                const bool sel = (g_selRow   == rowIdx && g_selCol   == c);
-                const bool hov = (g_hoverRow == rowIdx && g_hoverCol == c);
-                DrawCell(hdc, cell, thumb, entries[c], sel, hov);
+                const bool sel = (g_selRow   == section && g_selCol   == i);
+                const bool hov = (g_hoverRow == section && g_hoverCol == i);
+                DrawCell(hdc, cell, thumb, entries[i], sel, hov);
             }
             else
             {
@@ -1087,8 +1096,8 @@ void OnContentPaint(HWND hWnd)
             }
         }
     };
-    drawRow(0, pins);
-    drawRow(1, recents);
+    drawSection(0, pins);
+    drawSection(1, recents);
 
     SelectObject(hdc, hOldFont);
     EndPaint(hWnd, &ps);
