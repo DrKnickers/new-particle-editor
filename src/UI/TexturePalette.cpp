@@ -58,10 +58,12 @@ void DbgPrintf(const char*, ...) {}
 
 // Cell geometry. Each cell holds a thumbnail at the top + a single-
 // line filename strip below, ellipsis-clipped for long names.
-const int THUMB_PX       = 80;
-const int NAME_H         = 16;
+// Thumbnail fills the cell width — bigger preview, more useful at a
+// glance. Cell height grows accordingly to keep the thumb square.
 const int CELL_W         = 140;                              // ~28 chars of filename fit at 8pt before ellipsis
-const int CELL_H         = THUMB_PX + 4 + NAME_H;            // 100 — thumb + 4 px gap + name strip
+const int THUMB_PX       = CELL_W;                           // 140 — square thumb, no horizontal padding
+const int NAME_H         = 16;
+const int CELL_H         = THUMB_PX + 4 + NAME_H;            // 160 — thumb + 4 px gap + name strip
 const int THUMB_GAP_PX   =  6;
 const int THUMBS_PER_ROW =  4;                               // cells per visual sub-row
 const int SECTION_ROWS   =  3;                               // sub-rows per logical section (pin / recent)
