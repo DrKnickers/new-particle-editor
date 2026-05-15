@@ -225,6 +225,9 @@
     <Image Include="Resources\missing.bmp">
       <Filter>Resource Files</Filter>
     </Image>
+    <Image Include="Resources\palette_glyph.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
     <Image Include="Resources\sand.dds">
       <Filter>Resource Files</Filter>
     </Image>

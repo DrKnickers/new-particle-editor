@@ -284,6 +284,45 @@ static INT_PTR WINAPI DlgEmitterPropsProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 				}
 				SendMessage(hEmitModes, CB_SETCURSEL, 0, 0);
 			}
+
+            // MT-1 — set up the texture-palette button (only present on
+            // the Appearance page; GetDlgItem returns NULL on the others).
+            // Loads the IDB_PALETTE_GLYPH bitmap onto the BS_BITMAP button
+            // and attaches a tooltip. The button click is wired further
+            // down in WM_COMMAND; the popup window itself is created
+            // lazily on first click.
+            HWND hPaletteBtn = GetDlgItem(hWnd, IDC_BUTTON_PALETTE);
+            if (hPaletteBtn != NULL)
+            {
+                HINSTANCE hInst = (HINSTANCE)(LONG_PTR)GetWindowLongPtr(hWnd, GWLP_HINSTANCE);
+                HBITMAP hGlyph  = (HBITMAP)LoadImage(hInst, MAKEINTRESOURCE(IDB_PALETTE_GLYPH),
+                                                    IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+                if (hGlyph != NULL)
+                {
+                    SendMessage(hPaletteBtn, BM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hGlyph);
+                }
+
+                // Attach a tooltip — same V2-size compatibility pattern as
+                // the ground-texture picker's path-label tooltip in
+                // main.cpp (ComCtl32 v5 rejects the modern TOOLINFOW size).
+                HWND hToolTip = CreateWindowExW(0, TOOLTIPS_CLASS, NULL,
+                    WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                    hWnd, NULL, hInst, NULL);
+                if (hToolTip != NULL)
+                {
+                    static wstring s_paletteTip;  // must outlive the SendMessage
+                    s_paletteTip = LoadString(IDS_TOOLTIP_PALETTE);
+                    TOOLINFOW ti = {};
+                    ti.cbSize   = TTTOOLINFOW_V2_SIZE;
+                    ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
+                    ti.hwnd     = hWnd;
+                    ti.uId      = (UINT_PTR)hPaletteBtn;
+                    ti.lpszText = (LPWSTR)s_paletteTip.c_str();
+                    SendMessage(hToolTip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+                    SendMessage(hToolTip, TTM_SETDELAYTIME, TTDT_INITIAL, 250);
+                }
+            }
             break;
 		}
 		
@@ -333,6 +372,18 @@ static INT_PTR WINAPI DlgEmitterPropsProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 							case IDC_BUTTON2:
                                 LoadTexture(hWnd, emitter.normalTexture);
                                 SetWindowText(GetDlgItem(hWnd, IDC_EDIT3), AnsiToWide(emitter.normalTexture).c_str());
+                                break;
+
+                            // MT-1 — palette-button click. Popup window
+                            // (modeless, sticky, position-remembered) is
+                            // wired in a follow-up batch; for now this is
+                            // a stub so the BS_AUTOCHECKBOX toggle visibly
+                            // works and the build succeeds.
+                            case IDC_BUTTON_PALETTE:
+#ifndef NDEBUG
+                                OutputDebugStringA("[Palette] button clicked (popup not yet implemented)\n");
+#endif
+                                enable = false;  // no emitter-state mutation
                                 break;
 
 							default:

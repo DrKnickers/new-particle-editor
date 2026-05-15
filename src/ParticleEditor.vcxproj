@@ -232,6 +232,7 @@
     <Image Include="Resources\grass.dds" />
     <Image Include="Resources\logo.ico" />
     <Image Include="Resources\missing.bmp" />
+    <Image Include="Resources\palette_glyph.bmp" />
     <Image Include="Resources\sand.dds" />
     <Image Include="Resources\snow.dds" />
     <Image Include="Resources\toolbar1.bmp" />
