@@ -3686,11 +3686,13 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         // subclass paints hover state itself based on cursor hit-test.
         ListView_SetExtendedListViewStyle(hList, LVS_EX_DOUBLEBUFFER);
         // Layout: 144×144 thumb (matches kGroundPickerThumbSize) fills
-        // each cell edge-to-edge horizontally. Spacing 150×190 leaves
-        // a 6 px gap between cells and ~46 px below the thumb for the
-        // filename label. 4 × 150 = 600 px fits in the 400 du (~600 px)
-        // listview width without horizontal scroll.
-        ListView_SetIconSpacing(hList, 150, 190);
+        // each cell edge-to-edge horizontally. Spacing 160×190 leaves
+        // a 16 px gap between cells (~palette popup proportions) and
+        // ~46 px below the thumb for the filename label.
+        // 4 × 160 = 640 px fits in the widened 432 du (~648 px)
+        // listview width with a small safety margin so no horizontal
+        // scroll appears.
+        ListView_SetIconSpacing(hList, 160, 190);
         // Subclass the ListView so we own WM_PAINT entirely. The
         // native ListView's selection / focus / hot-track painting
         // can't bleed through if it never runs.
