@@ -749,6 +749,35 @@ HBITMAP GetMissingPlaceholder()
     return g_phMissing;
 }
 
+// Try to open a texture via FileManager. Matches the resolution
+// order TextureManager::getTexture uses in main.cpp: prepend the
+// engine's basePath ("Data\Art\Textures\"), then fall back to a
+// .DDS extension swap (common engine convention — the .alo stores
+// one extension but the on-disk file may be the other format).
+IFile* OpenTextureFile(const std::string& filename)
+{
+    // The TextureManager uppercases names internally — match that
+    // so case differences between INI-stored filenames and on-disk
+    // names don't matter on mods that ship uppercase filenames.
+    std::string upper = filename;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return (char)::toupper(c); });
+
+    static const std::string kBase = "Data\\Art\\Textures\\";
+    IFile* f = g_fileManager->getFile(kBase + upper);
+    if (f != nullptr) return f;
+
+    // .DDS swap (existing engine fallback at main.cpp:162).
+    size_t dot = upper.rfind('.');
+    if (dot != std::string::npos)
+    {
+        std::string swapped = upper.substr(0, dot) + ".DDS";
+        f = g_fileManager->getFile(kBase + swapped);
+        if (f != nullptr) return f;
+    }
+    return nullptr;
+}
+
 // Decode a texture to a 32x32 HBITMAP via D3DX9 → DIB section.
 // Returns either a real thumbnail, the broken placeholder (decode
 // failed), or the missing placeholder (FileManager couldn't find
@@ -759,7 +788,7 @@ HBITMAP DecodeThumbnail(const std::wstring& filename)
         return GetMissingPlaceholder();
 
     const std::string ansiName = WideToAnsi(filename);
-    IFile* file = g_fileManager->getFile(ansiName);
+    IFile* file = OpenTextureFile(ansiName);
     if (file == nullptr)
     {
         DbgPrintf("[Palette] missing file '%s'\n", ansiName.c_str());
