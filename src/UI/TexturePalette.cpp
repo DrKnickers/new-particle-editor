@@ -627,36 +627,37 @@ namespace {
 
 // Cell geometry. Each cell holds a thumbnail at the top + a single-
 // line filename strip below, ellipsis-clipped for long names.
-const int THUMB_PX       = 48;
-const int NAME_H         = 14;
-const int CELL_W         = 120;                              // wide enough for ~20-char filenames at 8pt
-const int CELL_H         = THUMB_PX + 2 + NAME_H;            // 64 — thumb + 2 px gap + name strip
-const int THUMB_GAP_PX   =  4;
+const int THUMB_PX       = 80;
+const int NAME_H         = 16;
+const int CELL_W         = 140;                              // ~28 chars of filename fit at 8pt before ellipsis
+const int CELL_H         = THUMB_PX + 4 + NAME_H;            // 100 — thumb + 4 px gap + name strip
+const int THUMB_GAP_PX   =  6;
 const int THUMBS_PER_ROW =  4;                               // cells per visual sub-row
 const int SECTION_ROWS   =  2;                               // sub-rows per logical section (pin / recent)
-const int SUBROW_GAP     =  4;                               // gap between sub-rows within a section
+const int SUBROW_GAP     =  6;                               // gap between sub-rows within a section
 const int MAX_PER_SECTION = THUMBS_PER_ROW * SECTION_ROWS;   // 8 — matches MAX_PINS/MAX_RECENTS in PaletteStore
 
 // Popup layout (client area).
-const int POPUP_MARGIN_X   = 12;
-const int POPUP_MARGIN_Y   =  8;
-const int FILTER_ROW_H     = 20;
-const int LABEL_H          = 14;
-const int ROW_GAP          =  8;
-const int STATUS_H         = 14;
-const int SECTION_CELLS_H  = SECTION_ROWS * CELL_H + (SECTION_ROWS - 1) * SUBROW_GAP;  // 132
+const int POPUP_MARGIN_X   = 16;
+const int POPUP_MARGIN_Y   = 10;
+const int FILTER_ROW_H     = 22;
+const int LABEL_H          = 16;
+const int ROW_GAP          = 10;
+const int STATUS_H         = 16;
+const int SECTION_CELLS_H  = SECTION_ROWS * CELL_H + (SECTION_ROWS - 1) * SUBROW_GAP;  // 206
 const int CONTENT_W        = POPUP_MARGIN_X * 2 + THUMBS_PER_ROW * CELL_W
-                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // ~516
+                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // ~610
 const int CONTENT_H        = POPUP_MARGIN_Y
                             + FILTER_ROW_H + ROW_GAP
                             + LABEL_H + SECTION_CELLS_H + ROW_GAP
                             + LABEL_H + SECTION_CELLS_H + ROW_GAP
                             + STATUS_H
-                            + POPUP_MARGIN_Y;                              // ~366
+                            + POPUP_MARGIN_Y;                              // ~542
 
 // Hover-star geometry (inside each thumb area, not the whole cell).
-const int STAR_PX = 10;
-const int STAR_INSET = 2;
+// Larger star (14px) so it's still clearly clickable against the 80px thumb.
+const int STAR_PX   = 14;
+const int STAR_INSET = 3;
 
 // Custom child-window IDs inside the popup.
 const int IDC_PAL_CONTENT = 5001;
