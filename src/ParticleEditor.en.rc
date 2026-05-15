@@ -676,7 +676,7 @@ BEGIN
     IDS_GROUND_CUSTOM_BASE + 5  "Custom 6"
     IDS_PALETTE_FILTER_COLOR    "Color"
     IDS_PALETTE_FILTER_BUMP     "Bump"
-    IDS_PALETTE_PINS_FULL       "Pins full (8). Unpin one to make room."
+    IDS_PALETTE_PINS_FULL       "Pins full (12). Unpin one to make room."
     IDS_TOOLTIP_PALETTE         "Recently-used and pinned textures"
     IDS_LABEL_LEAVE_PARTICLES "Leave particles after instance death"
     IDS_LABEL_TRACK_RED     "Red"
