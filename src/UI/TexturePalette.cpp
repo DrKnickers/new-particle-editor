@@ -3,6 +3,7 @@
 #include "../utils.h"
 #include "../managers.h"
 #include "../Resources/resource.en.h"
+#include "../Resources/resource.h"
 
 #include <d3d9.h>
 #include <d3dx9.h>
@@ -87,11 +88,15 @@ const int CONTENT_H        = POPUP_MARGIN_Y
                             + STATUS_H
                             + POPUP_MARGIN_Y;                              // ~542
 
-// Hover-pin button. Drawn at the thumb's top-right when the cell is
-// hovered. Bigger than a tiny indicator because it's the click target
-// for pinning/unpinning — needs to be unambiguously clickable.
-const int STAR_PX    = 20;
-const int STAR_INSET = 3;
+// Hover-pin badge. Loaded from IDB_PIN_BADGE — a 24×48 BMP strip
+// with the empty/hover state on top and the filled/pinned state
+// on bottom. Drawn at the thumb's top-right when the cell is
+// hovered. Bigger than a tiny indicator because it's the click
+// target for pinning/unpinning — needs to be unambiguously
+// clickable.
+const int STAR_PX    = 24;
+const int STAR_INSET = 4;
+HBITMAP g_pinBadgeBmp = NULL;   // 24×48 strip; lazy-loaded on first use
 
 // Custom child-window IDs inside the popup.
 const int IDC_PAL_CONTENT = 5001;
@@ -383,35 +388,37 @@ bool HitTestStar(int x, int y, int* outSection, int* outIdx)
 
 void DrawStar(HDC hdc, int x, int y, bool filled)
 {
-    // Yellow circle ("pin badge") with a thicker brown outline.
-    // Filled = pinned, hollow = not pinned. Big enough at 20 px on
-    // a clear background that the user reliably notices and clicks it.
-    HBRUSH fill = CreateSolidBrush(filled ? RGB(255, 200, 30) : RGB(255, 255, 255));
-    HPEN   pen  = CreatePen(PS_SOLID, 2, RGB(120, 80, 0));
-    HGDIOBJ oldB = SelectObject(hdc, fill);
-    HGDIOBJ oldP = SelectObject(hdc, pen);
-    Ellipse(hdc, x, y, x + STAR_PX, y + STAR_PX);
-    // Small dot in the centre to read as "pin head" when filled.
-    if (filled)
+    // Blit the appropriate half of IDB_PIN_BADGE (24×48 strip) at the
+    // requested position. Top half = empty/hover; bottom = pinned.
+    // Lazy-load the bitmap on first call.
+    if (g_pinBadgeBmp == NULL)
     {
-        const int cx = x + STAR_PX / 2;
-        const int cy = y + STAR_PX / 2;
-        HBRUSH dot = CreateSolidBrush(RGB(120, 80, 0));
-        HGDIOBJ oldDot = SelectObject(hdc, dot);
-        Ellipse(hdc, cx - 3, cy - 3, cx + 3, cy + 3);
-        SelectObject(hdc, oldDot);
-        DeleteObject(dot);
+        HMODULE hMod = GetModuleHandleW(NULL);
+        g_pinBadgeBmp = (HBITMAP)LoadImageW(hMod, MAKEINTRESOURCEW(IDB_PIN_BADGE),
+                                            IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+        if (g_pinBadgeBmp == NULL)
+        {
+            DbgPrintf("[Palette] LoadImage(IDB_PIN_BADGE) failed err=%lu\n", GetLastError());
+            return;
+        }
     }
-    SelectObject(hdc, oldB); SelectObject(hdc, oldP);
-    DeleteObject(fill); DeleteObject(pen);
+    HDC hMem = CreateCompatibleDC(hdc);
+    HGDIOBJ old = SelectObject(hMem, g_pinBadgeBmp);
+    // src y offset = 0 for empty (top half), 24 for filled (bottom half).
+    const int srcY = filled ? STAR_PX : 0;
+    BitBlt(hdc, x, y, STAR_PX, STAR_PX, hMem, 0, srcY, SRCCOPY);
+    SelectObject(hMem, old);
+    DeleteDC(hMem);
 }
 
 void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
               const Entry& e, bool selected, bool hovered)
 {
-    // Cell background. Hover tints the whole cell light-blue so the
-    // hovered cell stands out at a glance regardless of thumb content.
-    const COLORREF bgColor = hovered ? RGB(215, 232, 250) : RGB(240, 240, 240);
+    // Cell background. Hover tints the whole cell warm yellow so it
+    // stands out unambiguously against any thumbnail palette — the
+    // prior subtle blue tint blended too quietly with grey on some
+    // displays/themes.
+    const COLORREF bgColor = hovered ? RGB(255, 240, 170) : RGB(240, 240, 240);
     HBRUSH bg = CreateSolidBrush(bgColor);
     FillRect(hdc, &cell, bg);
     DeleteObject(bg);
@@ -443,7 +450,9 @@ void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
     }
     else if (hovered)
     {
-        HPEN pen = CreatePen(PS_SOLID, 2, RGB(120, 170, 230));
+        // Hover frame: 3 px bright orange — unmissable against any
+        // thumbnail content.
+        HPEN pen = CreatePen(PS_SOLID, 3, RGB(255, 140, 0));
         HGDIOBJ old = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
         Rectangle(hdc, thumb.left + 1, thumb.top + 1,
@@ -602,6 +611,7 @@ LRESULT CALLBACK ContentWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         {
             g_hoverRow = r; g_hoverCol = c;
             InvalidateRect(hWnd, NULL, FALSE);
+            DbgPrintf("[Palette] hover section=%d idx=%d (xy=%d,%d)\n", r, c, x, y);
 
             // TrackMouseEvent so we know when the cursor leaves the
             // control and can clear the hover state.
