@@ -487,6 +487,8 @@ static HBITMAP          MakeGroundSlotThumbnail(IDirect3DDevice9* pDevice,
                                                   COLORREF solidColor);
 static void             RebuildGroundTexturePreviewBitmap(APPLICATION_INFO* info);
 static void             ShowGroundTexturePicker(HWND hParent, APPLICATION_INFO* info);
+struct GroundPickerPos;
+static void             WriteGroundPickerPos(int x, int y);
 static bool             ReadBloomEnabled(bool defaultValue);
 static void             WriteBloomEnabled(bool enabled);
 static float            ReadBloomFloat(const wchar_t* name, float defaultValue);
@@ -572,6 +574,11 @@ struct APPLICATION_INFO
 	HWND            hSpawnerDlg;        // NULL until first show; lazy-created
 	bool            spawnerVisible;     // tracks visibility for menu check-mark
 	RECT            spawnerWindowRect;  // last-known position (session + registry)
+
+	// Ground-texture picker (modeless). Set when ShowGroundTexturePicker
+	// creates the dialog; routed into the main message pump's
+	// IsDialogMessage chain so Tab / Esc / arrow-key navigation work.
+	HWND            hGroundPicker;
 
 	// Bloom config dialog (View → Bloom… / Ctrl+B). Same modeless
 	// toggle pattern as the spawner. Engine owns the bloom state
@@ -3939,9 +3946,13 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                 // and closes. The LVN_ITEMCHANGED handler already
                 // swapped the engine texture as the user clicked
                 // (live-select), so closing here just dismisses the
-                // dialog without an extra OK round-trip. Matches the
+                // popup without an extra OK round-trip. Matches the
                 // texture-palette popup's commit-and-close behaviour.
-                EndDialog(hDlg, IDOK);
+                {
+                    RECT r; GetWindowRect(hDlg, &r);
+                    WriteGroundPickerPos(r.left, r.top);
+                    ShowWindow(hDlg, SW_HIDE);
+                }
             }
         }
         else if (hdr->code == NM_RCLICK)
@@ -4038,12 +4049,20 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
             return TRUE;
         }
         case IDOK:
-            // Live selection has already been committed; just close.
-            EndDialog(hDlg, IDOK);
+        {
+            // Live selection has already been committed; hide and
+            // persist position. (Modeless — the dialog instance is
+            // kept alive for the next ShowGroundTexturePicker call.)
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteGroundPickerPos(r.left, r.top);
+            ShowWindow(hDlg, SW_HIDE);
             return TRUE;
+        }
         case IDCANCEL:
-            // Revert engine selection to whatever was active when the
-            // dialog opened. Slot-path mutations stay (they're "data").
+        {
+            // Revert engine selection to whatever was active at the
+            // start of this show session. Slot-path mutations stay
+            // (they're "data"). Then hide + persist position.
             if (data->info->engine->GetGroundTexture() != data->originalSlot)
             {
                 data->info->engine->SetGroundTexture(data->originalSlot);
@@ -4053,7 +4072,31 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                 RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                              RDW_INVALIDATE | RDW_UPDATENOW);
             }
-            EndDialog(hDlg, IDCANCEL);
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteGroundPickerPos(r.left, r.top);
+            ShowWindow(hDlg, SW_HIDE);
+            return TRUE;
+        }
+        }
+        break;
+    case WM_CLOSE:
+        // Title-bar X button. Treat as OK (live changes already
+        // committed) rather than Cancel — matches palette popup
+        // behaviour. The user has explicit Cancel button if they
+        // want to revert.
+        {
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteGroundPickerPos(r.left, r.top);
+            ShowWindow(hDlg, SW_HIDE);
+        }
+        return TRUE;
+    case WM_KEYDOWN:
+        // Esc: dismiss without reverting (matches palette popup).
+        if (wParam == VK_ESCAPE)
+        {
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteGroundPickerPos(r.left, r.top);
+            ShowWindow(hDlg, SW_HIDE);
             return TRUE;
         }
         break;
@@ -4068,16 +4111,99 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
     return FALSE;
 }
 
+// Position persistence for the modeless ground-texture picker.
+// Stored as two DWORDs to match the existing HKCU\Software\AloParticleEditor
+// pattern. Both keys must be present; otherwise the caller falls back
+// to the dialog's default centering.
+struct GroundPickerPos { int x; int y; bool valid; };
+static GroundPickerPos ReadGroundPickerPos()
+{
+    GroundPickerPos p = { 0, 0, false };
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD x = 0, y = 0, type = 0, size = sizeof(DWORD);
+        BOOL gotX = (RegQueryValueEx(hKey, L"GroundPickerX", NULL, &type, (LPBYTE)&x, &size) == ERROR_SUCCESS && type == REG_DWORD);
+        size = sizeof(DWORD);
+        BOOL gotY = (RegQueryValueEx(hKey, L"GroundPickerY", NULL, &type, (LPBYTE)&y, &size) == ERROR_SUCCESS && type == REG_DWORD);
+        RegCloseKey(hKey);
+        if (gotX && gotY) { p.x = (int)x; p.y = (int)y; p.valid = true; }
+    }
+    return p;
+}
+static void WriteGroundPickerPos(int x, int y)
+{
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        DWORD dx = (DWORD)x, dy = (DWORD)y;
+        RegSetValueEx(hKey, L"GroundPickerX", 0, REG_DWORD, (BYTE*)&dx, sizeof(dx));
+        RegSetValueEx(hKey, L"GroundPickerY", 0, REG_DWORD, (BYTE*)&dy, sizeof(dy));
+        RegCloseKey(hKey);
+    }
+}
+
+// Modeless ground-texture picker.
+//
+// Created lazily on first call; subsequent calls toggle visibility.
+// Carries WS_EX_TOOLWINDOW to get the slim tool-window title bar, and
+// the data struct is static so it survives across show/hide cycles.
+// First show after launch reads the saved window position from the
+// registry; hide writes it back.
+//
+// Cancel reverts to the slot active at the start of the most recent
+// show session (data->originalSlot is re-recorded on every show).
 static void ShowGroundTexturePicker(HWND hParent, APPLICATION_INFO* info)
 {
     if (info == NULL || info->engine == NULL) return;
-    GroundTexturePickerData data;
-    data.info         = info;
-    data.hImageList   = NULL;
-    data.originalSlot = info->engine->GetGroundTexture();
-    DialogBoxParam(GetModuleHandle(NULL),
-                    MAKEINTRESOURCE(IDD_GROUND_TEXTURE_PICKER),
-                    hParent, GroundTexturePickerProc, (LPARAM)&data);
+    static HWND s_hPicker = NULL;
+    static GroundTexturePickerData s_data;
+    s_data.info         = info;
+    s_data.hImageList   = NULL;
+    s_data.originalSlot = info->engine->GetGroundTexture();
+
+    if (s_hPicker != NULL && IsWindowVisible(s_hPicker))
+    {
+        // Already visible — toggle hide, persist position.
+        RECT r; GetWindowRect(s_hPicker, &r);
+        WriteGroundPickerPos(r.left, r.top);
+        ShowWindow(s_hPicker, SW_HIDE);
+        return;
+    }
+    if (s_hPicker == NULL)
+    {
+        s_hPicker = CreateDialogParamW(GetModuleHandle(NULL),
+                                        MAKEINTRESOURCEW(IDD_GROUND_TEXTURE_PICKER),
+                                        hParent, GroundTexturePickerProc,
+                                        (LPARAM)&s_data);
+        if (s_hPicker == NULL) return;
+        info->hGroundPicker = s_hPicker;
+        // Apply tool-window title bar styling. Has to be after creation
+        // because WS_EX_TOOLWINDOW isn't in the dialog template's
+        // EXSTYLE; SWP_FRAMECHANGED forces the non-client area to
+        // repaint with the new style.
+        LONG_PTR ex = GetWindowLongPtr(s_hPicker, GWL_EXSTYLE);
+        SetWindowLongPtr(s_hPicker, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
+        SetWindowPos(s_hPicker, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        // Restore saved position if any.
+        GroundPickerPos pos = ReadGroundPickerPos();
+        if (pos.valid)
+        {
+            SetWindowPos(s_hPicker, NULL, pos.x, pos.y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+    else
+    {
+        // Existing instance — refresh in case the engine state changed
+        // while hidden (custom paths added via the right-click menu in
+        // another popup, etc.).
+        GroundTexturePicker_RefreshList(s_hPicker, &s_data);
+    }
+    ShowWindow(s_hPicker, SW_SHOW);
+    SetForegroundWindow(s_hPicker);
 }
 
 // Bloom config persistence. Master enable as DWORD (matches ShowGround
@@ -5339,6 +5465,15 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
 				{
 					consumed = true;
 				}
+				// Same routing for the ground-texture picker so its
+				// keyboard navigation (Tab between buttons, Esc to
+				// dismiss, etc.) works while modeless.
+				if (!consumed && info->hGroundPicker != NULL
+				    && IsWindowVisible(info->hGroundPicker)
+				    && IsDialogMessage(info->hGroundPicker, &msg))
+				{
+					consumed = true;
+				}
 				// Skip TranslateAccelerator while a tree drag-drop is in
 				// progress: a stray Ctrl+Z mid-drag would call DoUndo →
 				// RestoreFromSnapshot → delete info->particleSystem while
@@ -5484,6 +5619,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	info.spawner                = new SpawnerDriver();
 	info.hSpawnerDlg            = NULL;
 	info.spawnerVisible         = false;
+	info.hGroundPicker          = NULL;
 	memset(&info.spawnerWindowRect, 0, sizeof(info.spawnerWindowRect));
 	info.hBloomDlg              = NULL;
 	info.bloomDlgVisible        = false;
