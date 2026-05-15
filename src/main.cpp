@@ -3522,7 +3522,7 @@ static std::wstring GroundSlotDisplayName(int slot, const std::wstring& customPa
 // Picker-specific thumbnail size — bigger than the toolbar's 64 px
 // preview thumbnail and matched to the per-cell tile width so the
 // thumbnail fills the cell edge-to-edge (no horizontal padding).
-static const int kGroundPickerThumbSize = 160;
+static const int kGroundPickerThumbSize = 192;
 
 // Subclass plumbing — needed because the ListView's native paint
 // keeps bleeding through CDRF_SKIPDEFAULT in subtle ways (per-item
@@ -3685,12 +3685,12 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         // chrome the per-item custom-draw can't cleanly suppress; my
         // subclass paints hover state itself based on cursor hit-test.
         ListView_SetExtendedListViewStyle(hList, LVS_EX_DOUBLEBUFFER);
-        // Layout: 160×160 thumb (matches kGroundPickerThumbSize) fills
-        // each cell. Spacing 176×206 keeps a 16 px gap between cells
-        // and ~46 px below the thumb for the filename label.
-        // 4 × 176 = 704 px fits in the widened ~720 px listview with
-        // a small safety margin so no scrollbar appears.
-        ListView_SetIconSpacing(hList, 176, 206);
+        // Layout: 192×192 thumb (matches kGroundPickerThumbSize).
+        // Spacing 208×232 keeps a 16 px gap between cells and ~40 px
+        // below the thumb for the filename label.
+        // 4 × 208 = 832 px fits in the widened ~840 px listview;
+        // 2 × 232 = 464 px fits in the ~470 px listview height.
+        ListView_SetIconSpacing(hList, 208, 232);
         // Subclass the ListView so we own WM_PAINT entirely. The
         // native ListView's selection / focus / hot-track painting
         // can't bleed through if it never runs.
