@@ -3655,6 +3655,14 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         SetWindowLongPtr(hDlg, DWLP_USER, (LONG_PTR)data);
         data->hImageList = NULL;
         data->hToolTip   = NULL;
+        // Match the texture-palette popup's smoother feel:
+        //   LVS_EX_DOUBLEBUFFER — flicker-free repaint as the user
+        //     moves the mouse / live-selects.
+        //   LVS_EX_TRACKSELECT  — native hot-track highlight when the
+        //     cursor hovers a slot, mirroring the palette's hover tint.
+        HWND hList = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_LIST);
+        ListView_SetExtendedListViewStyle(hList,
+            LVS_EX_DOUBLEBUFFER | LVS_EX_TRACKSELECT);
         // Build the list — populates thumbnails, labels, selection.
         GroundTexturePicker_RefreshList(hDlg, data);
         // Attach a tooltip to the path label so the user can see
@@ -3761,9 +3769,14 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                         LVIS_SELECTED | LVIS_FOCUSED);
                 }
             }
-            else if (hdr->code == NM_DBLCLK)
+            else
             {
-                // Double-click confirms selection and closes.
+                // Populated, non-solid-colour slot: any click commits
+                // and closes. The LVN_ITEMCHANGED handler already
+                // swapped the engine texture as the user clicked
+                // (live-select), so closing here just dismisses the
+                // dialog without an extra OK round-trip. Matches the
+                // texture-palette popup's commit-and-close behaviour.
                 EndDialog(hDlg, IDOK);
             }
         }
