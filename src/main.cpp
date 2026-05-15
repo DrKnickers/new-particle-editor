@@ -3524,6 +3524,16 @@ static std::wstring GroundSlotDisplayName(int slot, const std::wstring& customPa
 // popup's 128-ish thumbnails.
 static const int kGroundPickerThumbSize = 128;
 
+// Subclass plumbing — needed because the ListView's native paint
+// keeps bleeding through CDRF_SKIPDEFAULT in subtle ways (per-item
+// hot-track border with LVS_EX_TRACKSELECT, native-selection blue
+// label text). The cleanest fix is to take over WM_PAINT entirely
+// in a subclass: native paint never runs, so it can't leak.
+static WNDPROC s_groundLVOriginalProc = NULL;
+static int     s_groundLVHoverIdx     = -1;
+static LRESULT CALLBACK GroundLVSubclassProc(HWND hList, UINT msg,
+                                              WPARAM wParam, LPARAM lParam);
+
 static void GroundTexturePicker_RefreshList(HWND hDlg, GroundTexturePickerData* data)
 {
     HWND hList = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_LIST);
@@ -3669,20 +3679,32 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         SetWindowLongPtr(hDlg, DWLP_USER, (LONG_PTR)data);
         data->hImageList = NULL;
         data->hToolTip   = NULL;
-        // Match the texture-palette popup's smoother feel:
-        //   LVS_EX_DOUBLEBUFFER — flicker-free repaint as the user
-        //     moves the mouse / live-selects.
-        //   LVS_EX_TRACKSELECT  — native hot-track tracking; my
-        //     custom-draw uses ListView_GetHotItem to highlight the
-        //     hovered slot with the palette's blue tint.
         HWND hList = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_LIST);
-        ListView_SetExtendedListViewStyle(hList,
-            LVS_EX_DOUBLEBUFFER | LVS_EX_TRACKSELECT);
+        // LVS_EX_DOUBLEBUFFER — flicker-free repaint on cursor motion.
+        // LVS_EX_TRACKSELECT deliberately NOT set: it draws hot-track
+        // chrome the per-item custom-draw can't cleanly suppress; my
+        // subclass paints hover state itself based on cursor hit-test.
+        ListView_SetExtendedListViewStyle(hList, LVS_EX_DOUBLEBUFFER);
         // Make the picker cells big like the palette's. Layout target:
         //   128×128 thumb + 4 px gap + ~18 px filename strip = ~150 tall.
         // ListView's icon spacing is (cellWidth, cellHeight) including
         // outer margin. 144×178 gives roughly the palette's proportions.
         ListView_SetIconSpacing(hList, 144, 178);
+        // Subclass the ListView so we own WM_PAINT entirely. The
+        // native ListView's selection / focus / hot-track painting
+        // can't bleed through if it never runs.
+        if (s_groundLVOriginalProc == NULL)
+        {
+            s_groundLVOriginalProc = (WNDPROC)SetWindowLongPtr(
+                hList, GWLP_WNDPROC, (LONG_PTR)GroundLVSubclassProc);
+        }
+        else
+        {
+            // Re-attach for subsequent show cycles (the modeless dialog
+            // keeps the same HWND, but defensively re-install in case).
+            SetWindowLongPtr(hList, GWLP_WNDPROC, (LONG_PTR)GroundLVSubclassProc);
+        }
+        s_groundLVHoverIdx = -1;
         // Hide the bottom path label — slot labels (Dirt / Grass /
         // filename basename for custom) already convey what each slot
         // is. The full-path duplication isn't pulling its weight.
@@ -4109,6 +4131,201 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         break;
     }
     return FALSE;
+}
+
+// Custom paint for the ground-texture picker's ListView. Mirrors the
+// texture-palette popup's DrawCell so the two popups look identical:
+// hover blue tint, blue frame (3 px hover / 2 px selected / 1 px
+// default), thumbnail centred in icon rect, pin badge top-right on
+// hover, filename below.
+//
+// Double-buffered. Pulls the engine's current ground slot from
+// GroundTexturePickerData stored in the parent dialog's DWLP_USER.
+static void GroundLV_PaintAll(HWND hList, HDC hdcScreen, const RECT& rcClient)
+{
+    HWND hDlg = GetParent(hList);
+    GroundTexturePickerData* data =
+        (GroundTexturePickerData*)(LONG_PTR)GetWindowLongPtr(hDlg, DWLP_USER);
+
+    // Off-screen buffer.
+    HDC     hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdcScreen,
+                                            rcClient.right, rcClient.bottom);
+    HGDIOBJ hOldBmp = SelectObject(hdcMem, hbmMem);
+    HDC     hdc    = hdcMem;
+
+    // Background — light grey, same constant as the palette popup's
+    // non-hovered cell colour.
+    HBRUSH bgBrush = CreateSolidBrush(RGB(240, 240, 240));
+    FillRect(hdc, &rcClient, bgBrush);
+    DeleteObject(bgBrush);
+
+    if (data == NULL || data->info == NULL || data->info->engine == NULL)
+    {
+        BitBlt(hdcScreen, 0, 0, rcClient.right, rcClient.bottom,
+               hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, hOldBmp);
+        DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        return;
+    }
+
+    // Dialog font for the filename labels.
+    HFONT hFont = (HFONT)SendMessage(hDlg, WM_GETFONT, 0, 0);
+    if (hFont == NULL) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+
+    const int currentSlot = data->info->engine->GetGroundTexture();
+    const int itemCount   = ListView_GetItemCount(hList);
+    HIMAGELIST hIL        = ListView_GetImageList(hList, LVSIL_NORMAL);
+
+    // Lazy-load pin badge.
+    static HBITMAP s_pinBadge = NULL;
+    if (s_pinBadge == NULL)
+    {
+        s_pinBadge = (HBITMAP)LoadImageW(GetModuleHandle(NULL),
+            MAKEINTRESOURCEW(IDB_PIN_BADGE),
+            IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+    }
+
+    for (int i = 0; i < itemCount; ++i)
+    {
+        RECT bounds, iconRc, labelRc;
+        ListView_GetItemRect(hList, i, &bounds,  LVIR_BOUNDS);
+        ListView_GetItemRect(hList, i, &iconRc,  LVIR_ICON);
+        ListView_GetItemRect(hList, i, &labelRc, LVIR_LABEL);
+
+        const bool hovered  = (s_groundLVHoverIdx == i);
+        const bool selected = (i == currentSlot);
+
+        // Cell background.
+        const COLORREF bgCol = hovered
+            ? RGB(160, 200, 250)
+            : RGB(240, 240, 240);
+        HBRUSH bg = CreateSolidBrush(bgCol);
+        FillRect(hdc, &bounds, bg);
+        DeleteObject(bg);
+
+        // Thumbnail.
+        if (hIL != NULL)
+        {
+            LVITEMW item = {};
+            item.mask  = LVIF_IMAGE;
+            item.iItem = i;
+            ListView_GetItem(hList, &item);
+            if (item.iImage >= 0)
+            {
+                IMAGEINFO ii = {};
+                ImageList_GetImageInfo(hIL, item.iImage, &ii);
+                const int imgW = ii.rcImage.right  - ii.rcImage.left;
+                const int imgH = ii.rcImage.bottom - ii.rcImage.top;
+                const int ix = iconRc.left
+                             + (iconRc.right - iconRc.left - imgW) / 2;
+                const int iy = iconRc.top
+                             + (iconRc.bottom - iconRc.top - imgH) / 2;
+                ImageList_Draw(hIL, item.iImage, hdc, ix, iy, ILD_NORMAL);
+            }
+        }
+
+        // Frame.
+        HPEN pen;
+        if (selected)
+            pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
+        else if (hovered)
+            pen = CreatePen(PS_SOLID, 3, RGB(70, 150, 240));
+        else
+            pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
+        HGDIOBJ oldP = SelectObject(hdc, pen);
+        HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc,
+                  iconRc.left + 1, iconRc.top + 1,
+                  iconRc.right - 1, iconRc.bottom - 1);
+        SelectObject(hdc, oldP);
+        SelectObject(hdc, oldB);
+        DeleteObject(pen);
+
+        // Pin badge in top-right of icon rect on hover.
+        if (hovered && s_pinBadge != NULL)
+        {
+            const int badgePx = 24;
+            const int inset   = 4;
+            const int bx = iconRc.right - inset - badgePx;
+            const int by = iconRc.top   + inset;
+            const int srcY = selected ? badgePx : 0;
+            HDC hMem = CreateCompatibleDC(hdc);
+            HGDIOBJ oldBm = SelectObject(hMem, s_pinBadge);
+            BitBlt(hdc, bx, by, badgePx, badgePx, hMem, 0, srcY, SRCCOPY);
+            SelectObject(hMem, oldBm);
+            DeleteDC(hMem);
+        }
+
+        // Filename label.
+        WCHAR labelBuf[256] = L"";
+        ListView_GetItemText(hList, i, 0, labelBuf, (int)_countof(labelBuf));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(40, 40, 40));
+        DrawTextW(hdc, labelBuf, -1, &labelRc,
+                  DT_SINGLELINE | DT_CENTER | DT_VCENTER
+                  | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+
+    SelectObject(hdc, hOldFont);
+
+    // Flush to screen.
+    BitBlt(hdcScreen, 0, 0, rcClient.right, rcClient.bottom,
+           hdcMem, 0, 0, SRCCOPY);
+    SelectObject(hdcMem, hOldBmp);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
+}
+
+static LRESULT CALLBACK GroundLVSubclassProc(HWND hList, UINT msg,
+                                              WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+        return 1;   // we handle the entire bg in WM_PAINT
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hList, &ps);
+        RECT rcClient;
+        GetClientRect(hList, &rcClient);
+        GroundLV_PaintAll(hList, hdc, rcClient);
+        EndPaint(hList, &ps);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+    {
+        // Update hover via cursor hit-test. Same approach as the
+        // palette popup's WM_MOUSEMOVE.
+        POINT cur = { (LONG)(short)LOWORD(lParam),
+                      (LONG)(short)HIWORD(lParam) };
+        LVHITTESTINFO ht = {};
+        ht.pt = cur;
+        const int newHot = ListView_HitTest(hList, &ht);
+        if (newHot != s_groundLVHoverIdx)
+        {
+            s_groundLVHoverIdx = newHot;
+            InvalidateRect(hList, NULL, FALSE);
+            TRACKMOUSEEVENT tme = {};
+            tme.cbSize    = sizeof(tme);
+            tme.dwFlags   = TME_LEAVE;
+            tme.hwndTrack = hList;
+            TrackMouseEvent(&tme);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        if (s_groundLVHoverIdx != -1)
+        {
+            s_groundLVHoverIdx = -1;
+            InvalidateRect(hList, NULL, FALSE);
+        }
+        break;
+    }
+    return CallWindowProc(s_groundLVOriginalProc, hList, msg, wParam, lParam);
 }
 
 // Position persistence for the modeless ground-texture picker.
