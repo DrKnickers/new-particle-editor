@@ -85,9 +85,10 @@ const int CONTENT_H        = POPUP_MARGIN_Y
                             + STATUS_H
                             + POPUP_MARGIN_Y;                              // ~542
 
-// Hover-star geometry (inside each thumb area, not the whole cell).
-// Larger star (14px) so it's still clearly clickable against the 80px thumb.
-const int STAR_PX   = 14;
+// Hover-pin button. Drawn at the thumb's top-right when the cell is
+// hovered. Bigger than a tiny indicator because it's the click target
+// for pinning/unpinning — needs to be unambiguously clickable.
+const int STAR_PX    = 20;
 const int STAR_INSET = 3;
 
 // Custom child-window IDs inside the popup.
@@ -380,16 +381,25 @@ bool HitTestStar(int x, int y, int* outSection, int* outIdx)
 
 void DrawStar(HDC hdc, int x, int y, bool filled)
 {
-    // Tiny "★": yellow filled square with darker border. Cheap to draw,
-    // unambiguous at 10x10 px.
-    HBRUSH fill = CreateSolidBrush(filled ? RGB(240, 200, 30) : RGB(255, 255, 255));
-    HPEN   pen  = CreatePen(PS_SOLID, 1, RGB(80, 60, 0));
+    // Yellow circle ("pin badge") with a thicker brown outline.
+    // Filled = pinned, hollow = not pinned. Big enough at 20 px on
+    // a clear background that the user reliably notices and clicks it.
+    HBRUSH fill = CreateSolidBrush(filled ? RGB(255, 200, 30) : RGB(255, 255, 255));
+    HPEN   pen  = CreatePen(PS_SOLID, 2, RGB(120, 80, 0));
     HGDIOBJ oldB = SelectObject(hdc, fill);
     HGDIOBJ oldP = SelectObject(hdc, pen);
-    Rectangle(hdc, x, y, x + STAR_PX, y + STAR_PX);
-    // Diagonal slash to differentiate from a plain box.
-    MoveToEx(hdc, x + 2, y + STAR_PX - 2, NULL);
-    LineTo  (hdc, x + STAR_PX - 2, y + 2);
+    Ellipse(hdc, x, y, x + STAR_PX, y + STAR_PX);
+    // Small dot in the centre to read as "pin head" when filled.
+    if (filled)
+    {
+        const int cx = x + STAR_PX / 2;
+        const int cy = y + STAR_PX / 2;
+        HBRUSH dot = CreateSolidBrush(RGB(120, 80, 0));
+        HGDIOBJ oldDot = SelectObject(hdc, dot);
+        Ellipse(hdc, cx - 3, cy - 3, cx + 3, cy + 3);
+        SelectObject(hdc, oldDot);
+        DeleteObject(dot);
+    }
     SelectObject(hdc, oldB); SelectObject(hdc, oldP);
     DeleteObject(fill); DeleteObject(pen);
 }
@@ -397,8 +407,10 @@ void DrawStar(HDC hdc, int x, int y, bool filled)
 void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
               const Entry& e, bool selected, bool hovered)
 {
-    // Cell background (covers thumb area + name strip).
-    HBRUSH bg = CreateSolidBrush(RGB(240, 240, 240));
+    // Cell background. Hover tints the whole cell light-blue so the
+    // hovered cell stands out at a glance regardless of thumb content.
+    const COLORREF bgColor = hovered ? RGB(215, 232, 250) : RGB(240, 240, 240);
+    HBRUSH bg = CreateSolidBrush(bgColor);
     FillRect(hdc, &cell, bg);
     DeleteObject(bg);
 
@@ -413,13 +425,25 @@ void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
         DeleteDC(hMem);
     }
 
-    // Thumb frame (selection = thick blue, otherwise 1 px grey).
+    // Thumb frame.
+    //   selected: 2 px saturated blue (commit target)
+    //   hovered  : 2 px lighter blue   (mouse-over indicator)
+    //   default  : 1 px grey
     if (selected)
     {
         HPEN pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
         HGDIOBJ old = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        // Inset by 1 so the 2px pen stays inside the thumb rect.
+        Rectangle(hdc, thumb.left + 1, thumb.top + 1,
+                       thumb.right - 1, thumb.bottom - 1);
+        SelectObject(hdc, old); SelectObject(hdc, oldBrush);
+        DeleteObject(pen);
+    }
+    else if (hovered)
+    {
+        HPEN pen = CreatePen(PS_SOLID, 2, RGB(120, 170, 230));
+        HGDIOBJ old = SelectObject(hdc, pen);
+        HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
         Rectangle(hdc, thumb.left + 1, thumb.top + 1,
                        thumb.right - 1, thumb.bottom - 1);
         SelectObject(hdc, old); SelectObject(hdc, oldBrush);
@@ -435,7 +459,8 @@ void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
         DeleteObject(pen);
     }
 
-    // Star on hover (top-right of thumb).
+    // Pin badge on hover (top-right of thumb, drawn AFTER the frame so
+    // it sits visibly on top).
     if (hovered)
     {
         DrawStar(hdc, thumb.right - STAR_INSET - STAR_PX,
@@ -443,7 +468,6 @@ void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
     }
 
     // Filename strip below the thumb. Ellipsis-clipped if too wide.
-    // Centered horizontally within the cell.
     RECT nameRect;
     nameRect.left   = cell.left + 1;
     nameRect.right  = cell.right - 1;
@@ -463,6 +487,7 @@ void DrawLabel(HDC hdc, int x, int y, const wchar_t* text)
 }
 
 void ShowStatus(HWND hPopup, UINT stringId);
+void HidePopupAndReset(HWND hPopup, const char* reason);
 
 void RebuildLayout(HWND hContent)
 {
@@ -663,6 +688,13 @@ LRESULT CALLBACK ContentWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 // the handler returns.
                 SendMessageW(g_commitTarget, WM_PALETTE_COMMIT,
                              (WPARAM)sl, (LPARAM)fn.c_str());
+                // Close the popup after a successful commit. Most
+                // users want to apply a texture and then continue
+                // tweaking the emitter — keeping the palette open
+                // would just obscure the viewport. They can reopen
+                // it via the palette button if they want to swap again.
+                HWND hPopup = GetParent(hWnd);
+                if (hPopup != NULL) HidePopupAndReset(hPopup, "dblclk commit");
             }
         }
         return 0;
