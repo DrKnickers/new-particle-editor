@@ -136,6 +136,13 @@ public:
 	static const int kGroundTextureBundledCount = 5;
 	static const int kGroundSolidColorSlot      = 4;   // 0-based; "Solid Color" slot
 	static const int kGroundThumbnailSize       = 64;
+
+	// MT-3: skydome slot layout (dialog and engine share these).
+	// 0=Off, 1-8=bundled scenes, 9-11=user-supplied custom paths.
+	static const int kSkydomeSlotCount       = 12;
+	static const int kSkydomeBundledCount    = 9;   // Off + 8 scenes
+	static const int kSkydomeFirstCustomSlot = 9;
+	static const int kSkydomeOffSlot         = 0;
 	bool     GetHeatDebug() const   { return m_debugHeat; }
 	bool     GetBloom()         const { return m_bloomEnabled;  }
 	float    GetBloomStrength() const { return m_bloomStrength; }
@@ -223,6 +230,15 @@ public:
 	// Returns true on success (or success of the fallback if the new
 	// path failed to load); false on out-of-range slot index.
 	bool SetGroundSlotCustomPath(int slot, const std::wstring& path);
+
+	// MT-3: skydome slot selection and custom-path management.
+	// Slot 0 = Off, slots 1-8 = bundled scenes, slots 9-11 = user-supplied paths.
+	int  GetSkydomeSlot() const { return m_skydomeIndex; }
+	bool SetSkydomeSlot(int index);
+	const std::wstring& GetSkydomeCustomPath(int slot) const;
+	bool SetSkydomeCustomPath(int slot, const std::wstring& path);
+	bool IsSkydomeSlotEmpty(int slot) const;
+
 	void SetHeatDebug(bool debug);
 	void SetBloom(bool enable);
 	void SetBloomStrength(float v);
@@ -262,6 +278,10 @@ private:
 
 	// MT-3: build the UV sphere VB/IB/Decl once at engine init.
 	void				InitSkydomeMesh();
+	// MT-3: compile IDR_SHADER_SKYDOME from RCDATA and cache parameter handles.
+	void				InitSkydomeEffect();
+	// MT-3: release m_pSkydomeTexture and re-load from slot (bundled or custom).
+	bool				ReloadSkydomeTexture(int slot);
 
 	//
 	// Data members
@@ -321,13 +341,21 @@ private:
 	    D3DXVECTOR2 TexCoord; // (U, V) for equirectangular sampling
 	};
 
-	static const int kSkydomeLongSegments = 32;
-	static const int kSkydomeLatSegments  = 16;
+	static const int kSkydomeLongSegments    = 32;
+	static const int kSkydomeLatSegments     = 16;
 
 	IDirect3DVertexBuffer9*      m_pSkydomeVB;
 	IDirect3DIndexBuffer9*       m_pSkydomeIB;
 	IDirect3DVertexDeclaration9* m_pSkydomeDecl;
 	DWORD                        m_skydomeIndexCount;
+
+	// MT-3: skydome effect and texture state
+	ID3DXEffect*             m_pSkydomeEffect;
+	D3DXHANDLE               m_hSkydomeWVP;
+	D3DXHANDLE               m_hSkydomeTex;
+	IDirect3DTexture9*       m_pSkydomeTexture;
+	int                      m_skydomeIndex;
+	std::wstring             m_skydomeCustomSlotPaths[3];
 
 	// Resources
 	IDirect3DTexture9*	m_pGroundTexture;
