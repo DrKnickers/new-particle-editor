@@ -3711,6 +3711,63 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
     {
         NMHDR* hdr = (NMHDR*)lParam;
         if (hdr->idFrom != IDC_GROUND_TEXTURE_LIST) break;
+        // Match the texture-palette popup's blue hover/selection
+        // frame styling. The ListView's native LVS_EX_TRACKSELECT
+        // gives a theme-dependent hot-track highlight; this overlay
+        // adds a deliberate blue frame on top so the two popups
+        // read the same way.
+        if (hdr->code == NM_CUSTOMDRAW)
+        {
+            LPNMLVCUSTOMDRAW lpc = (LPNMLVCUSTOMDRAW)lParam;
+            switch (lpc->nmcd.dwDrawStage)
+            {
+            case CDDS_PREPAINT:
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
+                return TRUE;
+            case CDDS_ITEMPREPAINT:
+                // Let the native paint do its thing; we'll overlay
+                // the frame in POSTPAINT.
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYPOSTPAINT);
+                return TRUE;
+            case CDDS_ITEMPOSTPAINT:
+            {
+                HWND hList   = lpc->nmcd.hdr.hwndFrom;
+                int  iItem   = (int)lpc->nmcd.dwItemSpec;
+                bool selected = (lpc->nmcd.uItemState & CDIS_SELECTED) != 0;
+                bool hovered  = (ListView_GetHotItem(hList) == iItem);
+                if (!selected && !hovered)
+                {
+                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
+                    return TRUE;
+                }
+                // Frame the icon area only — leaves the label below
+                // the icon visually unframed (same as the palette,
+                // which frames the thumb, not the filename strip).
+                RECT rc; ListView_GetItemRect(hList, iItem, &rc, LVIR_ICON);
+                HPEN pen = NULL;
+                if (selected)
+                {
+                    pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
+                }
+                else
+                {
+                    pen = CreatePen(PS_SOLID, 3, RGB(70, 150, 240));
+                }
+                HDC hdc = lpc->nmcd.hdc;
+                HGDIOBJ oldP = SelectObject(hdc, pen);
+                HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, rc.left + 1, rc.top + 1,
+                               rc.right - 1, rc.bottom - 1);
+                SelectObject(hdc, oldP);
+                SelectObject(hdc, oldB);
+                DeleteObject(pen);
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
+                return TRUE;
+            }
+            }
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
+            return TRUE;
+        }
         if (hdr->code == LVN_ITEMCHANGED)
         {
             NMLISTVIEW* nlv = (NMLISTVIEW*)lParam;
