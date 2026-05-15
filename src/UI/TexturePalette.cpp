@@ -450,9 +450,11 @@ void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
     }
     else if (hovered)
     {
-        // Hover frame: 3 px bright orange — unmissable against any
-        // thumbnail content.
-        HPEN pen = CreatePen(PS_SOLID, 3, RGB(255, 140, 0));
+        // Hover frame: 3 px bright blue — same tone family as the
+        // hover background tint, lighter than the saturated-blue
+        // selection frame so the two can still be distinguished
+        // when a cell goes from hover to selected.
+        HPEN pen = CreatePen(PS_SOLID, 3, RGB(70, 150, 240));
         HGDIOBJ old = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
         Rectangle(hdc, thumb.left + 1, thumb.top + 1,
@@ -512,7 +514,20 @@ void RebuildLayout(HWND hContent)
 void OnContentPaint(HWND hWnd)
 {
     PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hWnd, &ps);
+    HDC hdcScreen = BeginPaint(hWnd, &ps);
+
+    // Double-buffer: paint everything into an off-screen DC, then
+    // BitBlt the result to the screen in one operation. Without this,
+    // each mouse-move-driven repaint shows the intermediate states
+    // (grey FillRect → thumbnail blit → frame → text), producing
+    // visible flicker on the hovered cell.
+    RECT rcClient;
+    GetClientRect(hWnd, &rcClient);
+    HDC     hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdcScreen,
+                                            rcClient.right, rcClient.bottom);
+    HGDIOBJ hOldBmp = SelectObject(hdcMem, hbmMem);
+    HDC     hdc    = hdcMem;   // all subsequent draws go through hdc
 
     // BeginPaint's DC starts with the system bitmap font (ugly on
     // modern Windows). Select the dialog font so labels + filename
@@ -568,6 +583,17 @@ void OnContentPaint(HWND hWnd)
     drawSection(1, recents);
 
     SelectObject(hdc, hOldFont);
+
+    // Flush the off-screen buffer to the screen — only the dirty
+    // rect, so partial invalidations stay cheap.
+    const int w = ps.rcPaint.right  - ps.rcPaint.left;
+    const int h = ps.rcPaint.bottom - ps.rcPaint.top;
+    BitBlt(hdcScreen, ps.rcPaint.left, ps.rcPaint.top, w, h,
+           hdcMem,    ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+
+    SelectObject(hdcMem, hOldBmp);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
     EndPaint(hWnd, &ps);
 }
 
