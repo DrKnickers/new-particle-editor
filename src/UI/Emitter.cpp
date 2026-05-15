@@ -525,8 +525,12 @@ static EmitterPropsControl* CreateEmitterPropsControl(HWND hOwner, HINSTANCE hIn
 		//
 		// Create the property tab window
 		//
+		// Initial size; the WM_SIZE handler in EmitterPropsWindowProc resizes
+		// to fit the parent. Height bumped from 514→537 (+23 px) for MT-1 to
+		// give the Appearance tab the extra 14 du needed for the palette
+		// button row above the texture fields.
 		if ((control->hTabs = CreateWindowEx(WS_EX_CONTROLPARENT, WC_TABCONTROL, NULL, WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE | TCS_FOCUSNEVER | WS_TABSTOP,
-			4, 4, 286, 514, hOwner, NULL, hInstance, NULL)) == NULL)
+			4, 4, 286, 537, hOwner, NULL, hInstance, NULL)) == NULL)
 		{
 			delete control;
 			return NULL;

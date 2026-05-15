@@ -1773,8 +1773,13 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			//
 			// Create the property tab window
 			//
+			// Height bumped from 514→537 (+23 px) for MT-1 — the Appearance
+			// tab grew 14 du for the palette button row above the texture
+			// fields. The WM_SIZE handler at line ~2518 resizes this to
+			// the actual layout dynamically; the initial size matters
+			// because GetClientRect on first paint reads it.
 			if ((info->hPropertyTabs = CreateWindowEx(WS_EX_CONTROLPARENT, L"EmitterProps", NULL, WS_CHILD | WS_CLIPCHILDREN | WS_VISIBLE | TCS_FOCUSNEVER | WS_TABSTOP,
-				4, 4, SIDEBAR_WIDTH, 514, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
+				4, 4, SIDEBAR_WIDTH, 537, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
 			{
 				return -1;
 			}

@@ -1,5 +1,7 @@
-"""Generate a 16x16 24-bit BMP icon of a painter's palette for the Texture
-Palette button on the Appearance tab.
+"""Generate a 16x16 24-bit BMP icon for the Texture Palette button on
+the Appearance tab. Design: 3x3 grid of coloured swatches arranged like
+a painter's palette of texture choices — reads clearly at small sizes
+and instantly conveys "pick from a set".
 
 Why this lives in tools/ as a regenerable script rather than a checked-in
 binary the user authored by hand: the icon is small, deterministic, and
@@ -18,51 +20,48 @@ Writes: src/Resources/palette_glyph.bmp
 import struct
 from pathlib import Path
 
-# Colour palette (BGR for BMP)
-BG = (240, 240, 240)   # COLOR_BTNFACE — invisible against button background
-OUTLINE = (40, 65, 100)   # dark brown palette outline (BGR)
-BODY = (130, 180, 220)    # warm tan palette body (BGR)
-THUMB = (240, 240, 240)   # thumb hole — same as background
-RED = (40, 40, 215)
-GRN = (70, 175, 60)
-BLU = (220, 110, 50)
-YEL = (60, 220, 235)
+# Colour palette (BGR for BMP). Nine swatches in a 3x3 grid: warm row,
+# cool row, neutral row.
+BG  = (240, 240, 240)   # COLOR_BTNFACE — invisible against button background
+GAP = ( 80,  80,  80)   # thin dark separators between swatches
+
+R   = ( 40,  40, 215)   # red
+O   = ( 30, 140, 240)   # orange
+Y   = ( 50, 215, 235)   # yellow
+G   = ( 70, 175,  60)   # green
+T   = (170, 170,  60)   # teal
+B   = (220, 110,  50)   # blue
+P   = (180,  80, 150)   # purple
+W   = (230, 230, 230)   # white-ish
+K   = ( 30,  30,  30)   # black
 
 # 16x16 grid, top row first (we'll flip when writing).
-# Characters:
-#   .  background
-#   T  outline
-#   t  body (tan)
-#   h  thumb hole (background-coloured, inside the body)
-#   R G B Y  paint blobs
+# Each swatch is 4x4 with a 1px gap. Total grid 14x14 centred in
+# the 16x16 canvas with a 1-px BG margin.
 PIXELS = [
     "................",
-    ".....TTTTTT.....",
-    "...TTttttttTT...",
-    "..TtttRRttGGttT.",
-    "..TtttRRttGGtTT.",
-    ".TttttttttttttT.",
-    ".TtBBttttttYYttT",
-    ".TtBBttthhtYYttT",
-    ".Ttttttthhttttth",
-    ".Ttttttttttttth.",
-    "..TtttttttttthT.",
-    "..TTttttttttth..",
-    "...TTttttttth...",
-    ".....TTTTThh....",
+    ".RRRR.GGGG.BBBB.",
+    ".RRRR.GGGG.BBBB.",
+    ".RRRR.GGGG.BBBB.",
+    ".RRRR.GGGG.BBBB.",
     "................",
+    ".OOOO.TTTT.PPPP.",
+    ".OOOO.TTTT.PPPP.",
+    ".OOOO.TTTT.PPPP.",
+    ".OOOO.TTTT.PPPP.",
+    "................",
+    ".YYYY.WWWW.KKKK.",
+    ".YYYY.WWWW.KKKK.",
+    ".YYYY.WWWW.KKKK.",
+    ".YYYY.WWWW.KKKK.",
     "................",
 ]
 
 CHAR_TO_BGR = {
     ".": BG,
-    "T": OUTLINE,
-    "t": BODY,
-    "h": THUMB,
-    "R": RED,
-    "G": GRN,
-    "B": BLU,
-    "Y": YEL,
+    "R": R, "O": O, "Y": Y,
+    "G": G, "T": T, "B": B,
+    "P": P, "W": W, "K": K,
 }
 
 
