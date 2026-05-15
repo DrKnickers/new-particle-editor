@@ -4179,15 +4179,6 @@ static void GroundLV_PaintAll(HWND hList, HDC hdcScreen, const RECT& rcClient)
     const int itemCount   = ListView_GetItemCount(hList);
     HIMAGELIST hIL        = ListView_GetImageList(hList, LVSIL_NORMAL);
 
-    // Lazy-load pin badge.
-    static HBITMAP s_pinBadge = NULL;
-    if (s_pinBadge == NULL)
-    {
-        s_pinBadge = (HBITMAP)LoadImageW(GetModuleHandle(NULL),
-            MAKEINTRESOURCEW(IDB_PIN_BADGE),
-            IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
-    }
-
     for (int i = 0; i < itemCount; ++i)
     {
         RECT bounds, iconRc, labelRc;
@@ -4244,20 +4235,9 @@ static void GroundLV_PaintAll(HWND hList, HDC hdcScreen, const RECT& rcClient)
         SelectObject(hdc, oldB);
         DeleteObject(pen);
 
-        // Pin badge in top-right of icon rect on hover.
-        if (hovered && s_pinBadge != NULL)
-        {
-            const int badgePx = 24;
-            const int inset   = 4;
-            const int bx = iconRc.right - inset - badgePx;
-            const int by = iconRc.top   + inset;
-            const int srcY = selected ? badgePx : 0;
-            HDC hMem = CreateCompatibleDC(hdc);
-            HGDIOBJ oldBm = SelectObject(hMem, s_pinBadge);
-            BitBlt(hdc, bx, by, badgePx, badgePx, hMem, 0, srcY, SRCCOPY);
-            SelectObject(hMem, oldBm);
-            DeleteDC(hMem);
-        }
+        // (No pin badge for ground slots — they're fixed engine slots,
+        // not "pinnable"; the badge would be decorative-only and
+        // confused the workflow per user feedback.)
 
         // Filename label.
         WCHAR labelBuf[256] = L"";
