@@ -633,7 +633,7 @@ const int CELL_W         = 140;                              // ~28 chars of fil
 const int CELL_H         = THUMB_PX + 4 + NAME_H;            // 100 — thumb + 4 px gap + name strip
 const int THUMB_GAP_PX   =  6;
 const int THUMBS_PER_ROW =  4;                               // cells per visual sub-row
-const int SECTION_ROWS   =  2;                               // sub-rows per logical section (pin / recent)
+const int SECTION_ROWS   =  3;                               // sub-rows per logical section (pin / recent)
 const int SUBROW_GAP     =  6;                               // gap between sub-rows within a section
 const int MAX_PER_SECTION = THUMBS_PER_ROW * SECTION_ROWS;   // 8 — matches MAX_PINS/MAX_RECENTS in PaletteStore
 
