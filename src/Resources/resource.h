@@ -89,6 +89,10 @@
 // filled/pinned state. Blitted onto each cell when the user hovers.
 #define IDB_PIN_BADGE                   148
 
+// MT-3 — skydome equirectangular shader. Samples an environment texture
+// onto a UV sphere rendered from inside.
+#define IDR_SHADER_SKYDOME              150
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
