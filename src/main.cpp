@@ -4732,7 +4732,13 @@ static void SelectMod(APPLICATION_INFO* info, const wstring& modPath)
 	// MT-1 — swap the texture-palette to the new mod. SetActiveMod
 	// flushes any dirty state from the previous mod and lazy-loads the
 	// new mod's INI section. Empty `modPath` (unmodded) clears.
+	// Then drop the in-memory thumbnail cache (cache is keyed by
+	// filename, so a same-named file in a different mod would
+	// otherwise show the old mod's thumbnail) and refresh the popup
+	// content if visible.
 	TexturePalette::Store::Instance().SetActiveMod(modPath);
+	TexturePalette::ClearThumbnailCache();
+	TexturePalette::RefreshPopup();
 	RebuildModsMenu(info);
 
 	printf("[Mods] Selected: %S\n", modPath.empty() ? L"(unmodded)" : modPath.c_str()); fflush(stdout);
@@ -4976,6 +4982,12 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
         try
         {
 		    info->engine = new Engine(info->hMainWnd, info->hRenderWnd, textureManager, shaderManager);
+
+		    // MT-1 — give the texture-palette its services now that the
+		    // engine has a D3D device. Both pointers must outlive the
+		    // editor window, which they do (engine and FileManager
+		    // both live in this enclosing scope until app exit).
+		    TexturePalette::SetServices(info->fileManager, info->engine->GetDevice());
 
             // View settings persisted across sessions: pull from registry,
             // fall back to engine defaults when no value stored. Defaults
@@ -5305,10 +5317,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 #endif
     {
 		// Initialize UI classes and create windows
-		if (!UI_Initialize(hInstance) || !InitializeWindows(&info))
+		if (!UI_Initialize(hInstance) || !TexturePalette::Initialize(hInstance) || !InitializeWindows(&info))
 		{
 			//throw wruntime_error(LoadString(IDS_ERROR_UI_INITIALIZATION));
 		}
+		// MT-1 — wire the EmitterProps HWND as the WM_PALETTE_COMMIT
+		// recipient now that windows are created. Done before Engine
+		// init because both the EmitterProps and the popup are created
+		// before any commits can fire.
+		TexturePalette::SetCommitTarget(info.hPropertyTabs);
 
 		// Run the program
 		result = main( &info, parseCommandLine() );

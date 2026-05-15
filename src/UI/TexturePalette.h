@@ -19,6 +19,11 @@
 #include <unordered_map>
 #include <cstdint>
 
+// Forward declarations to avoid pulling D3D + manager headers into
+// every translation unit that touches the palette.
+class IFileManager;
+struct IDirect3DDevice9;
+
 namespace TexturePalette {
 
 // Which texture slot an entry has been used for. Bit-flags so a single
@@ -119,6 +124,62 @@ private:
     mutable bool                                       m_iniPathChecked;
     mutable std::wstring                               m_iniPathCache;
 };
+
+// ============================================================================
+// Popup window
+//
+// The palette UI lives in a modeless popup window owned by the main
+// editor window. The popup is created lazily on first toggle and stays
+// hidden between shows so its content control's state survives.
+//
+// Communication with the EmitterProps window is via a custom message
+// posted to the registered commit target — see WM_PALETTE_COMMIT below.
+
+// Custom message: popup → commit target.
+//   WPARAM = SlotMask (Color or Bump) for which slot to write.
+//   LPARAM = const wchar_t* pointing to the filename string.
+//            Sent synchronously via SendMessage so the pointer is
+//            valid for the duration of the call only — copy it if
+//            you need it after returning.
+#define WM_PALETTE_COMMIT (WM_APP + 50)
+
+// Visibility-change callback signature. Fires from any path that
+// shows or hides the popup (button toggle, X button, Esc key).
+typedef void (*VisibilityCallback)(bool visible);
+
+// Initialize: register window classes. Call once in app init,
+// after InitCommonControls.
+bool Initialize(HINSTANCE hInst);
+
+// Wire the popup to the engine's services. Both pointers must be
+// valid for the lifetime of the editor.
+void SetServices(IFileManager* fileManager, IDirect3DDevice9* device);
+
+// Set the HWND that should receive WM_PALETTE_COMMIT messages.
+// The EmitterProps window does the actual emitter-state mutation.
+void SetCommitTarget(HWND emitterPropsWnd);
+
+// Set a callback that fires when the popup hides or shows.
+void SetVisibilityCallback(VisibilityCallback cb);
+
+// Show/hide the popup (toggles).
+//   ownerEditor:      main editor HWND, used as popup's owner.
+//   buttonRectScreen: screen-coords rect of the palette button —
+//                     used for first-show position (just below it).
+void TogglePopup(HWND ownerEditor, const RECT& buttonRectScreen);
+
+// Returns true if the popup is currently visible.
+bool IsPopupVisible();
+
+// Force the popup to refresh its content (e.g., after mod switch
+// or after a commit that re-orders the recents).
+// No-op if the popup hasn't been created yet.
+void RefreshPopup();
+
+// Drop the in-memory thumbnail cache. Called on mod switch so stale
+// per-mod texture mappings (different mods with same-named files)
+// don't leak across.
+void ClearThumbnailCache();
 
 } // namespace TexturePalette
 
