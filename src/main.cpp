@@ -3512,15 +3512,22 @@ static std::wstring GroundSlotDisplayName(int slot, const std::wstring& customPa
 // Rebuild the picker dialog's ListView entirely — image list, item
 // labels, selection. Called after any slot-path mutation (set custom,
 // reset bundled, clear custom, reset-all).
+// Picker-specific thumbnail size — bigger than the toolbar's 64 px
+// preview thumbnail so the cells visually match the texture-palette
+// popup's 128-ish thumbnails.
+static const int kGroundPickerThumbSize = 128;
+
 static void GroundTexturePicker_RefreshList(HWND hDlg, GroundTexturePickerData* data)
 {
     HWND hList = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_LIST);
     int  prevSel = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
     ListView_DeleteAllItems(hList);
     if (data->hImageList != NULL) ImageList_Destroy(data->hImageList);
-    // Create a 64×64 imagelist; build one thumbnail per slot.
-    data->hImageList = ImageList_Create(Engine::kGroundThumbnailSize,
-                                         Engine::kGroundThumbnailSize,
+    // Create the picker's imagelist at the bigger size. MakeGroundSlotThumbnail
+    // accepts arbitrary sizes and re-renders the slot's source texture
+    // (or placeholder) at that resolution.
+    data->hImageList = ImageList_Create(kGroundPickerThumbSize,
+                                         kGroundPickerThumbSize,
                                          ILC_COLOR32, Engine::kGroundTextureCount, 0);
     ListView_SetImageList(hList, data->hImageList, LVSIL_NORMAL);
     for (int slot = 0; slot < Engine::kGroundTextureCount; ++slot)
@@ -3528,7 +3535,7 @@ static void GroundTexturePicker_RefreshList(HWND hDlg, GroundTexturePickerData* 
         const std::wstring& path = data->info->engine->GetGroundSlotCustomPath(slot);
         HBITMAP hThumb = MakeGroundSlotThumbnail(
             data->info->engine->GetDevice(),
-            slot, Engine::kGroundThumbnailSize, path,
+            slot, kGroundPickerThumbSize, path,
             data->info->engine->GetGroundSolidColor());
         int imgIdx = ImageList_Add(data->hImageList, hThumb, NULL);
         if (hThumb != NULL) DeleteObject(hThumb);
@@ -3658,11 +3665,22 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         // Match the texture-palette popup's smoother feel:
         //   LVS_EX_DOUBLEBUFFER — flicker-free repaint as the user
         //     moves the mouse / live-selects.
-        //   LVS_EX_TRACKSELECT  — native hot-track highlight when the
-        //     cursor hovers a slot, mirroring the palette's hover tint.
+        //   LVS_EX_TRACKSELECT  — native hot-track tracking; my
+        //     custom-draw uses ListView_GetHotItem to highlight the
+        //     hovered slot with the palette's blue tint.
         HWND hList = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_LIST);
         ListView_SetExtendedListViewStyle(hList,
             LVS_EX_DOUBLEBUFFER | LVS_EX_TRACKSELECT);
+        // Make the picker cells big like the palette's. Layout target:
+        //   128×128 thumb + 4 px gap + ~18 px filename strip = ~150 tall.
+        // ListView's icon spacing is (cellWidth, cellHeight) including
+        // outer margin. 144×178 gives roughly the palette's proportions.
+        ListView_SetIconSpacing(hList, 144, 178);
+        // Hide the bottom path label — slot labels (Dirt / Grass /
+        // filename basename for custom) already convey what each slot
+        // is. The full-path duplication isn't pulling its weight.
+        HWND hPath = GetDlgItem(hDlg, IDC_GROUND_TEXTURE_PATH_LABEL);
+        if (hPath != NULL) ShowWindow(hPath, SW_HIDE);
         // Build the list — populates thumbnails, labels, selection.
         GroundTexturePicker_RefreshList(hDlg, data);
         // Attach a tooltip to the path label so the user can see
@@ -3731,34 +3749,47 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                 //   - blue cell bg on hover
                 //   - blue frame around the thumbnail (3 px hover,
                 //     2 px selected, 1 px default)
-                //   - filename label below the thumbnail, centered
-                // The native ListView paint is suppressed via
-                // CDRF_SKIPDEFAULT once we've drawn everything ourselves.
-                HWND hList    = lpc->nmcd.hdr.hwndFrom;
-                int  iItem    = (int)lpc->nmcd.dwItemSpec;
-                bool selected = (lpc->nmcd.uItemState & CDIS_SELECTED) != 0;
-                bool hovered  = (ListView_GetHotItem(hList) == iItem);
-                HDC  hdc      = lpc->nmcd.hdc;
+                //   - pin badge in top-right on hover (filled if this
+                //     slot is currently active, hollow otherwise)
+                //   - filename label below the thumbnail, centred
+                // CDRF_SKIPDEFAULT at the end suppresses native paint.
+                HWND hList = lpc->nmcd.hdr.hwndFrom;
+                int  iItem = (int)lpc->nmcd.dwItemSpec;
+                HDC  hdc   = lpc->nmcd.hdc;
+
+                // Hover detection: prefer the cursor hit-test (works
+                // even if LVS_EX_TRACKSELECT's internal hot-item state
+                // isn't updated mid-paint). Falls back to GetHotItem.
+                POINT cursor;
+                GetCursorPos(&cursor);
+                ScreenToClient(hList, &cursor);
+                LVHITTESTINFO ht = {};
+                ht.pt = cursor;
+                int hotIdx = ListView_HitTest(hList, &ht);
+                if (hotIdx < 0) hotIdx = ListView_GetHotItem(hList);
+
+                const bool selected = (lpc->nmcd.uItemState & CDIS_SELECTED) != 0;
+                const bool hovered  = (hotIdx == iItem);
 
                 RECT bounds, iconRc, labelRc;
                 ListView_GetItemRect(hList, iItem, &bounds,  LVIR_BOUNDS);
                 ListView_GetItemRect(hList, iItem, &iconRc,  LVIR_ICON);
                 ListView_GetItemRect(hList, iItem, &labelRc, LVIR_LABEL);
 
-                // 1. Cell background — blue on hover, white otherwise.
-                //    Matches the palette popup's hover tint exactly.
+                // 1. Cell background — match the palette popup exactly:
+                //    blue on hover, light grey (button-face) otherwise.
                 const COLORREF bgCol = hovered
                     ? RGB(160, 200, 250)
-                    : RGB(255, 255, 255);
+                    : RGB(240, 240, 240);
                 HBRUSH bg = CreateSolidBrush(bgCol);
                 FillRect(hdc, &bounds, bg);
                 DeleteObject(bg);
 
-                // 2. Thumbnail — blit from the image list.
+                // 2. Thumbnail centred in the icon rect.
                 HIMAGELIST hIL = ListView_GetImageList(hList, LVSIL_NORMAL);
                 LVITEMW item = {};
-                item.mask     = LVIF_IMAGE;
-                item.iItem    = iItem;
+                item.mask  = LVIF_IMAGE;
+                item.iItem = iItem;
                 ListView_GetItem(hList, &item);
                 if (hIL != NULL && item.iImage >= 0)
                 {
@@ -3766,9 +3797,6 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                     ImageList_GetImageInfo(hIL, item.iImage, &ii);
                     const int imgW = ii.rcImage.right  - ii.rcImage.left;
                     const int imgH = ii.rcImage.bottom - ii.rcImage.top;
-                    // Centre the image inside iconRc (icon view
-                    // typically gives a larger icon area than the
-                    // image itself, with padding around).
                     const int ix = iconRc.left
                                  + (iconRc.right - iconRc.left - imgW) / 2;
                     const int iy = iconRc.top
@@ -3776,10 +3804,7 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                     ImageList_Draw(hIL, item.iImage, hdc, ix, iy, ILD_NORMAL);
                 }
 
-                // 3. Frame around the icon area.
-                //    selected → 2 px saturated blue,
-                //    hovered  → 3 px lighter blue,
-                //    default  → 1 px grey.
+                // 3. Frame.
                 HPEN pen;
                 if (selected)
                     pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
@@ -3796,10 +3821,39 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                 SelectObject(hdc, oldB);
                 DeleteObject(pen);
 
-                // 4. Filename label below the thumbnail. Use the
-                //    dialog font for consistency with the rest of
-                //    the editor (BeginPaint's DC has the system
-                //    bitmap font selected by default).
+                // 4. Pin badge in the top-right corner on hover.
+                //    Filled (red) if this slot is the engine's current
+                //    selection; hollow otherwise. Visual match with
+                //    the palette popup — for ground the badge has no
+                //    independent function (right-click is still the
+                //    slot-management entry point).
+                if (hovered)
+                {
+                    static HBITMAP s_pinBadge = NULL;
+                    if (s_pinBadge == NULL)
+                    {
+                        s_pinBadge = (HBITMAP)LoadImageW(GetModuleHandle(NULL),
+                            MAKEINTRESOURCEW(IDB_PIN_BADGE),
+                            IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+                    }
+                    if (s_pinBadge != NULL)
+                    {
+                        const int badgePx = 24;
+                        const int inset   = 4;
+                        const int bx = iconRc.right - inset - badgePx;
+                        const int by = iconRc.top   + inset;
+                        const bool isCurrent =
+                            (iItem == data->info->engine->GetGroundTexture());
+                        const int srcY = isCurrent ? badgePx : 0;
+                        HDC hMem = CreateCompatibleDC(hdc);
+                        HGDIOBJ oldBm = SelectObject(hMem, s_pinBadge);
+                        BitBlt(hdc, bx, by, badgePx, badgePx, hMem, 0, srcY, SRCCOPY);
+                        SelectObject(hMem, oldBm);
+                        DeleteDC(hMem);
+                    }
+                }
+
+                // 5. Filename label below the thumbnail.
                 HFONT hFont = (HFONT)SendMessage(hDlg, WM_GETFONT, 0, 0);
                 if (hFont == NULL) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
                 HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
@@ -3814,8 +3868,6 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                           | DT_END_ELLIPSIS | DT_NOPREFIX);
                 SelectObject(hdc, oldFont);
 
-                // Suppress the ListView's own item paint — we've
-                // drawn the whole thing ourselves.
                 SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
                 return TRUE;
             }
