@@ -27,6 +27,21 @@ static const char* ShaderNames[Engine::NUM_SHADERS] = {
     "Engine\\PrimAlphaScanlines.fx",
 };
 
+// MT-3: slot 0 is Off (no resource); slots 1-8 map to bundled skydome textures.
+// RCDATA entries for IDR_SKYDOME_* are added in Task 5; until then,
+// FindResource for slots 1-8 returns NULL and ReloadSkydomeTexture returns false.
+static const int kSkydomeBundledResources[Engine::kSkydomeBundledCount] = {
+    0,                       // 0: Off
+    IDR_SKYDOME_SPACE,       // 1
+    IDR_SKYDOME_ATMOSPHERE,  // 2
+    IDR_SKYDOME_SUNSET,      // 3
+    IDR_SKYDOME_DAWN,        // 4
+    IDR_SKYDOME_NIGHT,       // 5
+    IDR_SKYDOME_OVERCAST,    // 6
+    IDR_SKYDOME_STUDIO,      // 7
+    IDR_SKYDOME_INDOOR,      // 8
+};
+
 D3DVERTEXELEMENT9 Engine::ParticleElements[] = {
 	{0, offsetof(EmitterInstance::Vertex, Position),  D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0}, 
 	{0, offsetof(EmitterInstance::Vertex, Normal),    D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0}, 
@@ -1360,6 +1375,110 @@ void Engine::InitSkydomeMesh()
 #endif
 }
 
+void Engine::InitSkydomeEffect()
+{
+    HMODULE hMod  = GetModuleHandle(NULL);
+    HRSRC   hRes  = FindResource(hMod, MAKEINTRESOURCE(IDR_SHADER_SKYDOME), RT_RCDATA);
+    if (!hRes) return;
+    HGLOBAL hData  = LoadResource(hMod, hRes);
+    DWORD   dwSize = SizeofResource(hMod, hRes);
+    void*   pData  = hData ? LockResource(hData) : NULL;
+    if (!pData || !dwSize) return;
+
+    LPD3DXBUFFER pErrors = NULL;
+    HRESULT hr = D3DXCreateEffect(m_pDevice, pData, dwSize, NULL, NULL, 0, NULL,
+                                  &m_pSkydomeEffect, &pErrors);
+    if (FAILED(hr))
+    {
+#ifndef NDEBUG
+        if (pErrors) fprintf(stderr, "[Skydome] effect compile failed: %s\n",
+                             (const char*)pErrors->GetBufferPointer());
+#endif
+        SAFE_RELEASE(pErrors);
+        m_pSkydomeEffect = NULL;
+        return;
+    }
+    SAFE_RELEASE(pErrors);
+
+    m_hSkydomeWVP = m_pSkydomeEffect->GetParameterByName(NULL, "g_WorldViewProj");
+    m_hSkydomeTex = m_pSkydomeEffect->GetParameterByName(NULL, "g_Skydome");
+}
+
+bool Engine::ReloadSkydomeTexture(int slot)
+{
+    SAFE_RELEASE(m_pSkydomeTexture);
+    if (slot == kSkydomeOffSlot) return true;
+
+    if (slot >= 1 && slot < kSkydomeBundledCount)
+    {
+        HMODULE hMod   = GetModuleHandle(NULL);
+        HRSRC   hRes   = FindResource(hMod, MAKEINTRESOURCE(kSkydomeBundledResources[slot]), RT_RCDATA);
+        if (!hRes) return false;
+        HGLOBAL hData  = LoadResource(hMod, hRes);
+        DWORD   dwSize = SizeofResource(hMod, hRes);
+        void*   pData  = hData ? LockResource(hData) : NULL;
+        if (!pData || !dwSize) return false;
+        return SUCCEEDED(D3DXCreateTextureFromFileInMemory(m_pDevice, pData, dwSize, &m_pSkydomeTexture));
+    }
+
+    if (slot >= kSkydomeFirstCustomSlot && slot < kSkydomeSlotCount)
+    {
+        const std::wstring& path = m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot];
+        if (path.empty()) return false;
+        return SUCCEEDED(D3DXCreateTextureFromFileEx(
+            m_pDevice, path.c_str(),
+            D3DX_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, D3DFMT_UNKNOWN,
+            D3DPOOL_MANAGED, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL,
+            &m_pSkydomeTexture));
+    }
+    return false;
+}
+
+bool Engine::SetSkydomeSlot(int newIndex)
+{
+    if (newIndex < 0 || newIndex >= kSkydomeSlotCount) return false;
+    if (newIndex == m_skydomeIndex) return true;
+    if (!ReloadSkydomeTexture(newIndex))
+    {
+        // Fall back to Off on failure
+        m_skydomeIndex = kSkydomeOffSlot;
+        SAFE_RELEASE(m_pSkydomeTexture);
+        return false;
+    }
+    m_skydomeIndex = newIndex;
+#ifndef NDEBUG
+    fprintf(stdout, "[Skydome] select slot=%d\n", newIndex);
+#endif
+    return true;
+}
+
+bool Engine::SetSkydomeCustomPath(int slot, const std::wstring& path)
+{
+    if (slot < kSkydomeFirstCustomSlot || slot >= kSkydomeSlotCount) return false;
+    m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot] = path;
+    if (m_skydomeIndex == slot)
+    {
+        return ReloadSkydomeTexture(slot);
+    }
+    return true;
+}
+
+const std::wstring& Engine::GetSkydomeCustomPath(int slot) const
+{
+    static const std::wstring empty;
+    if (slot < kSkydomeFirstCustomSlot || slot >= kSkydomeSlotCount) return empty;
+    return m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot];
+}
+
+bool Engine::IsSkydomeSlotEmpty(int slot) const
+{
+    if (slot == kSkydomeOffSlot) return false;       // Off is "selectable", not empty
+    if (slot < kSkydomeBundledCount) return false;   // bundled always populated
+    if (slot < kSkydomeSlotCount)
+        return m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot].empty();
+    return true;
+}
+
 Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShaderManager& shaderManager)
     : m_textureManager(textureManager), m_shaderManager(shaderManager)
 {
@@ -1374,6 +1493,12 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_pSkydomeIB        = NULL;
 	m_pSkydomeDecl      = NULL;
 	m_skydomeIndexCount = 0;
+	// MT-3: skydome effect + texture state
+	m_pSkydomeEffect    = NULL;
+	m_hSkydomeWVP       = NULL;
+	m_hSkydomeTex       = NULL;
+	m_pSkydomeTexture   = NULL;
+	m_skydomeIndex      = 0;
 	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
 	m_hBloomIteration = m_hBloomSceneTextureParam = NULL;
 	m_hBloomResolutionConstants = NULL;
@@ -1520,6 +1645,10 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	// MT-3: build the UV sphere mesh used by the skydome render pass.
 	// m_pDevice is guaranteed valid at this point.
 	InitSkydomeMesh();
+	// MT-3: compile the skydome HLSL effect and cache its parameter handles.
+	// Graceful-degrade: if compile fails m_pSkydomeEffect stays NULL and the
+	// render pass (Task 4) will guard on it and skip skydome rendering.
+	InitSkydomeEffect();
 }
 
 Engine::~Engine()
@@ -1535,6 +1664,9 @@ Engine::~Engine()
 	SAFE_RELEASE(m_pDistortTexture);
 	SAFE_RELEASE(m_pSceneTexture);
 	SAFE_RELEASE(m_pGroundTexture);
+	// MT-3: skydome effect + texture (released before geometry for symmetry)
+	SAFE_RELEASE(m_pSkydomeEffect);
+	SAFE_RELEASE(m_pSkydomeTexture);
 	// MT-3: skydome geometry (D3DPOOL_MANAGED — only released here, not on Reset)
 	SAFE_RELEASE(m_pSkydomeVB);
 	SAFE_RELEASE(m_pSkydomeIB);
