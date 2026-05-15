@@ -625,28 +625,33 @@ void Store::FlushUi() const
 
 namespace {
 
-// Thumb cell geometry.
-const int THUMB_PX       = 32;
-const int THUMB_GAP_PX   =  2;
+// Cell geometry. Each cell holds a thumbnail at the top + a single-
+// line filename strip below, ellipsis-clipped for long names.
+const int THUMB_PX       = 48;
+const int NAME_H         = 14;
+const int CELL_PADDING_X =  4;                              // horizontal padding inside cell
+const int CELL_W         = THUMB_PX + CELL_PADDING_X * 2;   // 56 — wider than thumb so filename has breathing room
+const int CELL_H         = THUMB_PX + 2 + NAME_H;           // 64 — thumb + 2 px gap + name strip
+const int THUMB_GAP_PX   =  4;
 const int THUMBS_PER_ROW =  8;
 
 // Popup layout (client area).
-const int POPUP_MARGIN_X   =  8;
+const int POPUP_MARGIN_X   = 12;
 const int POPUP_MARGIN_Y   =  8;
 const int FILTER_ROW_H     = 20;
 const int LABEL_H          = 14;
-const int ROW_GAP          =  4;
+const int ROW_GAP          =  8;
 const int STATUS_H         = 14;
-const int CONTENT_W        = POPUP_MARGIN_X * 2 + THUMBS_PER_ROW * THUMB_PX
-                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // 280
+const int CONTENT_W        = POPUP_MARGIN_X * 2 + THUMBS_PER_ROW * CELL_W
+                            + (THUMBS_PER_ROW - 1) * THUMB_GAP_PX;        // ~500
 const int CONTENT_H        = POPUP_MARGIN_Y
                             + FILTER_ROW_H + ROW_GAP
-                            + LABEL_H + THUMB_PX + ROW_GAP
-                            + LABEL_H + THUMB_PX + ROW_GAP
+                            + LABEL_H + CELL_H + ROW_GAP
+                            + LABEL_H + CELL_H + ROW_GAP
                             + STATUS_H
-                            + POPUP_MARGIN_Y;                              // ~190
+                            + POPUP_MARGIN_Y;                              // ~230
 
-// Hover-star geometry (inside each thumb cell).
+// Hover-star geometry (inside each thumb area, not the whole cell).
 const int STAR_PX = 10;
 const int STAR_INSET = 2;
 
@@ -872,16 +877,29 @@ HBITMAP GetCachedThumbnail(const std::wstring& filename)
 // ----------------------------------------------------------------------------
 // Geometry helpers
 
-void GetThumbCellRect(int row /*0=pin,1=rec*/, int col, RECT* out)
+// Full cell rect (thumb area + filename strip).
+void GetCellRect(int row /*0=pin,1=rec*/, int col, RECT* out)
 {
     const int yBase = POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP
                     + LABEL_H
-                    + (row * (THUMB_PX + ROW_GAP + LABEL_H));
-    const int xBase = POPUP_MARGIN_X + col * (THUMB_PX + THUMB_GAP_PX);
+                    + (row * (CELL_H + ROW_GAP + LABEL_H));
+    const int xBase = POPUP_MARGIN_X + col * (CELL_W + THUMB_GAP_PX);
     out->left   = xBase;
     out->top    = yBase;
+    out->right  = xBase + CELL_W;
+    out->bottom = yBase + CELL_H;
+}
+
+// Just the thumb area within the cell (thumb is centered horizontally,
+// top-aligned vertically). Star icon is hit-tested against this rect.
+void GetThumbRect(int row, int col, RECT* out)
+{
+    RECT cell; GetCellRect(row, col, &cell);
+    const int xBase = cell.left + (CELL_W - THUMB_PX) / 2;
+    out->left   = xBase;
+    out->top    = cell.top;
     out->right  = xBase + THUMB_PX;
-    out->bottom = yBase + THUMB_PX;
+    out->bottom = cell.top + THUMB_PX;
 }
 
 bool HitTestCells(int x, int y, int* outRow, int* outCol)
@@ -890,7 +908,7 @@ bool HitTestCells(int x, int y, int* outRow, int* outCol)
     {
         for (int c = 0; c < THUMBS_PER_ROW; ++c)
         {
-            RECT rc; GetThumbCellRect(r, c, &rc);
+            RECT rc; GetCellRect(r, c, &rc);
             if (x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom)
             {
                 *outRow = r; *outCol = c;
@@ -905,9 +923,9 @@ bool HitTestStar(int x, int y, int* outRow, int* outCol)
 {
     int r, c;
     if (!HitTestCells(x, y, &r, &c)) return false;
-    RECT rc; GetThumbCellRect(r, c, &rc);
-    const int sx = rc.right - STAR_INSET - STAR_PX;
-    const int sy = rc.top   + STAR_INSET;
+    RECT t; GetThumbRect(r, c, &t);
+    const int sx = t.right - STAR_INSET - STAR_PX;
+    const int sy = t.top   + STAR_INSET;
     if (x >= sx && x < sx + STAR_PX && y >= sy && y < sy + STAR_PX)
     {
         *outRow = r; *outCol = c;
@@ -935,50 +953,65 @@ void DrawStar(HDC hdc, int x, int y, bool filled)
     DeleteObject(fill); DeleteObject(pen);
 }
 
-void DrawCell(HDC hdc, const RECT& rc, const Entry& e, bool selected, bool hovered)
+void DrawCell(HDC hdc, const RECT& cell, const RECT& thumb,
+              const Entry& e, bool selected, bool hovered)
 {
-    // Background.
+    // Cell background (covers thumb area + name strip).
     HBRUSH bg = CreateSolidBrush(RGB(240, 240, 240));
-    FillRect(hdc, &rc, bg);
+    FillRect(hdc, &cell, bg);
     DeleteObject(bg);
 
-    // Thumbnail blit.
+    // Thumbnail blit into the centered thumb rect.
     HBITMAP hbm = GetCachedThumbnail(e.filename);
     if (hbm != NULL)
     {
         HDC hMem = CreateCompatibleDC(hdc);
         HGDIOBJ old = SelectObject(hMem, hbm);
-        BitBlt(hdc, rc.left, rc.top, THUMB_PX, THUMB_PX, hMem, 0, 0, SRCCOPY);
+        BitBlt(hdc, thumb.left, thumb.top, THUMB_PX, THUMB_PX, hMem, 0, 0, SRCCOPY);
         SelectObject(hMem, old);
         DeleteDC(hMem);
     }
 
-    // Selection border (2 px blue inset).
+    // Thumb frame (selection = thick blue, otherwise 1 px grey).
     if (selected)
     {
         HPEN pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
         HGDIOBJ old = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        Rectangle(hdc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1);
+        // Inset by 1 so the 2px pen stays inside the thumb rect.
+        Rectangle(hdc, thumb.left + 1, thumb.top + 1,
+                       thumb.right - 1, thumb.bottom - 1);
         SelectObject(hdc, old); SelectObject(hdc, oldBrush);
         DeleteObject(pen);
     }
     else
     {
-        // Subtle 1 px grey frame so empty-ish thumbs are visible.
         HPEN pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
         HGDIOBJ old = SelectObject(hdc, pen);
         HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+        Rectangle(hdc, thumb.left, thumb.top, thumb.right, thumb.bottom);
         SelectObject(hdc, old); SelectObject(hdc, oldBrush);
         DeleteObject(pen);
     }
 
-    // Star on hover.
+    // Star on hover (top-right of thumb).
     if (hovered)
     {
-        DrawStar(hdc, rc.right - STAR_INSET - STAR_PX, rc.top + STAR_INSET, e.isPinned);
+        DrawStar(hdc, thumb.right - STAR_INSET - STAR_PX,
+                      thumb.top   + STAR_INSET, e.isPinned);
     }
+
+    // Filename strip below the thumb. Ellipsis-clipped if too wide.
+    // Centered horizontally within the cell.
+    RECT nameRect;
+    nameRect.left   = cell.left + 1;
+    nameRect.right  = cell.right - 1;
+    nameRect.top    = thumb.bottom + 2;
+    nameRect.bottom = cell.bottom;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(40, 40, 40));
+    DrawTextW(hdc, e.filename.c_str(), (int)e.filename.size(), &nameRect,
+              DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 void DrawLabel(HDC hdc, int x, int y, const wchar_t* text)
@@ -1004,6 +1037,14 @@ void OnContentPaint(HWND hWnd)
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(hWnd, &ps);
 
+    // BeginPaint's DC starts with the system bitmap font (ugly on
+    // modern Windows). Select the dialog font so labels + filename
+    // strings render in the same 8pt MS Shell Dlg as the rest of
+    // the editor.
+    HFONT hFont = (HFONT)SendMessage(hWnd, WM_GETFONT, 0, 0);
+    if (hFont == NULL) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+
     HBRUSH bg = (HBRUSH)(COLOR_BTNFACE + 1);
     FillRect(hdc, &ps.rcPaint, bg);
 
@@ -1011,61 +1052,45 @@ void OnContentPaint(HWND hWnd)
     DrawLabel(hdc, POPUP_MARGIN_X, POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP - 2,
               L"Pinned");
     DrawLabel(hdc, POPUP_MARGIN_X,
-              POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP + LABEL_H + THUMB_PX + ROW_GAP - 2,
+              POPUP_MARGIN_Y + FILTER_ROW_H + ROW_GAP + LABEL_H + CELL_H + ROW_GAP - 2,
               L"Recent");
 
     const SlotMask filter = Store::Instance().ActiveFilter();
     const std::vector<Entry> pins    = Store::Instance().Pins(filter);
     const std::vector<Entry> recents = Store::Instance().Recents(filter);
 
-    // Pin row.
-    for (int c = 0; c < THUMBS_PER_ROW; ++c)
+    auto drawRow = [&](int rowIdx, const std::vector<Entry>& entries)
     {
-        RECT rc; GetThumbCellRect(0, c, &rc);
-        if (c < (int)pins.size())
+        for (int c = 0; c < THUMBS_PER_ROW; ++c)
         {
-            const bool sel = (g_selRow == 0 && g_selCol == c);
-            const bool hov = (g_hoverRow == 0 && g_hoverCol == c);
-            DrawCell(hdc, rc, pins[c], sel, hov);
+            RECT cell;  GetCellRect (rowIdx, c, &cell);
+            RECT thumb; GetThumbRect(rowIdx, c, &thumb);
+            if (c < (int)entries.size())
+            {
+                const bool sel = (g_selRow   == rowIdx && g_selCol   == c);
+                const bool hov = (g_hoverRow == rowIdx && g_hoverCol == c);
+                DrawCell(hdc, cell, thumb, entries[c], sel, hov);
+            }
+            else
+            {
+                // Empty cell: dim background + dim frame around the
+                // thumb area only (no name strip).
+                HBRUSH e = CreateSolidBrush(RGB(228, 228, 228));
+                FillRect(hdc, &cell, e);
+                DeleteObject(e);
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(190, 190, 190));
+                HGDIOBJ old = SelectObject(hdc, pen);
+                HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, thumb.left, thumb.top, thumb.right, thumb.bottom);
+                SelectObject(hdc, old); SelectObject(hdc, oldB);
+                DeleteObject(pen);
+            }
         }
-        else
-        {
-            HBRUSH e = CreateSolidBrush(RGB(228, 228, 228));
-            FillRect(hdc, &rc, e);
-            DeleteObject(e);
-            HPEN pen = CreatePen(PS_SOLID, 1, RGB(190, 190, 190));
-            HGDIOBJ old = SelectObject(hdc, pen);
-            HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
-            SelectObject(hdc, old); SelectObject(hdc, oldB);
-            DeleteObject(pen);
-        }
-    }
+    };
+    drawRow(0, pins);
+    drawRow(1, recents);
 
-    // Recent row.
-    for (int c = 0; c < THUMBS_PER_ROW; ++c)
-    {
-        RECT rc; GetThumbCellRect(1, c, &rc);
-        if (c < (int)recents.size())
-        {
-            const bool sel = (g_selRow == 1 && g_selCol == c);
-            const bool hov = (g_hoverRow == 1 && g_hoverCol == c);
-            DrawCell(hdc, rc, recents[c], sel, hov);
-        }
-        else
-        {
-            HBRUSH e = CreateSolidBrush(RGB(228, 228, 228));
-            FillRect(hdc, &rc, e);
-            DeleteObject(e);
-            HPEN pen = CreatePen(PS_SOLID, 1, RGB(190, 190, 190));
-            HGDIOBJ old = SelectObject(hdc, pen);
-            HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
-            SelectObject(hdc, old); SelectObject(hdc, oldB);
-            DeleteObject(pen);
-        }
-    }
-
+    SelectObject(hdc, hOldFont);
     EndPaint(hWnd, &ps);
 }
 
