@@ -1,160 +1,118 @@
-# [MT-4] Adjustable environment lighting in the preview
+# [MT-3] Selectable skydome backgrounds
 
-**Status (2026-05-15):** plan draft v2 (revised to emulate the Petroglyph map editor's Sun/Fill panel), awaiting user approval. Target PR: `feat/mt4-env-lighting`.
+**Status (2026-05-15):** plan draft, awaiting user approval. Target PR: `feat/mt3-skydome`.
 
-Follows the planning conventions established for MT-1 / MT-2: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*.
+Follows the planning conventions established for MT-1 / MT-2 / MT-4: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*, and a bite-sized Task Breakdown at the bottom for execution.
 
 ---
 
 ## Status of the surrounding work
 
-- ✅ **[MT-1]** Frequently-used textures palette — [#69](https://github.com/DrKnickers/new-particle-editor/pull/69), docs [#70](https://github.com/DrKnickers/new-particle-editor/pull/70)
+- ✅ **[MT-4]** Adjustable environment lighting — [#71](https://github.com/DrKnickers/news-particle-editor/pull/71) (just shipped)
+- ✅ **[MT-1]** Frequently-used textures palette — [#69](https://github.com/DrKnickers/new-particle-editor/pull/69)
 - ✅ **[MT-2]** Selectable ground texture — [#67](https://github.com/DrKnickers/new-particle-editor/pull/67)
-- 🚧 **[MT-4]** Adjustable environment lighting — **this plan**.
+- 🚧 **[MT-3]** Selectable skydome backgrounds — **this plan**.
 
-Medium-term queue after MT-4: MT-3 (skydome — note the map editor's Sky Dome controls are visible in the reference screenshot but are out-of-scope for MT-4 and will be covered by MT-3).
+Last medium-term item; the queue empties once this ships.
 
 ---
 
 ## Context
 
-The engine maintains three directional `Light` structs ([engine.h:75-81](src/engine.h:75)) — `LT_SUN`, `LT_FILL1`, `LT_FILL2` — plus a separate ambient `D3DXVECTOR4` ([engine.h:294](src/engine.h:294)) and a declared-but-never-implemented `SetShadow(D3DXVECTOR4)` ([engine.h:185](src/engine.h:185), no body in [engine.cpp](src/engine.cpp) and no `m_shadow` member). The shader effect binds `hGlobalAmbient`, `hDirLightVec0`, `hDirLightDiffuse`, `hDirLightSpecular` per frame ([engine.cpp:528-532](src/engine.cpp:528), handles declared in [Effect.h:37-41](src/Effect.h:37)). There is **no shader handle for shadow color** — the dangling `SetShadow` API was a piece of unfinished engine plumbing.
+The preview viewport currently clears to a flat colour ([src/engine.cpp:564-565](src/engine.cpp:564) — `D3DDevice9::Clear` with `m_background`). Pre-MT-3 the only way to influence the background is through the colour picker on the toolbar (`Background:`). MT-3 replaces that single-colour background with an optional **skydome**: a textured sphere centred on the camera that the camera orbits inside, so the viewport's empty space reads as a scene — space, day sky, sunset, indoor, etc. — rather than a flat fill.
 
-Today there is **no way for the user to adjust any of these values**. They are hardcoded at engine construction ([engine.cpp:1384-1400](src/engine.cpp:1384)) to `Sun = white diffuse + zero specular along +X`, `Fill1/Fill2 = all zero`, `Ambient = (0,0,0,0)`. The ROADMAP entry's claim that "values from the loaded particle system can adjust them" is **inaccurate** — `.alo` files don't carry lighting data, and the editor never overrides the hardcoded defaults.
+The render integration is shallow: insert one new pass between the existing `Clear` and the ground render. The sphere is camera-locked (its world matrix is `Translation(camera.Position)`) so it stays "infinite" while the camera orbits the world origin where the particles live. Depth-test / depth-write off, no lighting, no fog — it's a background pass, nothing more.
 
-MT-4 surfaces a **View → Lighting…** modeless dialog that mirrors the Petroglyph map editor's Sun/Fill panel (reference screenshot supplied by the user, fog and sky-dome sections omitted). The Bloom dialog ([main.cpp:4867-5013](src/main.cpp:4867)) is the canonical template for modeless-tool-window lifecycle — lazy-created on first open, hides on close, position persisted to `HKCU\Software\AloParticleEditor`, `WM_USER` reseed-from-engine after Reset View Settings. MT-4 clones this shape and fills in the controls.
+The dialog UX matches the texture-palette popup's *visual style* (modeless tool window, owner-drawn thumbnail grid, blue hover / selection frames) but the *interaction model* matches the ground-texture picker (single-commit, only one slot is "active" at a time). 12 slots total laid out as a 4×3 grid: slot 0 is **Off** (disables the skydome pass, reverts to the flat-colour clear), slots 1–8 are bundled scenes (Space / Atmosphere / Sunset / Dawn / Night / Overcast / Studio / Indoor), slots 9–11 are user-customisable (file-picker on click of an empty slot, same pattern as MT-2's Custom 1/2/3).
 
-**Why now**: smallest unshipped medium-term item (4–6 h estimate, on track for ~5 h given the bloom-dialog clone path). Clears MT-4 out of the queue and leaves only MT-3 (skydome, ~8–14 h) ahead in medium-term. Touches no rendering pipeline code beyond exposing two getters and implementing the dangling `SetShadow` stub — risk is contained to UI plumbing.
+Bundled textures live in `RCDATA` resources (`IDR_SKYDOME_*`), loaded via the existing `LoadGroundTextureFromResource` pattern. **Equirectangular 2D textures** (not cubemaps) — single image per skydome, simpler to source, simpler to load, no new cubemap path needed.
+
+**Why now**: clears the last medium-term item. Once MT-3 ships, the queue is empty for medium-term and the next session can either pick up long-term LT-1/2/3/4 or do a near-term polish pass. Touches the render pipeline (new pass + new shader), but the integration point is well-isolated and the rest of the renderer doesn't see it.
 
 ---
 
 ## Goal + scope
 
-A new **View → Lighting…** menu entry opens a modeless dialog `IDD_LIGHTING`. Layout emulates the supplied Petroglyph map-editor screenshot:
+**A new toolbar preview button** (`Skydome:` label + 24×24 owner-drawn preview, between the existing `Ground Texture:` button and `Ground Height:` spinner) shows the currently-selected skydome's thumbnail. Clicking the preview opens the **Skydome picker** dialog: a modeless `WS_EX_TOOLWINDOW` window with a 4×3 grid of 96×96 slot thumbnails, single-click commits + closes, position persists across sessions, modeless so the viewport stays interactive.
+
+**Slot behaviour:**
+
+- **Slot 0 — Off** — fixed; clicking it sets `m_skydomeIndex = 0`, disables the skydome render pass, reverts to flat-colour background. Thumbnail is a small "✕" glyph on the flat background colour.
+- **Slots 1–8 — bundled scenes**: Space, Atmosphere, Sunset, Dawn, Night, Overcast, Studio, Indoor. Each is an equirectangular `.dds` (BC1 / DXT1 compressed) bundled via RCDATA. Click any to select.
+- **Slots 9–11 — Custom 1 / 2 / 3** — start empty (greyed "+" placeholder). Single-click an empty slot → `GetOpenFileName` filtered to `*.dds;*.tga` (matching EaW's native texture formats — lets users point a custom slot directly at game environment textures with no conversion). On success the slot is populated, thumbnail rebuilds, slot becomes selected.
+- **Right-click any slot** → context menu (only entries valid for the slot's state):
+  - Empty custom slot: *Set custom skydome…*
+  - Populated custom slot: *Change skydome…* / *Clear slot*
+  - Bundled / Off slot: nothing (right-click is a no-op)
+- **Reset all custom slots** button (bottom of dialog) → confirm prompt → wipes the 3 custom-slot paths only.
+- **Reset View Settings** (View menu) → resets `SkydomeIndex` to `0` (Off) but **does not** wipe custom-slot paths (those are user data, same convention as MT-2).
+
+**Render pipeline insertion** (in [src/engine.cpp:565](src/engine.cpp:565) area, after the Clear):
 
 ```
-┌─────────────────────────────────────────────────┐
-│ Sun Settings                                    │
-│   Intensity  [0.50]   Z Angle  [0.00]°   Tilt [45.00]° │
-│   Ambient Color  [swatch]                       │
-│   Specular Color [swatch]                       │
-│   Diffuse Color  [swatch]                       │
-│   Shadow Color   [swatch]                       │
-│   [✓] Force Fill Light Alignment                │
-│                                                 │
-│ Fill Light Settings                             │
-│   Intensity 1  [0.50]  Z Angle 1 [120.00]° Tilt 1 [-10.00]° │
-│   Diffuse Color  [swatch]                       │
-│   [Mirror Sun]                                  │
-│   Intensity 2  [0.50]  Z Angle 2 [210.00]° Tilt 2 [-10.00]° │
-│   Diffuse Color  [swatch]                       │
-│                                                 │
-│              [Reset to defaults]                │
-└─────────────────────────────────────────────────┘
+D3DDevice9::Clear (background colour, ZBUFFER)
+  │
+  ↓
+SkydomePass (if m_skydomeIndex != 0)
+  • SetVertexBuffer (sphere)
+  • SetIndexBuffer  (sphere)
+  • SetWorld = Translation(camera.Position)   ← locked to camera
+  • SetTexture (m_skydomeTexture)
+  • SetRenderState: ZWRITE off, ZTEST off, CULL_CW (we see the sphere from inside)
+  • Effect "Skydome.fx" sample-and-output
+  • DrawIndexedPrimitive
+  │
+  ↓
+Ground plane (existing)
+  ↓
+Particles (existing)
+  ↓
+Bloom / Distortion (existing — skydome contributes to bloom naturally)
 ```
 
-**Controls per light:**
+**Sphere mesh**: hand-rolled UV sphere, 32 longitude × 16 latitude segments → 512 triangles. Generated once at engine init into `m_pSkydomeVB` / `m_pSkydomeIB`, lives until shutdown.
 
-- **Sun:** Intensity spinner, Z Angle spinner, Tilt Angle spinner, Ambient ColorButton, Specular ColorButton, Diffuse ColorButton, Shadow ColorButton.
-- **Fill 1 / Fill 2:** Intensity spinner, Z Angle spinner, Tilt Angle spinner, Diffuse ColorButton. (No specular, no ambient, no shadow — they're scene-global properties living in the Sun group.)
+**Shader** ([src/Resources/Engine/Skydome.fx](src/Resources/Engine/Skydome.fx)): new `.fx` bundled via RCDATA (`IDR_SHADER_SKYDOME`). Vertex shader transforms sphere into clip space; pixel shader samples the equirectangular texture via UV (latitude → V, longitude → U). One technique, one pass, no lighting.
 
-**Two binding controls** (not per-light):
+**Persistence** under `HKCU\Software\AloParticleEditor`:
 
-- **Force Fill Light Alignment** (checkbox, default **ON**): when checked, the four fill-light angle spinners (Z1, Z2, Tilt1, Tilt2) are **disabled and auto-computed** from the sun's Z angle:
-  - `Fill1.Z = Sun.Z + 120°` (mod 360)
-  - `Fill2.Z = Sun.Z + 210°` (mod 360)
-  - `Fill1.Tilt = Fill2.Tilt = -10°` (fixed)
-  The "alignment" keeps the classic 3-light triangle (key + two flanks 120°/210° apart) rotating together as the sun moves. Unchecking enables independent fill-angle editing; values that were last user-set are preserved (or, if never set, snap to the auto-computed values at the moment of unchecking).
-- **Mirror Sun** (button, in the Fill Light group): one-shot. Copies the Sun's **Diffuse Color** to both fills' Diffuse Color. Does *not* touch intensity or angles. Disabled when Force Fill Light Alignment is ON (because alignment + mirror together becomes "do everything", which is more than the map editor exposes — keep them orthogonal). One-shot, not a binding mode — clicking it once does the copy and that's it.
-
-**UI ⇄ engine conversion:**
-
-- **Direction (Z Angle + Tilt) ⇄ engine `Light.Position`:**
-  - `Position.x = cos(tilt) · cos(z)`
-  - `Position.y = cos(tilt) · sin(z)`
-  - `Position.z = sin(tilt)`
-  - Z Angle is azimuth in degrees, range `0–360°` (wraps).
-  - Tilt is elevation in degrees, range `-90 to +90°` (clamps).
-  - `Engine::SetLight` normalizes Position and negates into Direction internally ([engine.cpp:1074-1076](src/engine.cpp:1074)) — we don't have to.
-- **Intensity + Diffuse Color ⇄ engine `Light.Diffuse`:**
-  - `Diffuse = (R/255 · I, G/255 · I, B/255 · I, 1.0)` where (R,G,B) is the 8-bit color and I is intensity.
-- **Intensity + Specular Color ⇄ engine `Light.Specular`** (Sun only):
-  - `Specular = (R/255 · I, G/255 · I, B/255 · I, 1.0)` using the **specular** color picker, with the *same* sun intensity multiplier.
-  - Fills get `Specular = (0,0,0,0)` — they have no specular color picker, consistent with the map editor.
-- **Ambient Color ⇄ engine `m_ambient`** (scene-global, lives in Sun group visually):
-  - `m_ambient = (R/255, G/255, B/255, 0.0)`. No intensity multiplier — ambient is meant as a low-magnitude floor light, not something you crank. `w=0` preserves the current `m_ambient = (0,0,0,0)` convention ([engine.cpp:1292](src/engine.cpp:1292)).
-- **Shadow Color ⇄ engine `m_shadow`** (scene-global, lives in Sun group visually):
-  - `m_shadow = (R/255, G/255, B/255, 0.0)`. **Stored only.** The dangling `Engine::SetShadow` stub gets a real implementation that writes `m_shadow`, but no shader handle binds it today — see R3.
-
-**Defaults — match the screenshot exactly:**
-
-| Setting | Default | Engine effect |
-|---|---|---|
-| Sun Intensity | `0.50` | scales Diffuse + Specular |
-| Sun Z Angle | `0.00°` | Position azimuth |
-| Sun Tilt Angle | `45.00°` | Position elevation |
-| Sun Ambient Color | `RGB(40, 40, 50)` (dark blue-grey) | `m_ambient = (0.157, 0.157, 0.196, 0)` |
-| Sun Specular Color | `RGB(190, 190, 200)` (light grey) | scaled by intensity |
-| Sun Diffuse Color | `RGB(180, 180, 190)` (light grey-blue) | scaled by intensity |
-| Shadow Color | `RGB(100, 100, 110)` (medium grey) | `m_shadow` stored, currently unbound |
-| Force Fill Light Alignment | **ON** | fills auto-compute from sun |
-| Fill 1 Intensity | `0.50` | scales Diffuse |
-| Fill 1 Z Angle | `120.00°` *(auto)* | Position azimuth |
-| Fill 1 Tilt Angle | `-10.00°` *(auto)* | Position elevation |
-| Fill 1 Diffuse Color | `RGB(60, 80, 160)` (slate blue) | scaled by intensity |
-| Fill 2 Intensity | `0.50` | scales Diffuse |
-| Fill 2 Z Angle | `210.00°` *(auto)* | Position azimuth |
-| Fill 2 Tilt Angle | `-10.00°` *(auto)* | Position elevation |
-| Fill 2 Diffuse Color | `RGB(60, 80, 160)` (slate blue, same as Fill 1) | scaled by intensity |
-
-The exact RGB values are eyeballed from the screenshot; the implementation should pin them down by sampling the screenshot or, ideally, by checking the Petroglyph map editor's source/binary for the canonical Alamo defaults. Treat the table above as **structurally correct, numerically approximate** — the implementation can pick precise hexes during the resource-file pass.
-
-**This changes the default visual** from the current pre-MT-4 baseline. Currently the editor opens with Sun white at Z=0°/Tilt=0° (Diffuse=(1,1,1,1), Position=(1,0,0)), fills off, ambient (0,0,0,0). The new defaults give a softer 3-light setup right out of the box, matching what map authors are used to seeing in the map editor. This is **intentional** and the headline visual change of the PR — note prominently in CHANGELOG.
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `SkydomeIndex` | REG_DWORD | `0` (Off) | Active slot 0..11 |
+| `SkydomeCustomSlot9` | REG_SZ | (empty) | Custom 1 path |
+| `SkydomeCustomSlot10` | REG_SZ | (empty) | Custom 2 path |
+| `SkydomeCustomSlot11` | REG_SZ | (empty) | Custom 3 path |
+| `SkydomePickerPos` | REG_BINARY (RECT) | (none — first run centres on owner) | Dialog position |
 
 **In:**
 
-- **New `IDD_LIGHTING` dialog template** in [src/ParticleEditor.en.rc:144](src/ParticleEditor.en.rc:144) area (after `IDD_BLOOM`), roughly `240×320 px`, `WS_POPUP | WS_CAPTION | WS_SYSMENU`, centered on owner on first open. Final pixel dimensions sized to fit content during implementation.
-- **New menu entry** `View → Lighting…` (`ID_VIEW_LIGHTING = 40117`, next free) in [src/ParticleEditor.en.rc:516](src/ParticleEditor.en.rc:516).
-- **New control IDs** in [src/Resources/resource.en.h](src/Resources/resource.en.h):
-  - Sun: `IDC_LIGHTING_SUN_{INTENSITY,ZANGLE,TILT,AMBIENT,SPECULAR,DIFFUSE,SHADOW}` (7 IDs)
-  - Per fill (×2): `IDC_LIGHTING_FILL{1,2}_{INTENSITY,ZANGLE,TILT,DIFFUSE}` (8 IDs)
-  - Bindings: `IDC_LIGHTING_FORCE_ALIGN` (checkbox), `IDC_LIGHTING_MIRROR_SUN` (button)
-  - `IDC_LIGHTING_RESET` (reset button)
-  - **18 control IDs total.**
-- **`LightingDlgProc` + `ToggleLightingDialog`** in [src/main.cpp](src/main.cpp) after `BloomDlgProc` and `ToggleBloomDialog`, mirroring their lifecycle exactly: lazy-create on first toggle, hide on close, save position to registry, `WM_USER` reseed-from-engine after Reset View Settings.
-- **`APPLICATION_INFO.hLightingDlg`** field added next to `hBloomDlg` ([main.cpp:586](src/main.cpp:586)).
-- **Engine getters** `Engine::GetLight(LightType) const → const Light&`, `Engine::GetAmbient() const → const D3DXVECTOR4&`, and `Engine::GetShadow() const → const D3DXVECTOR4&` added to [engine.h:184](src/engine.h:184) area. Setters either exist (`SetLight`, `SetAmbient`) or get a new minimal implementation (`SetShadow`).
-- **Implement the dangling `SetShadow`** in [engine.cpp](src/engine.cpp): add `m_shadow` member, store the vec4 in `SetShadow`, expose `GetShadow`. **Does not bind to a shader handle** — see R3.
-- **Registry I/O** under `HKCU\Software\AloParticleEditor`, following bloom's `WriteBloomFloat` / `ReadBloomFloat` pattern:
-  - **Sun:** `LightSun{Intensity, ZAngle, Tilt}` (REG_BINARY float, 3 keys), `LightSun{Ambient, Specular, Diffuse, Shadow}Color` (REG_DWORD COLORREF, 4 keys). **7 keys.**
-  - **Fill1, Fill2:** `Light{Fill1,Fill2}{Intensity, ZAngle, Tilt}` (REG_BINARY float, 6 keys), `Light{Fill1,Fill2}DiffuseColor` (REG_DWORD COLORREF, 2 keys). **8 keys.**
-  - **Bindings:** `LightingForceFillAlignment` (REG_DWORD bool). **1 key.**
-  - **Dialog:** `LightingDialogPos` (REG_BINARY RECT). **1 key.**
-  - **Total: 17 new registry keys** under the existing app key.
-- **Startup restore**: in `WinMain` after engine construction, before the first frame, read all 16 lighting keys (each with a sensible default if absent) and push them through `SetLight` × 3 + `SetAmbient` + `SetShadow`. Same code path as bloom's `ReadBloomEnabled` / `ReadBloomFloat` calls ([main.cpp:4943-4960](src/main.cpp:4943)).
-- **Reset View Settings integration**: the existing handler ([main.cpp:1593-1642](src/main.cpp:1593)) gains:
-  - Wipe the 17 lighting registry keys via `RegDeleteValue` (loop over a constant array).
-  - Push hardcoded defaults to engine via `SetLight` / `SetAmbient` / `SetShadow`.
-  - Post `WM_USER` to `hLightingDlg` if open → dialog reseeds spinners/colorbuttons/checkbox from engine state.
-  - Update the prompt's MessageBox text to include "lighting".
-- **In-panel Reset button** writes the same defaults to engine + registry + UI controls. Confirmation prompt: "Reset all lighting to defaults?" `MB_YESNO | MB_ICONQUESTION`.
-- **Esc handling** in the dialog: pressing Esc when the dialog or one of its child controls has focus closes the dialog (saves position, hides). Standard `WM_COMMAND IDCANCEL` route.
-- **Debug instrumentation** under `#ifndef NDEBUG`: `[Lighting] set sun int=%.2f z=%.1f tilt=%.1f`, `[Lighting] set fill%d int=%.2f z=%.1f tilt=%.1f color=#%06x`, `[Lighting] set ambient #%06x`, `[Lighting] set shadow #%06x (engine stores only; no shader binding)`, `[Lighting] force-align toggled %s`, `[Lighting] mirror sun: copied diffuse #%06x to both fills`, `[Lighting] reset to defaults source=%s` (panel / view-menu), `[Lighting] dialog show pos=(%d,%d)`, `[Lighting] dialog hide pos=(%d,%d)`, `[Lighting] startup restore loaded=%d missing=%d`.
+- **Engine:** sphere VB/IB generation, skydome texture state (`m_skydomeTexture` + path + index + slot paths), `SkydomeRender()` helper, integration into `Engine::Render` between Clear and ground, public API (`SetSkydomeSlot`, `GetSkydomeSlot`, `SetSkydomeCustomPath`, `GetSkydomeCustomPath`, `IsSkydomeSlotEmpty`, `ReloadSkydomeTexture`), thumbnail generator (`MakeSkydomeSlotThumbnail` — same shape as `MakeGroundSlotThumbnail`).
+- **Shader:** new `Engine/Skydome.fx` with `Sample()` technique. Equirectangular sampling via `atan2(direction.x, direction.z) / TWO_PI + 0.5` for U, `asin(direction.y) / PI + 0.5` for V (standard equirectangular projection).
+- **UI:** toolbar preview button (`IDC_SKYDOME_PREVIEW`, between Ground Texture preview and Ground Height spinner), `IDD_SKYDOME_PICKER` dialog template (similar to `IDD_GROUND_TEXTURE_PICKER` but 4×3 grid + larger thumbnails + 1 reset button), `SkydomePickerDlgProc` modeless lifecycle (lazy create, hide on close, position persisted), thumbnail rebuild on selection change.
+- **Resource bundling:** 8 new `IDR_SKYDOME_{SPACE,ATMOSPHERE,SUNSET,DAWN,NIGHT,OVERCAST,STUDIO,INDOOR}` RCDATA entries pointing to `Resources/skydomes/*.dds`. 1 new `IDR_SHADER_SKYDOME` RCDATA pointing to `Resources/Engine/Skydome.fx`. **Note**: the 8 `.dds` files themselves are an asset-authoring deliverable — see "Pre-implementation assets" below.
+- **Reset View Settings integration**: clear `SkydomeIndex` registry value, set engine to slot 0 (Off), update toolbar preview.
+- **Localised resources:** dialog template + toolbar label in both `.en.rc` and `.de.rc` (German strings as English placeholders per project convention).
+- **Debug instrumentation** under `#ifndef NDEBUG`: `[Skydome] select slot=%d path='%s'`, `[Skydome] reload texture path='%s' result=%s`, `[Skydome] dialog show pos=(%d,%d)`, `[Skydome] dialog hide pos=(%d,%d)`, `[Skydome] render pass skipped (Off)`, `[Skydome] sphere mesh init verts=%d tris=%d`.
 
 **Out:**
 
-- **Per-light Enable checkboxes.** *Reason: explicitly rejected — the map editor doesn't have them; setting intensity to 0 is the documented "off" gesture.*
-- **Fog settings (start, end, color, enabled).** *Reason: explicitly omitted per user. The engine has fog handles wired (`hFogVals`) so this could be a small follow-up if anyone asks.*
-- **Sky Dome controls.** *Reason: that's MT-3's scope, separately tracked. The map-editor screenshot shows them in the same panel but we keep MT-3 as its own item.*
-- **Shadow color shader binding.** *Reason: no `hShadow` handle exists in `Effect.h` and no current shader references one. We implement `SetShadow` to store the value (so the API stops being dangling) and persist the picker's value, but the preview doesn't visually change when you adjust shadow color. CHANGELOG entry must call this out plainly.*
-- **Visual gizmo for direction** (drag a dot on a hemisphere). *Reason: ~200 LOC of custom paint, blows the estimate.*
-- **Per-`.alo`-file lighting overrides.** *Reason: file format doesn't carry lighting; sidecar design is separate scope.*
-- **Lighting presets** (save / load named configurations). *Reason: out of scope for v1; short follow-up that reuses the registry I/O if requested.*
-- **Animated lights / time-of-day slider.** *Reason: separate feature.*
-- **Tabbed or compact layout.** *Reason: emulating the screenshot, which uses a single tall panel.*
-- **Force Fill Light Alignment as a *binding* mode** that re-applies on every Sun-Z change after un-checking. *Reason: explicitly one-shot semantics — Force is either ON (alignment active, spinners disabled) or OFF (free editing). No middle "auto-recompute once when you change sun" mode.*
-- **Mirror Sun for diffuse + specular + intensity.** *Reason: scoping it to just diffuse color matches what the screenshot looks like (one button, simple action). Promoting to a full multi-field copy is a follow-up if it's missed.*
-- **Localized (German) string translations.** *Reason: project's German strings are perennially behind English; the German `.de.rc` mirrors structure with English placeholders, consistent with MT-1.*
+- **Cubemap (6-face) skydomes.** *Reason: equirectangular is simpler to source, simpler to load (no new D3DXCreateCubeTexture path needed), simpler to thumbnail. If a power user needs cubemap support later, that's a follow-up that adds a second loader path.*
+- **HDR skydome rendering with proper tone-mapping.** *Reason: the engine renders LDR throughout. Bundled assets ship as DXT1 (8-bit per channel). If users want HDR, they can supply a `.hdr` file as a custom slot — D3DX9 decodes it to LDR on load, which is good enough for preview.*
+- **Skydome rotation control.** *Reason: skydome rotates automatically with the camera (camera-locked transform). Adding a separate "yaw the sky" control adds UI complexity for limited value — users can rotate the camera if they want to see a different angle of the sky.*
+- **Skydome → directional-light coupling** (e.g., a "sunset" sky auto-shifts the sun direction). *Reason: that's MT-4 territory; MT-3 is a pure background pass. Manual coupling via the Lighting panel is the user's call.*
+- **Per-mod custom slot paths.** *Reason: skydomes are scene/view settings, not mod assets. Registry-global (under `AloParticleEditor`) is consistent with how the existing background colour, ground colour, and bloom settings work.*
+- **Animated / time-of-day skydomes** (cycling between Dawn → Atmosphere → Sunset → Night). *Reason: out of scope; static-image swap is the v1 goal.*
+- **Skydome ground reflection.** *Reason: ground texture renders separately; reflection would require a render-to-texture pass on the ground material, which is much bigger scope.*
+- **Disabling bloom on skydome pixels.** *Reason: the skydome renders into the same scene RT as everything else, so bloom processes it naturally. If users find a particular sky too bloomy, they can lower the bloom strength or pick a less bright skydome.*
+
+**Pre-implementation assets (not part of the code change):**
+
+8 equirectangular `.dds` skydome textures, BC1/DXT1 compressed, recommended 2K resolution (2048×1024) → ~1.5 MB each → ~12 MB total in the .exe. Source files belong in `src/Resources/skydomes/{space,atmosphere,sunset,dawn,night,overcast,studio,indoor}.dds`. Authoring options:
+
+- **Source royalty-free / CC0 equirectangular HDRIs** from sites like Polyhaven (CC0), convert via DirectX Texture Tool (`texconv.exe`) to BC1 DDS at 2K.
+- **Generate procedurally** for the v1 ship — simple gradient skies driven by colour ramps (space = stars on black, atmosphere = blue-to-white vertical gradient, sunset = orange-red horizon, etc.). Programmatically generated DDS files via a small `tools/generate_skydome_textures.py` script (analogous to `tools/generate_pin_badge.py` from MT-1).
+
+The plan below assumes the 8 `.dds` files exist on disk at implementation time. **Recommend generating placeholder procedural textures first to unblock implementation**, then swapping in real HDRI-sourced assets in a follow-up PR. The dialog and engine code don't care about the source.
 
 ---
 
@@ -162,40 +120,47 @@ The exact RGB values are eyeballed from the screenshot; the implementation shoul
 
 | Piece | File:line |
 |---|---|
-| `Light` struct (Diffuse/Specular/Position/Direction vec4s) | [src/engine.h:75-81](src/engine.h:75) |
-| `LightType` enum (`LT_SUN`/`LT_FILL1`/`LT_FILL2`) | [src/engine.h:68-72](src/engine.h:68) |
-| `Engine::SetLight(LightType, const Light&)` — normalizes Position → Direction, recalculates SH matrices | [src/engine.cpp:1062-1081](src/engine.cpp:1062) |
-| `Engine::SetAmbient(D3DXVECTOR4)` | [src/engine.cpp:1083-1090](src/engine.cpp:1083) |
-| `Engine::SetShadow(D3DXVECTOR4)` declared, **never implemented** — we add the body | [src/engine.h:185](src/engine.h:185) |
-| `m_lights[3]` array (SUN=0, FILL1=1, FILL2=2) | [src/engine.h:295](src/engine.h:295) |
-| `m_ambient` vec4 (defaults `(0,0,0,0)`) | [src/engine.h:294](src/engine.h:294), [src/engine.cpp:1292](src/engine.cpp:1292) |
-| Hardcoded light defaults at engine construction | [src/engine.cpp:1384-1400](src/engine.cpp:1384) |
-| Effect handles (no shadow handle present) | [src/Effect.h:37-46](src/Effect.h:37) |
-| Per-frame shader binds | [src/engine.cpp:528-532](src/engine.cpp:528) |
-| `BloomDlgProc` (modeless dialog procedure to clone) | [src/main.cpp:4867-4959](src/main.cpp:4867) |
-| `ToggleBloomDialog` (lazy-create + show/hide + position save) | [src/main.cpp:4961-5013](src/main.cpp:4961) |
-| `WriteBloomFloat` / `ReadBloomFloat` (REG_BINARY float helpers) | [src/main.cpp:4439-4467](src/main.cpp:4439) |
-| `WriteBloomEnabled` / `ReadBloomEnabled` (REG_DWORD bool helpers) | [src/main.cpp:4414-4437](src/main.cpp:4414) |
-| Bloom dialog position persistence pattern | [src/main.cpp:4944-4998](src/main.cpp:4944) |
-| `Reset View Settings` handler (the integration point) | [src/main.cpp:1593-1642](src/main.cpp:1593) |
-| Spinner control (numeric edit + up/down) | [src/UI/Spinner.cpp](src/UI/Spinner.cpp); usage example [src/ParticleEditor.en.rc:152](src/ParticleEditor.en.rc:152) |
-| ColorButton control (color swatch + Win32 color picker) | [src/UI/ColorButton.cpp](src/UI/ColorButton.cpp) |
-| `APPLICATION_INFO` struct (the per-app singleton) | [src/main.cpp:586](src/main.cpp:586) area — add `HWND hLightingDlg` next to `hBloomDlg` |
-| View menu entries | [src/ParticleEditor.en.rc:516-532](src/ParticleEditor.en.rc:516) |
-| WM_USER dialog reseed pattern (used by bloom after Reset View Settings) | [src/main.cpp:1620](src/main.cpp:1620) area + BloomDlgProc's WM_USER case |
+| `D3DDevice9::Clear` with `m_background` | [src/engine.cpp:564-565](src/engine.cpp:564) |
+| `Engine::Render` (the render-order skeleton) | [src/engine.cpp:492-763](src/engine.cpp:492) |
+| Camera struct (Position / Target / Up) | [src/engine.h:86-90](src/engine.h:86) |
+| Camera orbits Target — drag handlers | [src/main.cpp:2706-2825](src/main.cpp:2706) |
+| Ground texture render (the closest analog: textured quad in 3D) | [src/engine.cpp:566-588](src/engine.cpp:566) |
+| RCDATA texture loader pattern (`LoadGroundTextureFromResource`) | [src/engine.cpp:873-890](src/engine.cpp:873) |
+| Shader effect loader (`Effect` class — FX file → ID3DXEffect) | [src/Effect.h](src/Effect.h), [src/Effect.cpp](src/Effect.cpp) |
+| 14-shader load path | [src/engine.cpp:11-26](src/engine.cpp:11) — `ShaderNames[]` |
+| Ground-texture picker dialog (MT-2 — the model to clone for MT-3) | [src/main.cpp:4312-4405](src/main.cpp:4312) |
+| `MakeGroundSlotThumbnail` (the thumbnail generator pattern) | [src/main.cpp](src/main.cpp) — search `MakeGroundSlotThumbnail` |
+| Ground texture toolbar preview button (`BS_OWNERDRAW`) + `WM_DRAWITEM` handler | [src/main.cpp](src/main.cpp) — search `hGroundTexturePreview` |
+| Texture-palette popup window class registration (visual style reference) | [src/UI/TexturePalette.cpp:899-906](src/UI/TexturePalette.cpp:899) |
+| Owner-draw cell pipeline (`AloPaletteContent` window class) | [src/UI/TexturePalette.cpp](src/UI/TexturePalette.cpp) — search `AloPaletteContent` |
+| `WS_EX_TOOLWINDOW + WS_POPUPWINDOW + WS_CAPTION + WS_SYSMENU` chrome | [src/UI/TexturePalette.cpp:899](src/UI/TexturePalette.cpp:899) |
+| Modeless dialog `IsDialogMessage` chain | [src/main.cpp:6347-6383](src/main.cpp:6347) |
+| Reset View Settings handler | [src/main.cpp:1610-1700](src/main.cpp:1610) |
+| Registry helpers (`Read/WriteBloomFloat`, `Read/WriteBloomEnabled`, etc. — pattern to clone) | [src/main.cpp:4411-4570](src/main.cpp:4411) |
+| MT-2's Custom-slot file picker logic | [src/main.cpp](src/main.cpp) — search `IDC_GROUND_TEXTURE_LIST` + `GetOpenFileName` |
 
 **Not yet in the codebase — to add:**
 
-- **`Engine::GetLight(LightType which) const`**, **`Engine::GetAmbient() const`**, **`Engine::GetShadow() const`** — single-line inline accessors in [src/engine.h:184](src/engine.h:184) area. Used by `WM_USER` reseed and by the in-panel Reset to write values back.
-- **`Engine::SetShadow` implementation** in [src/engine.cpp](src/engine.cpp) (currently linker-dangling): two-line body that writes `m_shadow = color`. No SH recalc, no shader bind.
-- **`Engine::m_shadow`** vec4 member in [src/engine.h](src/engine.h), initialized to the default shadow color `(100/255, 100/255, 110/255, 0)` in the engine constructor.
-- **`LightingDlgProc(HWND, UINT, WPARAM, LPARAM)`** in `main.cpp` after `BloomDlgProc`. ~200 LOC including per-control change handlers, force-align enable/disable logic, mirror-sun handler.
-- **`ToggleLightingDialog(APPLICATION_INFO*)`** in `main.cpp` after `ToggleBloomDialog`. ~30 LOC mirroring the bloom version.
-- **`InitializeLightingFromRegistry(Engine*)`** in `main.cpp` — called once at startup, after engine construction, before the first frame. Reads 16 lighting registry keys with defaults; calls `SetLight` × 3 + `SetAmbient` + `SetShadow`. ~70 LOC.
-- **`ApplyLightingDefaults(Engine*, HWND hDlgOrNull)`** in `main.cpp` — used by both the in-panel Reset button and the View → Reset View Settings handler. Writes defaults to engine, wipes registry keys, posts `WM_USER` to dialog if open. ~40 LOC.
-- **Spherical-coordinate conversion helpers** (file-local `static`): `DirectionFromZTilt(float z_deg, float tilt_deg) → D3DXVECTOR4`. ~5 LOC.
-- **Force-align computation helper**: `ComputeAlignedFill(int which, float sunZ_deg) → (z_deg, tilt_deg)`. Returns `(sunZ + 120, -10)` for Fill1, `(sunZ + 210, -10)` for Fill2.
-- **17 registry keys + 1 menu ID + 1 dialog template + 18 control IDs.** Localized in both `.en.rc` + `.de.rc` (German with English placeholders).
+- **`src/Resources/Engine/Skydome.fx`** — new HLSL effect file. Vertex shader transforms sphere → clip space; pixel shader samples equirectangular texture via `atan2 / asin`.
+- **`Engine::m_pSkydomeVB` / `m_pSkydomeIB`** — sphere mesh vertex + index buffers in [src/engine.h](src/engine.h).
+- **`Engine::m_skydomeTexture`** — `IDirect3DTexture9*` for the active skydome (or `NULL` for Off).
+- **`Engine::m_skydomeIndex`** — int slot index 0–11.
+- **`Engine::m_skydomeCustomSlotPaths[3]`** — `std::wstring[3]` for the 3 custom slot paths.
+- **`Engine::InitSkydomeMesh()`** — generates the UV sphere (called once in constructor).
+- **`Engine::ReloadSkydomeTexture()`** — loads the texture for `m_skydomeIndex` (RCDATA for bundled, file for custom). Released and recreated on every slot change.
+- **`Engine::RenderSkydome()`** — the new render pass (called from `Engine::Render` between Clear and ground).
+- **`Engine::SetSkydomeSlot(int)` / `GetSkydomeSlot() const`** — public API.
+- **`Engine::SetSkydomeCustomPath(int slot, const std::wstring&)` / `GetSkydomeCustomPath(int slot) const`** — public API for slots 9–11.
+- **`Engine::IsSkydomeSlotEmpty(int)`** — true for slot 0 (Off) and unfilled custom slots.
+- **8 bundled `.dds` files** in `src/Resources/skydomes/{space,atmosphere,sunset,dawn,night,overcast,studio,indoor}.dds`.
+- **`IDR_SKYDOME_*` RCDATA entries** in [src/ParticleEditor.rc](src/ParticleEditor.rc).
+- **`IDR_SHADER_SKYDOME` RCDATA entry** for the `.fx` file.
+- **`IDD_SKYDOME_PICKER`** dialog template in [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc) and [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc).
+- **`IDC_SKYDOME_PREVIEW`** toolbar control ID.
+- **`IDC_SKYDOME_PICKER_LIST`** / **`IDC_SKYDOME_PICKER_RESET_CUSTOM`** / **`IDC_SKYDOME_PICKER_PATH_LABEL`** dialog control IDs.
+- **`SkydomePickerDlgProc`** + **`ToggleSkydomePicker`** + **`MakeSkydomeSlotThumbnail`** + **`RebuildSkydomePreviewBitmap`** in [src/main.cpp](src/main.cpp).
+- **`Read/WriteSkydomeIndex`** + **`Read/WriteSkydomeCustomPath`** + **`Read/WriteSkydomePickerPos`** registry helpers.
+- **Slot-name string resources** (`IDS_SKYDOME_OFF`, `IDS_SKYDOME_SPACE`, ..., `IDS_SKYDOME_CUSTOM_BASE`).
 
 *(All design questions resolved — see "Resolved decisions" at the bottom of the spec.)*
 
@@ -203,316 +168,1090 @@ The exact RGB values are eyeballed from the screenshot; the implementation shoul
 
 ## Architecture / implementation approach
 
-### A. Data flow
+### A. Sphere mesh
 
-```
-                  ┌──── Registry (HKCU\Software\AloParticleEditor)
-                  │       17 keys (LightSun*, LightFill{1,2}*,
-                  │                LightingForceFillAlignment, LightingDialogPos)
-                  │
-       startup    │   WM_COMMAND               in-panel Reset                   View > Reset View Settings
-       ────────   │   (spinner SN_CHANGE,      button                           menu handler
-       Init…      │    color picker,           ────────                         ────────────────
-       FromReg    │    checkbox, mirror btn)   ApplyLightingDefaults            ApplyLightingDefaults
-       ────────   │   ────────                 ────────                         ────────────────
-                  ↓        ↓                        ↓                                   ↓
-            ┌─────────────────────────────────────────────────────────────────────────────┐
-            │                                                                             │
-            │     LightingDlgProc — owns conversion math, alignment, and registry write   │
-            │                                                                             │
-            │     z, tilt → DirectionFromZTilt → Position vec4                            │
-            │     Force-align ON → recompute fill Z/Tilt from sun on every sun change     │
-            │     Color × Intensity → Diffuse / Specular vec4                             │
-            │                                                                             │
-            └────────────────────────────┬────────────────────────────────────────────────┘
-                                         │
-                                         ↓
-                              Engine::SetLight / SetAmbient / SetShadow
-                                         │
-                                         ↓
-                              recalc SPH matrices, set shader vectors next frame
-                                         │
-                                         ↓
-                              InvalidateRect(viewport) → WM_PAINT → render
+A UV sphere with 32 longitude segments × 16 latitude segments (33 × 17 = 561 vertices, 32 × 16 × 2 = 1024 triangles). Generated once at engine init, lives in two D3D9 default-pool buffers:
+
+```cpp
+// src/engine.h
+struct SkydomeVertex {
+    D3DXVECTOR3 Position;
+    D3DXVECTOR3 Normal;   // unused by shader but kept for FVF alignment
+    D3DXVECTOR2 TexCoord; // (U, V) for equirectangular sampling
+};
+
+IDirect3DVertexBuffer9* m_pSkydomeVB;
+IDirect3DIndexBuffer9*  m_pSkydomeIB;
+DWORD                   m_skydomeIndexCount;
 ```
 
-Three callers feed the same engine-write path: dialog per-control change, in-panel Reset, View → Reset View Settings. The dialog owns the UI representation; the engine owns the rendering representation; conversion happens at the boundary in `LightingDlgProc`.
+The UV unwrap places `(longitude / 2π, latitude / π + 0.5)` in TexCoord so the standard equirectangular texture maps correctly: U wraps around the sphere horizontally, V wraps from south pole (V=0) to north pole (V=1).
 
-### B. Registry schema
+**Why hand-rolled instead of `D3DXCreateSphere`**: `D3DXCreateSphere` produces an `ID3DXMesh` with FVF `D3DFVF_XYZ | D3DFVF_NORMAL` — no texture coordinates. We need UVs for equirectangular sampling. Generating the mesh ourselves is ~30 lines of code and lets us match the existing `D3DPT_TRIANGLELIST + IDirect3DVertexBuffer9` pattern (the engine already speaks that language; `ID3DXMesh::DrawSubset` would be a one-off).
 
-All keys under `HKCU\Software\AloParticleEditor`. Existing keys (Bloom, GroundSolidColor, LastMod, etc.) untouched.
+### B. Shader (`src/Resources/Engine/Skydome.fx`)
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `LightSunIntensity` | REG_BINARY (float) | `0.50` | scales Diffuse + Specular |
-| `LightSunZAngle` | REG_BINARY (float) | `0.0` | degrees, 0–360 wrap |
-| `LightSunTilt` | REG_BINARY (float) | `45.0` | degrees, −90 to +90 clamp |
-| `LightSunAmbientColor` | REG_DWORD | `RGB(40,40,50)` | scene-global ambient |
-| `LightSunSpecularColor` | REG_DWORD | `RGB(190,190,200)` | scaled by sun intensity |
-| `LightSunDiffuseColor` | REG_DWORD | `RGB(180,180,190)` | scaled by sun intensity |
-| `LightSunShadowColor` | REG_DWORD | `RGB(100,100,110)` | scene-global; **stored only** (R3) |
-| `LightingForceFillAlignment` | REG_DWORD | `1` (ON) | binding mode for fill angles |
-| `LightFill1Intensity` | REG_BINARY (float) | `0.50` | scales Diffuse |
-| `LightFill1ZAngle` | REG_BINARY (float) | `120.0` | only written when force-align OFF; while ON, computed from sun |
-| `LightFill1Tilt` | REG_BINARY (float) | `-10.0` | same |
-| `LightFill1DiffuseColor` | REG_DWORD | `RGB(60,80,160)` | scaled by fill 1 intensity |
-| `LightFill2Intensity` | REG_BINARY (float) | `0.50` | |
-| `LightFill2ZAngle` | REG_BINARY (float) | `210.0` | |
-| `LightFill2Tilt` | REG_BINARY (float) | `-10.0` | |
-| `LightFill2DiffuseColor` | REG_DWORD | `RGB(60,80,160)` | |
-| `LightingDialogPos` | REG_BINARY (RECT) | (none — center on owner) | screen coords |
+```hlsl
+// Skydome.fx — samples an equirectangular environment texture onto a sphere
+// rendered from inside.
 
-**Note on the force-align interaction with persistence:** when alignment is ON, the fill Z/Tilt registry values are *not* live-rewritten as the sun rotates — they're the "last manually set" values, restored when alignment is turned OFF. This means the registry can hold a stale (Fill1 Z = 120, Sun Z = 0) pair that doesn't match what the renderer sees. That's intentional and matches the map editor: the persisted values represent the user's previous *free-edit* state, ready to be re-activated when alignment is unchecked.
+float4x4 g_WorldViewProj : WORLDVIEWPROJECTION;
+texture  g_Skydome;
 
-### C. Dialog template (rough resource sketch)
+sampler g_SkydomeSampler = sampler_state
+{
+    Texture = <g_Skydome>;
+    MinFilter = LINEAR;
+    MagFilter = LINEAR;
+    MipFilter = LINEAR;
+    AddressU  = WRAP;   // longitude wraps
+    AddressV  = CLAMP;  // latitude clamps (avoids pole bleed)
+};
+
+struct VS_INPUT {
+    float3 Position : POSITION;
+    float3 Normal   : NORMAL;
+    float2 TexCoord : TEXCOORD0;
+};
+
+struct VS_OUTPUT {
+    float4 Position : POSITION;
+    float2 TexCoord : TEXCOORD0;
+};
+
+VS_OUTPUT VS(VS_INPUT input)
+{
+    VS_OUTPUT o;
+    o.Position = mul(float4(input.Position, 1.0), g_WorldViewProj);
+    // Force the sphere to render at the far plane so depth-test (when on)
+    // always passes for ground/particles. Even with ZTEST off this also
+    // means the sphere never z-fights with anything.
+    o.Position.z = o.Position.w * 0.9999;
+    o.TexCoord = input.TexCoord;
+    return o;
+}
+
+float4 PS(VS_OUTPUT input) : COLOR
+{
+    return tex2D(g_SkydomeSampler, input.TexCoord);
+}
+
+technique Skydome
+{
+    pass P0
+    {
+        VertexShader = compile vs_2_0 VS();
+        PixelShader  = compile ps_2_0 PS();
+    }
+}
+```
+
+Loaded via the existing `Effect` infrastructure (`Effect::FromMemory` or equivalent). Handles cached at engine init: `hWorldViewProj`, `hSkydome` (texture parameter).
+
+### C. Render pass insertion
+
+In [src/engine.cpp:565](src/engine.cpp:565) area, immediately after the `Clear` call and before the ground render:
+
+```cpp
+// Existing:
+m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clearColor, 1.0f, 0);
+
+// NEW:
+if (m_skydomeIndex != 0 && m_pSkydomeTexture != NULL && m_pSkydomeEffect != NULL)
+{
+    RenderSkydome();
+}
+
+// Existing:
+if (m_showGround) { ... }
+```
+
+`RenderSkydome` body:
+
+```cpp
+void Engine::RenderSkydome()
+{
+    // World = Translation(camera.Position) — keeps the sphere camera-locked.
+    D3DXMATRIX world, wvp;
+    D3DXMatrixTranslation(&world, m_eye.Position.x, m_eye.Position.y, m_eye.Position.z);
+    wvp = world * m_view * m_projection;
+
+    // Restore state after to not pollute the rest of the render
+    DWORD oldZWrite, oldZEnable, oldCull;
+    m_pDevice->GetRenderState(D3DRS_ZWRITEENABLE, &oldZWrite);
+    m_pDevice->GetRenderState(D3DRS_ZENABLE,      &oldZEnable);
+    m_pDevice->GetRenderState(D3DRS_CULLMODE,     &oldCull);
+    m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    m_pDevice->SetRenderState(D3DRS_ZENABLE,      D3DZB_FALSE);
+    m_pDevice->SetRenderState(D3DRS_CULLMODE,     D3DCULL_CW); // we're inside the sphere
+
+    m_pSkydomeEffect->SetMatrix (m_hSkydomeWVP, &wvp);
+    m_pSkydomeEffect->SetTexture(m_hSkydomeTex, m_pSkydomeTexture);
+
+    UINT passes = 0;
+    m_pSkydomeEffect->Begin(&passes, 0);
+    m_pSkydomeEffect->BeginPass(0);
+
+    m_pDevice->SetVertexDeclaration(m_pSkydomeDecl);
+    m_pDevice->SetStreamSource(0, m_pSkydomeVB, 0, sizeof(SkydomeVertex));
+    m_pDevice->SetIndices(m_pSkydomeIB);
+    m_pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0,
+                                    /* numVerts */ 561,
+                                    0,
+                                    m_skydomeIndexCount / 3);
+
+    m_pSkydomeEffect->EndPass();
+    m_pSkydomeEffect->End();
+
+    m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, oldZWrite);
+    m_pDevice->SetRenderState(D3DRS_ZENABLE,      oldZEnable);
+    m_pDevice->SetRenderState(D3DRS_CULLMODE,     oldCull);
+}
+```
+
+### D. State machine
+
+`Engine::m_skydomeIndex` is the single source of truth. Slot 0 = Off, slots 1–8 = bundled, slots 9–11 = custom.
+
+- `SetSkydomeSlot(int newIndex)`:
+  - If newIndex == m_skydomeIndex, no-op (avoid reloading the same texture).
+  - Release `m_pSkydomeTexture` (if held).
+  - If newIndex == 0 → leave texture NULL, render pass skipped.
+  - Else → call `ReloadSkydomeTexture(newIndex)` which either:
+    - For bundled (1–8): `LoadGroundTextureFromResource(IDR_SKYDOME_<NAME>, &m_pSkydomeTexture)`.
+    - For custom (9–11): `D3DXCreateTextureFromFileEx(m_skydomeCustomSlotPaths[newIndex - 9].c_str(), ..., &m_pSkydomeTexture)`. On failure, fall back to slot 0 (Off) and log.
+- `m_skydomeIndex = newIndex` only if reload succeeded.
+
+### E. Toolbar preview button
+
+A 24×24 owner-draw button between `Ground Texture:` preview and `Ground Height:` spinner. `IDC_SKYDOME_PREVIEW`, style `BS_OWNERDRAW`. Same `WM_DRAWITEM` pattern as the ground-texture preview: cache a 24×24 HBITMAP thumbnail of the currently-selected skydome (Off slot shows the flat background colour with a small ✕ glyph), stretch-blit on paint, 1 px border, pressed / focus feedback. Rebuilt on:
+
+- Startup (after engine reads initial slot from registry).
+- Every successful slot change.
+- Reset View Settings.
+
+Layout: the toolbar reflow logic in `main.cpp` already handles positioning. Add the new button between the two existing controls and adjust their x-offsets by `kSkydomePreviewWidth + kGap` (~36 px).
+
+### F. Picker dialog (`IDD_SKYDOME_PICKER`)
 
 ```rc
-IDD_LIGHTING DIALOGEX 0, 0, 240, 320
+IDD_SKYDOME_PICKER DIALOGEX 0, 0, 432, 388
 STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Lighting"
+EXSTYLE WS_EX_TOOLWINDOW
+CAPTION "Skydome"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    GROUPBOX     "Sun Settings",         IDC_STATIC,            8,   4, 224, 156
-
-      LTEXT      "Intensity",             IDC_STATIC,           18,  18,  40,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_INTENSITY, "Spinner", WS_TABSTOP, 18, 28, 50, 14
-      LTEXT      "Z Angle",               IDC_STATIC,           78,  18,  40,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_ZANGLE,    "Spinner", WS_TABSTOP, 78, 28, 50, 14
-      LTEXT      "Tilt Angle",            IDC_STATIC,          138,  18,  50,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_TILT,      "Spinner", WS_TABSTOP, 138, 28, 50, 14
-
-      LTEXT      "Ambient Color",         IDC_STATIC,           18,  50,  60,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_AMBIENT,   "ColorButton", WS_TABSTOP, 78, 48, 40, 14
-      LTEXT      "Specular Color",        IDC_STATIC,          122,  50,  60,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_SPECULAR,  "ColorButton", WS_TABSTOP, 184, 48, 40, 14
-
-      LTEXT      "Diffuse Color",         IDC_STATIC,           18,  72,  60,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 70, 40, 14
-      LTEXT      "Shadow Color",          IDC_STATIC,          122,  72,  60,  10
-      CONTROL    "",                      IDC_LIGHTING_SUN_SHADOW,    "ColorButton", WS_TABSTOP, 184, 70, 40, 14
-
-      AUTOCHECKBOX "Force Fill Light Alignment", IDC_LIGHTING_FORCE_ALIGN, 18, 100, 140, 12
-
-    GROUPBOX     "Fill Light Settings",   IDC_STATIC,            8, 166, 224, 130
-
-      LTEXT      "Intensity 1",           IDC_STATIC,           18, 180,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL1_INTENSITY, "Spinner", WS_TABSTOP, 18, 190, 50, 14
-      LTEXT      "Z Angle 1",             IDC_STATIC,           78, 180,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL1_ZANGLE,    "Spinner", WS_TABSTOP, 78, 190, 50, 14
-      LTEXT      "Tilt 1",                IDC_STATIC,          138, 180,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL1_TILT,      "Spinner", WS_TABSTOP, 138, 190, 50, 14
-      LTEXT      "Diffuse",               IDC_STATIC,           18, 210,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL1_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 208, 40, 14
-      PUSHBUTTON "Mirror Sun",            IDC_LIGHTING_MIRROR_SUN,     150, 208, 60, 14
-
-      LTEXT      "Intensity 2",           IDC_STATIC,           18, 234,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL2_INTENSITY, "Spinner", WS_TABSTOP, 18, 244, 50, 14
-      LTEXT      "Z Angle 2",             IDC_STATIC,           78, 234,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL2_ZANGLE,    "Spinner", WS_TABSTOP, 78, 244, 50, 14
-      LTEXT      "Tilt 2",                IDC_STATIC,          138, 234,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL2_TILT,      "Spinner", WS_TABSTOP, 138, 244, 50, 14
-      LTEXT      "Diffuse",               IDC_STATIC,           18, 268,  44, 10
-      CONTROL    "",                      IDC_LIGHTING_FILL2_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 266, 40, 14
-
-    PUSHBUTTON   "Reset to defaults",     IDC_LIGHTING_RESET,         76, 300, 88, 14
+    CONTROL         "",IDC_SKYDOME_PICKER_LIST,"SysListView32",
+                    LVS_ICON | LVS_SHOWSELALWAYS | LVS_SINGLESEL | WS_TABSTOP,
+                    8, 8, 416, 320
+    LTEXT           "",IDC_SKYDOME_PICKER_PATH_LABEL,8,335,416,12,
+                    SS_PATHELLIPSIS | SS_NOTIFY
+    PUSHBUTTON      "Reset custom slots",IDC_SKYDOME_PICKER_RESET_CUSTOM,
+                    300, 364, 124, 18
 END
 ```
 
-Exact pixel coords are sized during implementation. The structural layout matches the supplied screenshot.
+`SysListView32` in icon mode with a 12-entry `HIMAGELIST` (96×96 colour bitmaps). Each item's label is the slot's display name (`IDS_SKYDOME_OFF` / `IDS_SKYDOME_SPACE` / .../`IDS_SKYDOME_CUSTOM_BASE`+0..2). Right-click context menu (different entries per slot type) is wired via `WM_NOTIFY NM_RCLICK`.
 
-### D. Message routing
+Modeless lifecycle clones [src/main.cpp:4312-4405](src/main.cpp:4312) (ground picker):
 
-| Message | Action |
-|---|---|
-| `WM_INITDIALOG` | Read current values from engine via `GetLight`/`GetAmbient`/`GetShadow`; decompose into intensity/Z/tilt/color quadruples; populate all controls; apply force-align disabled state to fill angle spinners and mirror-sun button; resize-to-saved-pos via `LightingDialogPos`. |
-| `WM_USER` (from `Reset View Settings`) | Same as `WM_INITDIALOG`'s seeding step — read engine, refresh all controls. No registry I/O (registry was already updated by the reset handler). |
-| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_SUN_INTENSITY/_DIFFUSE/_SPECULAR/_AMBIENT/_SHADOW` change | Recompute the corresponding vec4; call `SetLight(LT_SUN, ...)` and/or `SetAmbient` / `SetShadow`; write the changed key; redraw. **Intensity changes also recompute Specular** (since they share intensity). |
-| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_SUN_ZANGLE/_TILT` | Recompute Sun Position; `SetLight(LT_SUN, ...)`; write the key; redraw. **If force-align is ON, also recompute and re-apply both Fill1 and Fill2 directions** without writing their registry keys. |
-| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_FILL1_*`/`FILL2_*` | Recompute the fill Light vec4; `SetLight(LT_FILL{1,2}, ...)`; write the key; redraw. (Angle spinners are disabled while force-align ON, so this only fires from intensity or diffuse changes in that mode.) |
-| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_FORCE_ALIGN` | Read checkbox state; enable/disable Fill Z/Tilt spinners; enable/disable Mirror Sun button; if newly ON, immediately recompute fill directions from sun (no registry write); if newly OFF, restore registry-stored fill Z/Tilt values to the spinners (and `SetLight` to apply); write the `LightingForceFillAlignment` key. |
-| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_MIRROR_SUN` | Read Sun diffuse color; write it to both Fill1 and Fill2 diffuse color pickers; update engine via `SetLight` × 2; write the two `Light{Fill1,Fill2}DiffuseColor` registry keys; redraw. |
-| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_RESET` | Confirm via `MessageBox`; on YES call `ApplyLightingDefaults`; refresh all controls. |
-| `WM_COMMAND` `IDCANCEL` (Esc) | Save position; hide. |
-| `WM_CLOSE` | Save position; hide. |
+- **Lazy create** on first toggle: `CreateDialogParamW(IDD_SKYDOME_PICKER, ...)`, store handle in `info->hSkydomePicker`.
+- **Toggle**: show if hidden, hide if showing. Save position to registry on hide.
+- **Esc / WM_CLOSE** → save position, hide (don't destroy).
+- **Selection (`LVN_ITEMCHANGED`)** → live-update engine via `SetSkydomeSlot`, rebuild toolbar preview, refresh path label.
+- **Reset View Settings** → if visible, post `WM_USER` to re-seed the selection from the freshly-reset engine state.
 
-### E. Per-control conversion details
+The dialog stays open after a click — modeless. To close, the user clicks Esc / the title-bar X. Same as MT-2.
 
-```cpp
-// Per-light vec4 builder
-static Engine::Light MakeLight(float z_deg, float tilt_deg,
-                               COLORREF diffuseColor, COLORREF specularColor,
-                               float intensity)
-{
-    Engine::Light L = {};
-    L.Position = DirectionFromZTilt(z_deg, tilt_deg);
+### G. Thumbnail generator
 
-    float dR = GetRValue(diffuseColor)  / 255.0f * intensity;
-    float dG = GetGValue(diffuseColor)  / 255.0f * intensity;
-    float dB = GetBValue(diffuseColor)  / 255.0f * intensity;
-    L.Diffuse = D3DXVECTOR4(dR, dG, dB, 1.0f);
+`MakeSkydomeSlotThumbnail(int slot, int sizePx, const std::wstring& customPath)`:
 
-    float sR = GetRValue(specularColor) / 255.0f * intensity;
-    float sG = GetGValue(specularColor) / 255.0f * intensity;
-    float sB = GetBValue(specularColor) / 255.0f * intensity;
-    L.Specular = D3DXVECTOR4(sR, sG, sB, 1.0f);
+- **Off (slot 0)** → procedural: solid-fill the current `m_background` colour, draw a small "✕" glyph centred. Width × height = sizePx. Used for the toolbar preview when Off is active, and for slot 0's grid entry.
+- **Bundled (1–8)** → load the RCDATA texture via `D3DXCreateTextureFromFileInMemoryEx(..., D3DPOOL_SCRATCH, ...)` at the target size, `LockRect`, copy pixels into a `CreateDIBSection` HBITMAP. Cached in a `std::array<HBITMAP, 8>` filled at startup so we don't re-decode every paint.
+- **Custom populated (9–11)** → same as bundled but reads from the user-supplied file path; cache invalidated when the path changes.
+- **Custom empty (9–11)** → procedural: light-grey background + "+" glyph centred. Identical to MT-2's empty-custom-slot placeholder.
 
-    return L;
-}
-
-// Fills pass specularColor = RGB(0,0,0) so Specular comes out zero.
-```
-
-`DirectionFromZTilt` does the standard `(cos(tilt)cos(z), cos(tilt)sin(z), sin(tilt))` conversion with degrees-to-radians. The engine's `SetLight` handles normalization + Direction derivation.
-
-### F. Touch points by file
+### H. Touch points by file
 
 | File | Change |
 |---|---|
-| `src/engine.h` | Add `GetLight(LightType) const`, `GetAmbient() const`, `GetShadow() const` inline accessors; add `D3DXVECTOR4 m_shadow` member. |
-| `src/engine.cpp` | Implement `SetShadow` (store-only); initialize `m_shadow` in constructor. |
-| `src/main.cpp` | Add constants for defaults, `DirectionFromZTilt` + `ComputeAlignedFill` helpers, `LightingDlgProc`, `ToggleLightingDialog`, `InitializeLightingFromRegistry`, `ApplyLightingDefaults`, `hLightingDlg` field in `APPLICATION_INFO`, hook into Reset View Settings, hook startup init, register `ID_VIEW_LIGHTING` in the main menu switch. |
-| `src/ParticleEditor.en.rc` | Add `IDD_LIGHTING` template; add `View → Lighting…` to View menu. |
-| `src/ParticleEditor.de.rc` | Mirror structure with placeholder strings. |
-| `src/Resources/resource.en.h` | Add `ID_VIEW_LIGHTING = 40117`; add 18 control IDs (`IDC_LIGHTING_*`). |
-| `src/Resources/resource.de.h` | Same IDs as English. |
-
-Notably absent: **no shader changes, no engine state-machine changes, no file-format changes, no UndoStack hooks.**
+| `src/engine.h` | Add skydome members (`m_skydomeIndex`, `m_pSkydomeTexture`, `m_pSkydomeVB`, `m_pSkydomeIB`, `m_pSkydomeDecl`, `m_pSkydomeEffect`, `m_hSkydomeWVP`, `m_hSkydomeTex`, `m_skydomeIndexCount`, `m_skydomeCustomSlotPaths[3]`); declare `SetSkydomeSlot` / `GetSkydomeSlot` / `SetSkydomeCustomPath` / `GetSkydomeCustomPath` / `IsSkydomeSlotEmpty` / `kSkydomeSlotCount` / `kSkydomeBundledCount` / `kSkydomeFirstCustomSlot`. |
+| `src/engine.cpp` | `InitSkydomeMesh`, `InitSkydomeEffect`, `ReloadSkydomeTexture`, `RenderSkydome`, public API impls; hook into `Engine::Render` after Clear; cleanup in destructor / `Reset`. |
+| `src/Resources/Engine/Skydome.fx` | **NEW** — the HLSL effect. |
+| `src/Resources/skydomes/*.dds` | **NEW** — 8 bundled DDS textures (asset deliverable). |
+| `src/ParticleEditor.rc` | Add `IDR_SKYDOME_*` (×8) + `IDR_SHADER_SKYDOME` RCDATA entries. |
+| `src/Resources/resource.h` | Add `IDR_SKYDOME_*` + `IDR_SHADER_SKYDOME` + `IDC_SKYDOME_PREVIEW` + `IDC_SKYDOME_PICKER_*` + `IDS_SKYDOME_*` + `IDD_SKYDOME_PICKER` resource IDs. |
+| `src/ParticleEditor.en.rc` | `IDD_SKYDOME_PICKER` dialog template; toolbar template addition; string-table entries for slot names. |
+| `src/ParticleEditor.de.rc` | Same with English placeholder strings. |
+| `src/main.cpp` | Toolbar preview button creation + `WM_DRAWITEM`; `SkydomePickerDlgProc` + `ToggleSkydomePicker`; `MakeSkydomeSlotThumbnail` + `RebuildSkydomePreviewBitmap`; registry I/O helpers; startup restore; Reset View Settings hook; `IsDialogMessage` chain; `hSkydomePicker` field in `APPLICATION_INFO`. |
+| `src/ParticleEditor.vcxproj` | Add `Skydome.fx` + 8 DDS files as None / Content if MSBuild needs to track them (they're loaded via RCDATA so no explicit ItemGroup is needed beyond the .rc reference, but keep the project filters tidy). |
 
 ---
 
 ## Risks named up front + mitigations
 
-1. **R1 — New defaults visibly change the editor's appearance on every existing user's next launch.** Pre-MT-4: white sun pointing along +X, no fills, no ambient. Post-MT-4: 3-light setup with grey ambient, slate-blue fills, sun tilted 45° up. Every existing screenshot in CHANGELOG / docs / community wikis showing the editor's render will look different from a fresh launch after this ships. **Tripwire:** users open a familiar particle effect and the lighting looks different; some will read this as a regression.
-   **Mitigation:** make this the **headline visual change** of the CHANGELOG entry, with a side-by-side before/after. The new defaults match the Petroglyph map editor, which is the canonical reference for what a finished effect should look like in-game — so this is a *step toward authenticity*, not a regression. Reset View Settings restores these new defaults (not the pre-MT-4 white-sun-along-X). If anyone strongly objects, the defaults table is a one-place change.
+1. **R1 — Skydome bundled textures balloon the .exe size.** 8 × 1.5 MB = ~12 MB added to the .exe. **Tripwire:** users on slow connections / Win Defender real-time scanning notice startup-launch lag, distribution archives bloat.
+   **Mitigation:** DXT1 (BC1) compress every bundled texture during asset prep. 2K equirectangular DDS at BC1 is ~1.5 MB, well within tolerances. If the total still feels heavy, consider 1K (1024×512) for some scenes — Studio / Indoor don't need 2K. Document the compression target in the asset-prep section of the CHANGELOG. *No code-side mitigation needed — this is purely an asset-pipeline call.*
 
-2. **R2 — Direction convention (which axis is "up")** isn't called out in `engine.cpp`'s lighting code. The current default sun Position `(1,0,0)` is along +X. If the engine treats +Y or +Z as "up" in world space, then "Tilt Angle" measured around the wrong axis won't match user intuition. **Tripwire:** user sets Tilt to 45° expecting the sun to move halfway up the sky; instead it moves sideways or down.
-   **Mitigation:** during implementation, manually test the formula `Position = (cos·cos, cos·sin, sin)` by setting (z=0,tilt=0)/(z=90,tilt=0)/(z=0,tilt=90)/(z=0,tilt=−90) and visually confirming the sun moves through east→north→zenith→nadir semantics in the viewport. If the visual is wrong, swap two axes in `DirectionFromZTilt`. **This is a 2-minute check, but it absolutely must happen before merge** — *do not* trust the formula on paper.
+2. **R2 — Sphere shows visible polygonal seam at the back pole or texture wrap.** **Tripwire:** rotate the camera 180° and see a faint vertical seam where U wraps from 1.0 → 0.0, or a pinch at one of the poles where all UVs converge.
+   **Mitigation:** the standard fix for the seam is to duplicate the vertices at U=0 with U=1 so the wrap is exact (no interpolation across the seam). 32 longitude segments means an extra 17 vertices (one per latitude row). The pole pinch is mathematically unavoidable for a UV sphere, but with `AddressV = CLAMP` and a texture that has a relatively uniform colour near the poles (sky textures usually do), it's not visible. Test specifically by rotating to look straight up / down.
 
-3. **R3 — Shadow Color is a no-op control.** Engine has no shader handle for shadow color; the supposed `SetShadow` API has never been implemented. We're implementing it as a store-only stub. **Tripwire:** user changes shadow color, expects something to visually shift (e.g. the ground in shadowed regions tints), sees no change, thinks the editor is broken.
-   **Mitigation:** **explicit UI affordance.** Either (a) the tooltip on the Shadow Color picker says "Shadow color is stored and persists, but the preview renderer does not currently use it." Or (b) we omit it from the panel entirely. Recommend (a) for fidelity with the map editor's layout, with the tooltip + a CHANGELOG note. If reviewers prefer (b), removing the control is a 4-line patch (delete the static label, the ColorButton, the registry key, and the conversion code).
+3. **R3 — Camera-locked transform glitches when the camera moves between frames.** If `m_eye.Position` is sampled at a slightly different moment than the view matrix is computed, the skydome can "swim" relative to the scene as the camera rotates. **Tripwire:** orbit the camera quickly and see the skydome wobble or lag.
+   **Mitigation:** sample `m_eye.Position` and compute `world * view * projection` *in the same frame* as the view matrix is set up (which is what the existing `Engine::Render` does at the top, before any draw calls). Use the same `m_view` / `m_projection` matrices the rest of the scene uses — don't recompute from `m_eye`. The render pass is in the right place to inherit this naturally.
 
-4. **R4 — Force Fill Light Alignment's enabled/disabled state cycles** through several modes that can confuse the UI. ON at startup → spinners disabled, mirror-sun disabled. User unchecks → spinners enable to last-persisted values, mirror-sun enables. User edits Fill1 Z. User re-checks → spinners disable, *and the engine snaps fills back to (Sun Z + 120, -10)*, but the registry still holds the user's edited Fill1 Z. **Tripwire:** user un-checks force-align again expecting their previous edit to come back; if our restore-from-registry path reads stale state or the wrong source, they get the auto-computed values instead.
-   **Mitigation:** **registry is the only source of truth for fill Z/Tilt.** When force-align is ON, we never write the fill Z/Tilt registry keys — we only push computed values to the engine. When force-align goes OFF, we read the registry values back into the spinners (and to the engine). When force-align goes ON, we recompute and push to engine but leave registry untouched. This guarantees the "uncheck → restore" path works regardless of cycle count.
+4. **R4 — Shader compiles fine in Debug but fails on Release with different optimisation.** D3DX9 shader compilation has different defaults for Debug / Release. **Tripwire:** Debug build renders the skydome; Release build shows a black sphere because the effect failed to load.
+   **Mitigation:** compile the shader with the same flags as the existing `Effect` infrastructure uses. Verify by building both configurations during pre-handoff (already part of the build script). The fallback when the effect fails to load is: log the error, set `m_pSkydomeEffect = NULL`, the render pass guards on it (`if m_pSkydomeEffect != NULL`) and skips silently. User sees the flat background instead of the skydome but the editor doesn't crash.
 
-5. **R5 — Mirror Sun button overwrites both fills with no undo.** User has carefully tuned fill diffuse colors, accidentally clicks Mirror Sun, loses them. **Tripwire:** angry user.
-   **Mitigation:** confirmation prompt before applying? *No — too noisy for a one-click button.* Alternative: the button is positioned in the Fill Light *Settings* group, not somewhere they'd hit by mistake while editing the Sun. The map-editor screenshot positions it the same way. Document in the tooltip: "Copy Sun's Diffuse Color to both fill lights." If users complain, we can add a single-level undo (one button click of "Undo Mirror Sun" that restores the prior two fill colors); easy follow-up.
+5. **R5 — Custom user-supplied texture is huge (e.g. 8K equirectangular) and causes a VRAM hitch on load.** **Tripwire:** click an 8K HDR file in the custom-slot picker, editor freezes for several seconds while D3DX9 decodes / resamples.
+   **Mitigation:** `D3DXCreateTextureFromFileEx` with `D3DX_DEFAULT` for width/height lets D3DX9 pick a reasonable max texture size (caps at 4K on most cards). For very large user files, this is the bottleneck; document it in the dialog tooltip. No code-side mitigation beyond the existing async-load avoidance (the dialog blocks during the load, same as MT-2).
 
-6. **R6 — Dialog position lands off-screen after monitor topology change.** Same hazard as MT-1's popup. **Tripwire:** dialog opens, isn't visible anywhere, menu shows it as open.
-   **Mitigation:** validate position via `MonitorFromPoint(MONITOR_DEFAULTTONULL)` on show; fall back to centering on owner if invalid. **Verify bloom dialog handles this today** — if not, copy the new validation logic back into `ToggleBloomDialog` as a freebie fix.
+6. **R6 — Bloom + bright skydome (e.g., Space with stars) blows out the rest of the scene.** **Tripwire:** select Space + enable Bloom → particles look washed out.
+   **Mitigation:** acceptable v1 behaviour. The user can lower bloom strength or pick a different sky. Document in the CHANGELOG; if it's a frequent complaint, a future PR can add a "skydome contributes to bloom" toggle (cheap to implement — just render skydome with bloom-RT disabled).
 
-7. **R7 — Reset View Settings prompt text drift.** The current prompt enumerates what gets reset; we're adding lighting. **Tripwire:** prompt still says "background, ground, bloom" but resets lighting too — confusing for users; especially confusing because **the reset now changes the visible scene lighting**, which is much more noticeable than e.g. resetting the bloom strength.
-   **Mitigation:** update the prompt string in the resource file. Single-word change; verify the German variant gets the same treatment.
+7. **R7 — Sphere is inverted (we see the OUTSIDE not the inside).** Standard sphere vertices have outward-pointing normals. With back-face culling, only outward-facing tris draw. We're inside → all tris are back-facing → everything gets culled → invisible sphere. **Tripwire:** render a skydome and see only the flat background colour (skydome invisible).
+   **Mitigation:** explicitly `SetRenderState(D3DRS_CULLMODE, D3DCULL_CW)` in the render pass (default is CCW for front-facing). This is in the architecture sketch above; verify by selecting any non-Off slot and confirming the skydome renders.
 
-8. **R8 — Registry I/O ordering on startup.** If `InitializeLightingFromRegistry` runs before the engine is fully constructed, `SetLight` calls may fault. **Tripwire:** crash on first launch after upgrade.
-   **Mitigation:** call `InitializeLightingFromRegistry` after `info->engine = new Engine(...)` and before the message loop starts, in the same scope where `ReadBloomEnabled` runs ([main.cpp:4943-4960](src/main.cpp:4943)). Bloom's working ordering is the template — clone it exactly.
+8. **R8 — Toolbar preview button breaks the existing toolbar layout.** Adding a new control between two existing ones shifts every subsequent control by the new control's width. **Tripwire:** toolbar items overlap or get clipped after the change.
+   **Mitigation:** the existing toolbar uses absolute pixel coordinates per `WM_SIZE` reflow. Add the new control's reservation to the existing layout-x bookkeeping. Verify visually after rebuild that no items overlap. The `Ground Texture:` button is the immediate predecessor; the existing pattern (`hGroundTexturePreview` placement code) is one place to clone.
 
-9. **R9 — Force-align math mismatch with map-editor semantics.** I'm inferring that "Force Fill Light Alignment" means `Fill1.Z = Sun.Z + 120°, Fill2.Z = Sun.Z + 210°, Fill.Tilt = -10°`. The screenshot is consistent with that interpretation but I haven't confirmed against Petroglyph's source. **Tripwire:** the panel "feels off" because aligned fills don't move with the sun in the same way the map editor does.
-   **Mitigation:** the math is in `ComputeAlignedFill` — a single 3-line function. If observed map-editor behavior differs (e.g. tilt also tracks sun's tilt by some formula), it's a one-place fix. Worth manually opening the Petroglyph map editor side-by-side during implementation testing and verifying the Sun-Z-changes-fill-Z behavior empirically before merging.
+9. **R9 — Dialog position lands off-screen after monitor topology change.** Same hazard as MT-1's popup and MT-4's lighting dialog. **Tripwire:** dialog opens but isn't visible anywhere.
+   **Mitigation:** `MonitorFromPoint(MONITOR_DEFAULTTONULL)` validation on show; fall back to centre-on-owner if invalid. Reuse the same helper as the MT-4 / MT-2 dialogs.
 
-10. **R10 — Color values eyeballed from the screenshot won't match the map editor's exact defaults.** The default-table RGBs in this plan are approximations. **Tripwire:** user opens the particle editor and the lighting "almost but not quite" matches what they're seeing in the map editor.
-    **Mitigation:** during implementation, sample the screenshot with a pixel picker to refine the colors, OR (better) inspect the Petroglyph map editor's binary / configuration file for the actual stored Alamo defaults. The RGB table is a single block in `main.cpp` — refining it is trivial. Acceptable to ship with eyeballed values and refine in a follow-up if the binary inspection is more work than expected.
+10. **R10 — `Reset View Settings` clears `SkydomeIndex` but the toolbar preview doesn't refresh.** **Tripwire:** click Reset View Settings, the viewport reverts to flat background, but the toolbar still shows the previous skydome's thumbnail.
+    **Mitigation:** in the Reset View Settings handler ([src/main.cpp:1610](src/main.cpp:1610) area), after the engine state is reset, explicitly call `RebuildSkydomePreviewBitmap(info)` and `InvalidateRect(info->hSkydomePreview, NULL, TRUE)`. Same pattern as how MT-2 refreshes the ground-texture preview in the reset handler.
+
+11. **R11 — Effect parameter name collision between the new `Skydome.fx` and existing shaders.** Both might use `g_WorldViewProj` as the WVP matrix semantic. If the `Effect` class caches handles by name and there's a global state pool, one effect can clobber the other's binding. **Tripwire:** rendering the skydome corrupts another effect's matrices on the next frame.
+    **Mitigation:** D3DX9 effects are independent objects; each effect's handles are scoped to its own `ID3DXEffect`. Cross-effect contamination requires shared state which we don't use. Verify by selecting a non-Off skydome and confirming both ground (different effect) and skydome render correctly without flicker.
 
 ---
 
 ## Testing & verification
 
-Manual checklist. Each item names *what regression it catches*. Debug instrumentation: prefix `[Lighting]` — `grep '\[Lighting\]'` in stderr captures all events.
+Manual checklist. Each item names *what regression it catches*. Debug instrumentation: prefix `[Skydome]`.
 
-### A. Menu, dialog open/close, position memory
-
-| # | Check | Catches |
-|---|---|---|
-| A1 | View menu shows "Lighting…" between "Bloom…" and the separator. Click it. Dialog opens centered on the main window (first run). | Menu entry missing / handler unwired |
-| A2 | Move dialog to (100, 100). Click X. Reopen via menu. Dialog opens at (100, 100). | Position memory broken |
-| A3 | Press Esc with focus inside the dialog. Closes same as X. Reopen — position preserved. | Esc handler missing |
-| A4 | Close main editor with dialog open at (X, Y). Restart. Open dialog via menu. Opens at (X, Y). | Position not flushed |
-| A5 | Manually set `LightingDialogPos` registry to (99999, 99999). Restart. Open dialog. Snaps to center-on-owner default. | R6 — off-screen recovery |
-| A6 | Build Release. All `[Lighting]` debug lines absent from stderr. | Debug instrumentation leaked |
-
-### B. Sun controls
+### A. Sphere + shader basics
 
 | # | Check | Catches |
 |---|---|---|
-| B1 | Fresh install. Open dialog. Sun shows intensity 0.50, Z 0.00, Tilt 45.00, Ambient ≈ dark grey, Specular ≈ light grey, Diffuse ≈ light grey-blue, Shadow ≈ medium grey, Force-align CHECKED. | Default seeding wrong |
-| B2 | Set Sun intensity to 1.0. Particle visibly brighter. Set to 0.0 — only ambient lights it. | Intensity multiplier broken |
-| B3 | Set Sun Z to 90°. Viewport lighting rotates by 90° in the horizontal plane. | Direction Z/azimuth conversion wrong |
-| B4 | Set Sun Tilt to 90° (zenith). Sun overhead — top of particle lit, sides dimmer. | R2 — wrong axis convention; revisit DirectionFromZTilt |
-| B5 | Set Sun Tilt to -90° (nadir). Sun below — particle dark except ambient. | Tilt clamp + sign |
-| B6 | Open Sun Diffuse Color picker; pick red. Particle's lit side goes red-tinted. | Diffuse color → Light.Diffuse conversion |
-| B7 | Open Sun Specular Color picker; pick green. *Shader-dependent*: on shaders that use specular, highlights tint green. On shaders without specular (the majority), no visible change. | Specular color → Light.Specular conversion; documents the "many shaders don't use specular" expectation |
-| B8 | Open Sun Ambient Color picker; pick warm orange. Whole scene gets a warm wash even on the unlit side of particles. | Ambient color → m_ambient |
-| B9 | Open Sun Shadow Color picker; pick bright pink. **No visible change** in viewport. Tooltip on the picker explains this. | R3 — shadow color is store-only |
+| A1 | Cold launch with `SkydomeIndex` registry value missing — viewport shows flat background colour. `[Skydome] render pass skipped (Off)` logged. | Default state wrong; Off slot not really Off |
+| A2 | Select bundled slot Space → viewport shows the Space texture wrapped around the camera. Rotate the camera 360° horizontally → the sky stays continuous (no seam). | R2 — UV seam at u=0/u=1 |
+| A3 | Tilt the camera straight up (Tilt=90°) and straight down — visible textured sky at both poles, may show pinch but not black/garbage. | R2 — pole pinch unbounded |
+| A4 | Move the camera (middle-drag) — the skydome moves WITH the camera (stays infinite). The ground plane and particles stay anchored. | R3 — camera-lock broken |
+| A5 | Compile Release build, repeat A2. | R4 — shader Release compile divergence |
+| A6 | Select Off slot → `[Skydome] render pass skipped (Off)` logged. Viewport reverts to flat background. | Off slot fails to disable pass |
 
-### C. Fill light controls
+### B. Slot interactions
 
 | # | Check | Catches |
 |---|---|---|
-| C1 | With Force Fill Light Alignment ON (default), Fill1 Z/Tilt spinners are visibly disabled and grayed. Mirror Sun button is disabled. | Force-align disable wiring missing |
-| C2 | Uncheck Force-align. Fill1 Z/Tilt spinners become editable, showing 120.0 / -10.0. Mirror Sun button enables. | Force-align state transition (ON→OFF) wrong |
-| C3 | With Force-align OFF, set Fill1 Z to 270°. Fill1's contribution rotates. | Fill direction wiring independent of Force-align gate |
-| C4 | Re-check Force-align. Fill1 Z spinner becomes grayed and shows 120.0 again (recomputed from Sun Z=0°). | Force-align state transition (OFF→ON) wrong |
-| C5 | With Force-align OFF + Fill1 Z at 270°, uncheck Force-align again. Spinner shows 270° (the *user's last manual value*, restored from registry). | R4 — registry truth for Fill1 Z lost across cycle |
-| C6 | With Force-align ON, set Sun Z to 90°. Viewport: both fills rotate in lock-step (Fill1 visually at Z=210, Fill2 at Z=300). | Force-align live-recompute wiring broken |
-| C7 | Set Fill1 Intensity to 0.0. Fill1 contribution disappears. Set back to 0.5. Returns. | Per-fill intensity wiring |
-| C8 | Set Fill1 Diffuse Color to bright magenta. Fill1's contribution tints magenta. | Per-fill diffuse wiring |
-| C9 | Confirm Fill1 has no specular control. Confirm Fill1's contribution shows no specular highlight regardless of shader. | Spec scope creep — fills should never have specular |
-| C10 | Click Mirror Sun (with Force-align OFF). Both Fill diffuse pickers update to the Sun's current diffuse color. Viewport reflects. | Mirror Sun action broken |
-| C11 | Try to click Mirror Sun with Force-align ON — button is disabled. Cannot click. | Mirror Sun + Force-align orthogonality |
+| B1 | Click toolbar preview button → picker dialog opens. 12 slots visible in a 4×3 grid. Slot 0 (Off) is the first cell with a ✕ glyph; slots 1–8 show bundled-scene thumbnails; slots 9–11 show empty "+" placeholders. | Layout wrong / thumbnails missing |
+| B2 | Single-click a bundled slot (e.g. Sunset). Engine swaps to Sunset, toolbar preview updates to the Sunset thumbnail, dialog stays open (modeless). | Click handler / live update / sticky-modeless |
+| B3 | Single-click slot 0 (Off). Engine disables skydome, toolbar preview shows the ✕-on-background-colour thumbnail, viewport reverts to flat fill. | Off slot wiring |
+| B4 | Single-click an empty Custom slot. `GetOpenFileName` dialog opens with filter `.dds;.tga;.png;.hdr;.jpg`. Pick a file → slot populates, thumbnail rebuilds, slot becomes selected, skydome swaps. | File-picker wiring; populate-on-pick |
+| B5 | Right-click a populated Custom slot. Context menu shows "Change skydome…" and "Clear slot". Click "Clear slot" → slot returns to empty "+" placeholder; if it was the active slot, engine falls back to Off. | Context menu wiring; clear-slot active-fallback |
+| B6 | Right-click slot 0 / a bundled slot. Nothing happens (no context menu — right-click is a no-op for non-custom slots). | Context menu over-broad |
+| B7 | Click "Reset custom slots" button → confirmation prompt → custom paths cleared, slots 9–11 empty. Bundled slots unchanged. If active slot was a now-cleared custom, engine falls back to Off. | Reset-custom scope and active-fallback |
 
-### D. Persistence
+### C. Persistence
 
 | # | Check | Catches |
 |---|---|---|
-| D1 | Configure non-default values for Sun and Fill1. Close editor. Restart. Reopen Lighting. Values restored. | Registry write or startup read broken |
-| D2 | With Force-align OFF, edit Fill1 Z to 250°. Re-check Force-align. Close editor. Restart. Open dialog: Force-align is ON, Fill1 Z spinner shows 250° (grayed). Uncheck → 250° still there. | R4 — registry persistence under Force-align cycle |
-| D3 | Delete the entire `AloParticleEditor` registry key. Restart. All defaults loaded. Sun=0.5/0/45, Force-align ON, fills at 120/210, slate-blue. No crash. | Full-fresh-install path; R10 — defaults match the table |
-| D4 | Manually delete `LightSunDiffuseColor`. Restart. Dialog opens with default Sun diffuse color (light grey-blue from the table). Editor doesn't crash. | Per-key default-on-miss fallback |
+| C1 | Configure a non-default skydome (e.g., Atmosphere). Close editor. Restart. Toolbar preview and engine state reflect Atmosphere. | `SkydomeIndex` persistence |
+| C2 | Populate a Custom slot with a file path. Close editor. Restart. Custom slot still has the path; thumbnail rebuilds. | Custom-path persistence |
+| C3 | Manually edit registry to set `SkydomeIndex = 99` (out of range). Restart. Editor doesn't crash; falls back to Off. | Out-of-range defensive |
+| C4 | Manually edit `SkydomeCustomSlot9` to a non-existent file path. Restart. Slot shows broken-placeholder thumbnail. If active, engine falls back to Off. | Missing-file defensive |
+| C5 | Delete the entire `AloParticleEditor` registry key. Restart. All defaults loaded (Off, no custom paths). No crash. | Full-fresh-install |
 
-### E. Reset behaviors
+### D. Reset behaviours
 
 | # | Check | Catches |
 |---|---|---|
-| E1 | Configure non-default lighting. Click in-panel Reset. Confirm Yes. All controls snap to defaults. Viewport updates immediately. Force-align goes back to ON. | Reset button doesn't refresh UI / doesn't reset force-align |
-| E2 | Configure non-default lighting. Click in-panel Reset. Confirm **No**. Nothing changes. | Confirmation can be cancelled |
-| E3 | Configure non-default lighting. View → Reset View Settings. Confirm. Lighting (with bloom/ground/background) resets. Open Lighting dialog refreshes. | R7 — Reset View Settings doesn't hit lighting; WM_USER reseed broken |
-| E4 | Close Lighting dialog. View → Reset View Settings. Confirm. Reopen Lighting dialog. Defaults shown. | Registry actually wiped, not just in-memory |
-| E5 | Reset View Settings prompt text mentions lighting (alongside background, ground, bloom). | R7 — prompt drift |
+| D1 | Configure a non-default skydome + populate Custom 1. View → Reset View Settings → confirm. Skydome resets to Off; toolbar preview reflects Off. **Custom 1 path is preserved** (user data, not view settings — same convention as MT-2). | Reset over-broad |
+| D2 | Close picker. View → Reset View Settings. Reopen picker. Slot 0 (Off) is selected; Custom 1 still populated. | Persistence of customisation post-Reset View Settings |
+| D3 | Reset View Settings prompt text mentions skydome alongside background/ground/bloom/lighting. | Prompt text drift |
+
+### E. Toolbar + dialog interactions
+
+| # | Check | Catches |
+|---|---|---|
+| E1 | Drag the dialog to a new screen position. Click X. Reopen via toolbar button. Dialog appears at the dragged position. | Position memory |
+| E2 | Press Esc with focus in the dialog. Dialog hides; position preserved. | Esc → IDCANCEL routing |
+| E3 | Manually edit `SkydomePickerPos` registry to (99999, 99999). Restart. Open picker. Dialog snaps to centre-on-owner default. | R9 — off-screen recovery |
+| E4 | Open picker. Open Lighting / Bloom dialogs simultaneously. All work; no focus interference. | Modeless coexistence |
+| E5 | Open picker. Switch mods via File → Mods → … . Picker stays open; skydome state is unchanged (scene-global, not per-mod). | R-scope; skydome shouldn't react to mod switch |
 
 ### F. Engine integration
 
 | # | Check | Catches |
 |---|---|---|
-| F1 | Inspect `m_lights[0]` after startup: Diffuse ≈ (0.353, 0.353, 0.373, 1.0) (180×0.5/255 etc.), Specular ≈ (0.373, 0.373, 0.392, 1.0), Position normalized from (cos45·cos0, cos45·sin0, sin45) = (0.707, 0, 0.707). | Defaults wiring + conversion math |
-| F2 | Inspect `m_ambient` after startup: ≈ (0.157, 0.157, 0.196, 0). w=0 preserves the convention. | Ambient conversion |
-| F3 | Inspect `m_shadow` after startup: ≈ (0.392, 0.392, 0.431, 0). | R3 — m_shadow is stored even though unbound |
-| F4 | With Force-align ON and Sun Z=0°, inspect `m_lights[1].Position` (Fill1): normalized from (cos(-10)·cos(120), cos(-10)·sin(120), sin(-10)). | Force-align computation wired into engine push |
-| F5 | Change Sun Z to 45°. Inspect `m_lights[1]`: Position now reflects (Fill1.Z = 165°, Tilt -10°). | Force-align live recompute wires to engine |
+| F1 | Inspect `Engine::m_skydomeIndex` after startup with no registry — equals 0. `m_pSkydomeTexture == NULL`. | Default state correct |
+| F2 | Select bundled slot — inspect `m_pSkydomeTexture` non-NULL after `SetSkydomeSlot` returns. Index updated. | State update correctness |
+| F3 | Alt-Tab away and back (triggers lost device on D3D9). Skydome continues rendering correctly after device restore. | Lost-device recovery (the engine's existing pattern should handle this) |
+| F4 | Run with a Visual Studio leak-detection tool from clean launch to clean shutdown. No new leaks beyond the engine's existing baseline. | Resource cleanup (VB / IB / Texture / Effect) |
 
 ### G. Edge cases
 
 | # | Check | Catches |
 |---|---|---|
-| G1 | Z Angle wrap: set Sun Z to 359°, increment → either 360° (with engine modulo 360) or 0°. Document the behavior. | Wrap convention undefined |
-| G2 | Tilt clamp: set Sun Tilt to 91° — clamps to 90°. -91° — clamps to -90°. | Clamp missing |
-| G3 | Intensity clamp: -0.5 → 0.0. 5.0 → ? (decide a max — recommend 3.0 like the original plan). | Range enforcement |
-| G4 | Open Lighting dialog. Open Emitter properties simultaneously. Both work; no interference. | Modeless dialog independence |
-| G5 | Open Lighting dialog. Switch mods. Lighting values are session-global — they don't change. | Lighting incorrectly scoped to mod |
-| G6 | Open Lighting dialog. Open a different `.alo`. Lighting unchanged. | Lighting incorrectly scoped to particle file |
-| G7 | Open Lighting dialog. Open Bloom dialog. Adjust both. Each works; no WM_USER cross-talk. | R9-equivalent — bloom/lighting WM_USER collision |
+| G1 | Select a bundled slot. Bloom on. The skydome contributes to bloom (visible glow on bright sky). | Render-pipeline composition |
+| G2 | Select a bundled slot. Heat-distortion enabled. Distortion samples include the skydome. | Distortion pass composition |
+| G3 | Resize the main window (drag corner). Skydome aspect ratio stays correct (no stretching at extreme aspect ratios). | Projection-matrix path |
+| G4 | Zoom the camera all the way in / out (Ctrl+RightDrag). Skydome stays infinite (doesn't appear to scale with zoom). | R3 — camera-lock + zoom independence |
+| G5 | Build a Release configuration with `NDEBUG`. All `[Skydome]` debug lines absent from stderr. | Debug instrumentation leaked |
 
-### H. Localization parity
+### H. Localisation parity
 
 | # | Check | Catches |
 |---|---|---|
 | H1 | Compile both `.en.rc` and `.de.rc`. Both succeed. | German variant missing IDs |
-| H2 | German variant has the new dialog with English placeholder strings (per project convention). | German variant skipped entirely |
+| H2 | German variant has the new dialog template + toolbar entries with English placeholder strings. | German variant skipped entirely |
 
-### I. Cleanup
+---
 
-| # | Check | Catches |
-|---|---|---|
-| I1 | Quit editor. No leaks reported. | Dialog HWND not destroyed on app close |
-| I2 | Open / close Lighting dialog 20 times. Memory stable. | Resource leak per show/hide |
+## Task Breakdown (execution order)
+
+Each task is a self-contained slice — engine code + UI plumbing kept separate where possible so the diff is reviewable. Test-driven where there's a unit-testable boundary; otherwise verified by a build + manual check before commit.
+
+### Task 0: Pre-implementation asset prep
+
+**Files:**
+- Create: `tools/generate_skydome_textures.py` (procedural gradient generator)
+- Create: `src/Resources/skydomes/{space,atmosphere,sunset,dawn,night,overcast,studio,indoor}.dds`
+
+**Format decision: DDS (BC1/DXT1 compressed)** — same family as EaW's own environment textures, loaded via `D3DXCreateTextureFromFileInMemory` directly with no conversion. Custom slots accept `.dds` and `.tga` (the other native EaW format) for the same reason.
+
+- [ ] **Step 1: Write `tools/generate_skydome_textures.py`** — generates 8 equirectangular DDS files at 1024×512 with simple colour ramps representing each scene. Reuse the pattern from `tools/generate_pin_badge.py` (Python + Pillow + numpy + a DDS writer like `imageio` with the `bc1` compression flag).
+
+```python
+# generate_skydome_textures.py — placeholder skydome generator
+import numpy as np
+from PIL import Image
+import imageio.v3 as iio
+
+# Each tuple: (name, top_color RGB, mid_color, bottom_color)
+SCENES = [
+    ("space",      (0,0,8),       (0,0,16),       (0,0,8)),
+    ("atmosphere", (50,90,180),   (140,180,220),  (200,210,230)),
+    ("sunset",     (200,80,40),   (220,140,70),   (180,100,60)),
+    ("dawn",       (200,150,200), (240,200,180),  (200,180,180)),
+    ("night",      (10,10,30),    (20,20,40),     (10,15,25)),
+    ("overcast",   (140,150,160), (170,175,180),  (150,155,160)),
+    ("studio",     (180,180,180), (200,200,200),  (160,160,160)),
+    ("indoor",     (60,55,50),    (80,75,70),     (50,45,40)),
+]
+
+W, H = 1024, 512
+for name, top, mid, bot in SCENES:
+    img = np.zeros((H, W, 3), dtype=np.uint8)
+    for y in range(H):
+        t = y / (H-1)
+        if t < 0.5:
+            a = t * 2.0
+            c = np.array(top) * (1.0 - a) + np.array(mid) * a
+        else:
+            a = (t - 0.5) * 2.0
+            c = np.array(mid) * (1.0 - a) + np.array(bot) * a
+        img[y, :, :] = c.astype(np.uint8)
+    iio.imwrite(f"src/Resources/skydomes/{name}.dds", img,
+                extension=".dds", compression="bc1")
+```
+
+- [ ] **Step 2: Run the generator**, verify 8 DDS files land in `src/Resources/skydomes/`.
+
+```bash
+python tools/generate_skydome_textures.py
+ls src/Resources/skydomes/*.dds
+```
+
+Expected: 8 files, ~256KB-1MB each.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tools/generate_skydome_textures.py src/Resources/skydomes/*.dds
+git commit -m "asset(MT-3): procedural placeholder skydome DDS textures + generator"
+```
+
+### Task 1: Sphere mesh
+
+**Files:**
+- Modify: `src/engine.h` (add member declarations + `SkydomeVertex` struct)
+- Modify: `src/engine.cpp` (add `InitSkydomeMesh`)
+
+- [ ] **Step 1: Add member declarations to `engine.h` (near m_pGroundTexture).**
+
+```cpp
+// In Engine class, private section:
+struct SkydomeVertex
+{
+    D3DXVECTOR3 Position;
+    D3DXVECTOR3 Normal;
+    D3DXVECTOR2 TexCoord;
+};
+
+IDirect3DVertexBuffer9*  m_pSkydomeVB;
+IDirect3DIndexBuffer9*   m_pSkydomeIB;
+IDirect3DVertexDeclaration9* m_pSkydomeDecl;
+DWORD                    m_skydomeIndexCount;
+
+static const int kSkydomeLongSegments = 32;
+static const int kSkydomeLatSegments  = 16;
+```
+
+- [ ] **Step 2: Implement `InitSkydomeMesh` in `engine.cpp`** (called once from the Engine constructor after the device is created).
+
+```cpp
+void Engine::InitSkydomeMesh()
+{
+    const int lon = kSkydomeLongSegments;
+    const int lat = kSkydomeLatSegments;
+    const int vertCount = (lon + 1) * (lat + 1);
+    const int triCount  = lon * lat * 2;
+    m_skydomeIndexCount = triCount * 3;
+
+    // Generate vertices: U wraps lon segments [0,1], V is lat segments [0,1].
+    // Sphere radius is 1; we'll rely on the shader to push depth to far.
+    std::vector<SkydomeVertex> verts(vertCount);
+    for (int j = 0; j <= lat; ++j)
+    {
+        const float v = float(j) / float(lat);
+        const float theta = v * D3DX_PI;             // 0..pi (south to north)
+        const float sinTheta = sinf(theta);
+        const float cosTheta = cosf(theta);
+        for (int i = 0; i <= lon; ++i)
+        {
+            const float u = float(i) / float(lon);
+            const float phi = u * 2.0f * D3DX_PI;     // 0..2pi
+            const float sinPhi = sinf(phi);
+            const float cosPhi = cosf(phi);
+            SkydomeVertex& vx = verts[j * (lon + 1) + i];
+            vx.Position = D3DXVECTOR3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi);
+            vx.Normal   = vx.Position;
+            vx.TexCoord = D3DXVECTOR2(u, v);
+        }
+    }
+
+    std::vector<uint16_t> idx(m_skydomeIndexCount);
+    int k = 0;
+    for (int j = 0; j < lat; ++j)
+    {
+        for (int i = 0; i < lon; ++i)
+        {
+            uint16_t a = uint16_t(j * (lon + 1) + i);
+            uint16_t b = a + 1;
+            uint16_t c = uint16_t((j + 1) * (lon + 1) + i);
+            uint16_t d = c + 1;
+            idx[k++] = a; idx[k++] = c; idx[k++] = b;
+            idx[k++] = b; idx[k++] = c; idx[k++] = d;
+        }
+    }
+
+    // Vertex declaration
+    D3DVERTEXELEMENT9 decl[] = {
+        {0, offsetof(SkydomeVertex, Position),  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, offsetof(SkydomeVertex, Normal),    D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0},
+        {0, offsetof(SkydomeVertex, TexCoord),  D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END()
+    };
+    m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl);
+
+    // VB
+    m_pDevice->CreateVertexBuffer(
+        UINT(verts.size() * sizeof(SkydomeVertex)),
+        D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &m_pSkydomeVB, NULL);
+    void* pVB = NULL;
+    m_pSkydomeVB->Lock(0, 0, &pVB, 0);
+    memcpy(pVB, verts.data(), verts.size() * sizeof(SkydomeVertex));
+    m_pSkydomeVB->Unlock();
+
+    // IB
+    m_pDevice->CreateIndexBuffer(
+        UINT(idx.size() * sizeof(uint16_t)),
+        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_pSkydomeIB, NULL);
+    void* pIB = NULL;
+    m_pSkydomeIB->Lock(0, 0, &pIB, 0);
+    memcpy(pIB, idx.data(), idx.size() * sizeof(uint16_t));
+    m_pSkydomeIB->Unlock();
+
+#ifndef NDEBUG
+    fprintf(stdout, "[Skydome] sphere mesh init verts=%d tris=%d\n", vertCount, triCount);
+#endif
+}
+```
+
+- [ ] **Step 3: Call `InitSkydomeMesh` from the Engine constructor** after `m_pDevice` is created (around the existing `SetLight` calls).
+- [ ] **Step 4: Add cleanup in `Engine::~Engine`** — `SAFE_RELEASE(m_pSkydomeVB)`, `SAFE_RELEASE(m_pSkydomeIB)`, `SAFE_RELEASE(m_pSkydomeDecl)`.
+- [ ] **Step 5: Build, verify `[Skydome] sphere mesh init` log line on startup.**
+
+```bash
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" -p:Configuration=Debug -p:Platform=x64 -nologo
+./x64/Debug/ParticleEditor.exe
+# stderr should show [Skydome] sphere mesh init verts=561 tris=512
+```
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add src/engine.h src/engine.cpp
+git commit -m "feat(MT-3): generate UV sphere mesh at engine init"
+```
+
+### Task 2: Skydome shader
+
+**Files:**
+- Create: `src/Resources/Engine/Skydome.fx`
+- Modify: `src/ParticleEditor.rc` (add `IDR_SHADER_SKYDOME` RCDATA)
+- Modify: `src/Resources/resource.h` (add `IDR_SHADER_SKYDOME` ID)
+
+- [ ] **Step 1: Write `Skydome.fx`** (content as in Architecture section B).
+- [ ] **Step 2: Add resource ID** to `src/Resources/resource.h`:
+
+```cpp
+#define IDR_SHADER_SKYDOME    150
+```
+
+- [ ] **Step 3: Add RCDATA entry** to `src/ParticleEditor.rc`:
+
+```rc
+IDR_SHADER_SKYDOME      RCDATA                  "Resources\\Engine\\Skydome.fx"
+```
+
+- [ ] **Step 4: Build, verify the .rc compiles and the .exe contains the resource.**
+
+```bash
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" -p:Configuration=Debug -p:Platform=x64 -nologo
+```
+
+- [ ] **Step 5: Commit.**
+
+```bash
+git add src/Resources/Engine/Skydome.fx src/ParticleEditor.rc src/Resources/resource.h
+git commit -m "feat(MT-3): add skydome equirectangular-sampling shader"
+```
+
+### Task 3: Engine effect + texture loading
+
+**Files:**
+- Modify: `src/engine.h` (add `m_pSkydomeEffect`, `m_hSkydomeWVP`, `m_hSkydomeTex`, `m_pSkydomeTexture`, `m_skydomeIndex`, `m_skydomeCustomSlotPaths[3]`, kSkydome* constants)
+- Modify: `src/engine.cpp` (add `InitSkydomeEffect`, `ReloadSkydomeTexture`)
+
+- [ ] **Step 1: Add member declarations** in `engine.h` near the existing skydome mesh members.
+
+```cpp
+ID3DXEffect*             m_pSkydomeEffect;
+D3DXHANDLE               m_hSkydomeWVP;
+D3DXHANDLE               m_hSkydomeTex;
+IDirect3DTexture9*       m_pSkydomeTexture;
+int                      m_skydomeIndex;
+std::wstring             m_skydomeCustomSlotPaths[3];
+
+static const int kSkydomeSlotCount = 12;
+static const int kSkydomeBundledCount = 9;       // Off + 8 scenes
+static const int kSkydomeFirstCustomSlot = 9;
+static const int kSkydomeOffSlot = 0;
+```
+
+- [ ] **Step 2: Add public API declarations.**
+
+```cpp
+int  GetSkydomeSlot() const { return m_skydomeIndex; }
+bool SetSkydomeSlot(int index);    // returns true on success; false on load failure
+const std::wstring& GetSkydomeCustomPath(int slot) const;
+bool SetSkydomeCustomPath(int slot, const std::wstring& path);
+bool IsSkydomeSlotEmpty(int slot) const;
+```
+
+- [ ] **Step 3: Add the bundled-resource ID lookup table** as a static const array in `engine.cpp` (top of file, after `ShaderNames[]`).
+
+```cpp
+// Slot 0 is Off (no resource); slots 1-8 map to bundled skydomes.
+static const int kSkydomeBundledResources[9] = {
+    0,                       // 0: Off
+    IDR_SKYDOME_SPACE,       // 1
+    IDR_SKYDOME_ATMOSPHERE,  // 2
+    IDR_SKYDOME_SUNSET,      // 3
+    IDR_SKYDOME_DAWN,        // 4
+    IDR_SKYDOME_NIGHT,       // 5
+    IDR_SKYDOME_OVERCAST,    // 6
+    IDR_SKYDOME_STUDIO,      // 7
+    IDR_SKYDOME_INDOOR,      // 8
+};
+```
+
+- [ ] **Step 4: Implement `InitSkydomeEffect`** — loads `IDR_SHADER_SKYDOME` via RCDATA + `D3DXCreateEffectFromMemory`, caches handles. Called from the Engine constructor after `InitSkydomeMesh`.
+
+```cpp
+void Engine::InitSkydomeEffect()
+{
+    HMODULE hMod = GetModuleHandle(NULL);
+    HRSRC   hRes = FindResource(hMod, MAKEINTRESOURCE(IDR_SHADER_SKYDOME), RT_RCDATA);
+    if (!hRes) return;
+    HGLOBAL hData = LoadResource(hMod, hRes);
+    DWORD   dwSize = SizeofResource(hMod, hRes);
+    void*   pData = hData ? LockResource(hData) : NULL;
+    if (!pData || !dwSize) return;
+
+    LPD3DXBUFFER pErrors = NULL;
+    HRESULT hr = D3DXCreateEffect(m_pDevice, pData, dwSize, NULL, NULL, 0, NULL,
+                                  &m_pSkydomeEffect, &pErrors);
+    if (FAILED(hr))
+    {
+#ifndef NDEBUG
+        if (pErrors) fprintf(stderr, "[Skydome] effect compile failed: %s\n",
+                             (const char*)pErrors->GetBufferPointer());
+#endif
+        SAFE_RELEASE(pErrors);
+        m_pSkydomeEffect = NULL;
+        return;
+    }
+    SAFE_RELEASE(pErrors);
+
+    m_hSkydomeWVP = m_pSkydomeEffect->GetParameterByName(NULL, "g_WorldViewProj");
+    m_hSkydomeTex = m_pSkydomeEffect->GetParameterByName(NULL, "g_Skydome");
+}
+```
+
+- [ ] **Step 5: Implement `ReloadSkydomeTexture(int)`** — releases the current texture, loads from RCDATA (bundled) or file (custom), updates `m_pSkydomeTexture`. Returns false on failure (caller falls back to Off).
+
+```cpp
+bool Engine::ReloadSkydomeTexture(int slot)
+{
+    SAFE_RELEASE(m_pSkydomeTexture);
+    if (slot == kSkydomeOffSlot) return true;
+
+    if (slot >= 1 && slot < kSkydomeBundledCount)
+    {
+        HMODULE hMod = GetModuleHandle(NULL);
+        HRSRC   hRes = FindResource(hMod, MAKEINTRESOURCE(kSkydomeBundledResources[slot]), RT_RCDATA);
+        if (!hRes) return false;
+        HGLOBAL hData = LoadResource(hMod, hRes);
+        DWORD   dwSize = SizeofResource(hMod, hRes);
+        void*   pData = hData ? LockResource(hData) : NULL;
+        if (!pData || !dwSize) return false;
+        return SUCCEEDED(D3DXCreateTextureFromFileInMemory(m_pDevice, pData, dwSize, &m_pSkydomeTexture));
+    }
+
+    if (slot >= kSkydomeFirstCustomSlot && slot < kSkydomeSlotCount)
+    {
+        const std::wstring& path = m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot];
+        if (path.empty()) return false;
+        return SUCCEEDED(D3DXCreateTextureFromFileEx(
+            m_pDevice, path.c_str(),
+            D3DX_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, D3DFMT_UNKNOWN,
+            D3DPOOL_MANAGED, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL,
+            &m_pSkydomeTexture));
+    }
+    return false;
+}
+
+bool Engine::SetSkydomeSlot(int newIndex)
+{
+    if (newIndex < 0 || newIndex >= kSkydomeSlotCount) return false;
+    if (newIndex == m_skydomeIndex) return true;
+    if (!ReloadSkydomeTexture(newIndex))
+    {
+        // Fall back to Off on failure
+        m_skydomeIndex = kSkydomeOffSlot;
+        SAFE_RELEASE(m_pSkydomeTexture);
+        return false;
+    }
+    m_skydomeIndex = newIndex;
+#ifndef NDEBUG
+    fprintf(stdout, "[Skydome] select slot=%d\n", newIndex);
+#endif
+    return true;
+}
+
+bool Engine::SetSkydomeCustomPath(int slot, const std::wstring& path)
+{
+    if (slot < kSkydomeFirstCustomSlot || slot >= kSkydomeSlotCount) return false;
+    m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot] = path;
+    if (m_skydomeIndex == slot)
+    {
+        return ReloadSkydomeTexture(slot);
+    }
+    return true;
+}
+
+const std::wstring& Engine::GetSkydomeCustomPath(int slot) const
+{
+    static const std::wstring empty;
+    if (slot < kSkydomeFirstCustomSlot || slot >= kSkydomeSlotCount) return empty;
+    return m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot];
+}
+
+bool Engine::IsSkydomeSlotEmpty(int slot) const
+{
+    if (slot == kSkydomeOffSlot) return false;       // Off is "selectable", not empty
+    if (slot < kSkydomeBundledCount) return false;   // bundled always populated
+    if (slot < kSkydomeSlotCount)
+        return m_skydomeCustomSlotPaths[slot - kSkydomeFirstCustomSlot].empty();
+    return true;
+}
+```
+
+- [ ] **Step 6: Initialise `m_skydomeIndex = 0`, `m_pSkydomeTexture = NULL`, `m_pSkydomeEffect = NULL`** in the Engine constructor (near the other early-init assignments around line 1290).
+- [ ] **Step 7: Add cleanup in `~Engine`** — `SAFE_RELEASE(m_pSkydomeEffect)`, `SAFE_RELEASE(m_pSkydomeTexture)`.
+- [ ] **Step 8: Build, run, verify no crash and `[Skydome] sphere mesh init` still appears.**
+- [ ] **Step 9: Commit.**
+
+```bash
+git add src/engine.h src/engine.cpp
+git commit -m "feat(MT-3): skydome state + effect/texture load helpers"
+```
+
+### Task 4: Render pass integration
+
+**Files:**
+- Modify: `src/engine.cpp` (add `RenderSkydome`, hook into `Engine::Render`)
+
+- [ ] **Step 1: Implement `RenderSkydome`** as in Architecture section C.
+- [ ] **Step 2: Insert the call into `Engine::Render`** right after the `Clear` call and before the ground render.
+- [ ] **Step 3: Build, run, select a non-Off slot via direct registry edit** (since we haven't built the dialog yet — set `SkydomeIndex = 2` for Atmosphere). Verify the skydome renders. Check `[Skydome] render pass skipped` is *absent* (it's a non-Off slot).
+- [ ] **Step 4: Verify R7 (sphere not inverted)** — sphere is visible, not invisible/black. If invisible, fix the cull mode.
+- [ ] **Step 5: Verify R2 (no UV seam)** — orbit camera 360° horizontally, look for vertical line at the back.
+- [ ] **Step 6: Verify R3 (camera-lock works)** — middle-drag pan; skydome moves with camera.
+- [ ] **Step 7: Commit.**
+
+```bash
+git add src/engine.cpp
+git commit -m "feat(MT-3): render skydome pass between clear and ground"
+```
+
+### Task 5: Resource IDs + bundled DDS RCDATA entries
+
+**Files:**
+- Modify: `src/Resources/resource.h` (add 8 `IDR_SKYDOME_*` IDs)
+- Modify: `src/ParticleEditor.rc` (add 8 RCDATA entries)
+
+- [ ] **Step 1: Add resource IDs** to `src/Resources/resource.h` (block after the existing `IDR_SHADER_SKYDOME`):
+
+```cpp
+#define IDR_SKYDOME_SPACE       151
+#define IDR_SKYDOME_ATMOSPHERE  152
+#define IDR_SKYDOME_SUNSET      153
+#define IDR_SKYDOME_DAWN        154
+#define IDR_SKYDOME_NIGHT       155
+#define IDR_SKYDOME_OVERCAST    156
+#define IDR_SKYDOME_STUDIO      157
+#define IDR_SKYDOME_INDOOR      158
+```
+
+- [ ] **Step 2: Add RCDATA entries** to `src/ParticleEditor.rc` (block after `IDB_GROUND_SNOW`):
+
+```rc
+IDR_SKYDOME_SPACE       RCDATA                  "Resources\\skydomes\\space.dds"
+IDR_SKYDOME_ATMOSPHERE  RCDATA                  "Resources\\skydomes\\atmosphere.dds"
+IDR_SKYDOME_SUNSET      RCDATA                  "Resources\\skydomes\\sunset.dds"
+IDR_SKYDOME_DAWN        RCDATA                  "Resources\\skydomes\\dawn.dds"
+IDR_SKYDOME_NIGHT       RCDATA                  "Resources\\skydomes\\night.dds"
+IDR_SKYDOME_OVERCAST    RCDATA                  "Resources\\skydomes\\overcast.dds"
+IDR_SKYDOME_STUDIO      RCDATA                  "Resources\\skydomes\\studio.dds"
+IDR_SKYDOME_INDOOR      RCDATA                  "Resources\\skydomes\\indoor.dds"
+```
+
+- [ ] **Step 3: Build, verify .rc compiles and .exe size grew by ~12 MB** (R1 — sanity-check the bloat).
+
+```bash
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" -p:Configuration=Debug -p:Platform=x64 -nologo
+ls -la x64/Debug/ParticleEditor.exe
+```
+
+- [ ] **Step 4: Run the editor with `SkydomeIndex` = 1 in registry**. Verify slot 1 (Space) renders correctly.
+- [ ] **Step 5: Cycle through slots 1–8** via registry edits + restart. Verify each renders.
+- [ ] **Step 6: Commit.**
+
+```bash
+git add src/Resources/resource.h src/ParticleEditor.rc
+git commit -m "feat(MT-3): bundle 8 skydome RCDATA entries"
+```
+
+### Task 6: Registry I/O helpers
+
+**Files:**
+- Modify: `src/main.cpp` (add `Read/WriteSkydomeIndex`, `Read/WriteSkydomeCustomPath`, `Read/WriteSkydomePickerPos`)
+
+- [ ] **Step 1: Add helpers** in `main.cpp` near `Read/WriteBloomFloat` (~line 4411 area):
+
+```cpp
+static int ReadSkydomeIndex(int defaultValue)
+{
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD value, type, size = sizeof(value);
+        if (RegQueryValueEx(hKey, L"SkydomeIndex", NULL, &type, (LPBYTE)&value, &size) == ERROR_SUCCESS
+            && type == REG_DWORD && (int)value >= 0 && (int)value < Engine::kSkydomeSlotCount)
+        {
+            RegCloseKey(hKey);
+            return (int)value;
+        }
+        RegCloseKey(hKey);
+    }
+    return defaultValue;
+}
+
+static void WriteSkydomeIndex(int value)
+{
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        DWORD v = (DWORD)value;
+        RegSetValueEx(hKey, L"SkydomeIndex", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+        RegCloseKey(hKey);
+    }
+}
+
+// Custom slot paths use names SkydomeCustomSlot9, SkydomeCustomSlot10, SkydomeCustomSlot11
+static std::wstring ReadSkydomeCustomPath(int slot)
+{
+    if (slot < Engine::kSkydomeFirstCustomSlot || slot >= Engine::kSkydomeSlotCount) return L"";
+    HKEY hKey;
+    std::wstring out;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t buf[MAX_PATH];
+        DWORD size = sizeof(buf);
+        DWORD type;
+        wchar_t name[64];
+        swprintf_s(name, L"SkydomeCustomSlot%d", slot);
+        if (RegQueryValueEx(hKey, name, NULL, &type, (LPBYTE)buf, &size) == ERROR_SUCCESS && type == REG_SZ)
+        {
+            out = buf;
+        }
+        RegCloseKey(hKey);
+    }
+    return out;
+}
+
+static void WriteSkydomeCustomPath(int slot, const std::wstring& path)
+{
+    if (slot < Engine::kSkydomeFirstCustomSlot || slot >= Engine::kSkydomeSlotCount) return;
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        wchar_t name[64];
+        swprintf_s(name, L"SkydomeCustomSlot%d", slot);
+        if (path.empty())
+        {
+            RegDeleteValue(hKey, name);
+        }
+        else
+        {
+            RegSetValueEx(hKey, name, 0, REG_SZ, (const BYTE*)path.c_str(),
+                          DWORD((path.size() + 1) * sizeof(wchar_t)));
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+static bool ReadSkydomePickerPos(RECT& out)
+{
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD type, size = sizeof(out);
+        if (RegQueryValueEx(hKey, L"SkydomePickerPos", NULL, &type, (LPBYTE)&out, &size) == ERROR_SUCCESS
+            && type == REG_BINARY && size == sizeof(out))
+        {
+            RegCloseKey(hKey);
+            return true;
+        }
+        RegCloseKey(hKey);
+    }
+    return false;
+}
+
+static void WriteSkydomePickerPos(const RECT& in)
+{
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueEx(hKey, L"SkydomePickerPos", 0, REG_BINARY, (const BYTE*)&in, sizeof(in));
+        RegCloseKey(hKey);
+    }
+}
+```
+
+- [ ] **Step 2: Add cleanup of skydome keys** to `ResetViewSettings()`:
+
+```cpp
+RegDeleteValue(hKey, L"SkydomeIndex");
+RegDeleteValue(hKey, L"SkydomePickerPos");
+// NOTE: SkydomeCustomSlot* paths are user data, not view settings — NOT cleared here.
+```
+
+- [ ] **Step 3: Build, commit.**
+
+```bash
+git add src/main.cpp
+git commit -m "feat(MT-3): registry I/O for skydome state and dialog position"
+```
+
+### Task 7: Dialog template + control IDs
+
+**Files:**
+- Modify: `src/Resources/resource.h` (add `IDD_SKYDOME_PICKER` + `IDC_SKYDOME_*` + `IDS_SKYDOME_*` IDs)
+- Modify: `src/ParticleEditor.en.rc` (dialog template + string-table entries + toolbar slot)
+- Modify: `src/ParticleEditor.de.rc` (mirror with English placeholders)
+
+- [ ] **Step 1: Add resource IDs.**
+
+```cpp
+// Dialog
+#define IDD_SKYDOME_PICKER              160
+// Controls
+#define IDC_SKYDOME_PREVIEW             1700
+#define IDC_SKYDOME_PICKER_LIST         1701
+#define IDC_SKYDOME_PICKER_RESET_CUSTOM 1702
+#define IDC_SKYDOME_PICKER_PATH_LABEL   1703
+// Context menu IDs
+#define ID_SKYDOME_SLOT_SET_CUSTOM      40200
+#define ID_SKYDOME_SLOT_CHANGE_CUSTOM   40201
+#define ID_SKYDOME_SLOT_CLEAR_CUSTOM    40202
+// View menu (optional toolbar toggle — skip for v1, toolbar-only)
+// String table — name labels
+#define IDS_SKYDOME_OFF                 230
+#define IDS_SKYDOME_SPACE               231
+#define IDS_SKYDOME_ATMOSPHERE          232
+#define IDS_SKYDOME_SUNSET              233
+#define IDS_SKYDOME_DAWN                234
+#define IDS_SKYDOME_NIGHT               235
+#define IDS_SKYDOME_OVERCAST            236
+#define IDS_SKYDOME_STUDIO              237
+#define IDS_SKYDOME_INDOOR              238
+#define IDS_SKYDOME_CUSTOM_BASE         239   // Custom 1..3 via offset (239, 240, 241)
+```
+
+- [ ] **Step 2: Add dialog template** to `src/ParticleEditor.en.rc`:
+
+```rc
+IDD_SKYDOME_PICKER DIALOGEX 0, 0, 432, 388
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_TOOLWINDOW
+CAPTION "Skydome"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    CONTROL         "",IDC_SKYDOME_PICKER_LIST,"SysListView32",
+                    LVS_ICON | LVS_SHOWSELALWAYS | LVS_SINGLESEL | WS_TABSTOP,
+                    8, 8, 416, 320
+    LTEXT           "",IDC_SKYDOME_PICKER_PATH_LABEL,8,335,416,12,
+                    SS_PATHELLIPSIS | SS_NOTIFY
+    PUSHBUTTON      "Reset custom slots",IDC_SKYDOME_PICKER_RESET_CUSTOM,
+                    300, 364, 124, 18
+END
+```
+
+- [ ] **Step 3: Add string-table entries.**
+
+```rc
+STRINGTABLE
+BEGIN
+    IDS_SKYDOME_OFF         "Off"
+    IDS_SKYDOME_SPACE       "Space"
+    IDS_SKYDOME_ATMOSPHERE  "Atmosphere"
+    IDS_SKYDOME_SUNSET      "Sunset"
+    IDS_SKYDOME_DAWN        "Dawn"
+    IDS_SKYDOME_NIGHT       "Night"
+    IDS_SKYDOME_OVERCAST    "Overcast"
+    IDS_SKYDOME_STUDIO      "Studio"
+    IDS_SKYDOME_INDOOR      "Indoor"
+    // 239..241: Custom 1..3 via runtime concat
+END
+```
+
+- [ ] **Step 4: Mirror in `src/ParticleEditor.de.rc`** with identical template + English placeholder strings.
+- [ ] **Step 5: Build, verify .rc compiles.**
+- [ ] **Step 6: Commit.**
+
+```bash
+git add src/Resources/resource.h src/ParticleEditor.en.rc src/ParticleEditor.de.rc
+git commit -m "feat(MT-3): skydome picker dialog template + resource IDs"
+```
+
+### Task 8: Picker dialog procedure + toolbar preview
+
+**Files:**
+- Modify: `src/main.cpp` — adds `SkydomePickerDlgProc`, `ToggleSkydomePicker`, `MakeSkydomeSlotThumbnail`, `RebuildSkydomePreviewBitmap`, `APPLICATION_INFO::hSkydomePicker`, toolbar button creation + WM_DRAWITEM handler.
+
+This is the bulk of the UI work — model after `GroundTexturePickerDlgProc` + `ToggleGroundTexturePicker` at [src/main.cpp:4312-4405](src/main.cpp:4312).
+
+- [ ] **Step 1: Add `APPLICATION_INFO` field** `HWND hSkydomePicker` + `HWND hSkydomePreview` + `HBITMAP hSkydomePreviewBitmap` + `RECT skydomePickerRect` + `bool skydomePickerVisible`.
+- [ ] **Step 2: Implement `MakeSkydomeSlotThumbnail(int slot, int sizePx, const std::wstring& customPath, COLORREF bgColor)`** — `LockRect` + `CreateDIBSection` for bundled / custom; procedural fill for Off and empty custom slots. ~80 LOC.
+- [ ] **Step 3: Implement `RebuildSkydomePreviewBitmap(APPLICATION_INFO*)`** — calls `MakeSkydomeSlotThumbnail` with the current slot at 24×24, replaces `info->hSkydomePreviewBitmap`. Called from startup, slot change, Reset View Settings.
+- [ ] **Step 4: Add `WM_DRAWITEM` handler** for `IDC_SKYDOME_PREVIEW` in the main window proc — same shape as the existing ground-texture preview handler. Stretch-blit the cached HBITMAP with 1 px border and pressed/focus feedback.
+- [ ] **Step 5: Implement `SkydomePickerDlgProc`** — clone of `GroundTexturePickerDlgProc`. Handles `WM_INITDIALOG` (populate the 12-item ListView via a `HIMAGELIST` built from 12 `MakeSkydomeSlotThumbnail` calls at 96×96), `LVN_ITEMCHANGED` (call `SetSkydomeSlot`, write registry, rebuild toolbar preview, update path label), `NM_RCLICK` (context menu for custom slots), `WM_COMMAND` for `IDC_SKYDOME_PICKER_RESET_CUSTOM`, `WM_USER` (re-seed after Reset View Settings), `WM_CLOSE` (save position, hide).
+- [ ] **Step 6: Implement `ToggleSkydomePicker(APPLICATION_INFO*)`** — lazy-create on first toggle, position restore via `ReadSkydomePickerPos` with off-screen validation, show/hide pattern.
+- [ ] **Step 7: Add toolbar button creation** in `InitializeWindows` / toolbar reflow code — between Ground Texture preview and Ground Height spinner. Adjust x-offsets of subsequent controls.
+- [ ] **Step 8: Add `info->hSkydomePicker` to the IsDialogMessage chain** ([src/main.cpp:6347](src/main.cpp:6347) area).
+- [ ] **Step 9: Build, run.** Click the new toolbar button → picker opens with 12 slots. Click each → engine swaps, preview updates.
+- [ ] **Step 10: Commit.**
+
+```bash
+git add src/main.cpp
+git commit -m "feat(MT-3): skydome picker dialog + toolbar preview button"
+```
+
+### Task 9: Startup + Reset View Settings integration
+
+**Files:**
+- Modify: `src/main.cpp` (startup hook + Reset View Settings extension)
+
+- [ ] **Step 1: At startup** (around the existing `ReadBloomDialogPos` block, [src/main.cpp:6214](src/main.cpp:6214) area), restore skydome state:
+
+```cpp
+// Custom paths first so the bundled / custom check passes for slot reload.
+for (int s = Engine::kSkydomeFirstCustomSlot; s < Engine::kSkydomeSlotCount; ++s)
+{
+    info->engine->SetSkydomeCustomPath(s, ReadSkydomeCustomPath(s));
+}
+info->engine->SetSkydomeSlot(ReadSkydomeIndex(0));
+ReadSkydomePickerPos(info->skydomePickerRect);
+RebuildSkydomePreviewBitmap(info);
+```
+
+- [ ] **Step 2: Extend Reset View Settings handler** ([src/main.cpp:1610-1700](src/main.cpp:1610)):
+
+```cpp
+// Skydome reset (custom paths preserved; only the active selection wipes)
+info->engine->SetSkydomeSlot(0);
+WriteSkydomeIndex(0);
+RebuildSkydomePreviewBitmap(info);
+InvalidateRect(info->hSkydomePreview, NULL, TRUE);
+if (info->hSkydomePicker != NULL && info->skydomePickerVisible)
+{
+    SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
+}
+```
+
+- [ ] **Step 3: Update the Reset View Settings confirm prompt** to mention skydome alongside background/ground/bloom/lighting.
+- [ ] **Step 4: Build, verify startup restore + Reset View Settings flow** (D1, D2, D3 from Testing).
+- [ ] **Step 5: Commit.**
+
+```bash
+git add src/main.cpp
+git commit -m "feat(MT-3): startup restore + Reset View Settings integration"
+```
+
+### Task 10: Build & verification pass
+
+- [ ] **Step 1: Run Debug + Release builds, both clean.**
+- [ ] **Step 2: Walk the Testing & Verification checklist top-to-bottom.** Document any failures inline, fix, repeat.
+- [ ] **Step 3: Verify the .exe size** is within tolerances (R1). If oversized, revisit asset compression.
+- [ ] **Step 4: Manual visual check at corners**: 360° camera rotation horizontally and vertically; bloom on/off with bright sky; custom-slot HDR file load; Reset behaviour.
+- [ ] **Step 5: Commit any fixes from the verification pass** as separate commits per issue.
+
+### Task 11: CHANGELOG + ROADMAP + ship
+
+- [ ] **Step 1: Add CHANGELOG entry** at the top of `## Changelog` in [CHANGELOG.md](CHANGELOG.md). Three sections: what ships (user-facing), how we tackled it (architectural), issues encountered (numbered list).
+- [ ] **Step 2: Strikethrough MT-3 in ROADMAP.md** — move from §2.1 to §5.1 (Shipped). Renumber §5 entries below. Close the medium-term tier.
+- [ ] **Step 3: Commit the implementation and docs together** (one `feat(MT-3):` commit with the full set of files). Use the same commit-message shape as MT-4's ship commit `740c6a2`.
+- [ ] **Step 4: Push branch `feat/mt3-skydome`, open PR, ship.**
+- [ ] **Step 5: After merge, backfill CHANGELOG with the merge-commit hash** in a separate `docs/backfill-prNN` PR (same pattern as PR #70 and #72).
 
 ---
 
@@ -520,23 +1259,18 @@ Manual checklist. Each item names *what regression it catches*. Debug instrument
 
 All open design questions are resolved. Recording the answers and reasoning so reviewers can see the trail:
 
-1. **Layout** — emulate the Petroglyph map editor's Sun/Fill panel (reference screenshot). Single tall panel; Sun Settings group on top with Ambient/Specular/Diffuse/Shadow color pickers + Force Fill Light Alignment checkbox; Fill Light Settings group below with per-fill Intensity/Z/Tilt/Diffuse + Mirror Sun button. ~240×320 px.
-2. **No per-light Enable toggles** — explicitly rejected. Setting intensity to 0 is the documented way to mute a light. Matches the map editor.
-3. **Fog settings omitted** — out of scope. Engine has fog handles wired (`hFogVals`) if a follow-up wants them.
-4. **Sky Dome controls omitted** — that's MT-3.
-5. **Direction input** — Z Angle (azimuth 0–360°, wraps) + Tilt Angle (-90 to +90°, clamps), two spinners per light. Internal conversion to `Position` via `(cos·cos, cos·sin, sin)`.
-6. **Specular handling** — Sun has independent Specular Color picker (no longer derived from Diffuse). Same Intensity multiplier as Diffuse. Fills have no specular (always zero). Most shaders ignore specular anyway, but the panel is honest about exposing it.
-7. **Ambient + Shadow** — both are scene-global vec4s exposed in the Sun Settings group (matching the map editor's grouping). No intensity multiplier on either. **Shadow Color is stored-only**: `Engine::SetShadow` gets a real implementation that writes `m_shadow`, but no shader handle binds it today. Tooltip on the picker calls this out.
-8. **Force Fill Light Alignment** — checkbox in Sun Settings; default ON. When ON, fill Z/Tilt spinners disable and engine receives auto-computed values: `Fill1 = (Sun.Z + 120°, -10°)`, `Fill2 = (Sun.Z + 210°, -10°)`. When OFF, fills are free-edit; registry holds the last manually-set values.
-9. **Mirror Sun** — one-shot button; copies Sun's Diffuse Color to both fills' Diffuse Color pickers. Disabled when Force-align is ON (orthogonality with alignment). Does not affect intensity or angles.
-10. **Persistence** — registry under `HKCU\Software\AloParticleEditor`, same shape as Bloom. 17 keys total. Persists across sessions. Reset View Settings wipes them.
-11. **Defaults** — map editor defaults from the screenshot, baked in:
-    - Sun: intensity 0.50, Z 0°, Tilt 45°, Ambient `RGB(40,40,50)`, Specular `RGB(190,190,200)`, Diffuse `RGB(180,180,190)`, Shadow `RGB(100,100,110)`.
-    - Fills: intensity 0.50 each, Diffuse `RGB(60,80,160)`. Z/Tilt auto-computed.
-    - Force-align: ON.
-    - This **changes** the editor's default appearance from the current "white sun along +X, no fills" baseline. Documented as the headline visual change of the PR.
-12. **UI is source of truth** — registry stores UI representation (R, G, B per color, intensity, Z, tilt, force-align bool). Conversion to engine `Light` vec4s happens at write time. No decomposition of engine state into UI.
-13. **Reset semantics** — both the in-panel Reset button and View → Reset View Settings restore all values to the table above. Force-align goes back to ON.
-14. **No `.alo`-file lighting** — out of scope. Lighting stays session-global per registry.
-15. **No localized translations** — German variant gets the new dialog template + IDs with English placeholder strings, consistent with MT-1.
-16. **Phasing** — single PR. Scope is bounded (~5–6 h estimate given the expanded control surface), clone-of-bloom path is well-trodden.
+1. **Total slot count: 12 (4×3 grid)** — Off + 8 bundled scenes + 3 custom. Picked over 8 (too few scenes) or 16 (more authoring effort + ~24 MB asset bloat).
+2. **Bundled scene list (8)**: Space, Atmosphere, Sunset, Dawn, Night, Overcast, Studio, Indoor. Covers the most common particle-effect staging contexts. Picked over a smaller minimal set (2-3 scenes — leaves obvious gaps) and a larger set (8+ scenes — diminishing returns + bigger .exe).
+3. **Equirectangular 2D textures** — not cubemaps. Simpler to source (single image per skydome), simpler to load (existing D3DXCreateTextureFromFileInMemory path), simpler to thumbnail. Cubemap support is a low-priority follow-up if anyone asks.
+4. **3 user-customisable slots** (Custom 1, 2, 3) — matches MT-2's ground-picker convention. Click empty → file picker. Right-click populated → context menu.
+5. **Toolbar preview button as entry point** — matches MT-2's ground-texture pattern. Owner-drawn 24×24 thumbnail in the toolbar; click opens picker. Picked over View-menu-only (less discoverable) and toolbar+menu (extra LOC for limited value at this stage).
+6. **Off slot reverts to flat-colour background** — preserves the pre-MT-3 behaviour as the "no skydome" state. Default for new users.
+7. **Single-commit modeless dialog** — clicking a slot commits the selection immediately, dialog stays open. Esc / X to close. Matches MT-2's ground-picker model. Picked over MT-1's sticky multi-pin model (overkill — only one skydome can be active).
+8. **Scene-global persistence** — not per-mod. Skydomes are scene/view settings, like background colour. Stored in registry under `HKCU\Software\AloParticleEditor`. Per-mod state would be inconsistent with how the other view settings work.
+9. **Render-order insertion: between Clear and ground.** Skydome renders first (so it can be occluded by everything), ground next, particles next, post-process last. Skydome contributes to bloom naturally.
+10. **Camera-locked transform** (`World = Translation(camera.Position)`) — keeps the sphere "infinite" as the camera orbits the world origin. Same projection / view matrices as the rest of the scene.
+11. **Hand-rolled UV sphere** (32 longitude × 16 latitude = 561 verts / 1024 tris) — not `D3DXCreateSphere`. Sphere helper doesn't include UVs. Hand-roll is ~30 LOC.
+12. **Render state**: `ZWRITE=off, ZTEST=off, CULL_CW`. The far-plane push (`o.Position.z = w * 0.9999`) is belt-and-suspenders so even with ZTEST on the sphere always sits behind everything.
+13. **Reset View Settings clears `SkydomeIndex`** but preserves `SkydomeCustomSlot*` paths (user data, not view settings — MT-2 convention).
+14. **Asset prep is a separate workstream** — Task 0 generates procedural placeholders in **DDS (BC1) format** for v1. Custom slots accept `.dds` and `.tga` so users can point them at EaW's own environment textures with zero conversion. Real curated bundled DDS textures (also DDS BC1, sourced from game assets the editor's author has rights to or generated more carefully) can replace the placeholders in a follow-up PR without touching the engine or dialog code.
+15. **Phasing**: single PR for the full implementation. Scope is contained; clone-of-MT-2 path is well-trodden.
