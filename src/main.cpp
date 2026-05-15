@@ -3520,9 +3520,9 @@ static std::wstring GroundSlotDisplayName(int slot, const std::wstring& customPa
 // labels, selection. Called after any slot-path mutation (set custom,
 // reset bundled, clear custom, reset-all).
 // Picker-specific thumbnail size — bigger than the toolbar's 64 px
-// preview thumbnail so the cells visually match the texture-palette
-// popup's 128-ish thumbnails.
-static const int kGroundPickerThumbSize = 128;
+// preview thumbnail and matched to the per-cell tile width so the
+// thumbnail fills the cell edge-to-edge (no horizontal padding).
+static const int kGroundPickerThumbSize = 144;
 
 // Subclass plumbing — needed because the ListView's native paint
 // keeps bleeding through CDRF_SKIPDEFAULT in subtle ways (per-item
@@ -3685,11 +3685,12 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
         // chrome the per-item custom-draw can't cleanly suppress; my
         // subclass paints hover state itself based on cursor hit-test.
         ListView_SetExtendedListViewStyle(hList, LVS_EX_DOUBLEBUFFER);
-        // Make the picker cells big like the palette's. Layout target:
-        //   128×128 thumb + 4 px gap + ~18 px filename strip = ~150 tall.
-        // ListView's icon spacing is (cellWidth, cellHeight) including
-        // outer margin. 144×178 gives roughly the palette's proportions.
-        ListView_SetIconSpacing(hList, 144, 178);
+        // Layout: 144×144 thumb (matches kGroundPickerThumbSize) fills
+        // each cell edge-to-edge horizontally. Spacing 150×190 leaves
+        // a 6 px gap between cells and ~46 px below the thumb for the
+        // filename label. 4 × 150 = 600 px fits in the 400 du (~600 px)
+        // listview width without horizontal scroll.
+        ListView_SetIconSpacing(hList, 150, 190);
         // Subclass the ListView so we own WM_PAINT entirely. The
         // native ListView's selection / focus / hot-track painting
         // can't bleed through if it never runs.
