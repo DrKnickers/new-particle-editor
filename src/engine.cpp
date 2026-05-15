@@ -1292,7 +1292,7 @@ void Engine::InitSkydomeMesh()
     for (int j = 0; j <= lat; ++j)
     {
         const float v     = float(j) / float(lat);
-        const float theta = v * D3DX_PI;             // 0..pi (south to north)
+        const float theta = v * D3DX_PI;             // 0..pi (pole to pole)
         const float sinTheta = sinf(theta);
         const float cosTheta = cosf(theta);
         for (int i = 0; i <= lon; ++i)
@@ -1330,23 +1330,28 @@ void Engine::InitSkydomeMesh()
         {0, offsetof(SkydomeVertex, TexCoord),  D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
         D3DDECL_END()
     };
-    m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl);
+    if (FAILED(m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl)))
+        throw runtime_error("Unable to create skydome mesh");
 
     // VB
-    m_pDevice->CreateVertexBuffer(
+    if (FAILED(m_pDevice->CreateVertexBuffer(
         UINT(verts.size() * sizeof(SkydomeVertex)),
-        D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &m_pSkydomeVB, NULL);
+        D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &m_pSkydomeVB, NULL)))
+        throw runtime_error("Unable to create skydome mesh");
     void* pVB = NULL;
-    m_pSkydomeVB->Lock(0, 0, &pVB, 0);
+    if (FAILED(m_pSkydomeVB->Lock(0, 0, &pVB, 0)))
+        throw runtime_error("Unable to create skydome mesh");
     memcpy(pVB, verts.data(), verts.size() * sizeof(SkydomeVertex));
     m_pSkydomeVB->Unlock();
 
     // IB
-    m_pDevice->CreateIndexBuffer(
+    if (FAILED(m_pDevice->CreateIndexBuffer(
         UINT(idx.size() * sizeof(uint16_t)),
-        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_pSkydomeIB, NULL);
+        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_pSkydomeIB, NULL)))
+        throw runtime_error("Unable to create skydome mesh");
     void* pIB = NULL;
-    m_pSkydomeIB->Lock(0, 0, &pIB, 0);
+    if (FAILED(m_pSkydomeIB->Lock(0, 0, &pIB, 0)))
+        throw runtime_error("Unable to create skydome mesh");
     memcpy(pIB, idx.data(), idx.size() * sizeof(uint16_t));
     m_pSkydomeIB->Unlock();
 
