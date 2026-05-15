@@ -1,63 +1,82 @@
-# [MT-2] Selectable ground texture
+# [MT-1] Frequently-used textures palette
 
-**Status (2026-05-14):** plan draft, awaiting user approval. Target PR: `feat/mt2-selectable-ground`.
+**Status (2026-05-14):** plan draft, awaiting user approval. Target PR: `feat/mt1-textures-palette`.
 
-Follows the planning conventions established for MT-9 and MT-10: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*.
+Follows the planning conventions established for MT-2 / MT-9 / MT-10: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*.
 
 ---
 
 ## Status of the surrounding work
 
-- ✅ **[MT-7]** Linked emitters — [#58](https://github.com/DrKnickers/new-particle-editor/pull/58)
-- ✅ **[MT-8]** Multi-select — [#60](https://github.com/DrKnickers/new-particle-editor/pull/60)
-- ✅ **[MT-9]** Visual link-group bracket — [#63](https://github.com/DrKnickers/new-particle-editor/pull/63)
-- ✅ **[MT-10]** Configurable exempt set per link group — [#65](https://github.com/DrKnickers/new-particle-editor/pull/65)
-- 🚧 **[MT-2]** Selectable ground texture — **this plan**.
+- ✅ **[MT-2]** Selectable ground texture — [#67](https://github.com/DrKnickers/new-particle-editor/pull/67)
+- 🚧 **[MT-1]** Frequently-used textures palette — **this plan**.
 
-Medium-term queue after MT-2: MT-1 (textures palette), MT-3 (skydome), MT-4 (env lighting).
+Medium-term queue after MT-1: MT-3 (skydome), MT-4 (env lighting).
 
 ---
 
 ## Context
 
-The preview's ground plane is currently hardcoded to `IDB_GROUND` (`Resources\dirt.bmp`) — loaded once at engine init via `D3DXCreateTextureFromResource` ([src/engine.cpp:1126](src/engine.cpp:1126)) and rendered at every frame via `m_pDevice->SetTexture(0, m_pGroundTexture)` ([src/engine.cpp:581](src/engine.cpp:581)). The same single texture is what's released and re-loaded in the lost-device recovery path ([src/engine.cpp:1138](src/engine.cpp:1138), [src/engine.cpp:1153](src/engine.cpp:1153), [src/engine.cpp:1192](src/engine.cpp:1192)).
+Texture editing on the Appearance tab (`IDD_EMITTER_PROPS2`) currently has two slots — Color (`IDC_EDIT2`/`IDC_BUTTON1`) and Bump (`IDC_EDIT3`/`IDC_BUTTON2`) — each a filename edit field plus a "..." button that opens `GetOpenFileNameA` filtered to `*.tga;*.dds`. The chosen file's basename is stored in the emitter (`colorTexture` / `normalTexture` strings). Texture *resolution* at render time goes through `FileManager` against the active mod path. The mod path itself persists per-user via `HKCU\Software\AloParticleEditor\LastMod`.
 
-That single texture is the right default for a generic test, but doesn't match the visual context for many real particle effects: a sand-storm effect designed for Tatooine wants sand under it; a Hoth blizzard wants snow; a Star Destroyer interior smoke wants metal deck. The current workaround is "ignore the ground entirely and trust the eye to mentally substitute"; MT-2 swaps that for a small picker so the preview's ground matches the effect's likely deployment surface.
+The painful workflow this plan addresses: when iterating on an effect, modders typically cycle between a small set of textures from the same mod's `Data\Art\Textures` directory. Today every swap is a full file-picker round-trip — open dialog, navigate the tree, click, OK. Even with the picker remembering the last directory, that's 3–5 seconds per swap and breaks flow.
 
-MT-2 is intentionally small — a single dropdown control next to the existing **Background** colour button, a handful of bundled textures, registry persistence per the existing `BackgroundColor` / `ShowGround` pattern. No file-format changes, no engine-architecture changes, no .alo-level state. After MT-2 the preview's environmental context is fully controllable through three knobs: ground visibility (existing `ShowGround` toggle), ground texture (this plan), and background colour (existing).
+MT-1 surfaces a small per-mod palette of recently-used and explicitly-pinned textures. A new palette button in the Textures groupbox header (top-right corner of the existing group) toggles a **modeless sticky popup window** that holds the palette UI. The popup stays open across emitter selections, repositions are remembered per user, and the button reflects open/closed state. Double-click a thumbnail → texture slot is filled. Recents auto-populate from any successful texture load (file picker, edit-field commit, or palette click); pins are explicit (hover star). Per-mod scoping ensures switching between Empire at War, Republic at War, etc. doesn't cross-contaminate the palettes.
 
-**Why now**: clears the smallest item out of the medium-term queue while the editor team is "warmed up" on UI-adjacent work from the MT-7→MT-10 sequence. Low-risk, contained, useful to every workflow that uses the preview.
+Putting the palette in a popup rather than inline avoids growing the Appearance tab's dialog template — which would have required cascading layout changes through the EmitterProps host window and the surrounding main-window layout. The popup's own size budget is independent, so thumbnails and labels can size cleanly without fighting other controls.
+
+**Why now**: smallest medium-term item, contained, doesn't touch the rendering pipeline or file format. Clears MT-1 out of the queue and leaves only the larger MT-3 (skydome, ~8–14 h) and MT-4 (env lighting, ~4–6 h) ahead.
 
 ---
 
 ## Goal + scope
 
-A picker control on the top toolbar bar lets the user choose one of N bundled ground textures. The selection persists across editor sessions via `HKCU\Software\AloParticleEditor\GroundTexture` (REG_DWORD index). The default for a fresh install / corrupted registry is the existing `dirt.bmp` so pre-MT-2 users see no visual change.
+A new small **palette button** sits in the right side of the Textures groupbox header on the Appearance tab. Clicking it toggles a **modeless popup window** ("AloTexturePalettePopup") that holds the palette UI: a Color/Bump filter toggle at the top, a row of pinned texture thumbnails, and a row of recent texture thumbnails. Double-clicking a thumbnail writes its filename to the active filter's slot (color or bump). Single-click selects (highlight only). Hovering a thumbnail reveals a small star-corner button that toggles pinned state. Each entry's metadata records which slot(s) it has been used as (color, bump, or both), and only entries matching the active filter are shown.
+
+The popup is sticky (does not auto-close on outside click or after a commit), can be moved anywhere on screen, and remembers its position across editor sessions. The button's visual state (pressed vs. raised) reflects whether the popup is currently visible. Closing the popup via its X button, pressing Esc with focus inside it, or clicking the (pressed) palette button hides it.
+
+Palette state — pins, recents, last-used filter — persists per mod in a single INI file at `%APPDATA%\AloParticleEditor\texture-palettes.ini`, keyed by SHA1 of the absolute mod path. The popup's window position persists separately in the same INI under a `[ui]` section. Switching mods (via the existing mods menu) swaps the palette automatically while the popup remains open.
+
+Thumbnail decoding goes through D3DX9 (already used by the engine) — `D3DXCreateTextureFromFileEx` decodes TGA/DDS at the requested 32×32 size, and we copy the surface pixels into a `CreateDIBSection` HBITMAP for the owner-draw control. Decoded HBITMAPs live in a per-session in-memory cache keyed by absolute file path; missing or unreadable files fall back to a "broken" placeholder thumbnail.
 
 **In:**
 
-- **6 bundled ground textures** as RCDATA resources in the .exe (any of BMP / DDS / TGA / PNG / JPG):
-  1. **Dirt** (existing — kept as default; preserves pre-MT-2 visual).
-  2. **Grass** (green outdoor surface).
-  3. **Sand** (light tan — Tatooine / desert).
-  4. **Snow** (white-ish — Hoth / arctic).
-  5. **Metal deck** (gray plates — Star Destroyer / Death Star interior).
-  6. **Grey** (neutral grey — useful as a colour-neutral reference for judging the actual hue of particle effects, especially semi-transparent ones).
-- **`Engine::SetGroundTexture(int index)`** / **`Engine::GetGroundTexture()`** accessors. `SetGroundTexture` releases the current texture and creates the new one from the corresponding resource ID; on failure it falls back to the default (and logs in debug builds). `int m_groundTextureIndex` field on the Engine holds the current selection.
-- **Lost-device recovery path** ([src/engine.cpp:1138](src/engine.cpp:1138) and similar) consults `m_groundTextureIndex` when re-creating the texture so the user's choice survives Alt-Tab / fullscreen mode / window minimisation.
-- **Toolbar combobox** placed next to the existing **Background** colour button at the top of the editor window. Width ~100 px; reads the texture names from a string table. Selecting an entry fires `Engine::SetGroundTexture` and writes to the registry.
-- **Persistence**: `ReadGroundTexture` / `WriteGroundTexture` helpers in `main.cpp` parallel to `ReadBackgroundColor` / `WriteBackgroundColor`. Default index is `0` (dirt) when the registry value is missing, malformed, or out-of-range.
-- **Reset View Settings** integration: `ID_VIEW_RESET_VIEW_SETTINGS` ([src/main.cpp](src/main.cpp) line ~1573) currently clears `BackgroundColor`, `ShowGround`, `GroundZ`, bloom, and color-picker custom colours. MT-2 extends this to also clear `GroundTexture` and reset the engine + UI to dirt.
-- **Debug instrumentation** under `#ifndef NDEBUG`: `[Ground] texture set index=N name='%s'`, `[Ground] texture load failed index=N falling back to default`.
+- **New `IDC_BUTTON_PALETTE`** in the Textures groupbox header (`IDD_EMITTER_PROPS2`), positioned at roughly (170, 1) sized ~24×10 du — overlapping the right side of the group's title bar in the canonical Windows pattern. Style: `BS_BITMAP | BS_PUSHLIKE | BS_AUTOCHECKBOX` so the pressed state is visible and Win32 manages the toggle. Label: a **16×16 px painter's-palette BMP resource** (`IDB_PALETTE_GLYPH`) — kidney-shaped palette silhouette with thumb hole and a few coloured paint blobs. Tooltip "Texture palette".
+- **New top-level window class `"AloTexturePalettePopup"`**, registered once at startup. Owned by the main editor window so it dies with the editor. Window styles: `WS_POPUPWINDOW | WS_CAPTION | WS_THICKFRAME` (resizable in a future PR; v1 fixed-size). No taskbar entry (`WS_EX_TOOLWINDOW`).
+- **Popup contents** (laid out top to bottom):
+  - Filter row: two radio buttons "Color" / "Bump", default "Color". Selection persisted per-mod.
+  - Pinned row: up to 8 thumbnails (32×32) with a small "Pinned" label.
+  - Recent row: up to 8 thumbnails with a small "Recent" label.
+  - **Status strip** at bottom: single-line `SS_LEFT` static control (`IDC_PALETTE_STATUS`), hidden text by default. Used for transient feedback like "Pins full (8). Unpin one to make room." Always allocated 14 px of vertical space (no layout shift when shown). Text cleared by `WM_TIMER` after 3000 ms.
+  - Total fixed size: ~280×136 px (16 px margin + 12 px filter row + 16 px label + 32 px thumb row + 16 px label + 32 px thumb row + 14 px status strip + 2 px margin).
+- **Pin overflow handling**: when the user clicks the star on a 9th pin (capacity 8 already reached), the click is **rejected** — new entry stays as a recent. Status strip shows `IDS_PALETTE_PINS_FULL` ("Pins full (8). Unpin one to make room.") for 3 seconds, then auto-clears. Pin semantics preserved — deliberately-pinned textures are never silently dropped.
+- **Button toggle behavior**: clicking the button when popup is hidden shows it (positioned at remembered location, or button-anchored default if first run); clicking when shown hides it and saves position. Closing the popup via X or Esc also depresses the button.
+- **Click model in popup**: single-click selects (visible selection border on the thumbnail); double-click writes to the slot matching the current filter. Selection clears on filter change.
+- **Star-corner pin gesture**: a 10×10 px star icon appears in the top-right corner of any thumbnail under the mouse cursor. Click toggles pinned state. Recent entries pinned this way migrate to the pins row; pinned entries unpinned drop out of pins (and back into recents if recently used, otherwise gone).
+- **Auto-recent tracking**: any successful texture load — file picker via "..." button, edit-field commit (lines 358–359 of `Emitter.cpp`), or palette double-click — adds the filename to recents with the appropriate `isColor` / `isBump` flag set. Touching an existing recent moves it to position 0 (LRU).
+- **Recents eviction**: when a 9th distinct recent arrives for the active filter, the oldest is dropped.
+- **Per-mod isolation**: palette INI is keyed by SHA1 of the same mod path string `LastMod` writes. Mod switch (via `RebuildModsMenu` flow) triggers `PaletteStore::SetActiveMod(newPath)` which loads the new mod's palette from INI and posts a refresh message to the popup if visible.
+- **Position memory**: popup window position persists in the INI's `[ui]` section as `PopupX=`, `PopupY=` (in screen coordinates). On show, position is validated against `MonitorFromPoint(MONITOR_DEFAULTTONULL)`; if no monitor contains the point, fall back to button-anchored default (just below the palette button in screen coords).
+- **Thumbnail cache**: in-memory `unordered_map<string, HBITMAP>` keyed by absolute texture path. Populated lazily on first paint of an entry. Cleared on app shutdown (HBITMAPs deleted via `DeleteObject`).
+- **Placeholder thumbnails** for: (a) failed decode (a 32×32 magenta-with-X bitmap generated procedurally on first need), (b) file-not-found (a greyed-out variant of the same).
+- **Reset View Settings (`ID_VIEW_RESET_VIEW_SETTINGS`) integration**: the existing handler that clears `BackgroundColor` / `ShowGround` / `GroundZ` / `GroundTexture` is extended to also delete the active mod's palette INI section (not the whole file — other mods' palettes survive, and the `[ui]` popup-position section survives). Palette in the popup re-renders empty.
+- **Debug instrumentation** under `#ifndef NDEBUG`: `[Palette] touch recent name='%s' slot=%s`, `[Palette] toggle pin name='%s' newState=%s`, `[Palette] thumbnail decode failed path='%s' fallback=placeholder`, `[Palette] mod switch from='%s' to='%s' loadedEntries=%d`, `[Palette] popup show pos=(%d,%d)`, `[Palette] popup hide pos=(%d,%d)`, `[Palette] popup position invalid (off-screen) snapping to default`.
 
 **Out:**
 
-- **User-supplied ground textures** (load a `.bmp` / `.dds` / `.tga` from disk). *Reason: deferred per the original ROADMAP entry. Bundled set covers the canonical use cases; user-supplied adds a file picker, path validation, and persistence storage that aren't worth the v1 scope.*
-- **Per-particle-system ground texture** (saving the ground choice into the .alo file). *Reason: the ground texture is a *preview* concern — what surface the particle effect is being staged against — not a property of the effect itself. Storing it in .alo would also be a file-format change, which is out of scope for this tier of work.*
-- **Animated / scrolling ground textures.** *Reason: implementation is non-trivial (animated UV transform), and the use case is marginal.*
-- **Per-mod default ground texture.** *Reason: similar to `LastMod` but for ground — adds complexity without a strong driver. If demand surfaces, the registry layout already permits this layered.*
-- **A "Custom..." option in the combobox** that opens a file picker. *Reason: covered by the user-supplied bullet above.*
-- **Tiling / scale controls.** *Reason: the existing tiling math (`MAP_SIZE*UNITS_PER_CELL/TEXTURE_SCALE`, src/engine.cpp:576) is fine for all bundled textures designed at the same target tiling.*
+- **Inline panel embedded in the Appearance tab.** *Reason: explicitly superseded by the popup approach — eliminates dialog-template growth and cascading layout work.*
+- **Anchored dropdown (auto-close on outside-click).** *Reason: explicitly skipped per the design discussion — the multi-swap workflow benefits from sticky behavior.*
+- **Modal popup.** *Reason: same — modal blocks viewport interaction, defeating the "see the texture render while picking" workflow.*
+- **Resizable popup.** *Reason: v1 is fixed-size; the 8+8 capacity makes resizing low-value. `WS_THICKFRAME` is reserved in styles for future use without an API change.*
+- **Docking the popup against the main editor.** *Reason: floating-only is simpler. If users keep dragging it to the same spot, position memory makes that one-time. Docking is a follow-up if asked for.*
+- **On-disk thumbnail cache (cached PNGs in AppData).** *Reason: synchronous in-memory cache covers the dominant case (palette stable within a session). Cold-start cost is bounded — 16 thumbnails × ~10 ms decode each ≈ 160 ms once per popup open. If anyone reports it as slow, this becomes a follow-up PR.*
+- **Async / threaded thumbnail decoding.** *Reason: same as above. Synchronous + cache is fast enough; threading adds failure modes (D3D9 device thread affinity, cache invalidation races) for negligible benefit at this capacity.*
+- **Drag-and-drop pinning** (drag a recent into the pins row). *Reason: the hover-star gesture is sufficient. DnD adds OLE drop-target wiring for one ergonomic win that doesn't justify the cost.*
+- **Larger thumbnail-on-hover preview tooltip.** *Reason: explicitly skipped per the design discussion — selection highlight only is the chosen UX.*
+- **Live preview in the 3D viewport on single-click.** *Reason: explicitly skipped per the design discussion — would require a transient texture state + revert path in the engine, outside MT-1's scope.*
+- **Capacity beyond 8 + 8 per filter, or scrolling.** *Reason: 8 each is the chosen capacity. Two rows of 8 fit cleanly without scroll. If the cap proves too tight, raising it is a one-line change in a follow-up.*
+- **Heuristic auto-classification of entries as color vs bump from filename.** *Reason: tagging via slot-of-use is unambiguous. Filename heuristics (`_normal`, `_depth`, `_bump`) are unreliable across modder conventions and would surprise users when wrong.*
+- **Export / import palette INI via UI.** *Reason: file lives in AppData; users who want to share can copy it manually.*
 
 ---
 
@@ -65,446 +84,429 @@ A picker control on the top toolbar bar lets the user choose one of N bundled gr
 
 | Piece | File:line |
 |---|---|
-| Current ground texture field on Engine | [src/engine.h:234](src/engine.h:234) |
-| Current ground texture load (init) | [src/engine.cpp:1126](src/engine.cpp:1126) |
-| Lost-device recovery releases | [src/engine.cpp:1138](src/engine.cpp:1138), [src/engine.cpp:1153](src/engine.cpp:1153), [src/engine.cpp:1192](src/engine.cpp:1192) |
-| Ground rendering call site (per-frame) | [src/engine.cpp:581](src/engine.cpp:581) |
-| `IDB_GROUND` resource ID definition | [src/Resources/resource.h:20](src/Resources/resource.h:20) |
-| `dirt.bmp` BITMAP declaration in .rc | [src/ParticleEditor.rc:32](src/ParticleEditor.rc:32) |
-| `dirt.bmp` in .vcxproj's resource list | [src/ParticleEditor.vcxproj:230](src/ParticleEditor.vcxproj:230) |
-| Existing toolbar-row layout (Leave particles / Background / Ground Z) | [src/main.cpp:2400](src/main.cpp:2400)–2440 |
-| `ReadBackgroundColor` / `WriteBackgroundColor` registry pattern | [src/main.cpp:2887](src/main.cpp:2887)–2913 |
-| `ReadShowGround` / `WriteShowGround` (REG_DWORD pattern, defaulting policy) | [src/main.cpp:2915](src/main.cpp:2915)–2940 |
-| `ReadGroundZ` / `WriteGroundZ` (REG_BINARY pattern for float) | [src/main.cpp:2947](src/main.cpp:2947)–2974 |
-| `ID_VIEW_RESET_VIEW_SETTINGS` handler (clears persisted view settings) | [src/main.cpp:1566](src/main.cpp:1566)–~1606 + the registry-delete sweep in [src/main.cpp:3075](src/main.cpp:3075) |
-| Engine background colour load on startup | [src/main.cpp:4044](src/main.cpp:4044)–4045 |
-| Existing combobox patterns in the editor | [src/UI/EmitterProps.cpp](src/UI/EmitterProps.cpp) (blend-mode combo, ground-behavior combo) |
+| Texture slot edit fields + "..." buttons on Appearance tab | [src/UI/Emitter.cpp:328](src/UI/Emitter.cpp:328)–335, [src/UI/Emitter.cpp:358](src/UI/Emitter.cpp:358)–359 |
+| `LoadTexture` file-picker helper | [src/UI/Emitter.cpp:67](src/UI/Emitter.cpp:67)–88 |
+| `IDD_EMITTER_PROPS2` dialog template (the Appearance tab) — Textures groupbox at (0,4,197,67) | [src/ParticleEditor.en.rc:287](src/ParticleEditor.en.rc:287)–334 |
+| EmitterProps window class + tab pages creation | [src/UI/Emitter.cpp:466](src/UI/Emitter.cpp:466)–512 |
+| Emitter texture fields | `colorTexture`, `normalTexture` (strings) on `ParticleSystem::Emitter` ([src/ParticleSystem.cpp:269](src/ParticleSystem.cpp:269), 287, 481, 502) |
+| `ReadLastMod` / `WriteLastMod` registry pattern | [src/main.cpp:2967](src/main.cpp:2967)–2993 |
+| Mod-switch flow that updates `FileManager::SetModPath` | [src/main.cpp:4719](src/main.cpp:4719)–4727 |
+| `LastMod` restoration on startup | [src/main.cpp:4941](src/main.cpp:4941)–4945 |
+| `Reset View Settings` handler (sweeps registry view-settings) | [src/main.cpp:1566](src/main.cpp:1566)–~1606, [src/main.cpp:3075](src/main.cpp:3075) |
+| `FileManager` (resolves texture filenames against the mod path) | [src/managers.cpp](src/managers.cpp), [src/managers.h](src/managers.h) |
+| D3DX9 texture loading (TGA/DDS supported) | engine uses `D3DXCreateTextureFromFile*` for ground texture ([src/engine.cpp:1126](src/engine.cpp:1126)) — same APIs work for thumbnails |
+| UndoStack (used elsewhere for emitter edits) | [src/UndoStack.h](src/UndoStack.h) — palette writes should integrate consistent with how typed/file-picker writes do today |
+| Existing custom child-control patterns | `Spinner`, `ColorButton` registered window classes — see [src/UI/Spinner.cpp](src/UI/Spinner.cpp), [src/UI/ColorButton.cpp](src/UI/ColorButton.cpp) — pattern reused for the palette content control |
 
 **Not yet in the codebase — to add:**
 
-- 5 new RCDATA resources in `src/Resources/` (file extension chosen per user-supplied art: `.bmp` / `.dds` / `.tga` / `.png` all work). Existing `IDB_GROUND` also migrates from BITMAP → RCDATA for a unified load path.
-- 5 new `IDB_GROUND_*` resource IDs in `src/Resources/resource.h` (or stay in [src/Resources/resource.en.h](src/Resources/resource.en.h)).
-- 5 new `BITMAP` lines in [src/ParticleEditor.rc](src/ParticleEditor.rc).
-- 5 new `<Image Include="...">` lines in [src/ParticleEditor.vcxproj](src/ParticleEditor.vcxproj) and its `.filters` sibling.
-- `m_groundTextureIndex` field on Engine + getter/setter.
-- `Engine::SetGroundTexture(int)` implementation that handles release / reload / fallback.
-- `Engine::ReloadGroundTexture()` private helper used by both the public setter and the lost-device recovery path.
-- `ReadGroundTexture` / `WriteGroundTexture` in main.cpp.
-- Toolbar combobox `info->hGroundTextureCombo` + creation in `WM_CREATE` + layout in `WM_SIZE`.
-- Combobox change-notification handling (CBN_SELCHANGE).
-- `IDS_GROUND_*` string table entries for the dropdown labels.
-- `Reset View Settings` extended to delete the registry value + reset combo + reload texture.
+- **`src/UI/TexturePalette.{h,cpp}`** — new module. Owns:
+  - `PaletteStore` singleton (in-memory state + INI persistence).
+  - `RegisterTexturePaletteContentClass` / `RegisterTexturePalettePopupClass` — the inner owner-draw thumbnail control plus the outer popup window class.
+  - `PaletteStore::TouchRecent(string filename, SlotKind slot)`, `TogglePin(string filename)`, `SetActiveMod(string modPath)`, `Filter(SlotKind)`, `Get()` accessors.
+  - `PalettePopup::Show(HWND owner, POINT defaultPos)`, `PalettePopup::Hide()`, `PalettePopup::IsVisible()`, `PalettePopup::SetOnVisibilityChanged(callback)`.
+- **INI I/O** for palette persistence. `WritePrivateProfileStringW` family — already available, no new dependency.
+- **Thumbnail decoder** (`TexturePaletteThumbCache`): D3DX9 → DIB section → HBITMAP. Lives alongside `TexturePalette.cpp`.
+- **`IDC_BUTTON_PALETTE` control ID** + button addition in [src/ParticleEditor.en.rc:287](src/ParticleEditor.en.rc:287).
+- **`IDB_PALETTE_GLYPH`** — new 16×16 px BMP resource: painter's-palette icon (kidney outline with thumb hole + 4–5 paint blobs in red/blue/yellow/green/white). Hand-authored bitmap added to `src/Resources/`.
+- **`IDC_PALETTE_STATUS`** static control inside the popup for transient feedback messages.
+- **`IDS_PALETTE_PINS_FULL`** string: "Pins full (8). Unpin one to make room."
+- **Hooks into `Emitter.cpp`** at:
+  - `IDC_BUTTON_PALETTE` handler — toggle popup visibility.
+  - The three existing texture-write points (`LoadTexture` callers `IDC_BUTTON1`/`2`, `EN_CHANGE` on `IDC_EDIT2`/`3`) → call `PaletteStore::TouchRecent`.
+  - Custom notify code from popup → `PALETTE_NM_COMMIT` writes to the active emitter's slot.
+- **Hook into mod-switch flow** in `main.cpp`: when `WriteLastMod(modPath)` runs ([src/main.cpp:4725](src/main.cpp:4725)), also call `PaletteStore::SetActiveMod(modPath)`.
+- **Hook into startup** in `main.cpp`: after `ReadLastMod()` restores the mod ([src/main.cpp:4943](src/main.cpp:4943)–4945), call `PaletteStore::SetActiveMod(savedMod)`. Register the popup window class once at app init.
+- **Hook into `Reset View Settings`** to clear the active mod's palette INI section.
+- **Two new strings**: `IDS_PALETTE_FILTER_COLOR`, `IDS_PALETTE_FILTER_BUMP` (plus `IDS_PALETTE_PINS_FULL` noted above).
 
-**Unknown to confirm before coding:**
-
-1. **Texture sourcing.** The 5 new BMPs need actual image data. Three options: (a) user provides assets from existing game data; (b) I generate placeholder procedural textures (solid color + noise + simple pattern) for the v1 ship and replace later with curated art; (c) source from public-domain texture libraries. **Open Q1 below.**
-2. **Texture size.** Existing `dirt.bmp` size unknown without inspection — likely 256×256 or 512×512. New textures should match for consistent tiling and minimal .exe bloat. **Action**: inspect dirt.bmp during implementation; match the format.
-3. **Combobox vs. toolbar button popup vs. View submenu.** The combobox is the obvious choice for a 6-item dropdown, but I should confirm the top bar has space without crowding. Layout math at [src/main.cpp:2425](src/main.cpp:2425) anchors Background button at `clientWidth - 28`. A ~100 px combo to its left needs ~120 px of clear space; on narrow windows that may push the existing controls together. **Open Q2 below.**
-4. **`Engine::Lost / Reset` device path** — does the existing texture-release-and-recreate sequence correctly chain through a `SetGroundTexture`-equivalent that re-uses the current index? **Action**: trace the lost-device path to confirm where the re-create happens; the new `ReloadGroundTexture` helper plugs in there.
+*(All design questions resolved — see "Resolved decisions" at the bottom of the spec.)*
 
 ---
 
-## Architecture
+## Architecture / implementation approach
 
-Five pieces, all in well-bounded locations.
-
-### A. Resource additions
-
-5 new texture files in [src/Resources/](src/Resources/), declared in [src/ParticleEditor.rc](src/ParticleEditor.rc) as `RCDATA` resources rather than `BITMAP`. The existing `IDB_GROUND` is also migrated from BITMAP → RCDATA for a unified load path. RCDATA accepts any file format; the loader (`D3DXCreateTextureFromFileInMemory`, see §B) parses the bytes regardless of extension — BMP, DDS, TGA, PNG, JPG, HDR are all valid.
-
-```rc
-IDB_GROUND        RCDATA   "Resources\\dirt.bmp"     // (or .dds/.tga/.png — extension is informational)
-IDB_GROUND_GRASS  RCDATA   "Resources\\grass.tga"
-IDB_GROUND_SAND   RCDATA   "Resources\\sand.dds"
-IDB_GROUND_SNOW   RCDATA   "Resources\\snow.tga"
-IDB_GROUND_METAL  RCDATA   "Resources\\metal.dds"
-IDB_GROUND_GREY   RCDATA   "Resources\\grey.png"
-```
-
-Each texture can be any reasonable size (256–1024 px per side recommended; 2048 hard cap to keep .exe size sane). Mixed sizes and mixed formats are fine — tiling is governed by `TEXTURE_SCALE` in the vertex math at [src/engine.cpp:576](src/engine.cpp:576), independent of source pixel resolution. **Format-specific notes:**
-
-- **DDS** is preferred for ground textures: pre-mipmapped (sharper at oblique angles + distant viewing), GPU-native compression (BC1/DXT1 cuts size ~6× vs uncompressed RGB), no decode cost at load.
-- **TGA** is what game-asset pipelines typically deliver: lossless, alpha-channel support, no licensing concerns. D3DX9 decodes at load.
-- **BMP** stays a valid option (preserves the pre-MT-2 `dirt.bmp` exactly). Uncompressed, simple, but bulky compared to DDS.
-- **PNG / JPG** also work via D3DX9's built-in decoders — useful for quick-and-dirty placeholders.
-
-Resource IDs in [src/Resources/resource.h](src/Resources/resource.h) — adjacent to the existing `IDB_GROUND = 130`, picking 131..135.
-
-String table entries (both `resource.en.h` and `resource.de.h` for ID consistency, with the strings in the corresponding `.rc` files — English-only labels per the existing convention): `IDS_GROUND_DIRT`, `IDS_GROUND_GRASS`, `IDS_GROUND_SAND`, `IDS_GROUND_SNOW`, `IDS_GROUND_METAL`, `IDS_GROUND_GREY`.
-
-### B. Engine API
-
-Three additions to [src/engine.h](src/engine.h):
+### A. Data model
 
 ```cpp
-// Public.
-bool SetGroundTexture(int index);        // returns true on success
-int  GetGroundTexture() const { return m_groundTextureIndex; }
-static const int kGroundTextureCount = 6;
+// src/UI/TexturePalette.h
 
-// Private.
-int                m_groundTextureIndex;     // 0..kGroundTextureCount-1
-bool ReloadGroundTexture();                  // releases m_pGroundTexture, recreates from m_groundTextureIndex
+enum class PaletteSlot : uint8_t { Color = 1 << 0, Bump = 1 << 1 };
+
+struct PaletteEntry
+{
+    std::string filename;     // e.g. "p_smoke_01.tga" — the basename, exactly as stored in emitter
+    bool        isPinned;     // true ⇒ shown in pins row, false ⇒ recents row
+    uint8_t     slotMask;     // bit 0 = used as color, bit 1 = used as bump
+    uint64_t    lastUsedNs;   // monotonic clock, used for recents LRU sort
+};
+
+class PaletteStore
+{
+public:
+    static PaletteStore& Instance();
+
+    // Mod lifecycle
+    void SetActiveMod(const std::wstring& modPath);   // loads INI section if present
+    void ClearActiveMod();                             // wipes in-memory; called on Reset View Settings
+    const std::wstring& ActiveMod() const;
+
+    // Filter (persisted per mod)
+    PaletteSlot ActiveFilter() const;
+    void        SetActiveFilter(PaletteSlot);
+
+    // Mutations — each writes to disk before returning
+    void TouchRecent(const std::string& filename, PaletteSlot usedAs);
+    void TogglePin (const std::string& filename);
+    void RemoveRecent(const std::string& filename);
+
+    // Read access for the popup's WM_PAINT
+    std::vector<PaletteEntry> Pins   (PaletteSlot filter) const;
+    std::vector<PaletteEntry> Recents(PaletteSlot filter) const;
+
+    // Popup window position (separate from per-mod state)
+    POINT GetPopupPos(POINT fallback) const;
+    void  SetPopupPos(POINT pos);
+
+private:
+    std::wstring                                 m_activeMod;
+    std::unordered_map<std::wstring, ModPalette> m_byMod;   // loaded lazily
+    POINT                                        m_popupPos { -1, -1 };  // INI-persisted
+};
 ```
 
-Implementation in [src/engine.cpp](src/engine.cpp):
+`PaletteStore` is a singleton because it's a process-global cache shared across the Emitter properties window, the popup, and the mod-switch flow in `main.cpp`. Lifetime matches the process. No threading — all access from the UI thread.
+
+### B. Persistence schema (INI)
+
+File: `%APPDATA%\AloParticleEditor\texture-palettes.ini`
+
+```ini
+[ui]
+PopupX=120
+PopupY=240
+
+[mod=<sha1-hex-of-active-mod-path>]
+Path=C:\Mods\RepublicAtWar
+Filter=Color
+PinCount=3
+Pin0=p_smoke_01.tga|color
+Pin1=p_dust_norm.tga|bump
+Pin2=p_explosion_master.tga|color,bump
+RecentCount=4
+Recent0=p_spark_white.tga|color|2026-05-14T19:32:11Z
+Recent1=…
+```
+
+Choices:
+- **`[ui]` section** holds cross-mod editor UI state (currently just popup position). Survives Reset View Settings (which only wipes per-mod sections).
+- **Mod section key** = `mod=<sha1>` so that arbitrary path characters (drive letters, UNC, spaces, accents) don't break INI parsing. The `Path=` line preserves the human-readable original for debugging.
+- **`Pin*` lines have no timestamp** because pins are user-ordered (insertion order, oldest first). **`Recent*` lines do** because order is "most recent first" and we may want to debug LRU ordering.
+- **Slot mask** is encoded as `color`, `bump`, or `color,bump`.
+- **`PinCount` / `RecentCount`** make round-tripping safe even if the file is hand-edited and a `Pin5` line gets deleted.
+
+INI was chosen over JSON to avoid a new third-party dependency and to keep the persistence code small (~80 LOC using `Get/WritePrivateProfileStringW`).
+
+### C. Thumbnail pipeline
+
+```
+filename ──► resolve to absolute path via FileManager
+              │
+              ├─ found ──► D3DXCreateTextureFromFileEx(width=32, height=32,
+              │              format=D3DFMT_A8R8G8B8) ──► IDirect3DTexture9
+              │              │
+              │              ├─ LockRect(level 0) ──► copy 32×32 ARGB pixels
+              │              │     into a CreateDIBSection HBITMAP
+              │              │     (32-bit top-down DIB)
+              │              │
+              │              └─ Release D3D texture; cache HBITMAP in m_thumbCache
+              │
+              └─ not found ──► return s_placeholderMissingHBitmap (lazily generated)
+```
+
+Cache key: **absolute path**. Cache eviction: **none in v1**.
+Decoder uses the existing `Engine`'s `IDirect3DDevice9*`. No separate D3D device.
+Decode failures: log under `#ifndef NDEBUG` and substitute `s_placeholderBrokenHBitmap`.
+
+### D. Palette content control (inside the popup)
+
+A registered window class `"AloPaletteContent"` — owner-draw, sized to fit the popup client area minus the title bar margin. WndProc handles:
+
+- **`WM_PAINT`** — draws the filter row (small native radios are real child controls, *not* owner-drawn) + the two thumbnail rows. For each entry: blit the cached HBITMAP, draw selection border if selected, draw star icon if `m_hoveredEntry == this`.
+- **`WM_MOUSEMOVE`** — track hover; redraw the previously-hovered and newly-hovered cells. Use `TrackMouseEvent(TME_LEAVE)` so we know to clear hover when the cursor exits the panel.
+- **`WM_LBUTTONDOWN`** — hit-test against (a) star icon if visible (toggle pin), (b) thumbnail (set selection).
+- **`WM_LBUTTONDBLCLK`** — fire `WM_NOTIFY PALETTE_NM_COMMIT` to popup → forwarded to EmitterProps window.
+- **`WM_COMMAND`** from filter radios — call `PaletteStore::SetActiveFilter`, clear selection, invalidate.
+
+### E. Popup window architecture
+
+Window class: `"AloTexturePalettePopup"`.
+Owner: main editor window (lifetime tied to it).
+Styles: `WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU`. Ex-style: `WS_EX_TOOLWINDOW` (no taskbar entry, smaller title bar).
+Initial size: 280×120 px (fixed in v1).
+
+**Lifecycle:**
+- Class registered once in app init (`main.cpp` startup).
+- Window itself is **created lazily** on first palette-button click and persists hidden between shows. Cleaner than recreating per-show — keeps the inner content control's state, avoids re-register churn.
+- Destroyed automatically when the main editor window closes (Win32 owner cleanup).
+
+**Show / hide / toggle path:**
+
+```
+PalettePopup::Toggle(HWND ownerEditor, RECT buttonRectScreen)
+  if not visible:
+    POINT pos = PaletteStore::GetPopupPos(fallback = button-anchored default)
+    if ValidatePos(pos) fails (no monitor contains it):
+        pos = button-anchored default
+        log: [Palette] popup position invalid (off-screen) snapping to default
+    SetWindowPos(popup, NULL, pos.x, pos.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW)
+    log: [Palette] popup show pos=(x,y)
+    fire visibility-changed callback (button → pressed)
+  else:
+    GetWindowRect(popup, &r); PaletteStore::SetPopupPos({r.left, r.top})
+    ShowWindow(popup, SW_HIDE)
+    log: [Palette] popup hide pos=(x,y)
+    fire visibility-changed callback (button → raised)
+```
+
+**Position validation** uses `MonitorFromPoint({pos.x + 4, pos.y + 4}, MONITOR_DEFAULTTONULL)` — if NULL, snap to button-anchored default. Catches the "user disconnected secondary monitor" case.
+
+**Button-anchored default:** `{ buttonScreenRect.left, buttonScreenRect.bottom + 4 }` — popup appears just below the button.
+
+**Esc key handling:** popup's WndProc handles `WM_KEYDOWN VK_ESCAPE` → `Toggle()` (hides + saves position).
+
+**Title bar X (close) handling:** `WM_SYSCOMMAND SC_CLOSE` → save position, hide (don't destroy). `WM_CLOSE` returns 0 to prevent default destroy.
+
+**Visibility callback:** when popup hides or shows, fire a `std::function` set by EmitterProps. EmitterProps uses it to update the toggle button's `BM_SETCHECK` state — keeps button visual in sync regardless of which path triggered the change (button click, X, Esc).
+
+**Status strip:** static control `IDC_PALETTE_STATUS` at the bottom of the popup client area. API:
 
 ```cpp
-bool Engine::SetGroundTexture(int index)
-{
-    if (index < 0 || index >= kGroundTextureCount) return false;
-    if (index == m_groundTextureIndex && m_pGroundTexture != NULL) return true;
-    m_groundTextureIndex = index;
-    return ReloadGroundTexture();
-}
-
-bool Engine::ReloadGroundTexture()
-{
-    // Resource ID lookup table; kept in sync with the .rc additions.
-    static const UINT kResourceIds[kGroundTextureCount] = {
-        IDB_GROUND,        // 0 dirt (default)
-        IDB_GROUND_GRASS,  // 1
-        IDB_GROUND_SAND,   // 2
-        IDB_GROUND_SNOW,   // 3
-        IDB_GROUND_METAL,  // 4
-        IDB_GROUND_GREY,   // 5
-    };
-    // RCDATA + D3DXCreateTextureFromFileInMemory accepts any format
-    // D3DX9 understands (BMP, DDS, TGA, PNG, JPG, HDR). The extension
-    // in the .rc declaration is informational only — the loader sniffs
-    // the actual file bytes.
-    HMODULE  hMod  = GetModuleHandle(NULL);
-    HRSRC    hRes  = FindResource(hMod, MAKEINTRESOURCE(kResourceIds[m_groundTextureIndex]),
-                                   RT_RCDATA);
-    HGLOBAL  hData = (hRes != NULL) ? LoadResource(hMod, hRes) : NULL;
-    void*    pData = (hData != NULL) ? LockResource(hData) : NULL;
-    DWORD    dwSize = (hRes != NULL) ? SizeofResource(hMod, hRes) : 0;
-    IDirect3DTexture9* pNew = NULL;
-    if (pData == NULL || dwSize == 0 ||
-        FAILED(D3DXCreateTextureFromFileInMemory(m_pDevice, pData, dwSize, &pNew)))
-    {
-#ifndef NDEBUG
-        printf("[Ground] texture load failed index=%d falling back to default\n",
-               m_groundTextureIndex);
-        fflush(stdout);
-#endif
-        if (m_groundTextureIndex != 0)
-        {
-            m_groundTextureIndex = 0;
-            return ReloadGroundTexture();   // single retry on the known-good default
-        }
-        return false;                       // dirt itself failed → engine is in trouble
-    }
-    SAFE_RELEASE(m_pGroundTexture);
-    m_pGroundTexture = pNew;
-#ifndef NDEBUG
-    printf("[Ground] texture set index=%d\n", m_groundTextureIndex);
-    fflush(stdout);
-#endif
-    return true;
-}
+void PalettePopup::ShowStatus(UINT stringId, UINT durationMs = 3000);
+//   - LoadString(stringId) into the control
+//   - SetTimer(hPopup, ID_TIMER_STATUS_CLEAR, durationMs, NULL)
+//   - On WM_TIMER ID_TIMER_STATUS_CLEAR: SetWindowText(L""); KillTimer
+//   - On Hide(): SetWindowText(L""); KillTimer (no stale message on next show)
+//   - On WM_DESTROY: KillTimer
 ```
 
-The existing init-time load at [src/engine.cpp:1126](src/engine.cpp:1126) is rewritten to call `ReloadGroundTexture()` (with `m_groundTextureIndex = 0` set in the constructor). Same change for the lost-device recovery path.
+Triggered today from the pin-overflow path; reusable for future transient messages (mod switch confirm, decode failure summary, etc.).
 
-### C. Toolbar combobox + UI wiring
-
-In [src/main.cpp](src/main.cpp), add `HWND hGroundTextureCombo` to the `APPLICATION_INFO` struct (alongside `hBackgroundLabel`, `hBackgroundBtn`, `hGroundZSpinner`). Create in `WM_CREATE` adjacent to the existing background controls. Populate with the 6 entries via `LoadString(IDS_GROUND_*)` in order.
-
-Layout in `WM_SIZE` ([src/main.cpp:2400](src/main.cpp:2400)–2440): insert the combobox between the Ground Z group and the Background group, with the same vertical alignment as the other top-bar controls. Updated anchoring:
+### F. Mod switching
 
 ```
-[Leave particles] ...  [Ground tex combo] [Z:] [Z spinner] [Bg:] [Bg btn]
-                       ←──────────────── grouped from right ────────────→
+User picks a mod from File ▸ Mods ▸ <mod>
+  │
+  └─ existing path: SetModPath + WriteLastMod(modPath)
+     │
+     └─ new: PaletteStore::Instance().SetActiveMod(modPath)
+        │
+        ├─ flush dirty state from previous mod's in-memory entries to INI
+        ├─ read new mod's section from INI (or initialize empty)
+        └─ post WM_PALETTE_REFRESH to popup if visible (popup invalidates content control)
 ```
 
-`CBN_SELCHANGE` notification in `WM_COMMAND` calls `info->engine->SetGroundTexture(index)` then `WriteGroundTexture(index)`. On engine-side failure (returns false), fall back to `SetGroundTexture(0)` and re-sync the combobox to index 0 to keep UI ↔ engine state consistent.
+### G. Reset View Settings integration
 
-Combobox style: `CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP` (no user-typed entries; 6 items don't need a scroll bar in practice but the style is cheap).
-
-### D. Registry persistence
-
-Two helpers in [src/main.cpp](src/main.cpp) parallel to `ReadShowGround` / `WriteShowGround`:
+The existing handler at [src/main.cpp:1566](src/main.cpp:1566) gains one new step:
 
 ```cpp
-static int ReadGroundTexture(int defaultValue)
-{
-    HKEY hKey;
-    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0,
-                     KEY_READ, &hKey) == ERROR_SUCCESS)
-    {
-        DWORD value;
-        DWORD type, size = sizeof(value);
-        if (RegQueryValueEx(hKey, L"GroundTexture", NULL, &type,
-                            (LPBYTE)&value, &size) == ERROR_SUCCESS
-            && type == REG_DWORD && size == sizeof(value)
-            && value < (DWORD)Engine::kGroundTextureCount)
-        {
-            RegCloseKey(hKey);
-            return (int)value;
-        }
-        RegCloseKey(hKey);
-    }
-    return defaultValue;
-}
-
-static void WriteGroundTexture(int index)
-{
-    HKEY hKey;
-    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
-                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL)
-        == ERROR_SUCCESS)
-    {
-        DWORD value = (DWORD)index;
-        RegSetValueEx(hKey, L"GroundTexture", 0, REG_DWORD,
-                      (const BYTE*)&value, sizeof(value));
-        RegCloseKey(hKey);
-    }
-}
+PaletteStore::Instance().ClearActiveMod();
+// (deletes the [mod=<sha1>] section from the INI file; [ui] section survives)
 ```
 
-The `value < kGroundTextureCount` guard means a corrupt or future-version registry value (e.g. set to 99 by hand) is silently rejected and the default is used — no crash, no out-of-range texture-lookup, no need for a "did the user tamper" check at the engine side.
+This wipes pins + recents + filter for the active mod *only*. Other mods' palettes survive. Popup window position survives. If the popup is open, it refreshes to show the now-empty palette.
 
-Startup load in `WM_CREATE` / engine-init sequence ([src/main.cpp:4044](src/main.cpp:4044)–4045 area):
+### H. Touch points by file
 
-```cpp
-info->engine->SetGroundTexture(ReadGroundTexture(0));
-ComboBox_SetCurSel(info->hGroundTextureCombo, info->engine->GetGroundTexture());
-```
+| File | Change |
+|---|---|
+| `src/UI/TexturePalette.h` | **NEW** — `PaletteStore`, `PaletteEntry`, `PalettePopup`, control class registration |
+| `src/UI/TexturePalette.cpp` | **NEW** — implementation, INI I/O, thumbnail decoder, popup + content WndProcs |
+| `src/ParticleEditor.en.rc` | Add `IDC_BUTTON_PALETTE` to `IDD_EMITTER_PROPS2` Textures group header; add `BITMAP IDB_PALETTE_GLYPH "Resources/palette_glyph.bmp"`; add `IDS_PALETTE_FILTER_COLOR`, `IDS_PALETTE_FILTER_BUMP`, `IDS_PALETTE_PINS_FULL` string-table entries |
+| `src/Resources/palette_glyph.bmp` | **NEW** — 16×16 px 24-bit BMP, painter's palette icon (kidney outline + thumb hole + paint blobs) |
+| `src/Resources/resource.en.h` | Add the new control IDs (`IDC_BUTTON_PALETTE`, `IDC_PALETTE_STATUS`, `IDC_RADIO_PALETTE_COLOR`, `IDC_RADIO_PALETTE_BUMP`) + the bitmap ID + the new string IDs |
+| `src/UI/Emitter.cpp` | Hook texture-write points to `PaletteStore::TouchRecent`; handle `IDC_BUTTON_PALETTE` (toggle popup); handle `PALETTE_NM_COMMIT`; wire visibility-changed callback to `BM_SETCHECK` |
+| `src/main.cpp` | Register popup window class on startup; init `PaletteStore`; call `SetActiveMod` on mod switch + startup restore + Reset View Settings |
+| `src/ParticleEditor.vcxproj` | Add the two new files |
+| `src/ParticleEditor.vcxproj.filters` | Same |
 
-The `Set → Get → ComboBox_SetCurSel` round-trip catches the edge case where the registry value was in-range but the texture failed to load (engine fell back to 0); the combobox UI reflects the actual loaded state, not the requested one.
-
-### E. Reset View Settings integration
-
-The existing reset handler at [src/main.cpp:1566](src/main.cpp:1566)–1606 currently:
-1. Confirms via MessageBox.
-2. Resets Engine state (background colour, show-ground flag, ground Z).
-3. Updates UI controls (color button, toolbar check, ground Z spinner).
-4. Deletes registry values via the sweep at [src/main.cpp:3075](src/main.cpp:3075).
-
-MT-2 additions:
-- Reset handler: `info->engine->SetGroundTexture(0); ComboBox_SetCurSel(info->hGroundTextureCombo, 0);`
-- Confirm dialog text: extend "Reset background color, ground plane visibility, ground Z offset, bloom, and the color picker's custom colors to defaults?" → "...ground texture, ..."
-- Registry sweep at line 3075: add `RegDeleteValue(hKey, L"GroundTexture");`
+Notably absent: **no dialog template growth, no host-window resize, no main-window layout changes.** That was the goal of the popup pivot.
 
 ---
 
-## Risks named up front + mitigations + tripwires
+## Risks named up front + mitigations
 
-Each risk: what breaks, when, why → code-level mitigation → the verification step that bites if the mitigation regresses.
+1. **R1 — Texture file format ambiguity (DDS variants, exotic TGA flavors) breaks D3DX decode.** Some real-world mod textures use non-standard DDS pixel formats, RLE-compressed TGA, or 16-bit TGA. D3DX9 handles most but not all. **Tripwire:** thumbnails for some entries always show the broken placeholder.
+   **Mitigation:** the broken-placeholder fallback path *is* the mitigation — a failed thumbnail doesn't break the workflow (filename + pin/recent state still work; double-click still feeds the slot correctly). Debug log records the failure for triage. No attempt to support every exotic format — that's a separate problem.
 
-1. **Lost-device recovery loses the user's selection.** The existing recovery path at [src/engine.cpp:1138](src/engine.cpp:1138) re-loads `IDB_GROUND` via `D3DXCreateTextureFromResource`. If the new code doesn't intercept that path, an Alt-Tab / fullscreen toggle / display-mode change would silently reset the ground to dirt.
-   - *Mitigation*: route every load through `ReloadGroundTexture()` which consults `m_groundTextureIndex`. The init path, the lost-device path, and the public setter all go through the same helper.
-   - *Tripwire R1*: pick "Sand" → Alt-Tab away → return. Ground stays as sand. If it reverts to dirt, the recovery path isn't going through `ReloadGroundTexture`.
+2. **R2 — Stale recents pointing at deleted/renamed files clutter the palette.** A user might rename `p_smoke.tga` → `p_smoke_v2.tga` on disk; the recents entry for the old name persists with a broken thumbnail. **Tripwire:** palette accumulates broken-thumb entries over time.
+   **Mitigation:** on `SetActiveMod`, perform a one-shot existence check via `FileManager` for each entry. Entries where the file no longer resolves are *demoted* (pins → recents) but not deleted, on the theory that the file might come back (git checkout, mod re-extraction). After 30 days of continuous "missing" status (tracked via a `firstMissingNs` field added to entries that go missing), the entry is auto-pruned. The 30-day grace is a single constant in `TexturePalette.cpp` — easily tunable.
 
-2. **Resource leak on repeated SetGroundTexture.** `D3DXCreateTextureFromResource` returns an `IDirect3DTexture9*` that needs `Release` when no longer needed. If `SetGroundTexture` overwrites `m_pGroundTexture` without releasing the prior, every change leaks ~256KB of GPU memory.
-   - *Mitigation*: `ReloadGroundTexture` loads INTO a local `pNew`, only assigns to `m_pGroundTexture` after `SAFE_RELEASE`ing the prior, so even on `pNew` failure the existing texture is preserved (no transient null state).
-   - *Tripwire R2*: in a debug build, cycle through all 6 textures back-to-back 100 times via the combobox. RSS should be stable; no GPU memory accumulation.
+3. **R3 — `LastMod` value uses a registry-stored absolute path; if the user moves their mods folder, mod-key lookup misses and they "lose" their palette.** **Tripwire:** user moves `C:\Mods\RaW` → `D:\Mods\RaW`, palette appears empty for a mod they've used for months.
+   **Mitigation:** acceptable v1 limitation. The existing `LastMod` itself has this same property — moving the mod folder loses the "last opened" state too. If users complain, a future PR can add a "rebind palette to current mod path" import/migrate UI. Documented in the CHANGELOG entry as a known limitation.
 
-3. **Invalid registry value crashes the engine on startup.** A corrupt or hand-edited `HKCU\Software\AloParticleEditor\GroundTexture` set to e.g. `99` would, without bounds-checking, lookup past `kResourceIds[99]` and crash.
-   - *Mitigation*: `ReadGroundTexture` bounds-checks with `value < kGroundTextureCount` and returns the default on failure. `SetGroundTexture` also bounds-checks. Layered defence.
-   - *Tripwire R3*: manually write `99` to the registry value, restart editor — loads dirt without crashing or printing a misleading error.
+4. **R4 — INI file parsing edge cases (Unicode names, `=` or `\n` characters in filenames) corrupt the palette.** Texture filenames in real mods sometimes contain non-ASCII characters. **Tripwire:** a non-ASCII texture name in a recent entry causes either a parse failure on next load or a corrupted `Recent*=` line.
+   **Mitigation:** use `WritePrivateProfileStringW` consistently and keep the file UTF-16 LE on disk. Texture filenames are stored as `wstring` internally for INI I/O and converted to/from `string` only at the boundary with `Emitter::colorTexture`. Filenames containing `=` (illegal in INI keys) cannot occur for `Pin*` / `Recent*` *values*; the `=` would only be a problem in a key, which we control. A sanity-check at the `TouchRecent` boundary rejects entries with control characters, with a debug log.
 
-4. **Texture-load failure mid-cycle (e.g. resource corruption / engine in a weird state).** If `D3DXCreateTextureFromResource` returns failure for a non-default resource, the current `m_pGroundTexture` remains valid (mitigation R2) but `m_groundTextureIndex` is left wrong, leading to a state mismatch between the combobox / registry and the actually-loaded texture.
-   - *Mitigation*: on failure, `ReloadGroundTexture` retries with index 0 (single retry; not infinite). If index 0 also fails, return false and leave the engine flagged as "ground unavailable" — caller (combobox handler) syncs UI to index 0 on `SetGroundTexture` returning false.
-   - *Tripwire R4*: temporarily comment out one of the RCDATA resource lines in `.rc` and rebuild. Verify the editor still starts (loads dirt) and the combobox returns to dirt when that entry is picked.
+5. **R5 — Thumbnail decode pegs the UI thread on first popup show with many entries.** 16 thumbnails × ~10–20 ms decode each = up to 320 ms hitch. **Tripwire:** opening the popup on a populated mod feels janky.
+   **Mitigation:** decode lazily in `WM_PAINT` rather than upfront on popup show — only entries that are currently visible (and not yet cached) get decoded. With 16 max visible entries and the cache persisting across popup show/hide, the worst case is the first paint after a mod switch, and only for entries that haven't been seen this session. If field reports indicate this is still too slow, the on-disk PNG cache (Out item above) becomes the follow-up.
 
-5. **Combobox layout overflows on narrow windows.** The top bar already has 4 controls fighting for right-edge space ([src/main.cpp:2425](src/main.cpp:2425)–2433). Adding a ~100 px combo + label pushes everything left; at narrow client widths the controls may overlap the "Leave particles" checkbox.
-   - *Mitigation*: layout math anchors all top-bar controls from the right edge, with a minimum spacing between groups. If `clientWidth < threshold`, the combo's preferred width drops (e.g. to 70 px), and at very narrow widths the combo's label is hidden, leaving just the combo. Acceptable degradation.
-   - *Tripwire R5*: drag the window narrower than 800 px wide. Controls stay readable and clickable; no overlap.
+6. **R6 — Palette write happens before the texture-field's normal change-notification flow, so undo/redo skips the palette-driven write.** **Tripwire:** double-click a thumbnail, hit Ctrl+Z, the texture field doesn't revert.
+   **Mitigation:** the `PALETTE_NM_COMMIT` handler in `DlgEmitterPropsProc` writes via the *exact same path* the file-picker (`IDC_BUTTON1`/`2`) uses today — `SetWindowText` on the edit field followed by re-firing the change notification. This routes through whatever undo/edit-tracking the existing flow uses (or doesn't). Verified by I1/I2 below.
 
-6. **Stale combobox state after `Reset View Settings`.** The reset path resets Engine internals but if the combobox UI isn't also reset, the user sees "Sand" in the dropdown while the engine renders dirt.
-   - *Mitigation*: reset path explicitly calls `ComboBox_SetCurSel(info->hGroundTextureCombo, 0)` after `SetGroundTexture(0)`. Same pattern as the existing ColorButton + ground-Z spinner reset.
-   - *Tripwire R6*: pick "Metal", run View → Reset View Settings → combo reads "Dirt" AND engine renders dirt.
+7. **R7 — Popup position lands off-screen after monitor topology change** (user disconnected external monitor between sessions). **Tripwire:** popup opens, isn't visible anywhere, button shows pressed but no window on screen.
+   **Mitigation:** `MonitorFromPoint(MONITOR_DEFAULTTONULL)` validation on every show; snap to button-anchored default if invalid. Logs a debug line. The check is cheap enough to run unconditionally.
 
-7. **Texture not loaded yet during very-early UI interaction.** The combobox is created in `WM_CREATE` before the Engine finishes initialising. If the user somehow clicks the combo (extreme timing) before engine init completes, `SetGroundTexture` is called on a NULL engine.
-   - *Mitigation*: combobox notification handler null-checks `info->engine` before calling `SetGroundTexture`. The pattern is already used for `hBackgroundBtn` at [src/main.cpp:2212](src/main.cpp:2212) ("if (hControl == info->hBackgroundBtn && info->engine != NULL)").
-   - *Tripwire R7*: combobox change handler asserts that `info->engine != NULL` before dispatching; debug-build crash if violated.
+8. **R8 — Popup-button toggle desynchronizes if the popup is hidden via X but the button doesn't update.** **Tripwire:** close popup via title-bar X, button still shows pressed; clicking the button hides an already-hidden popup (no-op) but flips the visual to raised, requiring a second click to actually show.
+   **Mitigation:** the visibility-changed callback (Section E) fires from `PalettePopup::Hide()` regardless of trigger source — X, Esc, or button. EmitterProps's callback calls `Button_SetCheck(hButton, BST_UNCHECKED)`. Verified by K3.
 
-8. **Bundled bitmap is the wrong size / pixel format / not a BITMAP.** A misnamed or wrong-format file in `Resources/` would compile fine (the `.rc` doesn't validate) but `D3DXCreateTextureFromResource` would fail at runtime.
-   - *Mitigation*: ship each bundled texture as a real .bmp file (uncompressed RGB or RGBA). Test in a debug build at startup that each `kResourceIds[i]` loads without printing the `[Ground] texture load failed` warning.
-   - *Tripwire R8*: at app start in a debug build, sequentially call `SetGroundTexture(0..5)` once each and verify no `[Ground] texture load failed` lines in the AllocConsole.
+9. **R9 — Popup created lazily means the first toggle has higher latency** (window class registration + window creation + content-control creation). **Tripwire:** first palette-button click feels noticeably slower than subsequent clicks.
+   **Mitigation:** register the window class at app startup (cheap, ~microseconds). Defer only the `CreateWindowEx` call to first show. First-show latency is bounded by ~1–2 ms for window creation plus the lazy thumbnail decode (covered by R5).
 
-9. **Future texture additions require updating two places.** The `kResourceIds[]` lookup table in `ReloadGroundTexture` and the combobox population in `WM_CREATE` both enumerate the 6 textures. Adding a 7th requires touching both.
-   - *Mitigation*: keep both in sync via the `kGroundTextureCount` constant and a comment cross-referencing the two sites. A debug-only `static_assert` keeps the constant in agreement with the array literal.
-   - *Tripwire R9*: in a debug build, `static_assert(sizeof(kResourceIds) / sizeof(kResourceIds[0]) == kGroundTextureCount, "ground texture list drift")`. Fires at compile time if the array length doesn't match.
-
-10. **Mid-render texture change while a frame is in flight.** `m_pGroundTexture` is read in `RenderFrame` per frame ([src/engine.cpp:581](src/engine.cpp:581)). If `SetGroundTexture` is called between frames, no issue. If called on a different thread mid-frame, classic data race. *(Not a concern in practice — the editor's render loop and the UI message pump run on the same thread.)*
-    - *Mitigation*: existing single-threaded UI/render loop means SetGroundTexture is never called mid-frame. Document the implicit invariant in the Set function's comment.
-    - *Tripwire R10*: not test-able (single-threaded by design). Documented invariant only.
+10. **R10 — Status strip timer leaks if the popup is destroyed (e.g., main editor close) while a status message is showing.** **Tripwire:** debug-build leak detector flags an outstanding `SetTimer` reservation on shutdown, or a `WM_TIMER` fires against a destroyed window.
+    **Mitigation:** `KillTimer(hPopup, ID_TIMER_STATUS_CLEAR)` is called from three paths: the `WM_TIMER` handler itself (after clearing the text), `PalettePopup::Hide()` (so a hidden popup never has a pending timer), and `WM_DESTROY` (final cleanup). The triple-redundancy is cheap and eliminates the failure modes entirely.
 
 ---
 
-## Verification
+## Testing & verification
 
-Each row says **the regression it catches**.
+Manual checklist. Each item names *what regression it catches*. Debug instrumentation: prefix `[Palette]` — `grep '\[Palette\]'` in stderr captures all events.
 
-### A. Bundled-texture availability
+### A. Button & layout
 
-- **A1.** Open the editor → combobox shows 6 entries: Dirt, Grass, Sand, Snow, Metal, Void. *Catches: missing string-table entry; missing combobox population.*
-- **A2.** Select each of the 6 → ground renders with the corresponding texture; no crash, no visual artefacts. *Catches: missing RCDATA resource; wrong resource ID; unsupported file format inside the RCDATA blob.*
-- **A3.** Default-installed editor (no registry entry yet) → starts with Dirt selected. *Catches: default-index regression; bad fallback in `ReadGroundTexture`.*
+| # | Check | Catches |
+|---|---|---|
+| A1 | Open Emitter properties → Appearance tab. Palette button visible in the Textures groupbox header (right side). Tooltip "Texture palette" shown on hover. | Button missing or misplaced; tooltip wiring missing |
+| A2 | Switch to Basic / Physics tabs. Palette button hides with the rest of the Appearance tab. Switch back. Button reappears in the same position. | Button leaks onto wrong tab |
+| A3 | Resize the main window. Button stays in the groupbox header (groupbox doesn't resize, so button should be stable). | Button positioning regressed |
+| A4 | Build a Release configuration (NDEBUG). All `[Palette]` debug lines absent from stderr. | Debug instrumentation leaked |
 
-### B. Persistence
+### B. Recents auto-tracking
 
-- **B1.** Pick Sand → close editor → reopen → still on Sand. *Catches: WriteGroundTexture not called; registry value not written or wrong type.*
-- **B2.** Pick Snow → restart editor → still on Snow. *Catches: same as B1, different value.*
-- **B3.** Pick Dirt (default) → close → reopen → still on Dirt. *Catches: writer not storing index 0 explicitly; reader misreading 0 as "not set".*
-- **B4.** Manually corrupt the registry value (write `99` via `regedit`) → restart → editor loads with Dirt. *Catches: missing bounds check (R3 tripwire).*
-- **B5.** Manually write a `REG_SZ` instead of `REG_DWORD` for `GroundTexture` → restart → editor loads with Dirt. *Catches: missing type check in `ReadGroundTexture`.*
+| # | Check | Catches |
+|---|---|---|
+| B1 | Open palette popup. Click "..." on Color slot in the Appearance tab, pick `foo.tga`. Recent row first cell shows `foo.tga`'s thumbnail. `[Palette] touch recent name='foo.tga' slot=Color` logged. | File-picker hook missing |
+| B2 | Repeat with `bar.tga`, then `baz.tga`. Recent row reads (left-to-right) `baz, bar, foo`. | LRU ordering wrong |
+| B3 | Type a different texture name into the Color edit field and tab away. Recent updated; `[Palette] touch recent ... slot=Color` logged. | EN_CHANGE / EN_KILLFOCUS hook missing |
+| B4 | Switch popup filter to Bump. Recent row is empty (no Bump entries yet). Pick a bump texture via "..." — appears in Bump recents only. Switch back to Color — Color recents intact. | Slot tagging / filter logic wrong |
+| B5 | Touch a Recent entry by double-clicking it. It moves to position 0 (LRU re-touch). | Touch-on-click LRU update missing |
+| B6 | Add 9 distinct Color recents in a row. Oldest (`recent #1`) is evicted; only 8 visible. | Cap not enforced |
 
-### C. Engine integration
+### C. Pin gesture
 
-- **C1.** Engine init → `m_groundTextureIndex = 0` → first paint uses dirt. *Catches: constructor not initialising the index; init order issue.*
-- **C2.** Alt-Tab away from the editor → Alt-Tab back → ground stays the same as before (Sand, etc.). *Catches: lost-device recovery not consulting `m_groundTextureIndex` (R1 tripwire).*
-- **C3.** Minimise window → restore → ground unchanged. *Catches: minimise → device-lost recovery path different from Alt-Tab.*
-- **C4.** Change DPI in Windows settings → restart editor → ground texture displays correctly (DPI doesn't affect texture, just rendering target). *Catches: DPI-dependent resource path.*
-- **C5.** Cycle through all 6 textures via combobox 100 times rapidly → no crash, no memory leak (RSS stable). *Catches: leak on repeated SetGroundTexture (R2 tripwire).*
+| # | Check | Catches |
+|---|---|---|
+| C1 | Hover over a recent thumbnail. Star icon appears in the top-right corner. Move cursor away. Star disappears within one redraw cycle. | Hover tracking / `TrackMouseEvent` wrong |
+| C2 | Click the star on a recent. Entry moves to the Pinned row, vacates its recents slot, others shift down. `[Palette] toggle pin name='X' newState=true` logged. | Pin migration logic wrong |
+| C3 | Click the star on a pinned entry. It un-pins; if the file was used recently it returns to recents at position 0; if it predates the recents window, it disappears. | Unpin → recents promotion / drop logic wrong |
+| C4 | Add 9 pins. The 9th is rejected (or replaces oldest pin — define the policy). Visually the row stays at 8. | Pin cap not enforced |
+| C5 | Right-click outside any thumbnail. Nothing happens (no spurious context menu). | WM_RBUTTONDOWN unguarded |
 
-### D. UI behaviour
+### D. Click model
 
-- **D1.** Toolbar layout — combobox visible at default window size; doesn't overlap other controls. *Catches: hardcoded X coordinates; layout math regression.*
-- **D2.** Resize window narrower (down to ~600 px) → combobox shrinks or compacts; nothing overlaps. *Catches: layout overflow (R5 tripwire).*
-- **D3.** Resize window wider → controls space out; combobox stays at preferred width. *Catches: combobox absorbing excess space; bad anchoring.*
-- **D4.** Combobox keyboard navigation: Tab focuses it; arrow keys cycle entries; Enter commits. *Catches: missing WS_TABSTOP; combobox style wrong.*
-- **D5.** Click outside the combobox while it's expanded → dropdown closes without changing selection. *Catches: combobox style accepting clicks-elsewhere as commit.*
+| # | Check | Catches |
+|---|---|---|
+| D1 | Single-click a pinned entry. Selection border appears. The Color/Bump filter radios are unchanged. The texture edit field is **not** modified. | Single-click writes when it shouldn't |
+| D2 | Double-click that same entry. The Color edit field updates to the entry's filename. The viewport texture changes (visible particles change appearance). | Double-click commit broken |
+| D3 | Switch popup filter from Color to Bump. Selection clears. Single-click a Bump pin. Double-click. The Bump edit field updates. | Filter-change clears selection / double-click feeds correct slot |
+| D4 | Double-click an entry that's missing from disk (rename the file outside the editor first). Edit field still updates to the filename; viewport texture goes to whatever the engine does for missing textures (default fallback). No crash. | Defensive — missing-file commit path |
+| D5 | Double-click multiple entries in succession. Popup stays open between commits. Each commit updates the slot immediately. | Sticky-popup behavior broken |
 
-### E. Reset View Settings interaction
+### E. Per-mod isolation
 
-- **E1.** Pick Metal → View → Reset View Settings → Yes → combobox returns to Dirt AND engine renders dirt. *Catches: reset not extended for ground texture (R6 tripwire).*
-- **E2.** Pick Metal → View → Reset View Settings → No (cancel) → combobox unchanged at Metal, engine still rendering metal. *Catches: cancel path still applying reset.*
-- **E3.** After Reset, restart editor → loads with Dirt (registry deleted). *Catches: reset not deleting registry value.*
+| # | Check | Catches |
+|---|---|---|
+| E1 | Open Mod A, populate 3 pins + 5 recents. Switch to Mod B via File ▸ Mods. Palette popup (still open) refreshes to empty (or shows Mod B's separately-saved entries). `[Palette] mod switch from='A' to='B' loadedEntries=N` logged. | `SetActiveMod` not wired into mod-switch flow; popup not refreshed |
+| E2 | Switch back to Mod A. The original 3 pins + 5 recents are intact, in the same order. | INI write-on-change / read-on-load round-trip wrong |
+| E3 | Quit the editor entirely. Restart. Mod A is restored via `LastMod`. Palette shows Mod A's pins + recents when the popup is opened. | Startup hook missing or order wrong (must run after `LastMod` restore) |
+| E4 | Switch to a brand-new mod that has no INI section. Palette is empty. Add a pin. Quit. Restart. The pin survives. | New-section creation path |
 
-### F. Engine API + degenerate
+### F. Reset View Settings
 
-- **F1.** `SetGroundTexture(-1)` → returns false, no state change. *Catches: missing negative-bounds check.*
-- **F2.** `SetGroundTexture(kGroundTextureCount)` (out of range) → returns false, no state change. *Catches: off-by-one in bounds check.*
-- **F3.** `SetGroundTexture(0)` when already at 0 → returns true, no texture reload (cheap fast-path). *Catches: redundant work on no-op set.*
-- **F4.** Force a load failure (rename `metal.bmp` in build dir; doesn't apply to release build — only relevant in debug iteration) → `SetGroundTexture(4)` returns false; combobox handler resets to 0; engine renders dirt. *Catches: load-failure fallback (R4 tripwire).*
+| # | Check | Catches |
+|---|---|---|
+| F1 | With Mod A loaded and a populated palette, invoke View ▸ Reset View Settings. Mod A's palette goes empty in the popup immediately. | Reset hook missing or popup not refreshed |
+| F2 | Open the INI file. The `[mod=<sha1-of-A>]` section is gone; other mods' sections survive; the `[ui]` section (popup position) survives. | Reset wiped too much (or too little) |
+| F3 | Restart. Mod A's palette is still empty. Popup position is preserved. | Reset only affected memory, not disk; or wiped popup position |
 
-### G. Theme / DPI
+### G. Thumbnail pipeline
 
-- **G1.** Run editor under Windows High Contrast theme → combobox uses system theming; entries readable. *Catches: hardcoded colours.*
-- **G2.** Run editor at Windows 175% DPI → combobox dimensions scale; entries readable. *Catches: hardcoded pixel sizes ignoring DPI (similar to MT-9 lessons).*
+| # | Check | Catches |
+|---|---|---|
+| G1 | Add a recent for a `.tga` texture. Thumbnail decodes within ~50 ms (no UI freeze). | Synchronous decode is too slow |
+| G2 | Add a recent for a `.dds` (DXT5) texture. Thumbnail decodes correctly, looks visually plausible. | DXT decode path broken |
+| G3 | Manually create an empty file `broken.tga` in the mod's textures directory. Add a recent for it. Broken-placeholder thumbnail appears. `[Palette] thumbnail decode failed path='...' fallback=placeholder` logged. | Decode-failure fallback missing |
+| G4 | Reference a non-existent file in a recent (delete the file after adding). Missing-placeholder thumbnail appears. | Existence-check / file-not-found fallback missing |
+| G5 | Open the editor, populate 16 recents across two mods, switch back and forth 5 times. Memory does not climb (HBITMAP cache stable). | Cache leak |
 
-### H. Composite scenarios
+### H. INI persistence edge cases
 
-- **H1.** Build a particle effect that uses transparent particles (alpha blending). Switch ground texture to **Void** → particles visible against pure black; can judge their actual rendered alpha. Catches the canonical use case the user mentioned at MT-2 ROADMAP entry time.
-- **H2.** Load a Hoth-themed .alo file → switch ground to **Snow** → visual match. Save & reopen — particle data unchanged (ground texture is not persisted to .alo).
-- **H3.** Open File → New → fresh empty system → combobox state preserved (persistent setting, not per-system).
+| # | Check | Catches |
+|---|---|---|
+| H1 | Add a recent with a filename containing a non-ASCII character (e.g., `tëxture.tga`). Quit, restart. Entry restored intact. | UTF-16 INI handling wrong |
+| H2 | Hand-edit the INI file to set `RecentCount=99` while only `Recent0` and `Recent1` actually exist. Restart. Editor doesn't crash; palette shows just the two valid entries; on next change the file is rewritten with correct count. | Defensive parsing — bad counts |
+| H3 | Hand-edit to corrupt the slot mask (`Pin0=foo.tga|notarealslot`). Restart. Editor doesn't crash; entry is silently dropped; debug log records the parse error. | Defensive parsing — bad slot mask |
+| H4 | Delete the entire INI file while the editor is running. Open Emitter properties. Existing in-memory state still shows. Add a new entry. INI file is recreated. | Re-creation on next write |
 
-### I. Debug instrumentation
+### I. Undo round-trip
 
-Under `#ifndef NDEBUG`:
+| # | Check | Catches |
+|---|---|---|
+| I1 | (Skip if project has no undo for texture fields today.) Set Color to `a.tga` via "...", then double-click a palette entry for `b.tga`. Press Ctrl+Z. Color reverts to `a.tga` (or whatever the existing undo behavior is for the file-picker write). | R6: palette-driven write bypasses normal write path |
+| I2 | Compare the undo behavior of palette double-click vs. file-picker pick. Both should behave identically. | Two write paths diverged |
 
-- `[Ground] texture set index=N` — fires on each successful SetGroundTexture.
-- `[Ground] texture load failed index=N falling back to default` — fires on load failure; should NEVER appear in release-quality bundled bitmaps.
+### J. Cleanup
 
----
+| # | Check | Catches |
+|---|---|---|
+| J1 | Quit the editor. No `[Palette]` warnings about leaked HBITMAPs in debug output. | Cache HBITMAPs not freed in `PaletteStore`'s destructor |
+| J2 | Run with a Visual Studio leak-detection tool. No new leaks. | New module leaks |
 
-## Implementation order (test-as-you-go)
+### K. Popup window behavior
 
-Each milestone ends at a commit boundary; verify the listed categories pass before moving on.
+| # | Check | Catches |
+|---|---|---|
+| K1 | Click the palette button. Popup appears just below the button (first-run, no saved position). Button shows pressed state. `[Palette] popup show pos=(...)` logged. | First-show button-anchored default missing |
+| K2 | Drag popup to a new screen position. Click the palette button (button is still pressed). Popup hides. `[Palette] popup hide pos=(x,y)` with the new coords logged. Click button again. Popup reappears at the dragged position. | Position memory broken |
+| K3 | With popup open, click its X. Popup hides; button immediately shows raised state. | R8: button-popup desync |
+| K4 | With popup open and focused, press Esc. Popup hides; button raises; position preserved. | Esc handler missing |
+| K5 | Quit editor with popup open at position (X, Y). Restart. Click palette button. Popup appears at (X, Y). | Position not flushed to INI on app close |
+| K6 | Manually edit INI to set `PopupX=99999, PopupY=99999`. Restart. Click palette button. Popup snaps to button-anchored default. `[Palette] popup position invalid (off-screen) snapping to default` logged. | R7: off-screen recovery broken |
+| K7 | Open popup. Switch tabs in Emitter properties (Basic / Physics). Popup remains visible (it's a separate top-level window). | Popup incorrectly tied to Appearance tab visibility |
+| K8 | Open popup. Click anywhere in the main editor (viewport, menu, other controls). Popup remains visible (sticky, modeless). | Auto-close-on-outside-click leaked in |
+| K9 | Open popup. Close the main editor (Alt-F4 / X). Popup disappears with main window (owner cleanup). | Popup outlives main editor (orphan window) |
+| K10 | First-run editor on a fresh machine (no INI file). Click palette button. Popup opens at button-anchored default; no crash; no error. | First-run path with missing INI |
 
-1. **Engine API skeleton**: add `m_groundTextureIndex`, the kResourceIds lookup table (placeholder — all entries set to `IDB_GROUND` until milestone 2 lands real bitmaps), `SetGroundTexture`, `ReloadGroundTexture`. Verify **A2 (Dirt only — all 6 indices resolve to dirt initially), C1, C5, F1–F3, F4 (forced failure)**. **Commit boundary.**
-2. **Resource additions**: 5 new BMP files in `src/Resources/`, .rc entries, vcxproj entries, resource.h IDs. Real textures (per Open Q1). Update the kResourceIds lookup table to use the new IDs. Verify **A1, A2 (all 6 distinct), I (no LOW_CONTRAST or load_failed lines at startup)**. **Commit boundary.**
-3. **UI combobox**: hGroundTextureCombo creation in WM_CREATE, layout in WM_SIZE, CBN_SELCHANGE handler, string-table entries. Verify **D1–D5, A1, A2**. **Commit boundary.**
-4. **Persistence**: ReadGroundTexture / WriteGroundTexture; startup-load integration; CBN_SELCHANGE writes. Verify **B1–B5, F4**. **Commit boundary.**
-5. **Lost-device recovery integration**: ensure both lost-device paths route through `ReloadGroundTexture`. Verify **C2, C3**. **Commit boundary.**
-6. **Reset View Settings integration**: extend the handler + the registry sweep + the confirm dialog text. Verify **E1, E2, E3**. **Commit boundary.**
-7. **ROADMAP + CHANGELOG + final sweep**. Verify **H1, H2, H3**. **Squash to a single MT-2 commit on the feature branch before merge.**
+### L. Status strip (pin overflow)
 
----
-
-## Delivery shape
-
-- **Branch**: `feat/mt2-selectable-ground` off `master`.
-- **Files touched**:
-  - [src/engine.h](src/engine.h), [src/engine.cpp](src/engine.cpp) — `SetGroundTexture` / `GetGroundTexture` / `ReloadGroundTexture` + `m_groundTextureIndex` + ID lookup table; rewire init + lost-device paths.
-  - [src/main.cpp](src/main.cpp) — `hGroundTextureCombo` field, creation, layout, CBN_SELCHANGE handler, `ReadGroundTexture` / `WriteGroundTexture`, Reset View Settings integration, registry sweep extension.
-  - [src/ParticleEditor.rc](src/ParticleEditor.rc) — 5 new RCDATA lines + migrate existing `IDB_GROUND` BITMAP → RCDATA.
-  - [src/ParticleEditor.en.rc](src/ParticleEditor.en.rc), [src/ParticleEditor.de.rc](src/ParticleEditor.de.rc) — 6 new `IDS_GROUND_*` string-table entries.
-  - [src/Resources/resource.h](src/Resources/resource.h) — 5 new `IDB_GROUND_*` IDs.
-  - [src/Resources/resource.en.h](src/Resources/resource.en.h), [src/Resources/resource.de.h](src/Resources/resource.de.h) — 6 new `IDS_GROUND_*` IDs.
-  - [src/Resources/](src/Resources/) — 5 new `.bmp` files (`grass.bmp`, `sand.bmp`, `snow.bmp`, `metal.bmp`, `void.bmp`).
-  - [src/ParticleEditor.vcxproj](src/ParticleEditor.vcxproj) and `.filters` — 5 new `<Image Include>` entries.
-- **Estimated delta**: ~250 LOC (engine API ~60, UI wiring ~80, persistence ~50, reset integration ~20, resource declarations + IDs ~40). Plus 5 BMP binary files.
-- **No new files** beyond the .bmp resources. No file-format changes; no .alo-level state.
-- **Single PR**. Phases 1–4 are tractable to review as one diff; the texture-art bullet is a separable concern but the .bmp files are part of the same PR.
-- **ROADMAP / CHANGELOG** updates per repo convention.
-
----
-
-## Open questions for the user
-
-**All resolved (2026-05-14). Plan locked. Awaiting BMP assets before starting implementation; can proceed with placeholder copies of `dirt.bmp` in the meantime so the API/UI/persistence is testable end-to-end before final art lands.**
-
-- ✅ Q1 Texture sourcing → user-supplied. User provides `grass.bmp`, `sand.bmp`, `snow.bmp`, `metal.bmp`, `grey.bmp` BMP files. Until they arrive, I'll commit placeholder copies of `dirt.bmp` under each filename so the build works and the UI/persistence pipeline can be tested end-to-end.
-- ✅ Q2 UI placement → top-bar combobox. Inserted between the existing Ground Z and Background controls.
-- ✅ Q3 "Void / black" → replaced with **Grey** (neutral grey, useful as a colour-neutral reference for judging the actual hue of semi-transparent particle effects).
-- ✅ Q4 BMP file size → flexible. 256–1024 px per side recommended; 2048 hard cap to keep .exe size sane. Mixed sizes across the 5 user-supplied textures are fine — tiling is governed by `TEXTURE_SCALE` in the vertex math, independent of source resolution.
-
-### Two-phase delivery
-
-Because the BMP assets and the code are independently sourced, the implementation splits into two phases:
-
-1. **Phase 1 — code + placeholder assets.** All code (engine API, UI, persistence, reset integration) lands. The 5 new `.bmp` files exist on disk as copies of `dirt.bmp`. The combobox shows all 6 entries; selecting any one visually renders dirt (because all 5 placeholders ARE dirt). API + UI + persistence + lost-device + reset are all fully testable; just the visual differentiation isn't real yet. Verifies categories A1, A3, B1–B5, C1–C5, D1–D5, E1–E3, F1–F4, G1–G2 end-to-end.
-2. **Phase 2 — real textures.** User supplies the 5 BMPs. I swap them in (just file-replace inside `src/Resources/`; .rc + .vcxproj entries are already in place from phase 1). Verifies A2 (each texture visually distinct) and H1–H2 (composite scenarios that depend on real visual content).
-
-Phase 1 ships as the MT-2 PR (or as a draft PR pending phase 2). Phase 2 lands as a follow-up commit on master or a second PR — at the user's discretion.
-
-(Original open-question text preserved below for historical reference. Skip past it.)
-
-### Q1. Texture sourcing
-
-The 5 new BMPs need actual image data. Three options:
-
-| | Option A | Option B | Option C |
-|---|---|---|---|
-| **Approach** | I generate procedural placeholders (solid colour + noise + simple pattern) for v1 ship | User provides assets from existing game data / personal sources | Source from public-domain texture libraries (CC0 sites like Polyhaven, ambient-cg) |
-| **Visual quality** | Adequate — clearly distinguishable, "good enough" | Highest — matches real game look | High — professional asset quality |
-| **Effort cost** | ~30 min generation, zero attribution | Zero (you supply) | ~1 hour download + format conversion + attribution check |
-| **Replaceable later** | Trivially — just swap .bmp files | n/a | n/a (already final) |
-
-*Default recommendation: **Option A (procedural placeholders) for v1***, with a CHANGELOG note that the textures are placeholders pending real art. Future PR can swap in better assets without touching code.
-
-### Q2. UI placement
-
-The picker control's home:
-
-| | Option A | Option B | Option C |
-|---|---|---|---|
-| **Where** | Combobox in the top toolbar bar, between Ground Z and Background controls | View menu submenu: View → Ground Texture → 1. Dirt / 2. Grass / ... | Toolbar button that opens a small popup-menu picker |
-| **Discoverability** | Highest — always visible | Lower — hidden in menu | Medium |
-| **Real estate** | Adds ~100 px to the top bar | Zero footprint | Adds ~24 px (button only) |
-| **Pattern fit** | Matches Background colour button placement | Matches Show Ground / Reset Camera menu pattern | New pattern for this editor |
-
-*Default recommendation: **Option A (top-bar combobox)***. Matches the existing Background colour button's discoverability; the top bar already has the related Ground Z and Background controls. Crowding risk addressed by R5 tripwire.
-
-### Q3. Whether to include a "Void / black" option
-
-The Void option (solid black) is useful for transparent-particle scenarios where the ground texture distracts. Alternatives:
-- (a) Include Void (default per plan).
-- (b) Skip Void; the user can already toggle ground visibility off entirely via `Show Ground` (Ctrl-G).
-- (c) Include Void AND a "White" option for the inverse case.
-
-*Default recommendation: **(a) Include Void***. `Show Ground` removes the entire ground plane (sometimes useful, sometimes not — the visible disc gives spatial reference even when black). Void preserves the spatial reference while removing visual interference.
-
-### Q4. Bundled texture size
-
-Existing `dirt.bmp` size is unknown without inspection. New textures should match for tiling consistency. Two options:
-- (a) Inspect dirt.bmp size; match exactly.
-- (b) Standardise on 512×512 RGB for all 6 (including replacing dirt.bmp if it's a different size).
-
-*Default recommendation: **(a) Match dirt.bmp***. Less invasive — preserves the exact pre-MT-2 visual for Dirt. Switching dirt.bmp to a 512×512 version would risk a subtle visual change for existing users.
+| # | Check | Catches |
+|---|---|---|
+| L1 | Pin 8 distinct entries. Hover a 9th recent, click its star. New entry stays as a recent (pin row unchanged). Status strip shows "Pins full (8). Unpin one to make room." | Pin overflow accepted when it should be rejected |
+| L2 | Wait 3 seconds after L1. Status strip clears automatically. | `WM_TIMER` clear path missing |
+| L3 | After L1, immediately unpin one pin (click star on a pinned entry). It vacates the pin row. Now click star on a recent. It pins successfully. Status strip clears or stays empty (no spurious "full" message). | Stale status not cleared on next valid pin |
+| L4 | Trigger L1 to show the status. While still visible, hide the popup via X. Reopen the popup. Status strip is empty (no leftover message). | `Hide()` doesn't clear status |
+| L5 | Trigger L1, then immediately close the main editor while the status is still showing. No `WM_TIMER` callback fires against a destroyed window; no leaked timer reservation. | R10: timer cleanup on destroy |
 
 ---
 
-## After MT-2 ships
+## Resolved decisions
 
-Medium-term queue:
-- **MT-1** Frequently-used textures palette — 5–8 h
-- **MT-3** Selectable skydome backgrounds — 8–14 h (largest medium-term item; adds a render pass)
-- **MT-4** Adjustable environment lighting in the preview — 4–6 h
+All open design questions are resolved. Recording the answers and reasoning so reviewers can see the trail:
 
-MT-2 establishes a small but useful pattern for future "preview-only persistent settings": registry-backed REG_DWORD, combobox-driven, Reset-View-Settings-integrated. MT-4's lighting controls and MT-1's textures palette can both lean on the same persistence pattern.
+1. **Workflow** — *both* recents (auto) + pins (explicit), per the original ROADMAP language.
+2. **UI placement** — palette button in the Textures groupbox header (top-right) → modeless popup window. Chosen over inline panel to avoid cascading dialog-template / host-window layout changes.
+3. **Entry display** — 32×32 thumbnails (vs. text-only or tooltip-hover). Drives the D3DX → DIB pipeline in Section C.
+4. **Color/Bump separation** — single combined palette with a Color/Bump filter toggle. Entries flagged on use; no filename heuristics.
+5. **Pin gesture** — hover-revealed star button in the thumbnail's top-right corner.
+6. **Click model** — single-click selects (highlight only, no extra preview), double-click commits to the active filter's slot.
+7. **Capacity** — 8 pinned + 8 recent per filter. No scroll. Two compact rows.
+8. **Pin overflow at 9** — **Option B**: reject the click, show transient status-strip message ("Pins full (8). Unpin one to make room.") for 3 seconds, auto-clear. Preserves pin intent (never silently drop), gives user clear feedback.
+9. **Popup behavior** — modeless, sticky. Does not auto-close on outside click or after a commit. Position remembered across sessions in INI `[ui]` section.
+10. **Popup dismissal** — title-bar X, Esc when focused, or clicking the (pressed) palette button.
+11. **Persistence format** — INI via `WritePrivateProfileStringW` (UTF-16 LE), single file at `%APPDATA%\AloParticleEditor\texture-palettes.ini`. Avoids new third-party dependency.
+12. **Per-mod scoping** — INI section keyed by SHA1 of the absolute mod path.
+13. **Thumbnail decode** — synchronous, lazy in `WM_PAINT`, with in-memory HBITMAP cache. No on-disk PNG cache (deferred).
+14. **Button glyph** — hand-authored 16×16 px BMP resource depicting a painter's palette (kidney outline + thumb hole + paint blobs). `IDB_PALETTE_GLYPH`.
+15. **Undo integration** — *to be verified during implementation*. The `PALETTE_NM_COMMIT` handler writes via the same path the file-picker uses today; whether that path routes through `UndoStack` is a question for the first implementation step.
+16. **Phasing** — single PR. The unit is small enough (~9–12 h) that phasing overhead would exceed the verification benefit.
