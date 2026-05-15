@@ -1,5 +1,6 @@
 #include <windows.h>
 #include "UI.h"
+#include "TexturePalette.h"
 #include "utils.h"
 using namespace std;
 
@@ -367,11 +368,21 @@ static INT_PTR WINAPI DlgEmitterPropsProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 							case IDC_BUTTON1:
                                 LoadTexture(hWnd, emitter.colorTexture);
                                 SetWindowText(GetDlgItem(hWnd, IDC_EDIT2), AnsiToWide(emitter.colorTexture).c_str());
+                                if (!emitter.colorTexture.empty())
+                                {
+                                    TexturePalette::Store::Instance().TouchRecent(
+                                        AnsiToWide(emitter.colorTexture), TexturePalette::SLOT_COLOR);
+                                }
                                 break;
 
 							case IDC_BUTTON2:
                                 LoadTexture(hWnd, emitter.normalTexture);
                                 SetWindowText(GetDlgItem(hWnd, IDC_EDIT3), AnsiToWide(emitter.normalTexture).c_str());
+                                if (!emitter.normalTexture.empty())
+                                {
+                                    TexturePalette::Store::Instance().TouchRecent(
+                                        AnsiToWide(emitter.normalTexture), TexturePalette::SLOT_BUMP);
+                                }
                                 break;
 
                             // MT-1 — palette-button click. Popup window
@@ -414,6 +425,26 @@ static INT_PTR WINAPI DlgEmitterPropsProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
                         {
 						    NotifyParent(hWnd, EP_CHANGE);
                         }
+						break;
+
+					// MT-1 — touch the texture-palette recents only when the
+					// user actually finishes editing the field (tab away or
+					// click elsewhere). Touching on EN_CHANGE would create a
+					// recent entry per keystroke, polluting the list with
+					// in-progress filename fragments. The picker-button paths
+					// (IDC_BUTTON1/2 above) trigger TouchRecent directly on
+					// successful pick.
+					case EN_KILLFOCUS:
+						if ((uCtrlID == IDC_EDIT2 || uCtrlID == IDC_EDIT3) && control->allowNotify)
+						{
+							const string& tex  = (uCtrlID == IDC_EDIT2) ? emitter.colorTexture : emitter.normalTexture;
+							const TexturePalette::SlotMask slot =
+								(uCtrlID == IDC_EDIT2) ? TexturePalette::SLOT_COLOR : TexturePalette::SLOT_BUMP;
+							if (!tex.empty())
+							{
+								TexturePalette::Store::Instance().TouchRecent(AnsiToWide(tex), slot);
+							}
+						}
 						break;
 
 					case SN_CHANGE:

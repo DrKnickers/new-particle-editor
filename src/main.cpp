@@ -10,6 +10,7 @@
 
 #include "exceptions.h"
 #include "UI/UI.h"
+#include "UI/TexturePalette.h"
 #include "SpawnerDriver.h"
 #include "UndoStack.h"
 #include "LinkGroup.h"
@@ -4728,6 +4729,10 @@ static void SelectMod(APPLICATION_INFO* info, const wstring& modPath)
 	if (info->fileManager) info->fileManager->SetModPath(modPath);
 
 	WriteLastMod(modPath);
+	// MT-1 — swap the texture-palette to the new mod. SetActiveMod
+	// flushes any dirty state from the previous mod and lazy-loads the
+	// new mod's INI section. Empty `modPath` (unmodded) clears.
+	TexturePalette::Store::Instance().SetActiveMod(modPath);
 	RebuildModsMenu(info);
 
 	printf("[Mods] Selected: %S\n", modPath.empty() ? L"(unmodded)" : modPath.c_str()); fflush(stdout);
@@ -4960,6 +4965,11 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
 				printf("[Mods] Saved mod path no longer exists, falling back to unmodded: %S\n", savedMod.c_str()); fflush(stdout);
 			}
 		}
+		// MT-1 — initialize the texture-palette to whichever mod we just
+		// settled on (may be empty if no mod is active). Must run after
+		// the LastMod restore so the palette and FileManager agree on
+		// which mod is current.
+		TexturePalette::Store::Instance().SetActiveMod(info->selectedModPath);
 		RebuildModsMenu(info);
 
 		// Create the rendering engine
