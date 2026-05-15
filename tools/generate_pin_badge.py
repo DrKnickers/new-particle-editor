@@ -19,43 +19,42 @@ from pathlib import Path
 
 # Colour palette (BGR for BMP).
 BG  = (240, 240, 240)   # button-face grey — invisible on cell bg
-OUT = ( 30,  60, 120)   # dark brown-orange outline (B,G,R)
-FIL = ( 40, 200, 255)   # warm yellow fill (filled state)
-EMP = (250, 250, 250)   # near-white fill (empty/hover state)
+OUT = ( 40,  40,  40)   # near-black outline — readable on any thumbnail
+FIL = ( 50,  50, 220)   # canonical red pushpin (BGR) for the pinned state
+EMP = (250, 250, 250)   # near-white for the hover-but-not-pinned state
 
 # Two 24×24 frames. Each row is exactly 24 chars.
 #   .  background (button-face grey, invisible on cell bg)
 #   O  outline (dark)
 #   F  state-dependent fill (yellow on filled half, white on empty half)
 #
-# A clean filled five-pointed star inside the 24×24 cell. The outline
-# is a single-pixel border around the fill so the star reads against
-# light AND dark thumbnail backgrounds.
+# A stylised thumbtack: round head at the top with a tapered needle
+# going down. Recognisable as a pin even at small sizes.
 FRAME_TEMPLATE = [
     "........................",
+    ".......OOOOOOOOOO.......",
+    ".....OOFFFFFFFFFFOO.....",
+    "....OFFFFFFFFFFFFFFO....",
+    "....OFFFFFFFFFFFFFFO....",
+    "....OFFFFFFFFFFFFFFO....",
+    "....OFFFFFFFFFFFFFFO....",
+    "....OFFFFFFFFFFFFFFO....",
+    ".....OOFFFFFFFFFFOO.....",
+    ".......OOOOOOOOOO.......",
+    "..........OFFO..........",
+    "..........OFFO..........",
+    "..........OFFO..........",
+    "..........OFFO..........",
+    "..........OFFO..........",
     "...........OO...........",
-    "..........OFFO..........",
-    "..........OFFO..........",
-    ".........OFFFFO.........",
-    ".........OFFFFO.........",
-    "OOOOOOOOOOFFFFOOOOOOOOOO",
-    "OFFFFFFFFFFFFFFFFFFFFFFO",
-    ".OFFFFFFFFFFFFFFFFFFFFO.",
-    "..OFFFFFFFFFFFFFFFFFFO..",
-    "...OFFFFFFFFFFFFFFFFO...",
-    "....OFFFFFFFFFFFFFFO....",
-    "....OFFFFFFFFFFFFFFO....",
-    "...OFFFFFFFOOFFFFFFFO...",
-    "...OFFFFFFO..OFFFFFFO...",
-    "..OFFFFFFO....OFFFFFFO..",
-    "..OFFFFFO......OFFFFFO..",
-    ".OFFFFFO........OFFFFFO.",
-    ".OFFFFO..........OFFFFO.",
-    "OFFFFO............OFFFFO",
-    "OFFFO..............OFFFO",
-    "OFFO................OFFO",
-    "OFO..................OFO",
-    "OO....................OO",
+    "...........OO...........",
+    "............O...........",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
+    "........................",
 ]
 
 CHAR_TO_BGR = {
