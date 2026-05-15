@@ -1,82 +1,160 @@
-# [MT-1] Frequently-used textures palette
+# [MT-4] Adjustable environment lighting in the preview
 
-**Status (2026-05-14):** plan draft, awaiting user approval. Target PR: `feat/mt1-textures-palette`.
+**Status (2026-05-15):** plan draft v2 (revised to emulate the Petroglyph map editor's Sun/Fill panel), awaiting user approval. Target PR: `feat/mt4-env-lighting`.
 
-Follows the planning conventions established for MT-2 / MT-9 / MT-10: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*.
+Follows the planning conventions established for MT-1 / MT-2: Context block, per-artefact Architecture subsections, named tripwires per risk, verifier-first Verification where each row says *what regression it catches*.
 
 ---
 
 ## Status of the surrounding work
 
+- ✅ **[MT-1]** Frequently-used textures palette — [#69](https://github.com/DrKnickers/new-particle-editor/pull/69), docs [#70](https://github.com/DrKnickers/new-particle-editor/pull/70)
 - ✅ **[MT-2]** Selectable ground texture — [#67](https://github.com/DrKnickers/new-particle-editor/pull/67)
-- 🚧 **[MT-1]** Frequently-used textures palette — **this plan**.
+- 🚧 **[MT-4]** Adjustable environment lighting — **this plan**.
 
-Medium-term queue after MT-1: MT-3 (skydome), MT-4 (env lighting).
+Medium-term queue after MT-4: MT-3 (skydome — note the map editor's Sky Dome controls are visible in the reference screenshot but are out-of-scope for MT-4 and will be covered by MT-3).
 
 ---
 
 ## Context
 
-Texture editing on the Appearance tab (`IDD_EMITTER_PROPS2`) currently has two slots — Color (`IDC_EDIT2`/`IDC_BUTTON1`) and Bump (`IDC_EDIT3`/`IDC_BUTTON2`) — each a filename edit field plus a "..." button that opens `GetOpenFileNameA` filtered to `*.tga;*.dds`. The chosen file's basename is stored in the emitter (`colorTexture` / `normalTexture` strings). Texture *resolution* at render time goes through `FileManager` against the active mod path. The mod path itself persists per-user via `HKCU\Software\AloParticleEditor\LastMod`.
+The engine maintains three directional `Light` structs ([engine.h:75-81](src/engine.h:75)) — `LT_SUN`, `LT_FILL1`, `LT_FILL2` — plus a separate ambient `D3DXVECTOR4` ([engine.h:294](src/engine.h:294)) and a declared-but-never-implemented `SetShadow(D3DXVECTOR4)` ([engine.h:185](src/engine.h:185), no body in [engine.cpp](src/engine.cpp) and no `m_shadow` member). The shader effect binds `hGlobalAmbient`, `hDirLightVec0`, `hDirLightDiffuse`, `hDirLightSpecular` per frame ([engine.cpp:528-532](src/engine.cpp:528), handles declared in [Effect.h:37-41](src/Effect.h:37)). There is **no shader handle for shadow color** — the dangling `SetShadow` API was a piece of unfinished engine plumbing.
 
-The painful workflow this plan addresses: when iterating on an effect, modders typically cycle between a small set of textures from the same mod's `Data\Art\Textures` directory. Today every swap is a full file-picker round-trip — open dialog, navigate the tree, click, OK. Even with the picker remembering the last directory, that's 3–5 seconds per swap and breaks flow.
+Today there is **no way for the user to adjust any of these values**. They are hardcoded at engine construction ([engine.cpp:1384-1400](src/engine.cpp:1384)) to `Sun = white diffuse + zero specular along +X`, `Fill1/Fill2 = all zero`, `Ambient = (0,0,0,0)`. The ROADMAP entry's claim that "values from the loaded particle system can adjust them" is **inaccurate** — `.alo` files don't carry lighting data, and the editor never overrides the hardcoded defaults.
 
-MT-1 surfaces a small per-mod palette of recently-used and explicitly-pinned textures. A new palette button in the Textures groupbox header (top-right corner of the existing group) toggles a **modeless sticky popup window** that holds the palette UI. The popup stays open across emitter selections, repositions are remembered per user, and the button reflects open/closed state. Double-click a thumbnail → texture slot is filled. Recents auto-populate from any successful texture load (file picker, edit-field commit, or palette click); pins are explicit (hover star). Per-mod scoping ensures switching between Empire at War, Republic at War, etc. doesn't cross-contaminate the palettes.
+MT-4 surfaces a **View → Lighting…** modeless dialog that mirrors the Petroglyph map editor's Sun/Fill panel (reference screenshot supplied by the user, fog and sky-dome sections omitted). The Bloom dialog ([main.cpp:4867-5013](src/main.cpp:4867)) is the canonical template for modeless-tool-window lifecycle — lazy-created on first open, hides on close, position persisted to `HKCU\Software\AloParticleEditor`, `WM_USER` reseed-from-engine after Reset View Settings. MT-4 clones this shape and fills in the controls.
 
-Putting the palette in a popup rather than inline avoids growing the Appearance tab's dialog template — which would have required cascading layout changes through the EmitterProps host window and the surrounding main-window layout. The popup's own size budget is independent, so thumbnails and labels can size cleanly without fighting other controls.
-
-**Why now**: smallest medium-term item, contained, doesn't touch the rendering pipeline or file format. Clears MT-1 out of the queue and leaves only the larger MT-3 (skydome, ~8–14 h) and MT-4 (env lighting, ~4–6 h) ahead.
+**Why now**: smallest unshipped medium-term item (4–6 h estimate, on track for ~5 h given the bloom-dialog clone path). Clears MT-4 out of the queue and leaves only MT-3 (skydome, ~8–14 h) ahead in medium-term. Touches no rendering pipeline code beyond exposing two getters and implementing the dangling `SetShadow` stub — risk is contained to UI plumbing.
 
 ---
 
 ## Goal + scope
 
-A new small **palette button** sits in the right side of the Textures groupbox header on the Appearance tab. Clicking it toggles a **modeless popup window** ("AloTexturePalettePopup") that holds the palette UI: a Color/Bump filter toggle at the top, a row of pinned texture thumbnails, and a row of recent texture thumbnails. Double-clicking a thumbnail writes its filename to the active filter's slot (color or bump). Single-click selects (highlight only). Hovering a thumbnail reveals a small star-corner button that toggles pinned state. Each entry's metadata records which slot(s) it has been used as (color, bump, or both), and only entries matching the active filter are shown.
+A new **View → Lighting…** menu entry opens a modeless dialog `IDD_LIGHTING`. Layout emulates the supplied Petroglyph map-editor screenshot:
 
-The popup is sticky (does not auto-close on outside click or after a commit), can be moved anywhere on screen, and remembers its position across editor sessions. The button's visual state (pressed vs. raised) reflects whether the popup is currently visible. Closing the popup via its X button, pressing Esc with focus inside it, or clicking the (pressed) palette button hides it.
+```
+┌─────────────────────────────────────────────────┐
+│ Sun Settings                                    │
+│   Intensity  [0.50]   Z Angle  [0.00]°   Tilt [45.00]° │
+│   Ambient Color  [swatch]                       │
+│   Specular Color [swatch]                       │
+│   Diffuse Color  [swatch]                       │
+│   Shadow Color   [swatch]                       │
+│   [✓] Force Fill Light Alignment                │
+│                                                 │
+│ Fill Light Settings                             │
+│   Intensity 1  [0.50]  Z Angle 1 [120.00]° Tilt 1 [-10.00]° │
+│   Diffuse Color  [swatch]                       │
+│   [Mirror Sun]                                  │
+│   Intensity 2  [0.50]  Z Angle 2 [210.00]° Tilt 2 [-10.00]° │
+│   Diffuse Color  [swatch]                       │
+│                                                 │
+│              [Reset to defaults]                │
+└─────────────────────────────────────────────────┘
+```
 
-Palette state — pins, recents, last-used filter — persists per mod in a single INI file at `%APPDATA%\AloParticleEditor\texture-palettes.ini`, keyed by SHA1 of the absolute mod path. The popup's window position persists separately in the same INI under a `[ui]` section. Switching mods (via the existing mods menu) swaps the palette automatically while the popup remains open.
+**Controls per light:**
 
-Thumbnail decoding goes through D3DX9 (already used by the engine) — `D3DXCreateTextureFromFileEx` decodes TGA/DDS at the requested 32×32 size, and we copy the surface pixels into a `CreateDIBSection` HBITMAP for the owner-draw control. Decoded HBITMAPs live in a per-session in-memory cache keyed by absolute file path; missing or unreadable files fall back to a "broken" placeholder thumbnail.
+- **Sun:** Intensity spinner, Z Angle spinner, Tilt Angle spinner, Ambient ColorButton, Specular ColorButton, Diffuse ColorButton, Shadow ColorButton.
+- **Fill 1 / Fill 2:** Intensity spinner, Z Angle spinner, Tilt Angle spinner, Diffuse ColorButton. (No specular, no ambient, no shadow — they're scene-global properties living in the Sun group.)
+
+**Two binding controls** (not per-light):
+
+- **Force Fill Light Alignment** (checkbox, default **ON**): when checked, the four fill-light angle spinners (Z1, Z2, Tilt1, Tilt2) are **disabled and auto-computed** from the sun's Z angle:
+  - `Fill1.Z = Sun.Z + 120°` (mod 360)
+  - `Fill2.Z = Sun.Z + 210°` (mod 360)
+  - `Fill1.Tilt = Fill2.Tilt = -10°` (fixed)
+  The "alignment" keeps the classic 3-light triangle (key + two flanks 120°/210° apart) rotating together as the sun moves. Unchecking enables independent fill-angle editing; values that were last user-set are preserved (or, if never set, snap to the auto-computed values at the moment of unchecking).
+- **Mirror Sun** (button, in the Fill Light group): one-shot. Copies the Sun's **Diffuse Color** to both fills' Diffuse Color. Does *not* touch intensity or angles. Disabled when Force Fill Light Alignment is ON (because alignment + mirror together becomes "do everything", which is more than the map editor exposes — keep them orthogonal). One-shot, not a binding mode — clicking it once does the copy and that's it.
+
+**UI ⇄ engine conversion:**
+
+- **Direction (Z Angle + Tilt) ⇄ engine `Light.Position`:**
+  - `Position.x = cos(tilt) · cos(z)`
+  - `Position.y = cos(tilt) · sin(z)`
+  - `Position.z = sin(tilt)`
+  - Z Angle is azimuth in degrees, range `0–360°` (wraps).
+  - Tilt is elevation in degrees, range `-90 to +90°` (clamps).
+  - `Engine::SetLight` normalizes Position and negates into Direction internally ([engine.cpp:1074-1076](src/engine.cpp:1074)) — we don't have to.
+- **Intensity + Diffuse Color ⇄ engine `Light.Diffuse`:**
+  - `Diffuse = (R/255 · I, G/255 · I, B/255 · I, 1.0)` where (R,G,B) is the 8-bit color and I is intensity.
+- **Intensity + Specular Color ⇄ engine `Light.Specular`** (Sun only):
+  - `Specular = (R/255 · I, G/255 · I, B/255 · I, 1.0)` using the **specular** color picker, with the *same* sun intensity multiplier.
+  - Fills get `Specular = (0,0,0,0)` — they have no specular color picker, consistent with the map editor.
+- **Ambient Color ⇄ engine `m_ambient`** (scene-global, lives in Sun group visually):
+  - `m_ambient = (R/255, G/255, B/255, 0.0)`. No intensity multiplier — ambient is meant as a low-magnitude floor light, not something you crank. `w=0` preserves the current `m_ambient = (0,0,0,0)` convention ([engine.cpp:1292](src/engine.cpp:1292)).
+- **Shadow Color ⇄ engine `m_shadow`** (scene-global, lives in Sun group visually):
+  - `m_shadow = (R/255, G/255, B/255, 0.0)`. **Stored only.** The dangling `Engine::SetShadow` stub gets a real implementation that writes `m_shadow`, but no shader handle binds it today — see R3.
+
+**Defaults — match the screenshot exactly:**
+
+| Setting | Default | Engine effect |
+|---|---|---|
+| Sun Intensity | `0.50` | scales Diffuse + Specular |
+| Sun Z Angle | `0.00°` | Position azimuth |
+| Sun Tilt Angle | `45.00°` | Position elevation |
+| Sun Ambient Color | `RGB(40, 40, 50)` (dark blue-grey) | `m_ambient = (0.157, 0.157, 0.196, 0)` |
+| Sun Specular Color | `RGB(190, 190, 200)` (light grey) | scaled by intensity |
+| Sun Diffuse Color | `RGB(180, 180, 190)` (light grey-blue) | scaled by intensity |
+| Shadow Color | `RGB(100, 100, 110)` (medium grey) | `m_shadow` stored, currently unbound |
+| Force Fill Light Alignment | **ON** | fills auto-compute from sun |
+| Fill 1 Intensity | `0.50` | scales Diffuse |
+| Fill 1 Z Angle | `120.00°` *(auto)* | Position azimuth |
+| Fill 1 Tilt Angle | `-10.00°` *(auto)* | Position elevation |
+| Fill 1 Diffuse Color | `RGB(60, 80, 160)` (slate blue) | scaled by intensity |
+| Fill 2 Intensity | `0.50` | scales Diffuse |
+| Fill 2 Z Angle | `210.00°` *(auto)* | Position azimuth |
+| Fill 2 Tilt Angle | `-10.00°` *(auto)* | Position elevation |
+| Fill 2 Diffuse Color | `RGB(60, 80, 160)` (slate blue, same as Fill 1) | scaled by intensity |
+
+The exact RGB values are eyeballed from the screenshot; the implementation should pin them down by sampling the screenshot or, ideally, by checking the Petroglyph map editor's source/binary for the canonical Alamo defaults. Treat the table above as **structurally correct, numerically approximate** — the implementation can pick precise hexes during the resource-file pass.
+
+**This changes the default visual** from the current pre-MT-4 baseline. Currently the editor opens with Sun white at Z=0°/Tilt=0° (Diffuse=(1,1,1,1), Position=(1,0,0)), fills off, ambient (0,0,0,0). The new defaults give a softer 3-light setup right out of the box, matching what map authors are used to seeing in the map editor. This is **intentional** and the headline visual change of the PR — note prominently in CHANGELOG.
 
 **In:**
 
-- **New `IDC_BUTTON_PALETTE`** in the Textures groupbox header (`IDD_EMITTER_PROPS2`), positioned at roughly (170, 1) sized ~24×10 du — overlapping the right side of the group's title bar in the canonical Windows pattern. Style: `BS_BITMAP | BS_PUSHLIKE | BS_AUTOCHECKBOX` so the pressed state is visible and Win32 manages the toggle. Label: a **16×16 px painter's-palette BMP resource** (`IDB_PALETTE_GLYPH`) — kidney-shaped palette silhouette with thumb hole and a few coloured paint blobs. Tooltip "Texture palette".
-- **New top-level window class `"AloTexturePalettePopup"`**, registered once at startup. Owned by the main editor window so it dies with the editor. Window styles: `WS_POPUPWINDOW | WS_CAPTION | WS_THICKFRAME` (resizable in a future PR; v1 fixed-size). No taskbar entry (`WS_EX_TOOLWINDOW`).
-- **Popup contents** (laid out top to bottom):
-  - Filter row: two radio buttons "Color" / "Bump", default "Color". Selection persisted per-mod.
-  - Pinned row: up to 8 thumbnails (32×32) with a small "Pinned" label.
-  - Recent row: up to 8 thumbnails with a small "Recent" label.
-  - **Status strip** at bottom: single-line `SS_LEFT` static control (`IDC_PALETTE_STATUS`), hidden text by default. Used for transient feedback like "Pins full (8). Unpin one to make room." Always allocated 14 px of vertical space (no layout shift when shown). Text cleared by `WM_TIMER` after 3000 ms.
-  - Total fixed size: ~280×136 px (16 px margin + 12 px filter row + 16 px label + 32 px thumb row + 16 px label + 32 px thumb row + 14 px status strip + 2 px margin).
-- **Pin overflow handling**: when the user clicks the star on a 9th pin (capacity 8 already reached), the click is **rejected** — new entry stays as a recent. Status strip shows `IDS_PALETTE_PINS_FULL` ("Pins full (8). Unpin one to make room.") for 3 seconds, then auto-clears. Pin semantics preserved — deliberately-pinned textures are never silently dropped.
-- **Button toggle behavior**: clicking the button when popup is hidden shows it (positioned at remembered location, or button-anchored default if first run); clicking when shown hides it and saves position. Closing the popup via X or Esc also depresses the button.
-- **Click model in popup**: single-click selects (visible selection border on the thumbnail); double-click writes to the slot matching the current filter. Selection clears on filter change.
-- **Star-corner pin gesture**: a 10×10 px star icon appears in the top-right corner of any thumbnail under the mouse cursor. Click toggles pinned state. Recent entries pinned this way migrate to the pins row; pinned entries unpinned drop out of pins (and back into recents if recently used, otherwise gone).
-- **Auto-recent tracking**: any successful texture load — file picker via "..." button, edit-field commit (lines 358–359 of `Emitter.cpp`), or palette double-click — adds the filename to recents with the appropriate `isColor` / `isBump` flag set. Touching an existing recent moves it to position 0 (LRU).
-- **Recents eviction**: when a 9th distinct recent arrives for the active filter, the oldest is dropped.
-- **Per-mod isolation**: palette INI is keyed by SHA1 of the same mod path string `LastMod` writes. Mod switch (via `RebuildModsMenu` flow) triggers `PaletteStore::SetActiveMod(newPath)` which loads the new mod's palette from INI and posts a refresh message to the popup if visible.
-- **Position memory**: popup window position persists in the INI's `[ui]` section as `PopupX=`, `PopupY=` (in screen coordinates). On show, position is validated against `MonitorFromPoint(MONITOR_DEFAULTTONULL)`; if no monitor contains the point, fall back to button-anchored default (just below the palette button in screen coords).
-- **Thumbnail cache**: in-memory `unordered_map<string, HBITMAP>` keyed by absolute texture path. Populated lazily on first paint of an entry. Cleared on app shutdown (HBITMAPs deleted via `DeleteObject`).
-- **Placeholder thumbnails** for: (a) failed decode (a 32×32 magenta-with-X bitmap generated procedurally on first need), (b) file-not-found (a greyed-out variant of the same).
-- **Reset View Settings (`ID_VIEW_RESET_VIEW_SETTINGS`) integration**: the existing handler that clears `BackgroundColor` / `ShowGround` / `GroundZ` / `GroundTexture` is extended to also delete the active mod's palette INI section (not the whole file — other mods' palettes survive, and the `[ui]` popup-position section survives). Palette in the popup re-renders empty.
-- **Debug instrumentation** under `#ifndef NDEBUG`: `[Palette] touch recent name='%s' slot=%s`, `[Palette] toggle pin name='%s' newState=%s`, `[Palette] thumbnail decode failed path='%s' fallback=placeholder`, `[Palette] mod switch from='%s' to='%s' loadedEntries=%d`, `[Palette] popup show pos=(%d,%d)`, `[Palette] popup hide pos=(%d,%d)`, `[Palette] popup position invalid (off-screen) snapping to default`.
+- **New `IDD_LIGHTING` dialog template** in [src/ParticleEditor.en.rc:144](src/ParticleEditor.en.rc:144) area (after `IDD_BLOOM`), roughly `240×320 px`, `WS_POPUP | WS_CAPTION | WS_SYSMENU`, centered on owner on first open. Final pixel dimensions sized to fit content during implementation.
+- **New menu entry** `View → Lighting…` (`ID_VIEW_LIGHTING = 40117`, next free) in [src/ParticleEditor.en.rc:516](src/ParticleEditor.en.rc:516).
+- **New control IDs** in [src/Resources/resource.en.h](src/Resources/resource.en.h):
+  - Sun: `IDC_LIGHTING_SUN_{INTENSITY,ZANGLE,TILT,AMBIENT,SPECULAR,DIFFUSE,SHADOW}` (7 IDs)
+  - Per fill (×2): `IDC_LIGHTING_FILL{1,2}_{INTENSITY,ZANGLE,TILT,DIFFUSE}` (8 IDs)
+  - Bindings: `IDC_LIGHTING_FORCE_ALIGN` (checkbox), `IDC_LIGHTING_MIRROR_SUN` (button)
+  - `IDC_LIGHTING_RESET` (reset button)
+  - **18 control IDs total.**
+- **`LightingDlgProc` + `ToggleLightingDialog`** in [src/main.cpp](src/main.cpp) after `BloomDlgProc` and `ToggleBloomDialog`, mirroring their lifecycle exactly: lazy-create on first toggle, hide on close, save position to registry, `WM_USER` reseed-from-engine after Reset View Settings.
+- **`APPLICATION_INFO.hLightingDlg`** field added next to `hBloomDlg` ([main.cpp:586](src/main.cpp:586)).
+- **Engine getters** `Engine::GetLight(LightType) const → const Light&`, `Engine::GetAmbient() const → const D3DXVECTOR4&`, and `Engine::GetShadow() const → const D3DXVECTOR4&` added to [engine.h:184](src/engine.h:184) area. Setters either exist (`SetLight`, `SetAmbient`) or get a new minimal implementation (`SetShadow`).
+- **Implement the dangling `SetShadow`** in [engine.cpp](src/engine.cpp): add `m_shadow` member, store the vec4 in `SetShadow`, expose `GetShadow`. **Does not bind to a shader handle** — see R3.
+- **Registry I/O** under `HKCU\Software\AloParticleEditor`, following bloom's `WriteBloomFloat` / `ReadBloomFloat` pattern:
+  - **Sun:** `LightSun{Intensity, ZAngle, Tilt}` (REG_BINARY float, 3 keys), `LightSun{Ambient, Specular, Diffuse, Shadow}Color` (REG_DWORD COLORREF, 4 keys). **7 keys.**
+  - **Fill1, Fill2:** `Light{Fill1,Fill2}{Intensity, ZAngle, Tilt}` (REG_BINARY float, 6 keys), `Light{Fill1,Fill2}DiffuseColor` (REG_DWORD COLORREF, 2 keys). **8 keys.**
+  - **Bindings:** `LightingForceFillAlignment` (REG_DWORD bool). **1 key.**
+  - **Dialog:** `LightingDialogPos` (REG_BINARY RECT). **1 key.**
+  - **Total: 17 new registry keys** under the existing app key.
+- **Startup restore**: in `WinMain` after engine construction, before the first frame, read all 16 lighting keys (each with a sensible default if absent) and push them through `SetLight` × 3 + `SetAmbient` + `SetShadow`. Same code path as bloom's `ReadBloomEnabled` / `ReadBloomFloat` calls ([main.cpp:4943-4960](src/main.cpp:4943)).
+- **Reset View Settings integration**: the existing handler ([main.cpp:1593-1642](src/main.cpp:1593)) gains:
+  - Wipe the 17 lighting registry keys via `RegDeleteValue` (loop over a constant array).
+  - Push hardcoded defaults to engine via `SetLight` / `SetAmbient` / `SetShadow`.
+  - Post `WM_USER` to `hLightingDlg` if open → dialog reseeds spinners/colorbuttons/checkbox from engine state.
+  - Update the prompt's MessageBox text to include "lighting".
+- **In-panel Reset button** writes the same defaults to engine + registry + UI controls. Confirmation prompt: "Reset all lighting to defaults?" `MB_YESNO | MB_ICONQUESTION`.
+- **Esc handling** in the dialog: pressing Esc when the dialog or one of its child controls has focus closes the dialog (saves position, hides). Standard `WM_COMMAND IDCANCEL` route.
+- **Debug instrumentation** under `#ifndef NDEBUG`: `[Lighting] set sun int=%.2f z=%.1f tilt=%.1f`, `[Lighting] set fill%d int=%.2f z=%.1f tilt=%.1f color=#%06x`, `[Lighting] set ambient #%06x`, `[Lighting] set shadow #%06x (engine stores only; no shader binding)`, `[Lighting] force-align toggled %s`, `[Lighting] mirror sun: copied diffuse #%06x to both fills`, `[Lighting] reset to defaults source=%s` (panel / view-menu), `[Lighting] dialog show pos=(%d,%d)`, `[Lighting] dialog hide pos=(%d,%d)`, `[Lighting] startup restore loaded=%d missing=%d`.
 
 **Out:**
 
-- **Inline panel embedded in the Appearance tab.** *Reason: explicitly superseded by the popup approach — eliminates dialog-template growth and cascading layout work.*
-- **Anchored dropdown (auto-close on outside-click).** *Reason: explicitly skipped per the design discussion — the multi-swap workflow benefits from sticky behavior.*
-- **Modal popup.** *Reason: same — modal blocks viewport interaction, defeating the "see the texture render while picking" workflow.*
-- **Resizable popup.** *Reason: v1 is fixed-size; the 8+8 capacity makes resizing low-value. `WS_THICKFRAME` is reserved in styles for future use without an API change.*
-- **Docking the popup against the main editor.** *Reason: floating-only is simpler. If users keep dragging it to the same spot, position memory makes that one-time. Docking is a follow-up if asked for.*
-- **On-disk thumbnail cache (cached PNGs in AppData).** *Reason: synchronous in-memory cache covers the dominant case (palette stable within a session). Cold-start cost is bounded — 16 thumbnails × ~10 ms decode each ≈ 160 ms once per popup open. If anyone reports it as slow, this becomes a follow-up PR.*
-- **Async / threaded thumbnail decoding.** *Reason: same as above. Synchronous + cache is fast enough; threading adds failure modes (D3D9 device thread affinity, cache invalidation races) for negligible benefit at this capacity.*
-- **Drag-and-drop pinning** (drag a recent into the pins row). *Reason: the hover-star gesture is sufficient. DnD adds OLE drop-target wiring for one ergonomic win that doesn't justify the cost.*
-- **Larger thumbnail-on-hover preview tooltip.** *Reason: explicitly skipped per the design discussion — selection highlight only is the chosen UX.*
-- **Live preview in the 3D viewport on single-click.** *Reason: explicitly skipped per the design discussion — would require a transient texture state + revert path in the engine, outside MT-1's scope.*
-- **Capacity beyond 8 + 8 per filter, or scrolling.** *Reason: 8 each is the chosen capacity. Two rows of 8 fit cleanly without scroll. If the cap proves too tight, raising it is a one-line change in a follow-up.*
-- **Heuristic auto-classification of entries as color vs bump from filename.** *Reason: tagging via slot-of-use is unambiguous. Filename heuristics (`_normal`, `_depth`, `_bump`) are unreliable across modder conventions and would surprise users when wrong.*
-- **Export / import palette INI via UI.** *Reason: file lives in AppData; users who want to share can copy it manually.*
+- **Per-light Enable checkboxes.** *Reason: explicitly rejected — the map editor doesn't have them; setting intensity to 0 is the documented "off" gesture.*
+- **Fog settings (start, end, color, enabled).** *Reason: explicitly omitted per user. The engine has fog handles wired (`hFogVals`) so this could be a small follow-up if anyone asks.*
+- **Sky Dome controls.** *Reason: that's MT-3's scope, separately tracked. The map-editor screenshot shows them in the same panel but we keep MT-3 as its own item.*
+- **Shadow color shader binding.** *Reason: no `hShadow` handle exists in `Effect.h` and no current shader references one. We implement `SetShadow` to store the value (so the API stops being dangling) and persist the picker's value, but the preview doesn't visually change when you adjust shadow color. CHANGELOG entry must call this out plainly.*
+- **Visual gizmo for direction** (drag a dot on a hemisphere). *Reason: ~200 LOC of custom paint, blows the estimate.*
+- **Per-`.alo`-file lighting overrides.** *Reason: file format doesn't carry lighting; sidecar design is separate scope.*
+- **Lighting presets** (save / load named configurations). *Reason: out of scope for v1; short follow-up that reuses the registry I/O if requested.*
+- **Animated lights / time-of-day slider.** *Reason: separate feature.*
+- **Tabbed or compact layout.** *Reason: emulating the screenshot, which uses a single tall panel.*
+- **Force Fill Light Alignment as a *binding* mode** that re-applies on every Sun-Z change after un-checking. *Reason: explicitly one-shot semantics — Force is either ON (alignment active, spinners disabled) or OFF (free editing). No middle "auto-recompute once when you change sun" mode.*
+- **Mirror Sun for diffuse + specular + intensity.** *Reason: scoping it to just diffuse color matches what the screenshot looks like (one button, simple action). Promoting to a full multi-field copy is a follow-up if it's missed.*
+- **Localized (German) string translations.** *Reason: project's German strings are perennially behind English; the German `.de.rc` mirrors structure with English placeholders, consistent with MT-1.*
 
 ---
 
@@ -84,41 +162,40 @@ Thumbnail decoding goes through D3DX9 (already used by the engine) — `D3DXCrea
 
 | Piece | File:line |
 |---|---|
-| Texture slot edit fields + "..." buttons on Appearance tab | [src/UI/Emitter.cpp:328](src/UI/Emitter.cpp:328)–335, [src/UI/Emitter.cpp:358](src/UI/Emitter.cpp:358)–359 |
-| `LoadTexture` file-picker helper | [src/UI/Emitter.cpp:67](src/UI/Emitter.cpp:67)–88 |
-| `IDD_EMITTER_PROPS2` dialog template (the Appearance tab) — Textures groupbox at (0,4,197,67) | [src/ParticleEditor.en.rc:287](src/ParticleEditor.en.rc:287)–334 |
-| EmitterProps window class + tab pages creation | [src/UI/Emitter.cpp:466](src/UI/Emitter.cpp:466)–512 |
-| Emitter texture fields | `colorTexture`, `normalTexture` (strings) on `ParticleSystem::Emitter` ([src/ParticleSystem.cpp:269](src/ParticleSystem.cpp:269), 287, 481, 502) |
-| `ReadLastMod` / `WriteLastMod` registry pattern | [src/main.cpp:2967](src/main.cpp:2967)–2993 |
-| Mod-switch flow that updates `FileManager::SetModPath` | [src/main.cpp:4719](src/main.cpp:4719)–4727 |
-| `LastMod` restoration on startup | [src/main.cpp:4941](src/main.cpp:4941)–4945 |
-| `Reset View Settings` handler (sweeps registry view-settings) | [src/main.cpp:1566](src/main.cpp:1566)–~1606, [src/main.cpp:3075](src/main.cpp:3075) |
-| `FileManager` (resolves texture filenames against the mod path) | [src/managers.cpp](src/managers.cpp), [src/managers.h](src/managers.h) |
-| D3DX9 texture loading (TGA/DDS supported) | engine uses `D3DXCreateTextureFromFile*` for ground texture ([src/engine.cpp:1126](src/engine.cpp:1126)) — same APIs work for thumbnails |
-| UndoStack (used elsewhere for emitter edits) | [src/UndoStack.h](src/UndoStack.h) — palette writes should integrate consistent with how typed/file-picker writes do today |
-| Existing custom child-control patterns | `Spinner`, `ColorButton` registered window classes — see [src/UI/Spinner.cpp](src/UI/Spinner.cpp), [src/UI/ColorButton.cpp](src/UI/ColorButton.cpp) — pattern reused for the palette content control |
+| `Light` struct (Diffuse/Specular/Position/Direction vec4s) | [src/engine.h:75-81](src/engine.h:75) |
+| `LightType` enum (`LT_SUN`/`LT_FILL1`/`LT_FILL2`) | [src/engine.h:68-72](src/engine.h:68) |
+| `Engine::SetLight(LightType, const Light&)` — normalizes Position → Direction, recalculates SH matrices | [src/engine.cpp:1062-1081](src/engine.cpp:1062) |
+| `Engine::SetAmbient(D3DXVECTOR4)` | [src/engine.cpp:1083-1090](src/engine.cpp:1083) |
+| `Engine::SetShadow(D3DXVECTOR4)` declared, **never implemented** — we add the body | [src/engine.h:185](src/engine.h:185) |
+| `m_lights[3]` array (SUN=0, FILL1=1, FILL2=2) | [src/engine.h:295](src/engine.h:295) |
+| `m_ambient` vec4 (defaults `(0,0,0,0)`) | [src/engine.h:294](src/engine.h:294), [src/engine.cpp:1292](src/engine.cpp:1292) |
+| Hardcoded light defaults at engine construction | [src/engine.cpp:1384-1400](src/engine.cpp:1384) |
+| Effect handles (no shadow handle present) | [src/Effect.h:37-46](src/Effect.h:37) |
+| Per-frame shader binds | [src/engine.cpp:528-532](src/engine.cpp:528) |
+| `BloomDlgProc` (modeless dialog procedure to clone) | [src/main.cpp:4867-4959](src/main.cpp:4867) |
+| `ToggleBloomDialog` (lazy-create + show/hide + position save) | [src/main.cpp:4961-5013](src/main.cpp:4961) |
+| `WriteBloomFloat` / `ReadBloomFloat` (REG_BINARY float helpers) | [src/main.cpp:4439-4467](src/main.cpp:4439) |
+| `WriteBloomEnabled` / `ReadBloomEnabled` (REG_DWORD bool helpers) | [src/main.cpp:4414-4437](src/main.cpp:4414) |
+| Bloom dialog position persistence pattern | [src/main.cpp:4944-4998](src/main.cpp:4944) |
+| `Reset View Settings` handler (the integration point) | [src/main.cpp:1593-1642](src/main.cpp:1593) |
+| Spinner control (numeric edit + up/down) | [src/UI/Spinner.cpp](src/UI/Spinner.cpp); usage example [src/ParticleEditor.en.rc:152](src/ParticleEditor.en.rc:152) |
+| ColorButton control (color swatch + Win32 color picker) | [src/UI/ColorButton.cpp](src/UI/ColorButton.cpp) |
+| `APPLICATION_INFO` struct (the per-app singleton) | [src/main.cpp:586](src/main.cpp:586) area — add `HWND hLightingDlg` next to `hBloomDlg` |
+| View menu entries | [src/ParticleEditor.en.rc:516-532](src/ParticleEditor.en.rc:516) |
+| WM_USER dialog reseed pattern (used by bloom after Reset View Settings) | [src/main.cpp:1620](src/main.cpp:1620) area + BloomDlgProc's WM_USER case |
 
 **Not yet in the codebase — to add:**
 
-- **`src/UI/TexturePalette.{h,cpp}`** — new module. Owns:
-  - `PaletteStore` singleton (in-memory state + INI persistence).
-  - `RegisterTexturePaletteContentClass` / `RegisterTexturePalettePopupClass` — the inner owner-draw thumbnail control plus the outer popup window class.
-  - `PaletteStore::TouchRecent(string filename, SlotKind slot)`, `TogglePin(string filename)`, `SetActiveMod(string modPath)`, `Filter(SlotKind)`, `Get()` accessors.
-  - `PalettePopup::Show(HWND owner, POINT defaultPos)`, `PalettePopup::Hide()`, `PalettePopup::IsVisible()`, `PalettePopup::SetOnVisibilityChanged(callback)`.
-- **INI I/O** for palette persistence. `WritePrivateProfileStringW` family — already available, no new dependency.
-- **Thumbnail decoder** (`TexturePaletteThumbCache`): D3DX9 → DIB section → HBITMAP. Lives alongside `TexturePalette.cpp`.
-- **`IDC_BUTTON_PALETTE` control ID** + button addition in [src/ParticleEditor.en.rc:287](src/ParticleEditor.en.rc:287).
-- **`IDB_PALETTE_GLYPH`** — new 16×16 px BMP resource: painter's-palette icon (kidney outline with thumb hole + 4–5 paint blobs in red/blue/yellow/green/white). Hand-authored bitmap added to `src/Resources/`.
-- **`IDC_PALETTE_STATUS`** static control inside the popup for transient feedback messages.
-- **`IDS_PALETTE_PINS_FULL`** string: "Pins full (8). Unpin one to make room."
-- **Hooks into `Emitter.cpp`** at:
-  - `IDC_BUTTON_PALETTE` handler — toggle popup visibility.
-  - The three existing texture-write points (`LoadTexture` callers `IDC_BUTTON1`/`2`, `EN_CHANGE` on `IDC_EDIT2`/`3`) → call `PaletteStore::TouchRecent`.
-  - Custom notify code from popup → `PALETTE_NM_COMMIT` writes to the active emitter's slot.
-- **Hook into mod-switch flow** in `main.cpp`: when `WriteLastMod(modPath)` runs ([src/main.cpp:4725](src/main.cpp:4725)), also call `PaletteStore::SetActiveMod(modPath)`.
-- **Hook into startup** in `main.cpp`: after `ReadLastMod()` restores the mod ([src/main.cpp:4943](src/main.cpp:4943)–4945), call `PaletteStore::SetActiveMod(savedMod)`. Register the popup window class once at app init.
-- **Hook into `Reset View Settings`** to clear the active mod's palette INI section.
-- **Two new strings**: `IDS_PALETTE_FILTER_COLOR`, `IDS_PALETTE_FILTER_BUMP` (plus `IDS_PALETTE_PINS_FULL` noted above).
+- **`Engine::GetLight(LightType which) const`**, **`Engine::GetAmbient() const`**, **`Engine::GetShadow() const`** — single-line inline accessors in [src/engine.h:184](src/engine.h:184) area. Used by `WM_USER` reseed and by the in-panel Reset to write values back.
+- **`Engine::SetShadow` implementation** in [src/engine.cpp](src/engine.cpp) (currently linker-dangling): two-line body that writes `m_shadow = color`. No SH recalc, no shader bind.
+- **`Engine::m_shadow`** vec4 member in [src/engine.h](src/engine.h), initialized to the default shadow color `(100/255, 100/255, 110/255, 0)` in the engine constructor.
+- **`LightingDlgProc(HWND, UINT, WPARAM, LPARAM)`** in `main.cpp` after `BloomDlgProc`. ~200 LOC including per-control change handlers, force-align enable/disable logic, mirror-sun handler.
+- **`ToggleLightingDialog(APPLICATION_INFO*)`** in `main.cpp` after `ToggleBloomDialog`. ~30 LOC mirroring the bloom version.
+- **`InitializeLightingFromRegistry(Engine*)`** in `main.cpp` — called once at startup, after engine construction, before the first frame. Reads 16 lighting registry keys with defaults; calls `SetLight` × 3 + `SetAmbient` + `SetShadow`. ~70 LOC.
+- **`ApplyLightingDefaults(Engine*, HWND hDlgOrNull)`** in `main.cpp` — used by both the in-panel Reset button and the View → Reset View Settings handler. Writes defaults to engine, wipes registry keys, posts `WM_USER` to dialog if open. ~40 LOC.
+- **Spherical-coordinate conversion helpers** (file-local `static`): `DirectionFromZTilt(float z_deg, float tilt_deg) → D3DXVECTOR4`. ~5 LOC.
+- **Force-align computation helper**: `ComputeAlignedFill(int which, float sunZ_deg) → (z_deg, tilt_deg)`. Returns `(sunZ + 120, -10)` for Fill1, `(sunZ + 210, -10)` for Fill2.
+- **17 registry keys + 1 menu ID + 1 dialog template + 18 control IDs.** Localized in both `.en.rc` + `.de.rc` (German with English placeholders).
 
 *(All design questions resolved — see "Resolved decisions" at the bottom of the spec.)*
 
@@ -126,367 +203,316 @@ Thumbnail decoding goes through D3DX9 (already used by the engine) — `D3DXCrea
 
 ## Architecture / implementation approach
 
-### A. Data model
+### A. Data flow
+
+```
+                  ┌──── Registry (HKCU\Software\AloParticleEditor)
+                  │       17 keys (LightSun*, LightFill{1,2}*,
+                  │                LightingForceFillAlignment, LightingDialogPos)
+                  │
+       startup    │   WM_COMMAND               in-panel Reset                   View > Reset View Settings
+       ────────   │   (spinner SN_CHANGE,      button                           menu handler
+       Init…      │    color picker,           ────────                         ────────────────
+       FromReg    │    checkbox, mirror btn)   ApplyLightingDefaults            ApplyLightingDefaults
+       ────────   │   ────────                 ────────                         ────────────────
+                  ↓        ↓                        ↓                                   ↓
+            ┌─────────────────────────────────────────────────────────────────────────────┐
+            │                                                                             │
+            │     LightingDlgProc — owns conversion math, alignment, and registry write   │
+            │                                                                             │
+            │     z, tilt → DirectionFromZTilt → Position vec4                            │
+            │     Force-align ON → recompute fill Z/Tilt from sun on every sun change     │
+            │     Color × Intensity → Diffuse / Specular vec4                             │
+            │                                                                             │
+            └────────────────────────────┬────────────────────────────────────────────────┘
+                                         │
+                                         ↓
+                              Engine::SetLight / SetAmbient / SetShadow
+                                         │
+                                         ↓
+                              recalc SPH matrices, set shader vectors next frame
+                                         │
+                                         ↓
+                              InvalidateRect(viewport) → WM_PAINT → render
+```
+
+Three callers feed the same engine-write path: dialog per-control change, in-panel Reset, View → Reset View Settings. The dialog owns the UI representation; the engine owns the rendering representation; conversion happens at the boundary in `LightingDlgProc`.
+
+### B. Registry schema
+
+All keys under `HKCU\Software\AloParticleEditor`. Existing keys (Bloom, GroundSolidColor, LastMod, etc.) untouched.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `LightSunIntensity` | REG_BINARY (float) | `0.50` | scales Diffuse + Specular |
+| `LightSunZAngle` | REG_BINARY (float) | `0.0` | degrees, 0–360 wrap |
+| `LightSunTilt` | REG_BINARY (float) | `45.0` | degrees, −90 to +90 clamp |
+| `LightSunAmbientColor` | REG_DWORD | `RGB(40,40,50)` | scene-global ambient |
+| `LightSunSpecularColor` | REG_DWORD | `RGB(190,190,200)` | scaled by sun intensity |
+| `LightSunDiffuseColor` | REG_DWORD | `RGB(180,180,190)` | scaled by sun intensity |
+| `LightSunShadowColor` | REG_DWORD | `RGB(100,100,110)` | scene-global; **stored only** (R3) |
+| `LightingForceFillAlignment` | REG_DWORD | `1` (ON) | binding mode for fill angles |
+| `LightFill1Intensity` | REG_BINARY (float) | `0.50` | scales Diffuse |
+| `LightFill1ZAngle` | REG_BINARY (float) | `120.0` | only written when force-align OFF; while ON, computed from sun |
+| `LightFill1Tilt` | REG_BINARY (float) | `-10.0` | same |
+| `LightFill1DiffuseColor` | REG_DWORD | `RGB(60,80,160)` | scaled by fill 1 intensity |
+| `LightFill2Intensity` | REG_BINARY (float) | `0.50` | |
+| `LightFill2ZAngle` | REG_BINARY (float) | `210.0` | |
+| `LightFill2Tilt` | REG_BINARY (float) | `-10.0` | |
+| `LightFill2DiffuseColor` | REG_DWORD | `RGB(60,80,160)` | |
+| `LightingDialogPos` | REG_BINARY (RECT) | (none — center on owner) | screen coords |
+
+**Note on the force-align interaction with persistence:** when alignment is ON, the fill Z/Tilt registry values are *not* live-rewritten as the sun rotates — they're the "last manually set" values, restored when alignment is turned OFF. This means the registry can hold a stale (Fill1 Z = 120, Sun Z = 0) pair that doesn't match what the renderer sees. That's intentional and matches the map editor: the persisted values represent the user's previous *free-edit* state, ready to be re-activated when alignment is unchecked.
+
+### C. Dialog template (rough resource sketch)
+
+```rc
+IDD_LIGHTING DIALOGEX 0, 0, 240, 320
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Lighting"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    GROUPBOX     "Sun Settings",         IDC_STATIC,            8,   4, 224, 156
+
+      LTEXT      "Intensity",             IDC_STATIC,           18,  18,  40,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_INTENSITY, "Spinner", WS_TABSTOP, 18, 28, 50, 14
+      LTEXT      "Z Angle",               IDC_STATIC,           78,  18,  40,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_ZANGLE,    "Spinner", WS_TABSTOP, 78, 28, 50, 14
+      LTEXT      "Tilt Angle",            IDC_STATIC,          138,  18,  50,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_TILT,      "Spinner", WS_TABSTOP, 138, 28, 50, 14
+
+      LTEXT      "Ambient Color",         IDC_STATIC,           18,  50,  60,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_AMBIENT,   "ColorButton", WS_TABSTOP, 78, 48, 40, 14
+      LTEXT      "Specular Color",        IDC_STATIC,          122,  50,  60,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_SPECULAR,  "ColorButton", WS_TABSTOP, 184, 48, 40, 14
+
+      LTEXT      "Diffuse Color",         IDC_STATIC,           18,  72,  60,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 70, 40, 14
+      LTEXT      "Shadow Color",          IDC_STATIC,          122,  72,  60,  10
+      CONTROL    "",                      IDC_LIGHTING_SUN_SHADOW,    "ColorButton", WS_TABSTOP, 184, 70, 40, 14
+
+      AUTOCHECKBOX "Force Fill Light Alignment", IDC_LIGHTING_FORCE_ALIGN, 18, 100, 140, 12
+
+    GROUPBOX     "Fill Light Settings",   IDC_STATIC,            8, 166, 224, 130
+
+      LTEXT      "Intensity 1",           IDC_STATIC,           18, 180,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL1_INTENSITY, "Spinner", WS_TABSTOP, 18, 190, 50, 14
+      LTEXT      "Z Angle 1",             IDC_STATIC,           78, 180,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL1_ZANGLE,    "Spinner", WS_TABSTOP, 78, 190, 50, 14
+      LTEXT      "Tilt 1",                IDC_STATIC,          138, 180,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL1_TILT,      "Spinner", WS_TABSTOP, 138, 190, 50, 14
+      LTEXT      "Diffuse",               IDC_STATIC,           18, 210,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL1_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 208, 40, 14
+      PUSHBUTTON "Mirror Sun",            IDC_LIGHTING_MIRROR_SUN,     150, 208, 60, 14
+
+      LTEXT      "Intensity 2",           IDC_STATIC,           18, 234,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL2_INTENSITY, "Spinner", WS_TABSTOP, 18, 244, 50, 14
+      LTEXT      "Z Angle 2",             IDC_STATIC,           78, 234,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL2_ZANGLE,    "Spinner", WS_TABSTOP, 78, 244, 50, 14
+      LTEXT      "Tilt 2",                IDC_STATIC,          138, 234,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL2_TILT,      "Spinner", WS_TABSTOP, 138, 244, 50, 14
+      LTEXT      "Diffuse",               IDC_STATIC,           18, 268,  44, 10
+      CONTROL    "",                      IDC_LIGHTING_FILL2_DIFFUSE,   "ColorButton", WS_TABSTOP, 78, 266, 40, 14
+
+    PUSHBUTTON   "Reset to defaults",     IDC_LIGHTING_RESET,         76, 300, 88, 14
+END
+```
+
+Exact pixel coords are sized during implementation. The structural layout matches the supplied screenshot.
+
+### D. Message routing
+
+| Message | Action |
+|---|---|
+| `WM_INITDIALOG` | Read current values from engine via `GetLight`/`GetAmbient`/`GetShadow`; decompose into intensity/Z/tilt/color quadruples; populate all controls; apply force-align disabled state to fill angle spinners and mirror-sun button; resize-to-saved-pos via `LightingDialogPos`. |
+| `WM_USER` (from `Reset View Settings`) | Same as `WM_INITDIALOG`'s seeding step — read engine, refresh all controls. No registry I/O (registry was already updated by the reset handler). |
+| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_SUN_INTENSITY/_DIFFUSE/_SPECULAR/_AMBIENT/_SHADOW` change | Recompute the corresponding vec4; call `SetLight(LT_SUN, ...)` and/or `SetAmbient` / `SetShadow`; write the changed key; redraw. **Intensity changes also recompute Specular** (since they share intensity). |
+| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_SUN_ZANGLE/_TILT` | Recompute Sun Position; `SetLight(LT_SUN, ...)`; write the key; redraw. **If force-align is ON, also recompute and re-apply both Fill1 and Fill2 directions** without writing their registry keys. |
+| `WM_COMMAND` `SN_CHANGE` on `IDC_LIGHTING_FILL1_*`/`FILL2_*` | Recompute the fill Light vec4; `SetLight(LT_FILL{1,2}, ...)`; write the key; redraw. (Angle spinners are disabled while force-align ON, so this only fires from intensity or diffuse changes in that mode.) |
+| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_FORCE_ALIGN` | Read checkbox state; enable/disable Fill Z/Tilt spinners; enable/disable Mirror Sun button; if newly ON, immediately recompute fill directions from sun (no registry write); if newly OFF, restore registry-stored fill Z/Tilt values to the spinners (and `SetLight` to apply); write the `LightingForceFillAlignment` key. |
+| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_MIRROR_SUN` | Read Sun diffuse color; write it to both Fill1 and Fill2 diffuse color pickers; update engine via `SetLight` × 2; write the two `Light{Fill1,Fill2}DiffuseColor` registry keys; redraw. |
+| `WM_COMMAND` `BN_CLICKED` on `IDC_LIGHTING_RESET` | Confirm via `MessageBox`; on YES call `ApplyLightingDefaults`; refresh all controls. |
+| `WM_COMMAND` `IDCANCEL` (Esc) | Save position; hide. |
+| `WM_CLOSE` | Save position; hide. |
+
+### E. Per-control conversion details
 
 ```cpp
-// src/UI/TexturePalette.h
-
-enum class PaletteSlot : uint8_t { Color = 1 << 0, Bump = 1 << 1 };
-
-struct PaletteEntry
+// Per-light vec4 builder
+static Engine::Light MakeLight(float z_deg, float tilt_deg,
+                               COLORREF diffuseColor, COLORREF specularColor,
+                               float intensity)
 {
-    std::string filename;     // e.g. "p_smoke_01.tga" — the basename, exactly as stored in emitter
-    bool        isPinned;     // true ⇒ shown in pins row, false ⇒ recents row
-    uint8_t     slotMask;     // bit 0 = used as color, bit 1 = used as bump
-    uint64_t    lastUsedNs;   // monotonic clock, used for recents LRU sort
-};
+    Engine::Light L = {};
+    L.Position = DirectionFromZTilt(z_deg, tilt_deg);
 
-class PaletteStore
-{
-public:
-    static PaletteStore& Instance();
+    float dR = GetRValue(diffuseColor)  / 255.0f * intensity;
+    float dG = GetGValue(diffuseColor)  / 255.0f * intensity;
+    float dB = GetBValue(diffuseColor)  / 255.0f * intensity;
+    L.Diffuse = D3DXVECTOR4(dR, dG, dB, 1.0f);
 
-    // Mod lifecycle
-    void SetActiveMod(const std::wstring& modPath);   // loads INI section if present
-    void ClearActiveMod();                             // wipes in-memory; called on Reset View Settings
-    const std::wstring& ActiveMod() const;
+    float sR = GetRValue(specularColor) / 255.0f * intensity;
+    float sG = GetGValue(specularColor) / 255.0f * intensity;
+    float sB = GetBValue(specularColor) / 255.0f * intensity;
+    L.Specular = D3DXVECTOR4(sR, sG, sB, 1.0f);
 
-    // Filter (persisted per mod)
-    PaletteSlot ActiveFilter() const;
-    void        SetActiveFilter(PaletteSlot);
+    return L;
+}
 
-    // Mutations — each writes to disk before returning
-    void TouchRecent(const std::string& filename, PaletteSlot usedAs);
-    void TogglePin (const std::string& filename);
-    void RemoveRecent(const std::string& filename);
-
-    // Read access for the popup's WM_PAINT
-    std::vector<PaletteEntry> Pins   (PaletteSlot filter) const;
-    std::vector<PaletteEntry> Recents(PaletteSlot filter) const;
-
-    // Popup window position (separate from per-mod state)
-    POINT GetPopupPos(POINT fallback) const;
-    void  SetPopupPos(POINT pos);
-
-private:
-    std::wstring                                 m_activeMod;
-    std::unordered_map<std::wstring, ModPalette> m_byMod;   // loaded lazily
-    POINT                                        m_popupPos { -1, -1 };  // INI-persisted
-};
+// Fills pass specularColor = RGB(0,0,0) so Specular comes out zero.
 ```
 
-`PaletteStore` is a singleton because it's a process-global cache shared across the Emitter properties window, the popup, and the mod-switch flow in `main.cpp`. Lifetime matches the process. No threading — all access from the UI thread.
+`DirectionFromZTilt` does the standard `(cos(tilt)cos(z), cos(tilt)sin(z), sin(tilt))` conversion with degrees-to-radians. The engine's `SetLight` handles normalization + Direction derivation.
 
-### B. Persistence schema (INI)
-
-File: `%APPDATA%\AloParticleEditor\texture-palettes.ini`
-
-```ini
-[ui]
-PopupX=120
-PopupY=240
-
-[mod=<sha1-hex-of-active-mod-path>]
-Path=C:\Mods\RepublicAtWar
-Filter=Color
-PinCount=3
-Pin0=p_smoke_01.tga|color
-Pin1=p_dust_norm.tga|bump
-Pin2=p_explosion_master.tga|color,bump
-RecentCount=4
-Recent0=p_spark_white.tga|color|2026-05-14T19:32:11Z
-Recent1=…
-```
-
-Choices:
-- **`[ui]` section** holds cross-mod editor UI state (currently just popup position). Survives Reset View Settings (which only wipes per-mod sections).
-- **Mod section key** = `mod=<sha1>` so that arbitrary path characters (drive letters, UNC, spaces, accents) don't break INI parsing. The `Path=` line preserves the human-readable original for debugging.
-- **`Pin*` lines have no timestamp** because pins are user-ordered (insertion order, oldest first). **`Recent*` lines do** because order is "most recent first" and we may want to debug LRU ordering.
-- **Slot mask** is encoded as `color`, `bump`, or `color,bump`.
-- **`PinCount` / `RecentCount`** make round-tripping safe even if the file is hand-edited and a `Pin5` line gets deleted.
-
-INI was chosen over JSON to avoid a new third-party dependency and to keep the persistence code small (~80 LOC using `Get/WritePrivateProfileStringW`).
-
-### C. Thumbnail pipeline
-
-```
-filename ──► resolve to absolute path via FileManager
-              │
-              ├─ found ──► D3DXCreateTextureFromFileEx(width=32, height=32,
-              │              format=D3DFMT_A8R8G8B8) ──► IDirect3DTexture9
-              │              │
-              │              ├─ LockRect(level 0) ──► copy 32×32 ARGB pixels
-              │              │     into a CreateDIBSection HBITMAP
-              │              │     (32-bit top-down DIB)
-              │              │
-              │              └─ Release D3D texture; cache HBITMAP in m_thumbCache
-              │
-              └─ not found ──► return s_placeholderMissingHBitmap (lazily generated)
-```
-
-Cache key: **absolute path**. Cache eviction: **none in v1**.
-Decoder uses the existing `Engine`'s `IDirect3DDevice9*`. No separate D3D device.
-Decode failures: log under `#ifndef NDEBUG` and substitute `s_placeholderBrokenHBitmap`.
-
-### D. Palette content control (inside the popup)
-
-A registered window class `"AloPaletteContent"` — owner-draw, sized to fit the popup client area minus the title bar margin. WndProc handles:
-
-- **`WM_PAINT`** — draws the filter row (small native radios are real child controls, *not* owner-drawn) + the two thumbnail rows. For each entry: blit the cached HBITMAP, draw selection border if selected, draw star icon if `m_hoveredEntry == this`.
-- **`WM_MOUSEMOVE`** — track hover; redraw the previously-hovered and newly-hovered cells. Use `TrackMouseEvent(TME_LEAVE)` so we know to clear hover when the cursor exits the panel.
-- **`WM_LBUTTONDOWN`** — hit-test against (a) star icon if visible (toggle pin), (b) thumbnail (set selection).
-- **`WM_LBUTTONDBLCLK`** — fire `WM_NOTIFY PALETTE_NM_COMMIT` to popup → forwarded to EmitterProps window.
-- **`WM_COMMAND`** from filter radios — call `PaletteStore::SetActiveFilter`, clear selection, invalidate.
-
-### E. Popup window architecture
-
-Window class: `"AloTexturePalettePopup"`.
-Owner: main editor window (lifetime tied to it).
-Styles: `WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU`. Ex-style: `WS_EX_TOOLWINDOW` (no taskbar entry, smaller title bar).
-Initial size: 280×120 px (fixed in v1).
-
-**Lifecycle:**
-- Class registered once in app init (`main.cpp` startup).
-- Window itself is **created lazily** on first palette-button click and persists hidden between shows. Cleaner than recreating per-show — keeps the inner content control's state, avoids re-register churn.
-- Destroyed automatically when the main editor window closes (Win32 owner cleanup).
-
-**Show / hide / toggle path:**
-
-```
-PalettePopup::Toggle(HWND ownerEditor, RECT buttonRectScreen)
-  if not visible:
-    POINT pos = PaletteStore::GetPopupPos(fallback = button-anchored default)
-    if ValidatePos(pos) fails (no monitor contains it):
-        pos = button-anchored default
-        log: [Palette] popup position invalid (off-screen) snapping to default
-    SetWindowPos(popup, NULL, pos.x, pos.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW)
-    log: [Palette] popup show pos=(x,y)
-    fire visibility-changed callback (button → pressed)
-  else:
-    GetWindowRect(popup, &r); PaletteStore::SetPopupPos({r.left, r.top})
-    ShowWindow(popup, SW_HIDE)
-    log: [Palette] popup hide pos=(x,y)
-    fire visibility-changed callback (button → raised)
-```
-
-**Position validation** uses `MonitorFromPoint({pos.x + 4, pos.y + 4}, MONITOR_DEFAULTTONULL)` — if NULL, snap to button-anchored default. Catches the "user disconnected secondary monitor" case.
-
-**Button-anchored default:** `{ buttonScreenRect.left, buttonScreenRect.bottom + 4 }` — popup appears just below the button.
-
-**Esc key handling:** popup's WndProc handles `WM_KEYDOWN VK_ESCAPE` → `Toggle()` (hides + saves position).
-
-**Title bar X (close) handling:** `WM_SYSCOMMAND SC_CLOSE` → save position, hide (don't destroy). `WM_CLOSE` returns 0 to prevent default destroy.
-
-**Visibility callback:** when popup hides or shows, fire a `std::function` set by EmitterProps. EmitterProps uses it to update the toggle button's `BM_SETCHECK` state — keeps button visual in sync regardless of which path triggered the change (button click, X, Esc).
-
-**Status strip:** static control `IDC_PALETTE_STATUS` at the bottom of the popup client area. API:
-
-```cpp
-void PalettePopup::ShowStatus(UINT stringId, UINT durationMs = 3000);
-//   - LoadString(stringId) into the control
-//   - SetTimer(hPopup, ID_TIMER_STATUS_CLEAR, durationMs, NULL)
-//   - On WM_TIMER ID_TIMER_STATUS_CLEAR: SetWindowText(L""); KillTimer
-//   - On Hide(): SetWindowText(L""); KillTimer (no stale message on next show)
-//   - On WM_DESTROY: KillTimer
-```
-
-Triggered today from the pin-overflow path; reusable for future transient messages (mod switch confirm, decode failure summary, etc.).
-
-### F. Mod switching
-
-```
-User picks a mod from File ▸ Mods ▸ <mod>
-  │
-  └─ existing path: SetModPath + WriteLastMod(modPath)
-     │
-     └─ new: PaletteStore::Instance().SetActiveMod(modPath)
-        │
-        ├─ flush dirty state from previous mod's in-memory entries to INI
-        ├─ read new mod's section from INI (or initialize empty)
-        └─ post WM_PALETTE_REFRESH to popup if visible (popup invalidates content control)
-```
-
-### G. Reset View Settings integration
-
-The existing handler at [src/main.cpp:1566](src/main.cpp:1566) gains one new step:
-
-```cpp
-PaletteStore::Instance().ClearActiveMod();
-// (deletes the [mod=<sha1>] section from the INI file; [ui] section survives)
-```
-
-This wipes pins + recents + filter for the active mod *only*. Other mods' palettes survive. Popup window position survives. If the popup is open, it refreshes to show the now-empty palette.
-
-### H. Touch points by file
+### F. Touch points by file
 
 | File | Change |
 |---|---|
-| `src/UI/TexturePalette.h` | **NEW** — `PaletteStore`, `PaletteEntry`, `PalettePopup`, control class registration |
-| `src/UI/TexturePalette.cpp` | **NEW** — implementation, INI I/O, thumbnail decoder, popup + content WndProcs |
-| `src/ParticleEditor.en.rc` | Add `IDC_BUTTON_PALETTE` to `IDD_EMITTER_PROPS2` Textures group header; add `BITMAP IDB_PALETTE_GLYPH "Resources/palette_glyph.bmp"`; add `IDS_PALETTE_FILTER_COLOR`, `IDS_PALETTE_FILTER_BUMP`, `IDS_PALETTE_PINS_FULL` string-table entries |
-| `src/Resources/palette_glyph.bmp` | **NEW** — 16×16 px 24-bit BMP, painter's palette icon (kidney outline + thumb hole + paint blobs) |
-| `src/Resources/resource.en.h` | Add the new control IDs (`IDC_BUTTON_PALETTE`, `IDC_PALETTE_STATUS`, `IDC_RADIO_PALETTE_COLOR`, `IDC_RADIO_PALETTE_BUMP`) + the bitmap ID + the new string IDs |
-| `src/UI/Emitter.cpp` | Hook texture-write points to `PaletteStore::TouchRecent`; handle `IDC_BUTTON_PALETTE` (toggle popup); handle `PALETTE_NM_COMMIT`; wire visibility-changed callback to `BM_SETCHECK` |
-| `src/main.cpp` | Register popup window class on startup; init `PaletteStore`; call `SetActiveMod` on mod switch + startup restore + Reset View Settings |
-| `src/ParticleEditor.vcxproj` | Add the two new files |
-| `src/ParticleEditor.vcxproj.filters` | Same |
+| `src/engine.h` | Add `GetLight(LightType) const`, `GetAmbient() const`, `GetShadow() const` inline accessors; add `D3DXVECTOR4 m_shadow` member. |
+| `src/engine.cpp` | Implement `SetShadow` (store-only); initialize `m_shadow` in constructor. |
+| `src/main.cpp` | Add constants for defaults, `DirectionFromZTilt` + `ComputeAlignedFill` helpers, `LightingDlgProc`, `ToggleLightingDialog`, `InitializeLightingFromRegistry`, `ApplyLightingDefaults`, `hLightingDlg` field in `APPLICATION_INFO`, hook into Reset View Settings, hook startup init, register `ID_VIEW_LIGHTING` in the main menu switch. |
+| `src/ParticleEditor.en.rc` | Add `IDD_LIGHTING` template; add `View → Lighting…` to View menu. |
+| `src/ParticleEditor.de.rc` | Mirror structure with placeholder strings. |
+| `src/Resources/resource.en.h` | Add `ID_VIEW_LIGHTING = 40117`; add 18 control IDs (`IDC_LIGHTING_*`). |
+| `src/Resources/resource.de.h` | Same IDs as English. |
 
-Notably absent: **no dialog template growth, no host-window resize, no main-window layout changes.** That was the goal of the popup pivot.
+Notably absent: **no shader changes, no engine state-machine changes, no file-format changes, no UndoStack hooks.**
 
 ---
 
 ## Risks named up front + mitigations
 
-1. **R1 — Texture file format ambiguity (DDS variants, exotic TGA flavors) breaks D3DX decode.** Some real-world mod textures use non-standard DDS pixel formats, RLE-compressed TGA, or 16-bit TGA. D3DX9 handles most but not all. **Tripwire:** thumbnails for some entries always show the broken placeholder.
-   **Mitigation:** the broken-placeholder fallback path *is* the mitigation — a failed thumbnail doesn't break the workflow (filename + pin/recent state still work; double-click still feeds the slot correctly). Debug log records the failure for triage. No attempt to support every exotic format — that's a separate problem.
+1. **R1 — New defaults visibly change the editor's appearance on every existing user's next launch.** Pre-MT-4: white sun pointing along +X, no fills, no ambient. Post-MT-4: 3-light setup with grey ambient, slate-blue fills, sun tilted 45° up. Every existing screenshot in CHANGELOG / docs / community wikis showing the editor's render will look different from a fresh launch after this ships. **Tripwire:** users open a familiar particle effect and the lighting looks different; some will read this as a regression.
+   **Mitigation:** make this the **headline visual change** of the CHANGELOG entry, with a side-by-side before/after. The new defaults match the Petroglyph map editor, which is the canonical reference for what a finished effect should look like in-game — so this is a *step toward authenticity*, not a regression. Reset View Settings restores these new defaults (not the pre-MT-4 white-sun-along-X). If anyone strongly objects, the defaults table is a one-place change.
 
-2. **R2 — Stale recents pointing at deleted/renamed files clutter the palette.** A user might rename `p_smoke.tga` → `p_smoke_v2.tga` on disk; the recents entry for the old name persists with a broken thumbnail. **Tripwire:** palette accumulates broken-thumb entries over time.
-   **Mitigation:** on `SetActiveMod`, perform a one-shot existence check via `FileManager` for each entry. Entries where the file no longer resolves are *demoted* (pins → recents) but not deleted, on the theory that the file might come back (git checkout, mod re-extraction). After 30 days of continuous "missing" status (tracked via a `firstMissingNs` field added to entries that go missing), the entry is auto-pruned. The 30-day grace is a single constant in `TexturePalette.cpp` — easily tunable.
+2. **R2 — Direction convention (which axis is "up")** isn't called out in `engine.cpp`'s lighting code. The current default sun Position `(1,0,0)` is along +X. If the engine treats +Y or +Z as "up" in world space, then "Tilt Angle" measured around the wrong axis won't match user intuition. **Tripwire:** user sets Tilt to 45° expecting the sun to move halfway up the sky; instead it moves sideways or down.
+   **Mitigation:** during implementation, manually test the formula `Position = (cos·cos, cos·sin, sin)` by setting (z=0,tilt=0)/(z=90,tilt=0)/(z=0,tilt=90)/(z=0,tilt=−90) and visually confirming the sun moves through east→north→zenith→nadir semantics in the viewport. If the visual is wrong, swap two axes in `DirectionFromZTilt`. **This is a 2-minute check, but it absolutely must happen before merge** — *do not* trust the formula on paper.
 
-3. **R3 — `LastMod` value uses a registry-stored absolute path; if the user moves their mods folder, mod-key lookup misses and they "lose" their palette.** **Tripwire:** user moves `C:\Mods\RaW` → `D:\Mods\RaW`, palette appears empty for a mod they've used for months.
-   **Mitigation:** acceptable v1 limitation. The existing `LastMod` itself has this same property — moving the mod folder loses the "last opened" state too. If users complain, a future PR can add a "rebind palette to current mod path" import/migrate UI. Documented in the CHANGELOG entry as a known limitation.
+3. **R3 — Shadow Color is a no-op control.** Engine has no shader handle for shadow color; the supposed `SetShadow` API has never been implemented. We're implementing it as a store-only stub. **Tripwire:** user changes shadow color, expects something to visually shift (e.g. the ground in shadowed regions tints), sees no change, thinks the editor is broken.
+   **Mitigation:** **explicit UI affordance.** Either (a) the tooltip on the Shadow Color picker says "Shadow color is stored and persists, but the preview renderer does not currently use it." Or (b) we omit it from the panel entirely. Recommend (a) for fidelity with the map editor's layout, with the tooltip + a CHANGELOG note. If reviewers prefer (b), removing the control is a 4-line patch (delete the static label, the ColorButton, the registry key, and the conversion code).
 
-4. **R4 — INI file parsing edge cases (Unicode names, `=` or `\n` characters in filenames) corrupt the palette.** Texture filenames in real mods sometimes contain non-ASCII characters. **Tripwire:** a non-ASCII texture name in a recent entry causes either a parse failure on next load or a corrupted `Recent*=` line.
-   **Mitigation:** use `WritePrivateProfileStringW` consistently and keep the file UTF-16 LE on disk. Texture filenames are stored as `wstring` internally for INI I/O and converted to/from `string` only at the boundary with `Emitter::colorTexture`. Filenames containing `=` (illegal in INI keys) cannot occur for `Pin*` / `Recent*` *values*; the `=` would only be a problem in a key, which we control. A sanity-check at the `TouchRecent` boundary rejects entries with control characters, with a debug log.
+4. **R4 — Force Fill Light Alignment's enabled/disabled state cycles** through several modes that can confuse the UI. ON at startup → spinners disabled, mirror-sun disabled. User unchecks → spinners enable to last-persisted values, mirror-sun enables. User edits Fill1 Z. User re-checks → spinners disable, *and the engine snaps fills back to (Sun Z + 120, -10)*, but the registry still holds the user's edited Fill1 Z. **Tripwire:** user un-checks force-align again expecting their previous edit to come back; if our restore-from-registry path reads stale state or the wrong source, they get the auto-computed values instead.
+   **Mitigation:** **registry is the only source of truth for fill Z/Tilt.** When force-align is ON, we never write the fill Z/Tilt registry keys — we only push computed values to the engine. When force-align goes OFF, we read the registry values back into the spinners (and to the engine). When force-align goes ON, we recompute and push to engine but leave registry untouched. This guarantees the "uncheck → restore" path works regardless of cycle count.
 
-5. **R5 — Thumbnail decode pegs the UI thread on first popup show with many entries.** 16 thumbnails × ~10–20 ms decode each = up to 320 ms hitch. **Tripwire:** opening the popup on a populated mod feels janky.
-   **Mitigation:** decode lazily in `WM_PAINT` rather than upfront on popup show — only entries that are currently visible (and not yet cached) get decoded. With 16 max visible entries and the cache persisting across popup show/hide, the worst case is the first paint after a mod switch, and only for entries that haven't been seen this session. If field reports indicate this is still too slow, the on-disk PNG cache (Out item above) becomes the follow-up.
+5. **R5 — Mirror Sun button overwrites both fills with no undo.** User has carefully tuned fill diffuse colors, accidentally clicks Mirror Sun, loses them. **Tripwire:** angry user.
+   **Mitigation:** confirmation prompt before applying? *No — too noisy for a one-click button.* Alternative: the button is positioned in the Fill Light *Settings* group, not somewhere they'd hit by mistake while editing the Sun. The map-editor screenshot positions it the same way. Document in the tooltip: "Copy Sun's Diffuse Color to both fill lights." If users complain, we can add a single-level undo (one button click of "Undo Mirror Sun" that restores the prior two fill colors); easy follow-up.
 
-6. **R6 — Palette write happens before the texture-field's normal change-notification flow, so undo/redo skips the palette-driven write.** **Tripwire:** double-click a thumbnail, hit Ctrl+Z, the texture field doesn't revert.
-   **Mitigation:** the `PALETTE_NM_COMMIT` handler in `DlgEmitterPropsProc` writes via the *exact same path* the file-picker (`IDC_BUTTON1`/`2`) uses today — `SetWindowText` on the edit field followed by re-firing the change notification. This routes through whatever undo/edit-tracking the existing flow uses (or doesn't). Verified by I1/I2 below.
+6. **R6 — Dialog position lands off-screen after monitor topology change.** Same hazard as MT-1's popup. **Tripwire:** dialog opens, isn't visible anywhere, menu shows it as open.
+   **Mitigation:** validate position via `MonitorFromPoint(MONITOR_DEFAULTTONULL)` on show; fall back to centering on owner if invalid. **Verify bloom dialog handles this today** — if not, copy the new validation logic back into `ToggleBloomDialog` as a freebie fix.
 
-7. **R7 — Popup position lands off-screen after monitor topology change** (user disconnected external monitor between sessions). **Tripwire:** popup opens, isn't visible anywhere, button shows pressed but no window on screen.
-   **Mitigation:** `MonitorFromPoint(MONITOR_DEFAULTTONULL)` validation on every show; snap to button-anchored default if invalid. Logs a debug line. The check is cheap enough to run unconditionally.
+7. **R7 — Reset View Settings prompt text drift.** The current prompt enumerates what gets reset; we're adding lighting. **Tripwire:** prompt still says "background, ground, bloom" but resets lighting too — confusing for users; especially confusing because **the reset now changes the visible scene lighting**, which is much more noticeable than e.g. resetting the bloom strength.
+   **Mitigation:** update the prompt string in the resource file. Single-word change; verify the German variant gets the same treatment.
 
-8. **R8 — Popup-button toggle desynchronizes if the popup is hidden via X but the button doesn't update.** **Tripwire:** close popup via title-bar X, button still shows pressed; clicking the button hides an already-hidden popup (no-op) but flips the visual to raised, requiring a second click to actually show.
-   **Mitigation:** the visibility-changed callback (Section E) fires from `PalettePopup::Hide()` regardless of trigger source — X, Esc, or button. EmitterProps's callback calls `Button_SetCheck(hButton, BST_UNCHECKED)`. Verified by K3.
+8. **R8 — Registry I/O ordering on startup.** If `InitializeLightingFromRegistry` runs before the engine is fully constructed, `SetLight` calls may fault. **Tripwire:** crash on first launch after upgrade.
+   **Mitigation:** call `InitializeLightingFromRegistry` after `info->engine = new Engine(...)` and before the message loop starts, in the same scope where `ReadBloomEnabled` runs ([main.cpp:4943-4960](src/main.cpp:4943)). Bloom's working ordering is the template — clone it exactly.
 
-9. **R9 — Popup created lazily means the first toggle has higher latency** (window class registration + window creation + content-control creation). **Tripwire:** first palette-button click feels noticeably slower than subsequent clicks.
-   **Mitigation:** register the window class at app startup (cheap, ~microseconds). Defer only the `CreateWindowEx` call to first show. First-show latency is bounded by ~1–2 ms for window creation plus the lazy thumbnail decode (covered by R5).
+9. **R9 — Force-align math mismatch with map-editor semantics.** I'm inferring that "Force Fill Light Alignment" means `Fill1.Z = Sun.Z + 120°, Fill2.Z = Sun.Z + 210°, Fill.Tilt = -10°`. The screenshot is consistent with that interpretation but I haven't confirmed against Petroglyph's source. **Tripwire:** the panel "feels off" because aligned fills don't move with the sun in the same way the map editor does.
+   **Mitigation:** the math is in `ComputeAlignedFill` — a single 3-line function. If observed map-editor behavior differs (e.g. tilt also tracks sun's tilt by some formula), it's a one-place fix. Worth manually opening the Petroglyph map editor side-by-side during implementation testing and verifying the Sun-Z-changes-fill-Z behavior empirically before merging.
 
-10. **R10 — Status strip timer leaks if the popup is destroyed (e.g., main editor close) while a status message is showing.** **Tripwire:** debug-build leak detector flags an outstanding `SetTimer` reservation on shutdown, or a `WM_TIMER` fires against a destroyed window.
-    **Mitigation:** `KillTimer(hPopup, ID_TIMER_STATUS_CLEAR)` is called from three paths: the `WM_TIMER` handler itself (after clearing the text), `PalettePopup::Hide()` (so a hidden popup never has a pending timer), and `WM_DESTROY` (final cleanup). The triple-redundancy is cheap and eliminates the failure modes entirely.
+10. **R10 — Color values eyeballed from the screenshot won't match the map editor's exact defaults.** The default-table RGBs in this plan are approximations. **Tripwire:** user opens the particle editor and the lighting "almost but not quite" matches what they're seeing in the map editor.
+    **Mitigation:** during implementation, sample the screenshot with a pixel picker to refine the colors, OR (better) inspect the Petroglyph map editor's binary / configuration file for the actual stored Alamo defaults. The RGB table is a single block in `main.cpp` — refining it is trivial. Acceptable to ship with eyeballed values and refine in a follow-up if the binary inspection is more work than expected.
 
 ---
 
 ## Testing & verification
 
-Manual checklist. Each item names *what regression it catches*. Debug instrumentation: prefix `[Palette]` — `grep '\[Palette\]'` in stderr captures all events.
+Manual checklist. Each item names *what regression it catches*. Debug instrumentation: prefix `[Lighting]` — `grep '\[Lighting\]'` in stderr captures all events.
 
-### A. Button & layout
-
-| # | Check | Catches |
-|---|---|---|
-| A1 | Open Emitter properties → Appearance tab. Palette button visible in the Textures groupbox header (right side). Tooltip "Texture palette" shown on hover. | Button missing or misplaced; tooltip wiring missing |
-| A2 | Switch to Basic / Physics tabs. Palette button hides with the rest of the Appearance tab. Switch back. Button reappears in the same position. | Button leaks onto wrong tab |
-| A3 | Resize the main window. Button stays in the groupbox header (groupbox doesn't resize, so button should be stable). | Button positioning regressed |
-| A4 | Build a Release configuration (NDEBUG). All `[Palette]` debug lines absent from stderr. | Debug instrumentation leaked |
-
-### B. Recents auto-tracking
+### A. Menu, dialog open/close, position memory
 
 | # | Check | Catches |
 |---|---|---|
-| B1 | Open palette popup. Click "..." on Color slot in the Appearance tab, pick `foo.tga`. Recent row first cell shows `foo.tga`'s thumbnail. `[Palette] touch recent name='foo.tga' slot=Color` logged. | File-picker hook missing |
-| B2 | Repeat with `bar.tga`, then `baz.tga`. Recent row reads (left-to-right) `baz, bar, foo`. | LRU ordering wrong |
-| B3 | Type a different texture name into the Color edit field and tab away. Recent updated; `[Palette] touch recent ... slot=Color` logged. | EN_CHANGE / EN_KILLFOCUS hook missing |
-| B4 | Switch popup filter to Bump. Recent row is empty (no Bump entries yet). Pick a bump texture via "..." — appears in Bump recents only. Switch back to Color — Color recents intact. | Slot tagging / filter logic wrong |
-| B5 | Touch a Recent entry by double-clicking it. It moves to position 0 (LRU re-touch). | Touch-on-click LRU update missing |
-| B6 | Add 9 distinct Color recents in a row. Oldest (`recent #1`) is evicted; only 8 visible. | Cap not enforced |
+| A1 | View menu shows "Lighting…" between "Bloom…" and the separator. Click it. Dialog opens centered on the main window (first run). | Menu entry missing / handler unwired |
+| A2 | Move dialog to (100, 100). Click X. Reopen via menu. Dialog opens at (100, 100). | Position memory broken |
+| A3 | Press Esc with focus inside the dialog. Closes same as X. Reopen — position preserved. | Esc handler missing |
+| A4 | Close main editor with dialog open at (X, Y). Restart. Open dialog via menu. Opens at (X, Y). | Position not flushed |
+| A5 | Manually set `LightingDialogPos` registry to (99999, 99999). Restart. Open dialog. Snaps to center-on-owner default. | R6 — off-screen recovery |
+| A6 | Build Release. All `[Lighting]` debug lines absent from stderr. | Debug instrumentation leaked |
 
-### C. Pin gesture
-
-| # | Check | Catches |
-|---|---|---|
-| C1 | Hover over a recent thumbnail. Star icon appears in the top-right corner. Move cursor away. Star disappears within one redraw cycle. | Hover tracking / `TrackMouseEvent` wrong |
-| C2 | Click the star on a recent. Entry moves to the Pinned row, vacates its recents slot, others shift down. `[Palette] toggle pin name='X' newState=true` logged. | Pin migration logic wrong |
-| C3 | Click the star on a pinned entry. It un-pins; if the file was used recently it returns to recents at position 0; if it predates the recents window, it disappears. | Unpin → recents promotion / drop logic wrong |
-| C4 | Add 9 pins. The 9th is rejected (or replaces oldest pin — define the policy). Visually the row stays at 8. | Pin cap not enforced |
-| C5 | Right-click outside any thumbnail. Nothing happens (no spurious context menu). | WM_RBUTTONDOWN unguarded |
-
-### D. Click model
+### B. Sun controls
 
 | # | Check | Catches |
 |---|---|---|
-| D1 | Single-click a pinned entry. Selection border appears. The Color/Bump filter radios are unchanged. The texture edit field is **not** modified. | Single-click writes when it shouldn't |
-| D2 | Double-click that same entry. The Color edit field updates to the entry's filename. The viewport texture changes (visible particles change appearance). | Double-click commit broken |
-| D3 | Switch popup filter from Color to Bump. Selection clears. Single-click a Bump pin. Double-click. The Bump edit field updates. | Filter-change clears selection / double-click feeds correct slot |
-| D4 | Double-click an entry that's missing from disk (rename the file outside the editor first). Edit field still updates to the filename; viewport texture goes to whatever the engine does for missing textures (default fallback). No crash. | Defensive — missing-file commit path |
-| D5 | Double-click multiple entries in succession. Popup stays open between commits. Each commit updates the slot immediately. | Sticky-popup behavior broken |
+| B1 | Fresh install. Open dialog. Sun shows intensity 0.50, Z 0.00, Tilt 45.00, Ambient ≈ dark grey, Specular ≈ light grey, Diffuse ≈ light grey-blue, Shadow ≈ medium grey, Force-align CHECKED. | Default seeding wrong |
+| B2 | Set Sun intensity to 1.0. Particle visibly brighter. Set to 0.0 — only ambient lights it. | Intensity multiplier broken |
+| B3 | Set Sun Z to 90°. Viewport lighting rotates by 90° in the horizontal plane. | Direction Z/azimuth conversion wrong |
+| B4 | Set Sun Tilt to 90° (zenith). Sun overhead — top of particle lit, sides dimmer. | R2 — wrong axis convention; revisit DirectionFromZTilt |
+| B5 | Set Sun Tilt to -90° (nadir). Sun below — particle dark except ambient. | Tilt clamp + sign |
+| B6 | Open Sun Diffuse Color picker; pick red. Particle's lit side goes red-tinted. | Diffuse color → Light.Diffuse conversion |
+| B7 | Open Sun Specular Color picker; pick green. *Shader-dependent*: on shaders that use specular, highlights tint green. On shaders without specular (the majority), no visible change. | Specular color → Light.Specular conversion; documents the "many shaders don't use specular" expectation |
+| B8 | Open Sun Ambient Color picker; pick warm orange. Whole scene gets a warm wash even on the unlit side of particles. | Ambient color → m_ambient |
+| B9 | Open Sun Shadow Color picker; pick bright pink. **No visible change** in viewport. Tooltip on the picker explains this. | R3 — shadow color is store-only |
 
-### E. Per-mod isolation
-
-| # | Check | Catches |
-|---|---|---|
-| E1 | Open Mod A, populate 3 pins + 5 recents. Switch to Mod B via File ▸ Mods. Palette popup (still open) refreshes to empty (or shows Mod B's separately-saved entries). `[Palette] mod switch from='A' to='B' loadedEntries=N` logged. | `SetActiveMod` not wired into mod-switch flow; popup not refreshed |
-| E2 | Switch back to Mod A. The original 3 pins + 5 recents are intact, in the same order. | INI write-on-change / read-on-load round-trip wrong |
-| E3 | Quit the editor entirely. Restart. Mod A is restored via `LastMod`. Palette shows Mod A's pins + recents when the popup is opened. | Startup hook missing or order wrong (must run after `LastMod` restore) |
-| E4 | Switch to a brand-new mod that has no INI section. Palette is empty. Add a pin. Quit. Restart. The pin survives. | New-section creation path |
-
-### F. Reset View Settings
+### C. Fill light controls
 
 | # | Check | Catches |
 |---|---|---|
-| F1 | With Mod A loaded and a populated palette, invoke View ▸ Reset View Settings. Mod A's palette goes empty in the popup immediately. | Reset hook missing or popup not refreshed |
-| F2 | Open the INI file. The `[mod=<sha1-of-A>]` section is gone; other mods' sections survive; the `[ui]` section (popup position) survives. | Reset wiped too much (or too little) |
-| F3 | Restart. Mod A's palette is still empty. Popup position is preserved. | Reset only affected memory, not disk; or wiped popup position |
+| C1 | With Force Fill Light Alignment ON (default), Fill1 Z/Tilt spinners are visibly disabled and grayed. Mirror Sun button is disabled. | Force-align disable wiring missing |
+| C2 | Uncheck Force-align. Fill1 Z/Tilt spinners become editable, showing 120.0 / -10.0. Mirror Sun button enables. | Force-align state transition (ON→OFF) wrong |
+| C3 | With Force-align OFF, set Fill1 Z to 270°. Fill1's contribution rotates. | Fill direction wiring independent of Force-align gate |
+| C4 | Re-check Force-align. Fill1 Z spinner becomes grayed and shows 120.0 again (recomputed from Sun Z=0°). | Force-align state transition (OFF→ON) wrong |
+| C5 | With Force-align OFF + Fill1 Z at 270°, uncheck Force-align again. Spinner shows 270° (the *user's last manual value*, restored from registry). | R4 — registry truth for Fill1 Z lost across cycle |
+| C6 | With Force-align ON, set Sun Z to 90°. Viewport: both fills rotate in lock-step (Fill1 visually at Z=210, Fill2 at Z=300). | Force-align live-recompute wiring broken |
+| C7 | Set Fill1 Intensity to 0.0. Fill1 contribution disappears. Set back to 0.5. Returns. | Per-fill intensity wiring |
+| C8 | Set Fill1 Diffuse Color to bright magenta. Fill1's contribution tints magenta. | Per-fill diffuse wiring |
+| C9 | Confirm Fill1 has no specular control. Confirm Fill1's contribution shows no specular highlight regardless of shader. | Spec scope creep — fills should never have specular |
+| C10 | Click Mirror Sun (with Force-align OFF). Both Fill diffuse pickers update to the Sun's current diffuse color. Viewport reflects. | Mirror Sun action broken |
+| C11 | Try to click Mirror Sun with Force-align ON — button is disabled. Cannot click. | Mirror Sun + Force-align orthogonality |
 
-### G. Thumbnail pipeline
-
-| # | Check | Catches |
-|---|---|---|
-| G1 | Add a recent for a `.tga` texture. Thumbnail decodes within ~50 ms (no UI freeze). | Synchronous decode is too slow |
-| G2 | Add a recent for a `.dds` (DXT5) texture. Thumbnail decodes correctly, looks visually plausible. | DXT decode path broken |
-| G3 | Manually create an empty file `broken.tga` in the mod's textures directory. Add a recent for it. Broken-placeholder thumbnail appears. `[Palette] thumbnail decode failed path='...' fallback=placeholder` logged. | Decode-failure fallback missing |
-| G4 | Reference a non-existent file in a recent (delete the file after adding). Missing-placeholder thumbnail appears. | Existence-check / file-not-found fallback missing |
-| G5 | Open the editor, populate 16 recents across two mods, switch back and forth 5 times. Memory does not climb (HBITMAP cache stable). | Cache leak |
-
-### H. INI persistence edge cases
+### D. Persistence
 
 | # | Check | Catches |
 |---|---|---|
-| H1 | Add a recent with a filename containing a non-ASCII character (e.g., `tëxture.tga`). Quit, restart. Entry restored intact. | UTF-16 INI handling wrong |
-| H2 | Hand-edit the INI file to set `RecentCount=99` while only `Recent0` and `Recent1` actually exist. Restart. Editor doesn't crash; palette shows just the two valid entries; on next change the file is rewritten with correct count. | Defensive parsing — bad counts |
-| H3 | Hand-edit to corrupt the slot mask (`Pin0=foo.tga|notarealslot`). Restart. Editor doesn't crash; entry is silently dropped; debug log records the parse error. | Defensive parsing — bad slot mask |
-| H4 | Delete the entire INI file while the editor is running. Open Emitter properties. Existing in-memory state still shows. Add a new entry. INI file is recreated. | Re-creation on next write |
+| D1 | Configure non-default values for Sun and Fill1. Close editor. Restart. Reopen Lighting. Values restored. | Registry write or startup read broken |
+| D2 | With Force-align OFF, edit Fill1 Z to 250°. Re-check Force-align. Close editor. Restart. Open dialog: Force-align is ON, Fill1 Z spinner shows 250° (grayed). Uncheck → 250° still there. | R4 — registry persistence under Force-align cycle |
+| D3 | Delete the entire `AloParticleEditor` registry key. Restart. All defaults loaded. Sun=0.5/0/45, Force-align ON, fills at 120/210, slate-blue. No crash. | Full-fresh-install path; R10 — defaults match the table |
+| D4 | Manually delete `LightSunDiffuseColor`. Restart. Dialog opens with default Sun diffuse color (light grey-blue from the table). Editor doesn't crash. | Per-key default-on-miss fallback |
 
-### I. Undo round-trip
-
-| # | Check | Catches |
-|---|---|---|
-| I1 | (Skip if project has no undo for texture fields today.) Set Color to `a.tga` via "...", then double-click a palette entry for `b.tga`. Press Ctrl+Z. Color reverts to `a.tga` (or whatever the existing undo behavior is for the file-picker write). | R6: palette-driven write bypasses normal write path |
-| I2 | Compare the undo behavior of palette double-click vs. file-picker pick. Both should behave identically. | Two write paths diverged |
-
-### J. Cleanup
+### E. Reset behaviors
 
 | # | Check | Catches |
 |---|---|---|
-| J1 | Quit the editor. No `[Palette]` warnings about leaked HBITMAPs in debug output. | Cache HBITMAPs not freed in `PaletteStore`'s destructor |
-| J2 | Run with a Visual Studio leak-detection tool. No new leaks. | New module leaks |
+| E1 | Configure non-default lighting. Click in-panel Reset. Confirm Yes. All controls snap to defaults. Viewport updates immediately. Force-align goes back to ON. | Reset button doesn't refresh UI / doesn't reset force-align |
+| E2 | Configure non-default lighting. Click in-panel Reset. Confirm **No**. Nothing changes. | Confirmation can be cancelled |
+| E3 | Configure non-default lighting. View → Reset View Settings. Confirm. Lighting (with bloom/ground/background) resets. Open Lighting dialog refreshes. | R7 — Reset View Settings doesn't hit lighting; WM_USER reseed broken |
+| E4 | Close Lighting dialog. View → Reset View Settings. Confirm. Reopen Lighting dialog. Defaults shown. | Registry actually wiped, not just in-memory |
+| E5 | Reset View Settings prompt text mentions lighting (alongside background, ground, bloom). | R7 — prompt drift |
 
-### K. Popup window behavior
-
-| # | Check | Catches |
-|---|---|---|
-| K1 | Click the palette button. Popup appears just below the button (first-run, no saved position). Button shows pressed state. `[Palette] popup show pos=(...)` logged. | First-show button-anchored default missing |
-| K2 | Drag popup to a new screen position. Click the palette button (button is still pressed). Popup hides. `[Palette] popup hide pos=(x,y)` with the new coords logged. Click button again. Popup reappears at the dragged position. | Position memory broken |
-| K3 | With popup open, click its X. Popup hides; button immediately shows raised state. | R8: button-popup desync |
-| K4 | With popup open and focused, press Esc. Popup hides; button raises; position preserved. | Esc handler missing |
-| K5 | Quit editor with popup open at position (X, Y). Restart. Click palette button. Popup appears at (X, Y). | Position not flushed to INI on app close |
-| K6 | Manually edit INI to set `PopupX=99999, PopupY=99999`. Restart. Click palette button. Popup snaps to button-anchored default. `[Palette] popup position invalid (off-screen) snapping to default` logged. | R7: off-screen recovery broken |
-| K7 | Open popup. Switch tabs in Emitter properties (Basic / Physics). Popup remains visible (it's a separate top-level window). | Popup incorrectly tied to Appearance tab visibility |
-| K8 | Open popup. Click anywhere in the main editor (viewport, menu, other controls). Popup remains visible (sticky, modeless). | Auto-close-on-outside-click leaked in |
-| K9 | Open popup. Close the main editor (Alt-F4 / X). Popup disappears with main window (owner cleanup). | Popup outlives main editor (orphan window) |
-| K10 | First-run editor on a fresh machine (no INI file). Click palette button. Popup opens at button-anchored default; no crash; no error. | First-run path with missing INI |
-
-### L. Status strip (pin overflow)
+### F. Engine integration
 
 | # | Check | Catches |
 |---|---|---|
-| L1 | Pin 8 distinct entries. Hover a 9th recent, click its star. New entry stays as a recent (pin row unchanged). Status strip shows "Pins full (8). Unpin one to make room." | Pin overflow accepted when it should be rejected |
-| L2 | Wait 3 seconds after L1. Status strip clears automatically. | `WM_TIMER` clear path missing |
-| L3 | After L1, immediately unpin one pin (click star on a pinned entry). It vacates the pin row. Now click star on a recent. It pins successfully. Status strip clears or stays empty (no spurious "full" message). | Stale status not cleared on next valid pin |
-| L4 | Trigger L1 to show the status. While still visible, hide the popup via X. Reopen the popup. Status strip is empty (no leftover message). | `Hide()` doesn't clear status |
-| L5 | Trigger L1, then immediately close the main editor while the status is still showing. No `WM_TIMER` callback fires against a destroyed window; no leaked timer reservation. | R10: timer cleanup on destroy |
+| F1 | Inspect `m_lights[0]` after startup: Diffuse ≈ (0.353, 0.353, 0.373, 1.0) (180×0.5/255 etc.), Specular ≈ (0.373, 0.373, 0.392, 1.0), Position normalized from (cos45·cos0, cos45·sin0, sin45) = (0.707, 0, 0.707). | Defaults wiring + conversion math |
+| F2 | Inspect `m_ambient` after startup: ≈ (0.157, 0.157, 0.196, 0). w=0 preserves the convention. | Ambient conversion |
+| F3 | Inspect `m_shadow` after startup: ≈ (0.392, 0.392, 0.431, 0). | R3 — m_shadow is stored even though unbound |
+| F4 | With Force-align ON and Sun Z=0°, inspect `m_lights[1].Position` (Fill1): normalized from (cos(-10)·cos(120), cos(-10)·sin(120), sin(-10)). | Force-align computation wired into engine push |
+| F5 | Change Sun Z to 45°. Inspect `m_lights[1]`: Position now reflects (Fill1.Z = 165°, Tilt -10°). | Force-align live recompute wires to engine |
+
+### G. Edge cases
+
+| # | Check | Catches |
+|---|---|---|
+| G1 | Z Angle wrap: set Sun Z to 359°, increment → either 360° (with engine modulo 360) or 0°. Document the behavior. | Wrap convention undefined |
+| G2 | Tilt clamp: set Sun Tilt to 91° — clamps to 90°. -91° — clamps to -90°. | Clamp missing |
+| G3 | Intensity clamp: -0.5 → 0.0. 5.0 → ? (decide a max — recommend 3.0 like the original plan). | Range enforcement |
+| G4 | Open Lighting dialog. Open Emitter properties simultaneously. Both work; no interference. | Modeless dialog independence |
+| G5 | Open Lighting dialog. Switch mods. Lighting values are session-global — they don't change. | Lighting incorrectly scoped to mod |
+| G6 | Open Lighting dialog. Open a different `.alo`. Lighting unchanged. | Lighting incorrectly scoped to particle file |
+| G7 | Open Lighting dialog. Open Bloom dialog. Adjust both. Each works; no WM_USER cross-talk. | R9-equivalent — bloom/lighting WM_USER collision |
+
+### H. Localization parity
+
+| # | Check | Catches |
+|---|---|---|
+| H1 | Compile both `.en.rc` and `.de.rc`. Both succeed. | German variant missing IDs |
+| H2 | German variant has the new dialog with English placeholder strings (per project convention). | German variant skipped entirely |
+
+### I. Cleanup
+
+| # | Check | Catches |
+|---|---|---|
+| I1 | Quit editor. No leaks reported. | Dialog HWND not destroyed on app close |
+| I2 | Open / close Lighting dialog 20 times. Memory stable. | Resource leak per show/hide |
 
 ---
 
@@ -494,19 +520,23 @@ Manual checklist. Each item names *what regression it catches*. Debug instrument
 
 All open design questions are resolved. Recording the answers and reasoning so reviewers can see the trail:
 
-1. **Workflow** — *both* recents (auto) + pins (explicit), per the original ROADMAP language.
-2. **UI placement** — palette button in the Textures groupbox header (top-right) → modeless popup window. Chosen over inline panel to avoid cascading dialog-template / host-window layout changes.
-3. **Entry display** — 32×32 thumbnails (vs. text-only or tooltip-hover). Drives the D3DX → DIB pipeline in Section C.
-4. **Color/Bump separation** — single combined palette with a Color/Bump filter toggle. Entries flagged on use; no filename heuristics.
-5. **Pin gesture** — hover-revealed star button in the thumbnail's top-right corner.
-6. **Click model** — single-click selects (highlight only, no extra preview), double-click commits to the active filter's slot.
-7. **Capacity** — 8 pinned + 8 recent per filter. No scroll. Two compact rows.
-8. **Pin overflow at 9** — **Option B**: reject the click, show transient status-strip message ("Pins full (8). Unpin one to make room.") for 3 seconds, auto-clear. Preserves pin intent (never silently drop), gives user clear feedback.
-9. **Popup behavior** — modeless, sticky. Does not auto-close on outside click or after a commit. Position remembered across sessions in INI `[ui]` section.
-10. **Popup dismissal** — title-bar X, Esc when focused, or clicking the (pressed) palette button.
-11. **Persistence format** — INI via `WritePrivateProfileStringW` (UTF-16 LE), single file at `%APPDATA%\AloParticleEditor\texture-palettes.ini`. Avoids new third-party dependency.
-12. **Per-mod scoping** — INI section keyed by SHA1 of the absolute mod path.
-13. **Thumbnail decode** — synchronous, lazy in `WM_PAINT`, with in-memory HBITMAP cache. No on-disk PNG cache (deferred).
-14. **Button glyph** — hand-authored 16×16 px BMP resource depicting a painter's palette (kidney outline + thumb hole + paint blobs). `IDB_PALETTE_GLYPH`.
-15. **Undo integration** — *to be verified during implementation*. The `PALETTE_NM_COMMIT` handler writes via the same path the file-picker uses today; whether that path routes through `UndoStack` is a question for the first implementation step.
-16. **Phasing** — single PR. The unit is small enough (~9–12 h) that phasing overhead would exceed the verification benefit.
+1. **Layout** — emulate the Petroglyph map editor's Sun/Fill panel (reference screenshot). Single tall panel; Sun Settings group on top with Ambient/Specular/Diffuse/Shadow color pickers + Force Fill Light Alignment checkbox; Fill Light Settings group below with per-fill Intensity/Z/Tilt/Diffuse + Mirror Sun button. ~240×320 px.
+2. **No per-light Enable toggles** — explicitly rejected. Setting intensity to 0 is the documented way to mute a light. Matches the map editor.
+3. **Fog settings omitted** — out of scope. Engine has fog handles wired (`hFogVals`) if a follow-up wants them.
+4. **Sky Dome controls omitted** — that's MT-3.
+5. **Direction input** — Z Angle (azimuth 0–360°, wraps) + Tilt Angle (-90 to +90°, clamps), two spinners per light. Internal conversion to `Position` via `(cos·cos, cos·sin, sin)`.
+6. **Specular handling** — Sun has independent Specular Color picker (no longer derived from Diffuse). Same Intensity multiplier as Diffuse. Fills have no specular (always zero). Most shaders ignore specular anyway, but the panel is honest about exposing it.
+7. **Ambient + Shadow** — both are scene-global vec4s exposed in the Sun Settings group (matching the map editor's grouping). No intensity multiplier on either. **Shadow Color is stored-only**: `Engine::SetShadow` gets a real implementation that writes `m_shadow`, but no shader handle binds it today. Tooltip on the picker calls this out.
+8. **Force Fill Light Alignment** — checkbox in Sun Settings; default ON. When ON, fill Z/Tilt spinners disable and engine receives auto-computed values: `Fill1 = (Sun.Z + 120°, -10°)`, `Fill2 = (Sun.Z + 210°, -10°)`. When OFF, fills are free-edit; registry holds the last manually-set values.
+9. **Mirror Sun** — one-shot button; copies Sun's Diffuse Color to both fills' Diffuse Color pickers. Disabled when Force-align is ON (orthogonality with alignment). Does not affect intensity or angles.
+10. **Persistence** — registry under `HKCU\Software\AloParticleEditor`, same shape as Bloom. 17 keys total. Persists across sessions. Reset View Settings wipes them.
+11. **Defaults** — map editor defaults from the screenshot, baked in:
+    - Sun: intensity 0.50, Z 0°, Tilt 45°, Ambient `RGB(40,40,50)`, Specular `RGB(190,190,200)`, Diffuse `RGB(180,180,190)`, Shadow `RGB(100,100,110)`.
+    - Fills: intensity 0.50 each, Diffuse `RGB(60,80,160)`. Z/Tilt auto-computed.
+    - Force-align: ON.
+    - This **changes** the editor's default appearance from the current "white sun along +X, no fills" baseline. Documented as the headline visual change of the PR.
+12. **UI is source of truth** — registry stores UI representation (R, G, B per color, intensity, Z, tilt, force-align bool). Conversion to engine `Light` vec4s happens at write time. No decomposition of engine state into UI.
+13. **Reset semantics** — both the in-panel Reset button and View → Reset View Settings restore all values to the table above. Force-align goes back to ON.
+14. **No `.alo`-file lighting** — out of scope. Lighting stays session-global per registry.
+15. **No localized translations** — German variant gets the new dialog template + IDs with English placeholder strings, consistent with MT-1.
+16. **Phasing** — single PR. Scope is bounded (~5–6 h estimate given the expanded control surface), clone-of-bloom path is well-trodden.
