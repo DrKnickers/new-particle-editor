@@ -355,7 +355,7 @@ private:
 	D3DXHANDLE               m_hSkydomeTex;
 	IDirect3DTexture9*       m_pSkydomeTexture;
 	int                      m_skydomeIndex;
-	std::wstring             m_skydomeCustomSlotPaths[3];
+	std::wstring             m_skydomeCustomSlotPaths[kSkydomeSlotCount - kSkydomeFirstCustomSlot];
 
 	// Resources
 	IDirect3DTexture9*	m_pGroundTexture;

@@ -1409,7 +1409,7 @@ bool Engine::ReloadSkydomeTexture(int slot)
     SAFE_RELEASE(m_pSkydomeTexture);
     if (slot == kSkydomeOffSlot) return true;
 
-    if (slot >= 1 && slot < kSkydomeBundledCount)
+    if (slot > kSkydomeOffSlot && slot < kSkydomeBundledCount)
     {
         HMODULE hMod   = GetModuleHandle(NULL);
         HRSRC   hRes   = FindResource(hMod, MAKEINTRESOURCE(kSkydomeBundledResources[slot]), RT_RCDATA);
@@ -1498,7 +1498,7 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 	m_hSkydomeWVP       = NULL;
 	m_hSkydomeTex       = NULL;
 	m_pSkydomeTexture   = NULL;
-	m_skydomeIndex      = 0;
+	m_skydomeIndex      = kSkydomeOffSlot;
 	m_hBloomStrength = m_hBloomCutoff = m_hBloomSize = NULL;
 	m_hBloomIteration = m_hBloomSceneTextureParam = NULL;
 	m_hBloomResolutionConstants = NULL;
