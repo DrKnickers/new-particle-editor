@@ -3725,43 +3725,98 @@ static INT_PTR CALLBACK GroundTexturePickerProc(HWND hDlg, UINT uMsg,
                 SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
                 return TRUE;
             case CDDS_ITEMPREPAINT:
-                // Let the native paint do its thing; we'll overlay
-                // the frame in POSTPAINT.
-                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYPOSTPAINT);
-                return TRUE;
-            case CDDS_ITEMPOSTPAINT:
             {
-                HWND hList   = lpc->nmcd.hdr.hwndFrom;
-                int  iItem   = (int)lpc->nmcd.dwItemSpec;
+                // Take over the entire item paint so the cell looks
+                // pixel-identical to the texture-palette popup's cells:
+                //   - blue cell bg on hover
+                //   - blue frame around the thumbnail (3 px hover,
+                //     2 px selected, 1 px default)
+                //   - filename label below the thumbnail, centered
+                // The native ListView paint is suppressed via
+                // CDRF_SKIPDEFAULT once we've drawn everything ourselves.
+                HWND hList    = lpc->nmcd.hdr.hwndFrom;
+                int  iItem    = (int)lpc->nmcd.dwItemSpec;
                 bool selected = (lpc->nmcd.uItemState & CDIS_SELECTED) != 0;
                 bool hovered  = (ListView_GetHotItem(hList) == iItem);
-                if (!selected && !hovered)
+                HDC  hdc      = lpc->nmcd.hdc;
+
+                RECT bounds, iconRc, labelRc;
+                ListView_GetItemRect(hList, iItem, &bounds,  LVIR_BOUNDS);
+                ListView_GetItemRect(hList, iItem, &iconRc,  LVIR_ICON);
+                ListView_GetItemRect(hList, iItem, &labelRc, LVIR_LABEL);
+
+                // 1. Cell background — blue on hover, white otherwise.
+                //    Matches the palette popup's hover tint exactly.
+                const COLORREF bgCol = hovered
+                    ? RGB(160, 200, 250)
+                    : RGB(255, 255, 255);
+                HBRUSH bg = CreateSolidBrush(bgCol);
+                FillRect(hdc, &bounds, bg);
+                DeleteObject(bg);
+
+                // 2. Thumbnail — blit from the image list.
+                HIMAGELIST hIL = ListView_GetImageList(hList, LVSIL_NORMAL);
+                LVITEMW item = {};
+                item.mask     = LVIF_IMAGE;
+                item.iItem    = iItem;
+                ListView_GetItem(hList, &item);
+                if (hIL != NULL && item.iImage >= 0)
                 {
-                    SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
-                    return TRUE;
+                    IMAGEINFO ii = {};
+                    ImageList_GetImageInfo(hIL, item.iImage, &ii);
+                    const int imgW = ii.rcImage.right  - ii.rcImage.left;
+                    const int imgH = ii.rcImage.bottom - ii.rcImage.top;
+                    // Centre the image inside iconRc (icon view
+                    // typically gives a larger icon area than the
+                    // image itself, with padding around).
+                    const int ix = iconRc.left
+                                 + (iconRc.right - iconRc.left - imgW) / 2;
+                    const int iy = iconRc.top
+                                 + (iconRc.bottom - iconRc.top - imgH) / 2;
+                    ImageList_Draw(hIL, item.iImage, hdc, ix, iy, ILD_NORMAL);
                 }
-                // Frame the icon area only — leaves the label below
-                // the icon visually unframed (same as the palette,
-                // which frames the thumb, not the filename strip).
-                RECT rc; ListView_GetItemRect(hList, iItem, &rc, LVIR_ICON);
-                HPEN pen = NULL;
+
+                // 3. Frame around the icon area.
+                //    selected → 2 px saturated blue,
+                //    hovered  → 3 px lighter blue,
+                //    default  → 1 px grey.
+                HPEN pen;
                 if (selected)
-                {
                     pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
-                }
-                else
-                {
+                else if (hovered)
                     pen = CreatePen(PS_SOLID, 3, RGB(70, 150, 240));
-                }
-                HDC hdc = lpc->nmcd.hdc;
+                else
+                    pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
                 HGDIOBJ oldP = SelectObject(hdc, pen);
                 HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                Rectangle(hdc, rc.left + 1, rc.top + 1,
-                               rc.right - 1, rc.bottom - 1);
+                Rectangle(hdc,
+                          iconRc.left + 1, iconRc.top + 1,
+                          iconRc.right - 1, iconRc.bottom - 1);
                 SelectObject(hdc, oldP);
                 SelectObject(hdc, oldB);
                 DeleteObject(pen);
-                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
+
+                // 4. Filename label below the thumbnail. Use the
+                //    dialog font for consistency with the rest of
+                //    the editor (BeginPaint's DC has the system
+                //    bitmap font selected by default).
+                HFONT hFont = (HFONT)SendMessage(hDlg, WM_GETFONT, 0, 0);
+                if (hFont == NULL) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+                HFONT oldFont = (HFONT)SelectObject(hdc, hFont);
+
+                WCHAR labelBuf[256] = L"";
+                ListView_GetItemText(hList, iItem, 0, labelBuf,
+                                     (int)_countof(labelBuf));
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, RGB(40, 40, 40));
+                DrawTextW(hdc, labelBuf, -1, &labelRc,
+                          DT_SINGLELINE | DT_CENTER | DT_VCENTER
+                          | DT_END_ELLIPSIS | DT_NOPREFIX);
+                SelectObject(hdc, oldFont);
+
+                // Suppress the ListView's own item paint — we've
+                // drawn the whole thing ourselves.
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
                 return TRUE;
             }
             }
