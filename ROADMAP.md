@@ -222,7 +222,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#TODO)
+### 5.1 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#77)
 
 New **File → Import Emitters from File…** entry opens an `.alo` picker and a modal dialog showing the source file's emitter tree with `TVS_CHECKBOXES`. Tick whichever emitters you want — *Auto-include children* is on by default so ticking a parent picks up its descendants — hit OK, and the selected emitters land as new root emitters in the current particle system. *Select all* / *Clear* / *Browse…* buttons round out the dialog; *Browse…* swaps the source file in place without cancelling. OK is disabled until at least one emitter is ticked.
 
