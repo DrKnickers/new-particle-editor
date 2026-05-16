@@ -308,11 +308,11 @@ These are the fields React reads from the engine state snapshot. The snapshot is
 | `ground` | `boolean` | `engine->GetGround()` | Whether ground plane is visible |
 | `groundZ` | `number` | `engine->GetGroundZ()` | Session-only; deliberately not persisted across launches |
 | `groundTexture` | `number` | `engine->GetGroundTexture()` | Active slot index, 0–7 |
-| `groundSolidColor` | `number` | `engine->GetGroundSolidColor()` | COLORREF (`0x00BBGGRR`) |
+| `groundSolidColor` | `number` | `engine->GetGroundSolidColor()` | COLORREF (`0x00BBGGRR` per Win32 `RGB()` macro — low byte = R, then G, then B) |
 | `groundSlotCustomPaths` | `string[8]` | `engine->GetGroundSlotCustomPath(slot)` for each slot | Empty string = use bundled default or slot is empty |
 | `skydomeSlot` | `number` | `engine->GetSkydomeSlot()` | 0 = Off, 1–8 = bundled, 9–11 = custom |
 | `skydomeCustomPaths` | `string[3]` | `engine->GetSkydomeCustomPath(slot)` for slots 9–11 | |
-| `background` | `number` | `engine->GetBackground()` | COLORREF (`0x00BBGGRR`) |
+| `background` | `number` | `engine->GetBackground()` | COLORREF (`0x00BBGGRR` per Win32 `RGB()` macro — low byte = R, then G, then B) |
 | `heatDebug` | `boolean` | `engine->GetHeatDebug()` | |
 | `bloom` | `boolean` | `engine->GetBloom()` | |
 | `bloomAvailable` | `boolean` | `engine->IsBloomAvailable()` | False when SceneBloom.fx is missing/fallback |
