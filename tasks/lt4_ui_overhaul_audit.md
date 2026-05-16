@@ -168,3 +168,161 @@ Loaded via `LoadAccelerators` at `src/main.cpp:7913`; translated in the message 
 | `RandomParam` | `src/UI/RandomParam.cpp` | 269 | Win32 custom control. Wraps a `RandomParameter` value (Exact / Box / Sphere / Cube / Cylinder). Exposes a type combo and up to six spinners depending on type. Backed by `IDD_RANDOM_PARAMETERS` |
 | `PaletteStore` | `src/UI/PaletteStore.cpp` | 563 | Non-visual helper. Manages the persistence layer for the TexturePalette (scans directories, caches thumbnail bitmaps, handles pin-slot state). Not a Win32 control; used as a data layer by TexturePalette |
 | `Emitter` (UI) | `src/UI/Emitter.cpp` | 873 | Manages the three emitter property tab-pages (`IDD_EMITTER_PROPS1/2/3`). Populates form fields from a selected `ParticleSystem::Emitter` and writes changes back. Orchestrates the embedded TrackEditor, RandomParam, Spinner, ColorButton, and TexturePalette controls |
+
+---
+
+## 5. Engine API surface used by UI
+
+Inventory of `Engine` methods called from `src/main.cpp` (all call sites verified by grep). No `src/UI/*.cpp` file calls engine methods directly — all engine access is routed through `APPLICATION_INFO* info` in `main.cpp`. Methods that exist in `engine.h` but are not called from any UI code (e.g. `SetWind`, `SetGravity`, `GetWind`, `GetGravity`, `GetLight`, `GetAmbient`, `GetShadow`, `GetShader`, `GetTexture`, `GetBillboardMatrix`, `GetViewRotationMatrix`, `GetProjectionMatrix` *(via `&engine->` not through UI results)*, `DetachParticleSystem`) are excluded.
+
+### 5.1 Methods called
+
+| Engine method | Signature (from `src/engine.h`) | Kind | UI affordance / caller | Call site (file:line) |
+|---|---|---|---|---|
+| `Update` | `void Update()` | ACTION | Render loop — called every frame from `Render()` helper | `src/main.cpp:1487`, `src/main.cpp:1787` |
+| `Render` | `bool Render()` | ACTION | Render loop — called every frame from `Render()` helper | `src/main.cpp:1788` |
+| `Clear` | `void Clear()` | ACTION | `ID_EDIT_CLEARALLPARTICLES` (Ctrl+Del / menu), also called on file-open / file-new / undo-apply to flush live instances | `src/main.cpp:953`, `src/main.cpp:1196`, `src/main.cpp:1237`, `src/main.cpp:1412`, `src/main.cpp:1525`, `src/main.cpp:2162` |
+| `Reset` | `void Reset()` | ACTION | Render-window `WM_SIZE` — rebuilds D3D swap chain to new dimensions | `src/main.cpp:2953` |
+| `OnParticleSystemChanged` | `void OnParticleSystemChanged(int track)` | ACTION | `EP_CHANGE` notification (emitter property edited) and `TE_CHANGE` notification (track/curve edited); also fires after undo/redo apply | `src/main.cpp:978`, `src/main.cpp:2561`, `src/main.cpp:2581` |
+| `SpawnParticleSystem` | `ParticleSystemInstance* SpawnParticleSystem(const ParticleSystem&, Object3D*)` | ACTION | Shift+click in render window spawns a cursor-attached instance | `src/main.cpp:2849` |
+| `KillParticleSystem` | `void KillParticleSystem(ParticleSystemInstance*)` | ACTION | Mouse-button release after Shift+click spawn (kills the cursor-attached instance) | `src/main.cpp:2837` |
+| `GetCamera` | `const Camera& GetCamera() const` | GET | Mouse drag orbit/pan/zoom reads current camera before computing new position | `src/main.cpp:2826`, `src/main.cpp:2936` |
+| `SetCamera` | `void SetCamera(const Camera&)` | SET | `ID_VIEW_RESETCAMERA` (Ctrl+Home), and mouse drag to orbit/pan/zoom | `src/main.cpp:1734`, `src/main.cpp:2923`, `src/main.cpp:2945` |
+| `GetGround` | `bool GetGround() const` | GET | `ID_VIEW_SHOWGROUND` toggle reads current state to flip it; startup syncs toolbar check button; `WM_INITMENU` syncs menu check | `src/main.cpp:1442`, `src/main.cpp:1550`, `src/main.cpp:1551`, `src/main.cpp:1552`, `src/main.cpp:7730`, `src/main.cpp:7815` |
+| `SetGround` | `void SetGround(bool)` | SET | `ID_VIEW_SHOWGROUND` toggle, `ID_VIEW_RESET_VIEW_SETTINGS`, startup registry restore | `src/main.cpp:1550`, `src/main.cpp:1664`, `src/main.cpp:7730` |
+| `GetGroundZ` | `float GetGroundZ() const` | GET | Startup seeds the Ground Z spinner value | `src/main.cpp:7824` |
+| `SetGroundZ` | `void SetGroundZ(float)` | SET | Ground Z spinner `SN_CHANGE` notification, `ID_VIEW_RESET_VIEW_SETTINGS`, startup registry restore | `src/main.cpp:2453`, `src/main.cpp:1665`, `src/main.cpp:7737` |
+| `GetGroundTexture` | `int GetGroundTexture() const` | GET | Ground texture picker: reads active slot for thumbnail highlight, cancel-revert, and post-set sync | `src/main.cpp:3584`, `src/main.cpp:3691`, `src/main.cpp:3745`, `src/main.cpp:3779`, `src/main.cpp:3871`, `src/main.cpp:3996`, `src/main.cpp:4041`, `src/main.cpp:4157`, `src/main.cpp:4209`, `src/main.cpp:4212`, `src/main.cpp:4299`, `src/main.cpp:4482` |
+| `SetGroundTexture` | `bool SetGroundTexture(int)` | SET | Ground texture picker single-click selects slot; `ID_VIEW_RESET_VIEW_SETTINGS`, startup registry restore | `src/main.cpp:4040`, `src/main.cpp:1666`, `src/main.cpp:7754` |
+| `GetGroundSolidColor` | `COLORREF GetGroundSolidColor() const` | GET | Ground texture picker seeds the colour-picker dialog for the solid-colour slot | `src/main.cpp:3737`, `src/main.cpp:3745` |
+| `SetGroundSolidColor` | `bool SetGroundSolidColor(COLORREF)` | SET | Ground texture picker ChooseColor OK for slot `kGroundSolidColorSlot`; startup registry restore | `src/main.cpp:3740`, `src/main.cpp:7752` |
+| `GetGroundSlotCustomPath` | `const std::wstring& GetGroundSlotCustomPath(int) const` | GET | Ground texture picker reads custom path for thumbnail generation and right-click context menu label | `src/main.cpp:3589`, `src/main.cpp:3672`, `src/main.cpp:3873`, `src/main.cpp:4050`, `src/main.cpp:4111` |
+| `SetGroundSlotCustomPath` | `bool SetGroundSlotCustomPath(int, const std::wstring&)` | SET | `ID_GROUND_SLOT_SET_CUSTOM` (file picker assigns), `ID_GROUND_SLOT_RESET_BUNDLED` / `ID_GROUND_SLOT_CLEAR_CUSTOM` (reset/clear to empty), startup registry restore | `src/main.cpp:3774`, `src/main.cpp:4154`, `src/main.cpp:4184`, `src/main.cpp:7749` |
+| `IsGroundSlotEmpty` | `bool IsGroundSlotEmpty(int) const` | QUERY | Ground texture picker decides whether single-click selects or opens file picker | `src/main.cpp:4038`, `src/main.cpp:4073`, `src/main.cpp:4078` |
+| `GetSkydomeSlot` | `int GetSkydomeSlot() const` | GET | Skydome picker reads active slot for thumbnail highlight, cancel-revert, and background-visibility guard | `src/main.cpp:2270`, `src/main.cpp:4762`, `src/main.cpp:4879`, `src/main.cpp:4916`, `src/main.cpp:4944`, `src/main.cpp:4992`, `src/main.cpp:5035`, `src/main.cpp:5113`, `src/main.cpp:5145`, `src/main.cpp:5167`, `src/main.cpp:5241`, `src/main.cpp:5365` |
+| `SetSkydomeSlot` | `bool SetSkydomeSlot(int)` | SET | Skydome picker single-click selects slot; `ID_VIEW_RESET_VIEW_SETTINGS` resets to Off; `ID_SKYDOME_SLOT_CLEAR_CUSTOM` resets to Off; startup registry restore | `src/main.cpp:5035`, `src/main.cpp:5115`, `src/main.cpp:5148`, `src/main.cpp:5169`, `src/main.cpp:1684`, `src/main.cpp:7803` |
+| `GetSkydomeCustomPath` | `const std::wstring& GetSkydomeCustomPath(int) const` | GET | Skydome picker reads custom path for thumbnail generation | `src/main.cpp:4781`, `src/main.cpp:4858`, `src/main.cpp:5082` |
+| `SetSkydomeCustomPath` | `bool SetSkydomeCustomPath(int, const std::wstring&)` | SET | `ID_SKYDOME_SLOT_SET_CUSTOM` / `ID_SKYDOME_SLOT_CHANGE_CUSTOM` (file picker assigns), `ID_SKYDOME_SLOT_CLEAR_CUSTOM` (clears), `ID_VIEW_RESET_VIEW_SETTINGS` (clears all custom slots), startup registry restore | `src/main.cpp:4941`, `src/main.cpp:5110`, `src/main.cpp:5141`, `src/main.cpp:7801` |
+| `IsSkydomeSlotEmpty` | `bool IsSkydomeSlotEmpty(int) const` | QUERY | Skydome picker decides whether single-click selects or opens file picker | `src/main.cpp:5033`, `src/main.cpp:5059`, `src/main.cpp:5062` |
+| `GetBackground` | `COLORREF GetBackground() const` | GET | Skydome picker seeds the ChooseColor dialog for solid-colour background; `WM_CTLCOLORSTATIC` paints background swatch; startup registry restore | `src/main.cpp:2288`, `src/main.cpp:4784`, `src/main.cpp:4902`, `src/main.cpp:7729` |
+| `SetBackground` | `void SetBackground(COLORREF)` | SET | Skydome picker ChooseColor OK for slot 0 (solid colour background); `ID_VIEW_RESET_VIEW_SETTINGS`; startup registry restore | `src/main.cpp:4905`, `src/main.cpp:1663`, `src/main.cpp:7729` |
+| `GetHeatDebug` | `bool GetHeatDebug() const` | GET | `ID_VIEW_DEBUGHEAT` toggle reads current state; `WM_INITMENU` syncs check | `src/main.cpp:1443`, `src/main.cpp:1564`, `src/main.cpp:1565` |
+| `SetHeatDebug` | `void SetHeatDebug(bool)` | SET | `ID_VIEW_DEBUGHEAT` toggle | `src/main.cpp:1564` |
+| `GetBloom` | `bool GetBloom() const` | GET | `ID_VIEW_BLOOM_TOGGLE` reads current state to flip; Bloom dialog `WM_INITDIALOG` seeds checkbox; toolbar sync | `src/main.cpp:1584`, `src/main.cpp:5962`, `src/main.cpp:7837` |
+| `SetBloom` | `void SetBloom(bool)` | SET | `ID_VIEW_BLOOM_TOGGLE`, Bloom dialog enable checkbox, `ID_VIEW_RESET_VIEW_SETTINGS` | `src/main.cpp:1585`, `src/main.cpp:6006`, `src/main.cpp:1667` |
+| `IsBloomAvailable` | `bool IsBloomAvailable() const` | QUERY | `ID_VIEW_BLOOM_TOGGLE` gates on availability; Bloom dialog enables/disables controls | `src/main.cpp:1582`, `src/main.cpp:5970`, `src/main.cpp:7833` |
+| `GetBloomStrength` | `float GetBloomStrength() const` | GET | Bloom dialog `WM_INITDIALOG` seeds spinner; startup registry restore | `src/main.cpp:5963`, `src/main.cpp:7759` |
+| `SetBloomStrength` | `void SetBloomStrength(float)` | SET | Bloom dialog strength spinner `SN_CHANGE`; `ID_VIEW_RESET_VIEW_SETTINGS`; startup registry restore | `src/main.cpp:6028`, `src/main.cpp:1668`, `src/main.cpp:7759` |
+| `GetBloomCutoff` | `float GetBloomCutoff() const` | GET | Bloom dialog `WM_INITDIALOG` seeds spinner; startup registry restore | `src/main.cpp:5964`, `src/main.cpp:7760` |
+| `SetBloomCutoff` | `void SetBloomCutoff(float)` | SET | Bloom dialog cutoff spinner `SN_CHANGE`; `ID_VIEW_RESET_VIEW_SETTINGS`; startup registry restore | `src/main.cpp:6032`, `src/main.cpp:1669`, `src/main.cpp:7760` |
+| `GetBloomSize` | `float GetBloomSize() const` | GET | Bloom dialog `WM_INITDIALOG` seeds spinner; startup registry restore | `src/main.cpp:5965`, `src/main.cpp:7761` |
+| `SetBloomSize` | `void SetBloomSize(float)` | SET | Bloom dialog size spinner `SN_CHANGE`; `ID_VIEW_RESET_VIEW_SETTINGS`; startup registry restore | `src/main.cpp:6036`, `src/main.cpp:1670`, `src/main.cpp:7761` |
+| `SetLight` | `void SetLight(LightType, const Light&)` | SET | Lighting dialog any spinner/colour change (`LightingDlg_PushAll`), and startup registry restore (`PushLightingToEngine`) | `src/main.cpp:6369`, `src/main.cpp:6370`, `src/main.cpp:6371`, `src/main.cpp:6525`, `src/main.cpp:6526`, `src/main.cpp:6527` |
+| `SetAmbient` | `void SetAmbient(const D3DXVECTOR4&)` | SET | Lighting dialog ambient colour change; startup registry restore | `src/main.cpp:6372`, `src/main.cpp:6528` |
+| `SetShadow` | `void SetShadow(const D3DXVECTOR4&)` | SET | Lighting dialog shadow colour change; startup registry restore | `src/main.cpp:6373`, `src/main.cpp:6529` |
+| `ReloadShaders` | `bool ReloadShaders()` | ACTION | `ID_VIEW_RELOAD_SHADERS` (F6); also called during startup mod-reload path | `src/main.cpp:1741`, `src/main.cpp:7029` |
+| `ReloadTextures` | `void ReloadTextures()` | ACTION | `ID_VIEW_RELOAD_TEXTURES` (F5); also called during startup mod-reload path | `src/main.cpp:1757`, `src/main.cpp:7034` |
+| `GetNumInstances` | `int GetNumInstances() const` | GET | Status bar updates instance count every frame; `WM_INITMENU` gates `ID_EDIT_CLEARALLPARTICLES` | `src/main.cpp:1434`, `src/main.cpp:1795` |
+| `GetNumEmitters` | `int GetNumEmitters() const` | GET | Status bar updates emitter count every frame | `src/main.cpp:1795` |
+| `GetNumParticles` | `int GetNumParticles() const` | GET | Status bar updates particle count every frame | `src/main.cpp:1796` |
+| `ActiveSpawnerInstanceCount` | `int ActiveSpawnerInstanceCount() const` | GET | Spawner dialog status label shows active instance count and cap status | `src/main.cpp:1809` |
+| `GetDevice` | `IDirect3DDevice9* GetDevice() const` | GET | `TexturePalette::SetServices` — passes D3D device for texture creation; ground/skydome thumbnail generators | `src/main.cpp:3588`, `src/main.cpp:3674`, `src/main.cpp:4783`, `src/main.cpp:4860`, `src/main.cpp:7723` |
+| `GetViewPort` | `void GetViewPort(D3DVIEWPORT9*) const` | GET | Mouse-to-3D-world unproject for Shift+click spawn position | `src/main.cpp:2771` |
+| `GetProjectionMatrix` | `const D3DXMATRIX& GetProjectionMatrix() const` | GET | Mouse-to-3D-world unproject | `src/main.cpp:2773` |
+| `GetViewMatrix` | `const D3DXMATRIX& GetViewMatrix() const` | GET | Mouse-to-3D-world unproject | `src/main.cpp:2773` |
+
+### 5.2 Methods grouped by domain
+
+**Ground plane** — `GetGround`, `SetGround`, `GetGroundZ`, `SetGroundZ`, `GetGroundTexture`, `SetGroundTexture`, `GetGroundSolidColor`, `SetGroundSolidColor`, `GetGroundSlotCustomPath`, `SetGroundSlotCustomPath`, `IsGroundSlotEmpty`
+
+**Skydome / background** — `GetSkydomeSlot`, `SetSkydomeSlot`, `GetSkydomeCustomPath`, `SetSkydomeCustomPath`, `IsSkydomeSlotEmpty`, `GetBackground`, `SetBackground`
+
+**Bloom** — `IsBloomAvailable`, `GetBloom`, `SetBloom`, `GetBloomStrength`, `SetBloomStrength`, `GetBloomCutoff`, `SetBloomCutoff`, `GetBloomSize`, `SetBloomSize`
+
+**Lighting** — `SetLight`, `SetAmbient`, `SetShadow`
+
+**Camera** — `GetCamera`, `SetCamera`, `GetViewPort`, `GetProjectionMatrix`, `GetViewMatrix`
+
+**Particle-system lifecycle** — `Clear`, `Reset`, `OnParticleSystemChanged`, `SpawnParticleSystem`, `KillParticleSystem`
+
+**Shader / texture reload** — `ReloadShaders`, `ReloadTextures`
+
+**Stats / frame** — `Update`, `Render`, `GetNumInstances`, `GetNumEmitters`, `GetNumParticles`, `ActiveSpawnerInstanceCount`
+
+**D3D device** — `GetDevice`
+
+**Debug** — `GetHeatDebug`, `SetHeatDebug`
+
+---
+
+## 6. Bridge command candidates
+
+### 6.1 Requests (Set / Action)
+
+| Request kind | Params | Engine call | Events emitted |
+|---|---|---|---|
+| `engine/set/background` | `{ rgb: number }` | `engine->SetBackground(params.rgb)` | `engine/state/changed` |
+| `engine/set/ground` | `{ enabled: boolean }` | `engine->SetGround(params.enabled)` | `engine/state/changed` |
+| `engine/set/ground-z` | `{ z: number }` | `engine->SetGroundZ(params.z)` | `engine/state/changed` |
+| `engine/set/ground-texture` | `{ slot: number }` | `engine->SetGroundTexture(params.slot)` | `engine/state/changed` |
+| `engine/set/ground-solid-color` | `{ rgb: number }` | `engine->SetGroundSolidColor(params.rgb)` | `engine/state/changed` |
+| `engine/set/ground-slot-custom-path` | `{ slot: number, path: string }` | `engine->SetGroundSlotCustomPath(params.slot, params.path)` | `engine/state/changed` |
+| `engine/set/skydome-slot` | `{ slot: number }` | `engine->SetSkydomeSlot(params.slot)` | `engine/state/changed` |
+| `engine/set/skydome-custom-path` | `{ slot: number, path: string }` | `engine->SetSkydomeCustomPath(params.slot, params.path)` | `engine/state/changed` |
+| `engine/set/bloom` | `{ enabled: boolean }` | `engine->SetBloom(params.enabled)` | `engine/state/changed` |
+| `engine/set/bloom-strength` | `{ v: number }` | `engine->SetBloomStrength(params.v)` | `engine/state/changed` |
+| `engine/set/bloom-cutoff` | `{ v: number }` | `engine->SetBloomCutoff(params.v)` | `engine/state/changed` |
+| `engine/set/bloom-size` | `{ v: number }` | `engine->SetBloomSize(params.v)` | `engine/state/changed` |
+| `engine/set/heat-debug` | `{ enabled: boolean }` | `engine->SetHeatDebug(params.enabled)` | `engine/state/changed` |
+| `engine/set/camera` | `{ position: [x,y,z], target: [x,y,z], up: [x,y,z] }` | `engine->SetCamera(params)` | `engine/state/changed` |
+| `engine/set/light` | `{ which: 0\|1\|2, diffuse: [r,g,b,a], specular: [r,g,b,a], position: [x,y,z,w], direction: [x,y,z,w] }` | `engine->SetLight(params.which, params)` | `engine/state/changed` |
+| `engine/set/ambient` | `{ color: [r,g,b,a] }` | `engine->SetAmbient(params.color)` | `engine/state/changed` |
+| `engine/set/shadow` | `{ color: [r,g,b,a] }` | `engine->SetShadow(params.color)` | `engine/state/changed` |
+| `engine/action/clear` | `{}` | `engine->Clear()` | `engine/state/changed` |
+| `engine/action/reload-shaders` | `{}` | `engine->ReloadShaders()` | `engine/state/changed` |
+| `engine/action/reload-textures` | `{}` | `engine->ReloadTextures()` | `engine/state/changed` |
+| `engine/action/on-particle-system-changed` | `{ track: number }` | `engine->OnParticleSystemChanged(params.track)` | *(no separate event — engine re-renders next frame)* |
+
+### 6.2 Requests (Query)
+
+| Request kind | Params | Returns | Engine call |
+|---|---|---|---|
+| `engine/query/ground-slot-empty` | `{ slot: number }` | `boolean` | `engine->IsGroundSlotEmpty(params.slot)` |
+| `engine/query/skydome-slot-empty` | `{ slot: number }` | `boolean` | `engine->IsSkydomeSlotEmpty(params.slot)` |
+| `engine/query/bloom-available` | `{}` | `boolean` | `engine->IsBloomAvailable()` |
+
+### 6.3 EngineStateDto fields (Get)
+
+These are the fields React reads from the engine state snapshot. The snapshot is pushed after any setter fires `engine/state/changed`.
+
+| Field | Type | Engine getter | Notes |
+|---|---|---|---|
+| `ground` | `boolean` | `engine->GetGround()` | Whether ground plane is visible |
+| `groundZ` | `number` | `engine->GetGroundZ()` | Session-only; deliberately not persisted across launches |
+| `groundTexture` | `number` | `engine->GetGroundTexture()` | Active slot index, 0–7 |
+| `groundSolidColor` | `number` | `engine->GetGroundSolidColor()` | COLORREF (`0x00BBGGRR`) |
+| `groundSlotCustomPaths` | `string[8]` | `engine->GetGroundSlotCustomPath(slot)` for each slot | Empty string = use bundled default or slot is empty |
+| `skydomeSlot` | `number` | `engine->GetSkydomeSlot()` | 0 = Off, 1–8 = bundled, 9–11 = custom |
+| `skydomeCustomPaths` | `string[3]` | `engine->GetSkydomeCustomPath(slot)` for slots 9–11 | |
+| `background` | `number` | `engine->GetBackground()` | COLORREF (`0x00BBGGRR`) |
+| `heatDebug` | `boolean` | `engine->GetHeatDebug()` | |
+| `bloom` | `boolean` | `engine->GetBloom()` | |
+| `bloomAvailable` | `boolean` | `engine->IsBloomAvailable()` | False when SceneBloom.fx is missing/fallback |
+| `bloomStrength` | `number` | `engine->GetBloomStrength()` | |
+| `bloomCutoff` | `number` | `engine->GetBloomCutoff()` | |
+| `bloomSize` | `number` | `engine->GetBloomSize()` | |
+| `camera` | `{ position: [x,y,z], target: [x,y,z], up: [x,y,z] }` | `engine->GetCamera()` | |
+| `numInstances` | `number` | `engine->GetNumInstances()` | Live particle-system instances |
+| `numEmitters` | `number` | `engine->GetNumEmitters()` | Active emitter instances |
+| `numParticles` | `number` | `engine->GetNumParticles()` | Active particle count |
+| `spawnerActiveCount` | `number` | `engine->ActiveSpawnerInstanceCount()` | Instances owned by the spawner driver |
+
+### 6.4 Events
+
+| Event kind | Payload | When emitted |
+|---|---|---|
+| `engine/state/changed` | `EngineStateDto` | After any setter or action that mutates engine-visible state; carries the full snapshot |
+| `stats/tick` | `{ fps: number, emitters: number, particles: number, instances: number }` | 4 Hz heartbeat from the render loop (subset of `EngineStateDto` for lightweight status bar updates) |
+| `emitters/tree/changed` | `EmitterTreeDto` | After any emitter add, delete, rename, reorder, duplicate, reparent, or visibility toggle |
+| `dirty/changed` | `{ dirty: boolean }` | When the unsaved-changes flag transitions (file modified or saved) |
+| `undo/changed` | `{ canUndo: boolean, canRedo: boolean }` | After any undo stack push, pop, or save-state bookmark |
