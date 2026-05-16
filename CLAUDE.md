@@ -292,15 +292,27 @@ When a new tagged release ships:
 1. **Add a `## vX.Y.Z — YYYY-MM-DD` section** at the top of the
    reverse-chronological list, immediately under the file's intro
    block.
-2. **Lead with a one-or-two-sentence intro** naming the themes of the
+2. **Italic metadata line** directly under the heading, with three
+   pieces separated by ` · `:
+   ```
+   *Tag [`vX.Y.Z`](https://github.com/DrKnickers/new-particle-editor/releases/tag/vX.Y.Z) · Merge [`<short-hash>`](https://github.com/DrKnickers/new-particle-editor/commit/<short-hash>) · PR [#NN](https://github.com/DrKnickers/new-particle-editor/pull/NN)*
+   ```
+   - **Tag** links to the GitHub release page.
+   - **Merge** is the 7-character merge-commit hash on `master` for
+     the release PR. Wrap in backticks inside the link text.
+   - **PR** is the release PR. If the entry is being written before
+     the tag exists, leave `TODO` placeholders and backfill in a
+     small docs PR after the release goes live — same pattern as
+     `DEVELOPMENT_LOG.md` per-PR entries.
+3. **Lead with a one-or-two-sentence intro** naming the themes of the
    release in matter-of-fact prose. No PR counts, no roadmap-tag IDs
    (NT-N / MT-N / LT-N belong in `ROADMAP.md` and `DEVELOPMENT_LOG.md`,
    not user-facing).
-3. **List headline additions grouped by category** (typical:
+4. **List headline additions grouped by category** (typical:
    *New features*, *Emitter management*, *Viewport & preview*,
    *Input*, *Bug fixes*, *Known issues*). Bullet-per-item, prose
    tone, bold lead-in for each bullet's name.
-4. **Don't duplicate engineering detail.** Source paths, line numbers,
+5. **Don't duplicate engineering detail.** Source paths, line numbers,
    architectural rationale, "how we tackled it", "issues encountered"
    all stay in `DEVELOPMENT_LOG.md`. `CHANGELOG.md` is the summary
    readers find from the release page; `DEVELOPMENT_LOG.md` is what
