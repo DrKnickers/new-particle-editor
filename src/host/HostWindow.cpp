@@ -222,6 +222,7 @@ struct HostWindowImpl
 
     ComPtr<ICoreWebView2Controller> webController;
     ComPtr<ICoreWebView2>           webView;
+    EventRegistrationToken          accelKeyTok = {};
 
     ITextureManager& textureManager;
     IShaderManager&  shaderManager;
@@ -436,6 +437,51 @@ HRESULT HostWindowImpl::InitWebView2()
                                 Log("[host] WebView2 bg => transparent\n");
                             }
 
+                            // Task 1.6: intercept registered accelerator keys before
+                            // WebView2 routes them to the page. ICoreWebView2Controller
+                            // exposes add_AcceleratorKeyPressed for exactly this purpose;
+                            // we only set Handled=TRUE when the combo matches the
+                            // dictionary registered by React via `register-accelerators`.
+                            controller->add_AcceleratorKeyPressed(
+                                Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
+                                    [this](ICoreWebView2Controller* /*sender*/,
+                                           ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT
+                                    {
+                                        COREWEBVIEW2_KEY_EVENT_KIND kind = {};
+                                        args->get_KeyEventKind(&kind);
+                                        // Only react on key-down events; KEY_UP events are
+                                        // intentionally ignored (no repeat firing).
+                                        if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN &&
+                                            kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                                        {
+                                            return S_OK;
+                                        }
+                                        UINT vk = 0;
+                                        args->get_VirtualKey(&vk);
+
+                                        // GetKeyState is synchronous and reliable in an
+                                        // event handler context — reads the current physical
+                                        // key state at the moment of the event.
+                                        bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                                        bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+                                        bool alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+
+                                        bool matched = accelerator.TryDispatch(vk, ctrl, shift, alt,
+                                            [this](const std::string& combo)
+                                            {
+                                                Log("[Accel] combo=%s\n", combo.c_str());
+                                                if (dispatcher)
+                                                    dispatcher->EmitAcceleratorPressed(combo);
+                                            });
+
+                                        if (matched)
+                                            args->put_Handled(TRUE);
+
+                                        return S_OK;
+                                    }).Get(),
+                                &accelKeyTok);
+                            Log("[host] AcceleratorKeyPressed handler registered\n");
+
                             // Fit to client.
                             RECT bounds;
                             GetClientRect(hMain, &bounds);
@@ -561,6 +607,14 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DESTROY:
         if (webController)
         {
+            // Unregister the accelerator hook before closing the controller
+            // so the callback lambda (which captures `this`) is never invoked
+            // after HostWindowImpl starts destructing.
+            if (accelKeyTok.value != 0)
+            {
+                webController->remove_AcceleratorKeyPressed(accelKeyTok);
+                accelKeyTok = {};
+            }
             webController->Close();
             webController.Reset();
         }
@@ -723,7 +777,7 @@ int HostWindowImpl::Run(int nCmdShow)
         std::wstring w = Utf8ToUtf16(js);
         webView->PostWebMessageAsJson(w.c_str());
     };
-    dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, emitFn);
+    dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, accelerator, emitFn);
 
     // WM_CREATE fired during CreateWindowEx; viewport + engine now exist.
     // Wire the engine into the dispatcher (it was null when we constructed
@@ -751,7 +805,6 @@ int HostWindowImpl::Run(int nCmdShow)
     MSG m;
     while (GetMessage(&m, nullptr, 0, 0))
     {
-        // TODO Task 1.6: pre-translate accelerator combos here.
         TranslateMessage(&m);
         DispatchMessage(&m);
     }

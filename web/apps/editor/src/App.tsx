@@ -1,9 +1,28 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { makeBridge } from "@/bridge";
 import { ViewportSlot } from "@/components/ViewportSlot";
 
 export function App() {
   const bridge = useMemo(() => makeBridge(), []);
+
+  // TODO Phase 3: remove this debug block once real per-screen shortcut
+  // handlers are wired in. Until then it proves the round-trip works:
+  //   1. React registers combos with the host on mount.
+  //   2. Host fires AcceleratorKeyPressed → matches → emits accelerator/pressed.
+  //   3. React logs the payload here; DevTools console shows "[accel] Ctrl+S".
+  useEffect(() => {
+    bridge
+      .request({
+        kind: "register-accelerators",
+        params: { combos: ["Ctrl+S", "Ctrl+Z", "Ctrl+Shift+Z", "Delete", "F5"] },
+      })
+      .catch((err) => console.warn("[accel] register-accelerators failed:", err));
+
+    const off = bridge.on("accelerator/pressed", (e) => {
+      console.log("[accel]", e.payload.combo);
+    });
+    return off;
+  }, [bridge]);
 
   return (
     <div className="flex h-full w-full flex-col bg-neutral-950 text-neutral-100">

@@ -24,6 +24,7 @@ class Engine;
 
 namespace host {
 
+class AcceleratorBridge;
 class LayoutBroker;
 
 class BridgeDispatcher
@@ -31,7 +32,7 @@ class BridgeDispatcher
 public:
     using EmitFn = std::function<void(const std::string& json)>;
 
-    BridgeDispatcher(Engine* engine, LayoutBroker& layout, EmitFn emit);
+    BridgeDispatcher(Engine* engine, LayoutBroker& layout, AcceleratorBridge& accel, EmitFn emit);
 
     // Sets / replaces the live Engine pointer. The host can install this
     // before or after the Engine is constructed; null is treated as
@@ -49,10 +50,16 @@ public:
     void EmitEngineStateChanged();
     void EmitStatsTick(int fps, int emitters, int particles, int instances);
 
+    // Emits an `accelerator/pressed` event to React with the matched combo
+    // string (e.g. "Ctrl+S"). Called by HostWindow's AcceleratorKeyPressed
+    // handler after AcceleratorBridge::TryDispatch returns true.
+    void EmitAcceleratorPressed(const std::string& combo);
+
 private:
-    Engine*       m_engine;
-    LayoutBroker& m_layout;
-    EmitFn        m_emit;
+    Engine*            m_engine;
+    LayoutBroker&      m_layout;
+    AcceleratorBridge& m_accel;
+    EmitFn             m_emit;
 };
 
 } // namespace host

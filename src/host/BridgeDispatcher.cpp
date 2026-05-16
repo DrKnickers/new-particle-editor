@@ -1,5 +1,6 @@
 #include "BridgeDispatcher.h"
 
+#include "AcceleratorBridge.h"
 #include "LayoutBroker.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -39,8 +40,9 @@ std::string BuildErrResponse(const std::string& id, const std::string& error)
 
 } // namespace
 
-BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout, EmitFn emit)
-    : m_engine(engine), m_layout(layout), m_emit(std::move(emit))
+BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
+                                    AcceleratorBridge& accel, EmitFn emit)
+    : m_engine(engine), m_layout(layout), m_accel(accel), m_emit(std::move(emit))
 {
 }
 
@@ -120,9 +122,31 @@ void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
         return;
     }
 
+    // -------- register-accelerators --------
+    if (kind == "register-accelerators")
+    {
+        auto combos = params.value("combos", std::vector<std::string>{});
+        m_accel.RegisterCombos(combos);
+        fprintf(stderr, "[host] AcceleratorBridge registered %zu combo(s)\n", combos.size());
+        if (m_emit && !id.empty())
+            m_emit(BuildOkResponse(id, json::object()));
+        return;
+    }
+
     // -------- everything else --------
     if (m_emit && !id.empty())
         m_emit(BuildErrResponse(id, "not implemented yet (Task 2.1+)"));
+}
+
+void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
+{
+    if (!m_emit) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "accelerator/pressed"},
+        {"payload", {{"combo", combo}}},
+    };
+    m_emit(env.dump());
 }
 
 void BridgeDispatcher::EmitEngineStateChanged()
