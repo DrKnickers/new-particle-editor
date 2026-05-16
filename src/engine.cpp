@@ -42,6 +42,12 @@ static const int kSkydomeBundledResources[Engine::kSkydomeBundledCount] = {
     IDR_SKYDOME_INDOOR,      // 8
 };
 
+// Public getter so main.cpp can build thumbnails without duplicating the table.
+const int* Engine::GetSkydomeBundledResources()
+{
+    return kSkydomeBundledResources;
+}
+
 D3DVERTEXELEMENT9 Engine::ParticleElements[] = {
 	{0, offsetof(EmitterInstance::Vertex, Position),  D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0}, 
 	{0, offsetof(EmitterInstance::Vertex, Normal),    D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0}, 
