@@ -10,10 +10,19 @@
 //             { type: "res",  id, ok: false, error }
 //   event   : { type: "evt",  kind, payload }
 //
-// For Task 1.3 only two requests are implemented end-to-end:
-//   - layout/viewport-rect  → LayoutBroker::Apply(...)
-//   - engine/state/snapshot → { groundZ, background, skydomeSlot } from Engine
-// Everything else returns `{ ok: false, error: "not implemented yet (Task 2.1+)" }`.
+// Task 2.1 surface:
+//   - layout/viewport-rect              → LayoutBroker::Apply(...)
+//   - register-accelerators             → AcceleratorBridge::RegisterCombos
+//   - engine/state/snapshot             → full EngineStateDto (every getter)
+//   - engine/set/*           (17 of)    → setter + engine/state/changed event
+//   - engine/action/*        (4 of)     → action + engine/state/changed event
+//                                         (on-particle-system-changed skips
+//                                         the event — engine re-renders next
+//                                         frame anyway)
+//   - engine/query/*         (3 of)     → IsGroundSlotEmpty / IsSkydomeSlotEmpty
+//                                         / IsBloomAvailable
+// Everything else (emitters/*, file/*, undo/*, spawner/*) still returns
+// `{ ok: false, error: "not implemented yet (Phase 3+)" }`.
 #ifndef HOST_BRIDGE_DISPATCHER_H
 #define HOST_BRIDGE_DISPATCHER_H
 

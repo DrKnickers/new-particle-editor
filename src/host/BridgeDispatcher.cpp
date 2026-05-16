@@ -7,6 +7,9 @@
 #include "../engine.h"
 
 #include <cstdio>
+#include <string>
+#include <vector>
+#include <windows.h>
 
 using nlohmann::json;
 
@@ -36,6 +39,148 @@ std::string BuildErrResponse(const std::string& id, const std::string& error)
         {"error", error},
     };
     return env.dump();
+}
+
+// UTF-8 ↔ UTF-16 helpers — kept local because the bridge only needs them
+// for the handful of `engine/*/custom-path` setters and the snapshot's
+// path arrays. Mirrors the equivalents in HostWindow.cpp.
+std::wstring Utf8ToWide(const std::string& s)
+{
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), len);
+    return out;
+}
+
+std::string WideToUtf8(const std::wstring& w)
+{
+    if (w.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                                  nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                        out.data(), len, nullptr, nullptr);
+    return out;
+}
+
+// Serialise a D3DXVECTOR3/4 / Engine::Camera / Engine::Light into the
+// EngineStateDto-compatible JSON shape.
+json Vec3ToJson(const D3DXVECTOR3& v)
+{
+    return json::array({v.x, v.y, v.z});
+}
+
+json Vec4ToJson(const D3DXVECTOR4& v)
+{
+    return json::array({v.x, v.y, v.z, v.w});
+}
+
+json CameraToJson(const Engine::Camera& c)
+{
+    return json{
+        {"position", Vec3ToJson(c.Position)},
+        {"target",   Vec3ToJson(c.Target)},
+        {"up",       Vec3ToJson(c.Up)},
+    };
+}
+
+json LightToJson(const Engine::Light& l)
+{
+    return json{
+        {"diffuse",   Vec4ToJson(l.Diffuse)},
+        {"specular",  Vec4ToJson(l.Specular)},
+        {"position",  Vec4ToJson(l.Position)},
+        {"direction", Vec4ToJson(l.Direction)},
+    };
+}
+
+// Parse a JSON array of 3 numbers into a D3DXVECTOR3. Defaults to zero
+// on malformed input (better than crashing on a stray non-array param).
+D3DXVECTOR3 JsonToVec3(const json& j)
+{
+    if (j.is_array() && j.size() >= 3)
+        return D3DXVECTOR3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+    return D3DXVECTOR3(0, 0, 0);
+}
+
+D3DXVECTOR4 JsonToVec4(const json& j)
+{
+    if (j.is_array() && j.size() >= 4)
+        return D3DXVECTOR4(j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>());
+    return D3DXVECTOR4(0, 0, 0, 0);
+}
+
+Engine::LightType ParseLightWhich(const std::string& s)
+{
+    if (s == "fill1") return Engine::LT_FILL1;
+    if (s == "fill2") return Engine::LT_FILL2;
+    return Engine::LT_SUN;  // default / "sun"
+}
+
+// Reads every getter on Engine into a JSON object whose shape matches
+// `EngineStateDto` in web/packages/bridge-schema/src/index.ts.
+//
+// Coupling note: any new field added to `EngineStateDto` MUST also be
+// added here, otherwise the React UI will read `undefined` for it.
+json BuildEngineStateSnapshot(Engine* engine)
+{
+    if (!engine) return json::object();
+
+    // Ground slot custom paths — kGroundTextureCount entries.
+    json groundPaths = json::array();
+    for (int i = 0; i < Engine::kGroundTextureCount; ++i)
+        groundPaths.push_back(WideToUtf8(engine->GetGroundSlotCustomPath(i)));
+
+    // Skydome custom paths — only slots 9..11 are user-customisable.
+    // The DTO exposes them as a flat array indexed 0..2.
+    json skyPaths = json::array();
+    for (int i = Engine::kSkydomeFirstCustomSlot; i < Engine::kSkydomeSlotCount; ++i)
+        skyPaths.push_back(WideToUtf8(engine->GetSkydomeCustomPath(i)));
+
+    json lights = {
+        {"sun",   LightToJson(engine->GetLight(Engine::LT_SUN))},
+        {"fill1", LightToJson(engine->GetLight(Engine::LT_FILL1))},
+        {"fill2", LightToJson(engine->GetLight(Engine::LT_FILL2))},
+    };
+
+    return json{
+        // Ground
+        {"ground",                engine->GetGround()},
+        {"groundZ",               engine->GetGroundZ()},
+        {"groundTexture",         engine->GetGroundTexture()},
+        {"groundSolidColor",      static_cast<unsigned int>(engine->GetGroundSolidColor())},
+        {"groundSlotCustomPaths", groundPaths},
+
+        // Skydome
+        {"skydomeSlot",           engine->GetSkydomeSlot()},
+        {"skydomeCustomPaths",    skyPaths},
+
+        // Background (COLORREF; low byte = blue)
+        {"background",            static_cast<unsigned int>(engine->GetBackground())},
+
+        // Lights / ambient / shadow
+        {"lights",                lights},
+        {"ambient",               Vec4ToJson(engine->GetAmbient())},
+        {"shadow",                Vec4ToJson(engine->GetShadow())},
+
+        // Bloom
+        {"bloom",                 engine->GetBloom()},
+        {"bloomAvailable",        engine->IsBloomAvailable()},
+        {"bloomStrength",         engine->GetBloomStrength()},
+        {"bloomCutoff",           engine->GetBloomCutoff()},
+        {"bloomSize",             engine->GetBloomSize()},
+
+        // Debug
+        {"heatDebug",             engine->GetHeatDebug()},
+
+        // Camera
+        {"camera",                CameraToJson(engine->GetCamera())},
+
+        // Wind / gravity — read-only via DTO for now (no setter binding).
+        {"wind",                  Vec3ToJson(engine->GetWind())},
+        {"gravity",               Vec3ToJson(engine->GetGravity())},
+    };
 }
 
 } // namespace
@@ -88,6 +233,24 @@ void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
         return;
     }
 
+    auto sendOk = [&](const json& data) {
+        if (m_emit && !id.empty())
+            m_emit(BuildOkResponse(id, data));
+    };
+    auto sendErr = [&](const std::string& msg) {
+        if (m_emit && !id.empty())
+            m_emit(BuildErrResponse(id, msg));
+    };
+
+    // Every engine/* handler routes through this guard: if the engine
+    // isn't yet constructed (or has been torn down), refuse the request
+    // with a structured error instead of crashing on a null deref.
+    auto requireEngine = [&](const char* what) -> bool {
+        if (m_engine) return true;
+        sendErr(std::string("engine not constructed (") + what + ")");
+        return false;
+    };
+
     // -------- layout/viewport-rect --------
     if (kind == "layout/viewport-rect")
     {
@@ -96,29 +259,7 @@ void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
         int w = params.value("w", 0);
         int h = params.value("h", 0);
         m_layout.Apply(x, y, w, h);
-        if (m_emit && !id.empty())
-            m_emit(BuildOkResponse(id, json::object()));
-        return;
-    }
-
-    // -------- engine/state/snapshot --------
-    if (kind == "engine/state/snapshot")
-    {
-        if (!m_engine)
-        {
-            if (m_emit && !id.empty())
-                m_emit(BuildErrResponse(id, "engine not initialized"));
-            return;
-        }
-        // Minimal EngineStateDto for Task 1.3. The full surface (ground,
-        // skydomeCustomPaths, bloom, camera, etc.) lands in Task 2.1.
-        json data = {
-            {"groundZ",     m_engine->GetGroundZ()},
-            {"background",  static_cast<unsigned int>(m_engine->GetBackground())},
-            {"skydomeSlot", m_engine->GetSkydomeSlot()},
-        };
-        if (m_emit && !id.empty())
-            m_emit(BuildOkResponse(id, data));
+        sendOk(json::object());
         return;
     }
 
@@ -128,14 +269,228 @@ void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
         auto combos = params.value("combos", std::vector<std::string>{});
         m_accel.RegisterCombos(combos);
         fprintf(stderr, "[host] AcceleratorBridge registered %zu combo(s)\n", combos.size());
-        if (m_emit && !id.empty())
-            m_emit(BuildOkResponse(id, json::object()));
+        sendOk(json::object());
         return;
     }
 
-    // -------- everything else --------
-    if (m_emit && !id.empty())
-        m_emit(BuildErrResponse(id, "not implemented yet (Task 2.1+)"));
+    // -------- engine/state/snapshot --------
+    if (kind == "engine/state/snapshot")
+    {
+        if (!requireEngine("snapshot")) return;
+        sendOk(BuildEngineStateSnapshot(m_engine));
+        return;
+    }
+
+    // -------- engine/set/* (17 handlers) --------
+    if (kind == "engine/set/ground")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetGround(params.value("enabled", false));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/ground-z")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetGroundZ(params.value("z", 0.0f));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/ground-texture")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetGroundTexture(params.value("slot", 0));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/ground-solid-color")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        unsigned int rgb = params.value("rgb", 0u);
+        m_engine->SetGroundSolidColor(static_cast<COLORREF>(rgb));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/ground-slot-custom-path")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        int slot = params.value("slot", -1);
+        std::string p = params.value("path", std::string{});
+        m_engine->SetGroundSlotCustomPath(slot, Utf8ToWide(p));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/skydome-slot")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetSkydomeSlot(params.value("slot", 0));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/skydome-custom-path")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        int slot = params.value("slot", -1);
+        std::string p = params.value("path", std::string{});
+        m_engine->SetSkydomeCustomPath(slot, Utf8ToWide(p));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/background")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        unsigned int rgb = params.value("rgb", 0u);
+        m_engine->SetBackground(static_cast<COLORREF>(rgb));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/bloom")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetBloom(params.value("enabled", false));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/bloom-strength")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetBloomStrength(params.value("v", 0.0f));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/bloom-cutoff")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetBloomCutoff(params.value("v", 0.0f));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/bloom-size")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetBloomSize(params.value("v", 0.0f));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/heat-debug")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetHeatDebug(params.value("enabled", false));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/camera")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        Engine::Camera cam;
+        cam.Position = JsonToVec3(params.value("position", json::array()));
+        cam.Target   = JsonToVec3(params.value("target",   json::array()));
+        cam.Up       = JsonToVec3(params.value("up",       json::array()));
+        m_engine->SetCamera(cam);
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/light")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        std::string which = params.value("which", std::string{"sun"});
+        Engine::Light l;
+        l.Diffuse   = JsonToVec4(params.value("diffuse",   json::array()));
+        l.Specular  = JsonToVec4(params.value("specular",  json::array()));
+        l.Position  = JsonToVec4(params.value("position",  json::array()));
+        l.Direction = JsonToVec4(params.value("direction", json::array()));
+        m_engine->SetLight(ParseLightWhich(which), l);
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/ambient")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetAmbient(JsonToVec4(params.value("color", json::array())));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/set/shadow")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->SetShadow(JsonToVec4(params.value("color", json::array())));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+
+    // -------- engine/action/* --------
+    if (kind == "engine/action/clear")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->Clear();
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/action/reload-shaders")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->ReloadShaders();
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/action/reload-textures")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->ReloadTextures();
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return;
+    }
+    if (kind == "engine/action/on-particle-system-changed")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        m_engine->OnParticleSystemChanged(params.value("track", 0));
+        sendOk(json::object());
+        // No engine/state/changed broadcast — engine re-renders next frame.
+        return;
+    }
+
+    // -------- engine/query/* --------
+    if (kind == "engine/query/ground-slot-empty")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        sendOk(json(m_engine->IsGroundSlotEmpty(params.value("slot", -1))));
+        return;
+    }
+    if (kind == "engine/query/skydome-slot-empty")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        sendOk(json(m_engine->IsSkydomeSlotEmpty(params.value("slot", -1))));
+        return;
+    }
+    if (kind == "engine/query/bloom-available")
+    {
+        if (!requireEngine(kind.c_str())) return;
+        sendOk(json(m_engine->IsBloomAvailable()));
+        return;
+    }
+
+    // -------- everything else (emitters/* / file/* / undo/* / spawner/*) --------
+    sendErr("not implemented yet (Phase 3+)");
 }
 
 void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
@@ -151,7 +506,13 @@ void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
 
 void BridgeDispatcher::EmitEngineStateChanged()
 {
-    // Stub — Task 2.1 will broadcast the full snapshot.
+    if (!m_emit || !m_engine) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "engine/state/changed"},
+        {"payload", BuildEngineStateSnapshot(m_engine)},
+    };
+    m_emit(env.dump());
 }
 
 void BridgeDispatcher::EmitStatsTick(int /*fps*/, int /*emitters*/,

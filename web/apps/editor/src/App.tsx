@@ -24,6 +24,18 @@ export function App() {
     return off;
   }, [bridge]);
 
+  // Task 2.1 verification hook: log the initial engine snapshot at mount.
+  // Confirms the bridge round-trip is producing a real EngineStateDto,
+  // not the old `{ groundZ, background, skydomeSlot }` stub. Stays as a
+  // permanent dev-mode breadcrumb — cheap, and useful any time the
+  // bridge surface grows.
+  useEffect(() => {
+    bridge
+      .request({ kind: "engine/state/snapshot", params: {} })
+      .then((s) => console.log("[engine/state/snapshot]", s))
+      .catch((err) => console.warn("[engine/state/snapshot] failed:", err));
+  }, [bridge]);
+
   return (
     <div className="flex h-full w-full flex-col bg-neutral-950 text-neutral-100">
       {/* Top bar */}
