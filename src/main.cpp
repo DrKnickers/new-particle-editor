@@ -4487,6 +4487,109 @@ static void WriteBloomFloat(const wchar_t* name, float value)
     }
 }
 
+// Skydome state persistence (MT-3). Index as DWORD, custom slot paths as
+// REG_SZ, picker dialog position as RECT (REG_BINARY).
+static int ReadSkydomeIndex(int defaultValue)
+{
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD value, type, size = sizeof(value);
+        if (RegQueryValueEx(hKey, L"SkydomeIndex", NULL, &type, (LPBYTE)&value, &size) == ERROR_SUCCESS
+            && type == REG_DWORD && (int)value >= 0 && (int)value < Engine::kSkydomeSlotCount)
+        {
+            RegCloseKey(hKey);
+            return (int)value;
+        }
+        RegCloseKey(hKey);
+    }
+    return defaultValue;
+}
+
+static void WriteSkydomeIndex(int value)
+{
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        DWORD v = (DWORD)value;
+        RegSetValueEx(hKey, L"SkydomeIndex", 0, REG_DWORD, (const BYTE*)&v, sizeof(v));
+        RegCloseKey(hKey);
+    }
+}
+
+// Custom slot paths use names SkydomeCustomSlot9, SkydomeCustomSlot10, SkydomeCustomSlot11
+static std::wstring ReadSkydomeCustomPath(int slot)
+{
+    if (slot < Engine::kSkydomeFirstCustomSlot || slot >= Engine::kSkydomeSlotCount) return L"";
+    HKEY hKey;
+    std::wstring out;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t buf[MAX_PATH];
+        DWORD size = sizeof(buf);
+        DWORD type;
+        wchar_t name[64];
+        swprintf_s(name, L"SkydomeCustomSlot%d", slot);
+        if (RegQueryValueEx(hKey, name, NULL, &type, (LPBYTE)buf, &size) == ERROR_SUCCESS && type == REG_SZ)
+        {
+            out = buf;
+        }
+        RegCloseKey(hKey);
+    }
+    return out;
+}
+
+static void WriteSkydomeCustomPath(int slot, const std::wstring& path)
+{
+    if (slot < Engine::kSkydomeFirstCustomSlot || slot >= Engine::kSkydomeSlotCount) return;
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        wchar_t name[64];
+        swprintf_s(name, L"SkydomeCustomSlot%d", slot);
+        if (path.empty())
+        {
+            RegDeleteValue(hKey, name);
+        }
+        else
+        {
+            RegSetValueEx(hKey, name, 0, REG_SZ, (const BYTE*)path.c_str(),
+                          DWORD((path.size() + 1) * sizeof(wchar_t)));
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+static bool ReadSkydomePickerPos(RECT& out)
+{
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD type, size = sizeof(out);
+        if (RegQueryValueEx(hKey, L"SkydomePickerPos", NULL, &type, (LPBYTE)&out, &size) == ERROR_SUCCESS
+            && type == REG_BINARY && size == sizeof(out))
+        {
+            RegCloseKey(hKey);
+            return true;
+        }
+        RegCloseKey(hKey);
+    }
+    return false;
+}
+
+static void WriteSkydomePickerPos(const RECT& in)
+{
+    HKEY hKey;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
+                       REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueEx(hKey, L"SkydomePickerPos", 0, REG_BINARY, (const BYTE*)&in, sizeof(in));
+        RegCloseKey(hKey);
+    }
+}
+
 // `out` must point to a 16-element COLORREF buffer. On miss, leaves the
 // buffer untouched and returns false so the caller can decide whether
 // to seed defaults.
@@ -4537,6 +4640,9 @@ static void ResetViewSettings()
         RegDeleteValue(hKey, L"CustomColors");
         RegDeleteValue(hKey, L"SpawnerConfig");
         RegDeleteValue(hKey, L"SpawnerDialogPos");
+        RegDeleteValue(hKey, L"SkydomeIndex");    // MT-3
+        RegDeleteValue(hKey, L"SkydomePickerPos");
+        // NOTE: SkydomeCustomSlot* paths are user data, not view settings — NOT cleared here.
         RegCloseKey(hKey);
     }
 }
