@@ -452,7 +452,7 @@ static const UINT ID_MOD_LAST     = 0xAFFF;
 // below ID_MOD_NONE to avoid collisions in WM_COMMAND.
 static const UINT ID_GROUNDZ_SPINNER          = 0x5000;
 static const UINT ID_GROUND_TEXTURE_PREVIEW   = 0x5001;   // MT-2 toolbar preview button
-static const UINT ID_SKYDOME_PREVIEW          = 0x5002;   // MT-3 toolbar skydome preview button
+static const UINT ID_BACKGROUND_PREVIEW       = 0x5002;   // MT-3 unified background preview (colour swatch or skydome thumbnail)
 
 // Posted to the main window from WM_MENURBUTTONUP to defer the nickname
 // dialog until after the menu's modal loop has finished tearing down.
@@ -492,7 +492,7 @@ static HBITMAP          MakeSkydomeSlotThumbnail(IDirect3DDevice9* pDevice,
                                                    int slot, int sizePx,
                                                    const std::wstring& customPath,
                                                    COLORREF bgColor);
-static void             RebuildSkydomePreviewBitmap(APPLICATION_INFO* info);
+static void             RebuildBackgroundPreviewBitmap(APPLICATION_INFO* info);
 static void             ShowSkydomePicker(HWND hParent, APPLICATION_INFO* info);
 static void             WriteSkydomeIndex(int value);
 static void             WriteSkydomeCustomPath(int slot, const std::wstring& path);
@@ -540,6 +540,10 @@ struct APPLICATION_INFO
     HWND      hLeaveParticles;
     HWND      hBackgroundLabel;
     HWND      hBackgroundBtn;
+    // MT-3 rework: thumbnail bitmap painted on hBackgroundBtn when a
+    // skydome slot is active. Stays NULL when SkydomeIndex == 0, in
+    // which case the owner-draw paints a flat colour swatch instead.
+    HBITMAP   hBackgroundPreviewBitmap;
     HWND      hGroundZLabel;
     HWND      hGroundZSpinner;
     HWND      hGroundTextureLabel;       // MT-2 "Ground Texture:" caption
@@ -596,12 +600,9 @@ struct APPLICATION_INFO
 	HWND            hGroundPicker;
 
 	// MT-3: skydome picker (modeless). Same lifecycle as hGroundPicker.
+	// Reached through the unified Background button (no standalone toolbar
+	// entry — slot 0 of the picker covers the flat-colour case).
 	HWND            hSkydomePicker;
-	// MT-3: toolbar owner-drawn preview button for the active skydome slot.
-	HWND            hSkydomePreview;
-	// MT-3: 24×24 thumbnail of the current skydome slot; rebuilt on any
-	// slot change. NULL until the engine finishes its first init.
-	HBITMAP         hSkydomePreviewBitmap;
 
 	// Bloom config dialog (View → Bloom… / Ctrl+B). Same modeless
 	// toggle pattern as the spawner. Engine owns the bloom state
@@ -1657,7 +1658,6 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     info->engine->SetBloomStrength(0.0f);
                     info->engine->SetBloomCutoff(0.90f);
                     info->engine->SetBloomSize(0.10f);
-                    ColorButton_SetColor(info->hBackgroundBtn, info->engine->GetBackground());
                     SendMessage(info->hToolbar, TB_CHECKBUTTON, ID_VIEW_SHOWGROUND,
                                 MAKELONG(info->engine->GetGround(), 0));
                     // MT-2: Reset View Settings returns selection to
@@ -1667,11 +1667,14 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     // in the picker dialog handles that.
                     RebuildGroundTexturePreviewBitmap(info);
                     InvalidateRect(info->hGroundTexturePreview, NULL, TRUE);
-                    // MT-3: reset skydome to Off (slot 0) and rebuild preview.
+                    // MT-3: reset skydome to Off (slot 0). Background colour
+                    // is reset above (SetBackground); the unified Background
+                    // button repaints itself off engine state — no ColorButton
+                    // path remains since the rework.
                     info->engine->SetSkydomeSlot(0);
                     WriteSkydomeIndex(0);
-                    RebuildSkydomePreviewBitmap(info);
-                    InvalidateRect(info->hSkydomePreview, NULL, TRUE);
+                    RebuildBackgroundPreviewBitmap(info);
+                    InvalidateRect(info->hBackgroundBtn, NULL, TRUE);
                     // Reseed the picker if it's open.
                     if (info->hSkydomePicker != NULL && IsWindowVisible(info->hSkydomePicker))
                         SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
@@ -1958,11 +1961,22 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			}
 			SendMessage(info->hBackgroundLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
 			
-			if ((info->hBackgroundBtn = CreateWindowEx(0, L"ColorButton", NULL, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW,
-				0, 0, 24, 24, hWnd, NULL, pcs->hInstance, NULL)) == NULL)
+			// MT-3 rework: the Background button is the single entry point for
+			// background state. Owner-draw paints either a flat colour swatch
+			// (SkydomeIndex == 0) or the current skydome thumbnail (slots 1+).
+			// Click opens the picker dialog. Class changes from ColorButton to
+			// plain BUTTON so we own the paint path; ChooseColor is now reached
+			// through slot 0 of the picker, not through this button directly.
+			if ((info->hBackgroundBtn = CreateWindowEx(0, L"BUTTON", NULL,
+				WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+				0, 0, 24, 24, hWnd, (HMENU)(UINT_PTR)ID_BACKGROUND_PREVIEW,
+				pcs->hInstance, NULL)) == NULL)
 			{
 				return -1;
 			}
+			info->hBackgroundPreviewBitmap = NULL;
+			// Bitmap built later, after engine init + registry load, by
+			// RebuildBackgroundPreviewBitmap().
 
             // Create the "leave particles" check box
             if ((info->hLeaveParticles = CreateWindow(L"BUTTON", LoadString(IDS_LABEL_LEAVE_PARTICLES).c_str(), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -2005,19 +2019,6 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             info->hGroundTexturePreviewBitmap = NULL;
             // Thumbnail is built later (after engine init + registry
             // load) by RebuildGroundTexturePreviewBitmap().
-
-            // MT-3: skydome preview button (owner-drawn, 24×24) sits to the
-            // left of the Ground Texture preview in the header strip.
-            // Positioned during WM_SIZE like all other header controls.
-            if ((info->hSkydomePreview = CreateWindowEx(0, L"BUTTON", NULL,
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                0, 0, 24, 24, hWnd, (HMENU)(UINT_PTR)ID_SKYDOME_PREVIEW,
-                pcs->hInstance, NULL)) == NULL)
-            {
-                return -1;
-            }
-            info->hSkydomePreviewBitmap = NULL;
-            // Thumbnail built after engine init by RebuildSkydomePreviewBitmap().
 
             if ((info->hGroundZSpinner = CreateWindowEx(WS_EX_CLIENTEDGE, L"Spinner", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                 0, 0, 80, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
@@ -2245,13 +2246,19 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				}
 				return TRUE;
 			}
-			// MT-3: skydome preview button — same shape as ground texture preview.
+			// MT-3 rework: unified Background button. Paints a flat colour
+			// swatch when no skydome is active, or the current skydome
+			// thumbnail otherwise. RebuildBackgroundPreviewBitmap keeps the
+			// bitmap NULL in solid-colour mode so a stale thumbnail can't
+			// shadow the swatch path.
 			if (dis->CtlType == ODT_BUTTON &&
-			    dis->CtlID   == ID_SKYDOME_PREVIEW &&
-			    info != NULL)
+			    dis->CtlID   == ID_BACKGROUND_PREVIEW &&
+			    info != NULL && info->engine != NULL)
 			{
 				RECT rc = dis->rcItem;
-				HBITMAP hbm = info->hSkydomePreviewBitmap;
+				const bool useSkydome =
+				    info->engine->GetSkydomeSlot() != Engine::kSkydomeOffSlot;
+				HBITMAP hbm = useSkydome ? info->hBackgroundPreviewBitmap : NULL;
 				if (hbm != NULL)
 				{
 					HDC hMem = CreateCompatibleDC(dis->hDC);
@@ -2268,8 +2275,9 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				}
 				else
 				{
-					FillRect(dis->hDC, &rc,
-					         (HBRUSH)(COLOR_BTNFACE + 1));
+					HBRUSH brSwatch = CreateSolidBrush(info->engine->GetBackground());
+					FillRect(dis->hDC, &rc, brSwatch);
+					DeleteObject(brSwatch);
 				}
 				// Border + focus / pressed indication.
 				HPEN penSky = CreatePen(PS_SOLID, 1,
@@ -2427,24 +2435,6 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                     }
     		        else DoMenuItem(info, id);
                 }
-				else if (code == CBN_CHANGE)
-				{
-					if (hControl == info->hBackgroundBtn && info->engine != NULL)
-					{
-						// The background color has changed
-						info->engine->SetBackground(ColorButton_GetColor(hControl));
-                        RedrawWindow(info->hRenderWnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
-                        // Persist. Also save the ChooseColor palette: even on
-                        // Cancel the user may have defined custom slots, and
-                        // CBN_CHANGE fires for every interim value during the
-                        // dialog — by the time we land here the palette is
-                        // final. Cheap (~64-byte write).
-                        WriteBackgroundColor(info->engine->GetBackground());
-                        COLORREF currentCustom[16];
-                        ColorButton_GetCustomColors(currentCustom);
-                        WriteCustomColors(currentCustom);
-					}
-				}
                 else if (code == SN_CHANGE)
                 {
                     if (hControl == info->hGroundZSpinner && info->engine != NULL)
@@ -2465,8 +2455,11 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                         ShowGroundTexturePicker(hWnd, info);
                         break;
                     }
-                    // MT-3: skydome preview button — toggle the skydome picker.
-                    if (hControl == info->hSkydomePreview && info->engine != NULL)
+                    // MT-3 rework: unified Background button. Click opens the
+                    // picker (slot 0 = solid colour, slots 1+ = skydomes). The
+                    // picker is sticky — clicking a slot commits but leaves
+                    // the dialog visible for further browsing.
+                    if (hControl == info->hBackgroundBtn && info->engine != NULL)
                     {
                         ShowSkydomePicker(hWnd, info);
                         break;
@@ -2658,30 +2651,29 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 const int GROUND_COMBO_H   = 20;
                 MoveWindow(info->hLeaveParticles, props.right + 8, top + 4 + (height - checkbox.bottom) / 2, checkbox.right, label.bottom, TRUE);
                 // Right side of the header strip, anchored from the right edge:
-                //   [Skydome preview] [Ground tex label] [Ground tex preview]  [Ground Z label] [Ground Z spinner]  [Background label] [Background btn]
+                //   [Ground tex label] [Ground tex preview]  [Ground Z label] [Ground Z spinner]  [Background label] [Background btn]
                 // Background button is 4 px from the right edge; the
                 // Ground Z group sits 16 px to its left; the Ground
-                // texture group sits 16 px to the left of that; the
-                // skydome preview sits 8 px to the left of the ground
-                // texture preview. Same anchoring pattern; narrow-window
-                // overflow degrades gracefully (spinner widths are fixed;
-                // labels truncate via Win32 default).
+                // texture group sits 16 px to the left of that. Same
+                // anchoring pattern; narrow-window overflow degrades
+                // gracefully (spinner widths are fixed; labels truncate
+                // via Win32 default).
+                //
+                // MT-3 rework: removed the standalone skydome preview slot.
+                // Skydome selection is now reached through slot 0+ of the
+                // picker opened by the Background button.
                 const int GT_PREVIEW_SIZE  = 24;
-                const int SKY_PREVIEW_SIZE = 24;
                 int bgLabelX    = LOWORD(lParam) - 32 - label.right;
                 int gzSpinnerX  = bgLabelX - 16 - GROUND_SPINNER_W;
                 int gzLabelX    = gzSpinnerX - 4 - groundLabel.right;
                 int gtPreviewX  = gzLabelX - 16 - GT_PREVIEW_SIZE;
                 int gtLabelX    = gtPreviewX - 4 - groundTexLabel.right;
-                int skyPreviewX = gtLabelX - 8 - SKY_PREVIEW_SIZE;
 				MoveWindow(info->hBackgroundBtn,   LOWORD(lParam) - 28, top + 4 + (height - 24) / 2, 24, 24, TRUE);
 				MoveWindow(info->hBackgroundLabel, bgLabelX, top + 4 + (height - label.bottom) / 2, label.right, label.bottom, TRUE);
                 MoveWindow(info->hGroundZSpinner,  gzSpinnerX, top + 4 + (height - GROUND_SPINNER_H) / 2, GROUND_SPINNER_W,  GROUND_SPINNER_H,   TRUE);
                 MoveWindow(info->hGroundZLabel,    gzLabelX,   top + 4 + (height - groundLabel.bottom) / 2, groundLabel.right, groundLabel.bottom, TRUE);
                 MoveWindow(info->hGroundTexturePreview, gtPreviewX, top + 4 + (height - GT_PREVIEW_SIZE) / 2, GT_PREVIEW_SIZE, GT_PREVIEW_SIZE, TRUE);
                 MoveWindow(info->hGroundTextureLabel,   gtLabelX,   top + 4 + (height - groundTexLabel.bottom) / 2, groundTexLabel.right, groundTexLabel.bottom, TRUE);
-                if (info->hSkydomePreview != NULL)
-                    MoveWindow(info->hSkydomePreview, skyPreviewX, top + 4 + (height - SKY_PREVIEW_SIZE) / 2, SKY_PREVIEW_SIZE, SKY_PREVIEW_SIZE, TRUE);
 
 				// Move render window
 				MoveWindow(info->hRenderWnd, props.right + 8, top + 32, LOWORD(lParam) - (props.right + 8), HIWORD(lParam) - tabs.bottom - 36, TRUE);
@@ -4584,8 +4576,10 @@ static HBITMAP MakeSkydomeSlotThumbnail(IDirect3DDevice9*    pDevice,
         return hbm;
     };
 
-    // Slot 0 — Off: flat background colour + centred "✕" (drawn as
-    // two crossing lines at 1/3 of the cell size).
+    // Slot 0 — Solid colour: flat fill of the user's background colour
+    // with a 1px outline. The swatch IS the affordance ("this is the
+    // colour the viewport will show"); no glyph needed after the MT-3
+    // rework that folded the Background button into the picker.
     if (slot == Engine::kSkydomeOffSlot)
     {
         HDC hScreen = GetDC(NULL);
@@ -4606,7 +4600,6 @@ static HBITMAP MakeSkydomeSlotThumbnail(IDirect3DDevice9*    pDevice,
         HBRUSH br = CreateSolidBrush(bgColor);
         FillRect(hMem, &r, br);
         DeleteObject(br);
-        // 1 px outline.
         HPEN pen = CreatePen(PS_SOLID, 1, RGB(0x60, 0x60, 0x60));
         HGDIOBJ oldPen   = SelectObject(hMem, pen);
         HGDIOBJ oldBrush = SelectObject(hMem, GetStockObject(NULL_BRUSH));
@@ -4614,17 +4607,6 @@ static HBITMAP MakeSkydomeSlotThumbnail(IDirect3DDevice9*    pDevice,
         SelectObject(hMem, oldBrush);
         SelectObject(hMem, oldPen);
         DeleteObject(pen);
-        // "x" glyph using DrawText — matches ground picker's empty-slot style.
-        HFONT hFont = CreateFont(sizePx / 2, 0, 0, 0, FW_BOLD,
-                                  FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        HGDIOBJ oldFont = SelectObject(hMem, hFont);
-        SetBkMode(hMem, TRANSPARENT);
-        SetTextColor(hMem, RGB(0xC0, 0xC0, 0xC0));
-        DrawText(hMem, L"x", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(hMem, oldFont);
-        DeleteObject(hFont);
         SelectObject(hMem, old);
         DeleteDC(hMem);
         return hbm;
@@ -4719,24 +4701,39 @@ static HBITMAP MakeSkydomeSlotThumbnail(IDirect3DDevice9*    pDevice,
     return hbm;
 }
 
-// RebuildSkydomePreviewBitmap — regenerates the 24×24 toolbar thumbnail
-// from the current engine skydome slot and stores it in info->hSkydomePreviewBitmap.
+// RebuildBackgroundPreviewBitmap — regenerates the 24×24 toolbar thumbnail
+// from the current engine skydome slot and stores it in info->hBackgroundPreviewBitmap.
 // Releases the previous bitmap before replacing (no double-free).
 // Called at startup, after every slot change, and after Reset View Settings.
-static void RebuildSkydomePreviewBitmap(APPLICATION_INFO* info)
+static void RebuildBackgroundPreviewBitmap(APPLICATION_INFO* info)
 {
     if (info == NULL || info->engine == NULL) return;
-    HBITMAP hbmOld = info->hSkydomePreviewBitmap;
-    int slot = info->engine->GetSkydomeSlot();
+    const int slot = info->engine->GetSkydomeSlot();
+    // MT-3 rework: when no skydome is active, the owner-draw paints a flat
+    // colour swatch read directly from engine state. Keep the cached
+    // thumbnail NULL in that case so the owner-draw's NULL-check selects
+    // the swatch path and a stale thumbnail can't ghost through.
+    if (slot == Engine::kSkydomeOffSlot)
+    {
+        if (info->hBackgroundPreviewBitmap != NULL)
+        {
+            DeleteObject(info->hBackgroundPreviewBitmap);
+            info->hBackgroundPreviewBitmap = NULL;
+        }
+        if (info->hBackgroundBtn != NULL)
+            InvalidateRect(info->hBackgroundBtn, NULL, TRUE);
+        return;
+    }
+    HBITMAP hbmOld = info->hBackgroundPreviewBitmap;
     std::wstring customPath;
     if (slot >= Engine::kSkydomeFirstCustomSlot && slot < Engine::kSkydomeSlotCount)
         customPath = info->engine->GetSkydomeCustomPath(slot);
-    info->hSkydomePreviewBitmap = MakeSkydomeSlotThumbnail(
+    info->hBackgroundPreviewBitmap = MakeSkydomeSlotThumbnail(
         info->engine->GetDevice(), slot, 24,
         customPath, info->engine->GetBackground());
     if (hbmOld != NULL) DeleteObject(hbmOld);
-    if (info->hSkydomePreview != NULL)
-        InvalidateRect(info->hSkydomePreview, NULL, TRUE);
+    if (info->hBackgroundBtn != NULL)
+        InvalidateRect(info->hBackgroundBtn, NULL, TRUE);
 }
 
 // ---------------------------------------------------------------------------
@@ -4835,6 +4832,43 @@ static void SkydomePicker_RefreshList(HWND hDlg, SkydomePickerData* data)
     }
 }
 
+// MT-3 rework: open ChooseColor for slot 0 (solid colour). Mirrors the
+// MT-2 ground-picker analog (GroundTexturePicker_PickSolidColor) but seeds
+// the 16-slot custom palette from the ColorButton library's shared state
+// (used by the Lighting dialog) so palette additions made here propagate
+// to the other ColorButton instances and survive a restart via the
+// WriteCustomColors registry write. Returns true if a colour was picked.
+static bool BackgroundPicker_PickSolidColor(HWND hDlg, SkydomePickerData* data)
+{
+    COLORREF custom[16];
+    ColorButton_GetCustomColors(custom);
+    CHOOSECOLOR cc = {};
+    cc.lStructSize  = sizeof(cc);
+    cc.hwndOwner    = hDlg;
+    cc.lpCustColors = custom;
+    cc.rgbResult    = data->info->engine->GetBackground();
+    cc.Flags        = CC_ANYCOLOR | CC_FULLOPEN | CC_RGBINIT;
+    if (!ChooseColor(&cc)) return false;
+    data->info->engine->SetBackground(cc.rgbResult);
+    WriteBackgroundColor(cc.rgbResult);
+    // Push the (possibly enlarged) custom palette back into the ColorButton
+    // library so the Lighting dialog's colour fields see the new entries,
+    // then persist so it survives an editor restart.
+    ColorButton_SetCustomColors(custom);
+    WriteCustomColors(custom);
+    // Refresh the picker thumbnail for slot 0 (the swatch follows the
+    // background colour) and the toolbar preview if we're currently in
+    // solid-colour mode.
+    SkydomePicker_RefreshList(hDlg, data);
+    if (data->info->engine->GetSkydomeSlot() == Engine::kSkydomeOffSlot)
+    {
+        RebuildBackgroundPreviewBitmap(data->info);
+        RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                     RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    return true;
+}
+
 // File picker for a custom skydome slot. Returns true if a file was assigned.
 static bool SkydomePicker_PickCustomFile(HWND hDlg, SkydomePickerData* data, int slot)
 {
@@ -4856,7 +4890,7 @@ static bool SkydomePicker_PickCustomFile(HWND hDlg, SkydomePickerData* data, int
     SkydomePicker_RefreshList(hDlg, data);
     if (data->info->engine->GetSkydomeSlot() == slot)
     {
-        RebuildSkydomePreviewBitmap(data->info);
+        RebuildBackgroundPreviewBitmap(data->info);
         RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                      RDW_INVALIDATE | RDW_UPDATENOW);
     }
@@ -4947,7 +4981,7 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
                 {
                     data->info->engine->SetSkydomeSlot(slot);
                     WriteSkydomeIndex(slot);
-                    RebuildSkydomePreviewBitmap(data->info);
+                    RebuildBackgroundPreviewBitmap(data->info);
                     RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                                  RDW_INVALIDATE | RDW_UPDATENOW);
                 }
@@ -4958,6 +4992,16 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
             NMITEMACTIVATE* nia = (NMITEMACTIVATE*)lParam;
             int slot = nia->iItem;
             if (slot < 0 || slot >= Engine::kSkydomeSlotCount) break;
+            // MT-3 rework: slot 0 is the unified "Solid colour" entry.
+            // LVN_ITEMCHANGED already committed SkydomeSlot=0; clicking
+            // additionally opens ChooseColor. Cancel keeps the existing
+            // background colour (BackgroundPicker_PickSolidColor returns
+            // false without touching engine state).
+            if (slot == Engine::kSkydomeOffSlot)
+            {
+                BackgroundPicker_PickSolidColor(hDlg, data);
+                break;
+            }
             // Empty custom slot: single click opens file picker.
             if (data->info->engine->IsSkydomeSlotEmpty(slot))
             {
@@ -4970,14 +5014,10 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
                         LVIS_SELECTED | LVIS_FOCUSED);
                 }
             }
-            else
-            {
-                // Populated slot: commit and close — matches ground picker
-                // and texture palette "click closes" convention.
-                RECT r; GetWindowRect(hDlg, &r);
-                WriteSkydomePickerPos(r);
-                ShowWindow(hDlg, SW_HIDE);
-            }
+            // MT-3 rework: sticky picker. Populated slots commit via
+            // LVN_ITEMCHANGED above; the dialog stays open so the user
+            // can browse other skydomes interactively. Close via the
+            // window X button or by toggling the Background button.
         }
         else if (hdr->code == NM_RCLICK)
         {
@@ -5023,7 +5063,7 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
                     WriteSkydomeIndex(Engine::kSkydomeOffSlot);
                 }
                 SkydomePicker_RefreshList(hDlg, data);
-                RebuildSkydomePreviewBitmap(data->info);
+                RebuildBackgroundPreviewBitmap(data->info);
                 RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                              RDW_INVALIDATE | RDW_UPDATENOW);
             }
@@ -5056,7 +5096,7 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
                 WriteSkydomeIndex(Engine::kSkydomeOffSlot);
             }
             SkydomePicker_RefreshList(hDlg, data);
-            RebuildSkydomePreviewBitmap(data->info);
+            RebuildBackgroundPreviewBitmap(data->info);
             RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                          RDW_INVALIDATE | RDW_UPDATENOW);
             return TRUE;
@@ -5075,7 +5115,7 @@ static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
             {
                 data->info->engine->SetSkydomeSlot(data->originalSlot);
                 WriteSkydomeIndex(data->originalSlot);
-                RebuildSkydomePreviewBitmap(data->info);
+                RebuildBackgroundPreviewBitmap(data->info);
                 RedrawWindow(data->info->hRenderWnd, NULL, NULL,
                              RDW_INVALIDATE | RDW_UPDATENOW);
             }
@@ -7226,7 +7266,11 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
             PushLightingToEngine(info->engine);
             ReadLightingDialogPos(info->lightingDlgRect);
 
-            ColorButton_SetColor(info->hBackgroundBtn, info->engine->GetBackground());
+            // MT-3 rework: no ColorButton seed — the Background button is a
+            // plain owner-drawn BUTTON that reads engine state directly.
+            // RebuildBackgroundPreviewBitmap below paints the thumbnail if a
+            // skydome slot is active, otherwise the owner-draw falls through
+            // to the swatch path on first WM_DRAWITEM.
 
             // MT-2: build the toolbar preview thumbnail for whatever
             // slot the engine actually loaded. May differ from the
@@ -7245,7 +7289,7 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
             info->engine->SetSkydomeSlot(ReadSkydomeIndex(0));
 
             // MT-3: build the skydome toolbar preview thumbnail.
-            RebuildSkydomePreviewBitmap(info);
+            RebuildBackgroundPreviewBitmap(info);
 
             // Sync the ground-toggle toolbar button to the (possibly
             // restored-from-registry) engine state. The TBBUTTON definition
@@ -7587,8 +7631,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	info.spawnerVisible         = false;
 	info.hGroundPicker          = NULL;
 	info.hSkydomePicker         = NULL;
-	info.hSkydomePreview        = NULL;
-	info.hSkydomePreviewBitmap  = NULL;
+	info.hBackgroundPreviewBitmap = NULL;
 	memset(&info.spawnerWindowRect, 0, sizeof(info.spawnerWindowRect));
 	info.hBloomDlg              = NULL;
 	info.bloomDlgVisible        = false;
