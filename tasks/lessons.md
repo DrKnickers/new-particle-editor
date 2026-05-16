@@ -23,6 +23,6 @@ and concluded "community recompile" — which would have made me caveat
 the RE results as non-canonical. User corrected: Petroglyph themselves
 shipped a 64-bit patch as a community-support gesture
 (see `memory/project_petroglyph_64bit_patch.md`). The binaries are
-canonical. The miscaveat would have polluted the CHANGELOG entry and
+canonical. The miscaveat would have polluted the development-log entry and
 created false uncertainty about whether the discovered iteration count
 was the "real" engine value.

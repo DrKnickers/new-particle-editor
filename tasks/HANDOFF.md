@@ -12,7 +12,7 @@ If you are a fresh Claude session resuming this project: read in this order.
 1. **This file** (top to bottom).
 2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline, the trust-but-verify rule. The authoritative behaviour spec.
 3. **[ROADMAP.md](../ROADMAP.md)** — what's queued, what's shipped, the renumber rules. Near-term and medium-term tiers are both empty as of 2026-05-16; only long-term remains.
-4. **[CHANGELOG.md](../CHANGELOG.md)** — most-recent shipped work. Top entry is the Ground Z reset (2026-05-16).
+4. **[DEVELOPMENT_LOG.md](../DEVELOPMENT_LOG.md)** — per-PR engineering detail for the most recent shipped work. Top entry is the Ground Z reset (2026-05-16). (Formerly `CHANGELOG.md`; the public-facing version-grouped release history now lives at [`CHANGELOG.md`](../CHANGELOG.md).)
 5. **Recent `git log`** — last ~20 commits to understand the rhythm.
 6. Open PRs: `gh pr list --state open` (none expected as of handoff).
 
@@ -120,7 +120,7 @@ For next session: `git worktree list` first, confirm you're somewhere that exist
 - **Ground Z does NOT persist** anymore. Future code that touches Ground Height should *not* re-introduce registry persistence without explicit user direction. The helpers `ReadGroundZ` / `WriteGroundZ` are intentionally dormant — they exist so a future revert is a 2-line change.
 - **Skydome render is Z-up.** Poles at ±Z, horizon ring on the XY plane. Don't accidentally regress this when touching the sphere mesh.
 - **`Engine` constructor signature is now** `Engine(HWND, HWND, ITextureManager&, IShaderManager&, IFileManager&)` — three references, in that order. Any future construction site must pass all three.
-- **CHANGELOG / ROADMAP backfill pattern** (now five PRs deep): every feature PR ships with `TODO` placeholders for the merge-commit short hash in the date line and the ROADMAP shipped-entry's `(#NN)`. After merge, a separate small docs PR replaces them. **Never fold the backfill into the feature PR** — keeps the feature PR's hash stable as a permanent reference.
+- **DEVELOPMENT_LOG / ROADMAP backfill pattern** (now five PRs deep): every feature PR ships with `TODO` placeholders for the merge-commit short hash in the date line and the ROADMAP shipped-entry's `(#NN)`. After merge, a separate small docs PR replaces them. **Never fold the backfill into the feature PR** — keeps the feature PR's hash stable as a permanent reference.
 
 ### Recently-shipped work that informs ongoing decisions
 

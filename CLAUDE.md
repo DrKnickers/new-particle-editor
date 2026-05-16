@@ -160,10 +160,14 @@ failure of pre-handoff discipline, not a normal collaboration cost.
 - When given a bug report, just fix it. Zero context-switching required
   from the user beyond the original report.
 
-### Roadmap items: update `ROADMAP.md` and `CHANGELOG.md` when a feature ships
+### Roadmap items: update `ROADMAP.md` and `DEVELOPMENT_LOG.md` when a feature ships
 
 Whenever a `ROADMAP.md` item lands, update both files — same PR if
-practical, immediate follow-up otherwise.
+practical, immediate follow-up otherwise. Per-PR engineering detail
+goes in `DEVELOPMENT_LOG.md`; the public-facing version-grouped
+release history in `CHANGELOG.md` is touched only at release time
+(see [Releases](#releases-update-changelogmd-when-a-version-ships)
+below).
 
 **`ROADMAP.md`**: when an item ships, do all five:
 
@@ -218,7 +222,7 @@ different stability semantics:
     it as vacating the old tag and taking a fresh one in the new
     tier.
 
-**`CHANGELOG.md`**: add a section covering three things, in this order:
+**`DEVELOPMENT_LOG.md`**: add a section covering three things, in this order:
 
 1. **What ships** — one-paragraph user-facing description. What the user
    can now do that they couldn't before, what shortcuts / modifiers
@@ -232,17 +236,17 @@ different stability semantics:
    errors and forward-declaration shuffles; record the gotchas a future
    contributor would otherwise step on.
 
-Skip the CHANGELOG addition only when the change is purely cosmetic with
+Skip the DEVELOPMENT_LOG addition only when the change is purely cosmetic with
 no behavioural or architectural pattern worth remembering. When in
 doubt, write the section — every entry costs five minutes today and
 saves an hour of rediscovery later.
 
-#### CHANGELOG formatting conventions
+#### DEVELOPMENT_LOG formatting conventions
 
 Match the existing entries — readers and tooling rely on the shape:
 
 - **Reverse chronological order.** New entries go at the *top* of the
-  `## Changelog` section, immediately under the heading. Within a single
+  `## Log` section, immediately under the heading. Within a single
   day, the most recently merged entry sits above older ones from the
   same day.
 - **Date line format.** Italicised line directly under the `### Title`,
@@ -260,7 +264,7 @@ Match the existing entries — readers and tooling rely on the shape:
     for prior art on the backfill pattern.
 - **Section title** is plain prose, not a Conventional-Commit prefix.
   Commit *messages* still use `feat:` / `fix:` / `docs:`; the heading
-  in the changelog reads naturally (e.g. *"Move Up / Move Down buttons
+  in the development log reads naturally (e.g. *"Move Up / Move Down buttons
   for root emitters"*, not *"feat(emitter-list): …"*).
 - **Section delimiter.** End every entry with a `---` on its own line
   before the next entry.
@@ -273,9 +277,38 @@ Match the existing entries — readers and tooling rely on the shape:
   period — they're sentence-leading run-in headers, not separate
   blocks.
 
-The changelog header (top of `CHANGELOG.md`) is the authoritative
+The header (top of `DEVELOPMENT_LOG.md`) is the authoritative
 short-form of these rules; if it ever drifts from this section, the
 header wins.
+
+### Releases: update `CHANGELOG.md` when a version ships
+
+`CHANGELOG.md` is the public-facing version-grouped release history —
+the document a downstream user reads to find out what's new in a
+release. It's updated at release time only, not per PR.
+
+When a new tagged release ships:
+
+1. **Add a `## vX.Y.Z — YYYY-MM-DD` section** at the top of the
+   reverse-chronological list, immediately under the file's intro
+   block.
+2. **Lead with a one-or-two-sentence intro** naming the themes of the
+   release in matter-of-fact prose. No PR counts, no roadmap-tag IDs
+   (NT-N / MT-N / LT-N belong in `ROADMAP.md` and `DEVELOPMENT_LOG.md`,
+   not user-facing).
+3. **List headline additions grouped by category** (typical:
+   *New features*, *Emitter management*, *Viewport & preview*,
+   *Input*, *Bug fixes*, *Known issues*). Bullet-per-item, prose
+   tone, bold lead-in for each bullet's name.
+4. **Don't duplicate engineering detail.** Source paths, line numbers,
+   architectural rationale, "how we tackled it", "issues encountered"
+   all stay in `DEVELOPMENT_LOG.md`. `CHANGELOG.md` is the summary
+   readers find from the release page; `DEVELOPMENT_LOG.md` is what
+   they click through to for depth.
+
+The GitHub release body for the same version typically expands the
+`CHANGELOG.md` section with installation instructions, credits, and
+any version-specific notes — it's not a verbatim copy.
 
 ---
 
@@ -322,7 +355,7 @@ where it will be seen again so the same check is never repeated. Valid
 targets:
 
 - This `CLAUDE.md` (for tooling-level conventions)
-- `CHANGELOG.md` (for "we tried X, it failed because Y, now we do Z" notes)
+- `DEVELOPMENT_LOG.md` (for "we tried X, it failed because Y, now we do Z" notes)
 - `tasks/lessons.md` (for collaboration corrections)
 - Code comments (for why a non-obvious line exists)
 - READMEs / ADRs / guides (for cross-cutting decisions)
@@ -370,4 +403,5 @@ These principles are not license to:
 | Bug report                                 | Fix it; don't ask permission                     |
 | Simple fix                                 | Don't over-engineer; skip the elegance pass      |
 | Marking a task done                        | Quote proof. *"Would a staff engineer approve?"* |
-| Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `CHANGELOG.md` (description + how-we-tackled-it + issues) |
+| Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `DEVELOPMENT_LOG.md` (description + how-we-tackled-it + issues) |
+| New tagged release ships                   | Add `## vX.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md` (intro + headline additions grouped by category) |
