@@ -1,0 +1,672 @@
+// HostWindow — see HostWindow.h for the design overview.
+//
+// Most of this file is a port of src/host/viewport_poc.cpp, split into
+// instance methods on a singleton-style HostWindow + Impl pair. The PoC
+// proved the composition pattern (WebView2 surface set transparent, D3D9
+// sibling child HWND layered on top, layout/viewport-rect drives
+// SetWindowPos). We carry those decisions forward verbatim.
+//
+// IMPORTANT: this TU upgrades _WIN32_WINNT to 0x0A00 (Windows 10) before
+// including windows.h. The rest of the project targets XP-era APIs;
+// WebView2 + DPI awareness need a modern target.
+#define _WIN32_WINNT 0x0A00
+#undef WINVER
+#define WINVER 0x0A00
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>
+#include <shlobj.h>
+#include <wrl.h>
+#include <d3d9.h>
+#include "WebView2.h"
+
+#include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "HostWindow.h"
+#include "Run.h"
+
+#include "AcceleratorBridge.h"
+#include "BridgeDispatcher.h"
+#include "LayoutBroker.h"
+
+#include "../engine.h"
+#include "../managers.h"
+
+using namespace Microsoft::WRL;
+
+namespace host {
+
+namespace {
+
+constexpr wchar_t kHostWindowClassName[]     = L"AloHostMain";
+constexpr wchar_t kHostViewportClassName[]   = L"AloHostViewport";
+constexpr int     kInitialWidth              = 1280;
+constexpr int     kInitialHeight             = 800;
+constexpr wchar_t kVirtualHostName[]         = L"app.local";
+
+// Walk up from x64/<Config>/ParticleEditor.exe to the repo root, then
+// descend to web/apps/editor/dist (Vite's build output). Same pattern as
+// viewport_poc, just a different sub-path.
+std::wstring ComputeEditorDistPath()
+{
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::filesystem::path p(exePath);
+    auto root = p.parent_path().parent_path().parent_path();
+    return (root / L"web" / L"apps" / L"editor" / L"dist").wstring();
+}
+
+// WebView2 user-data folder under %LOCALAPPDATA%. We use a stable,
+// production-quality location (not %TEMP%) so the runtime can persist
+// IndexedDB / cache across launches.
+std::wstring ComputeUserDataFolder()
+{
+    PWSTR localAppData = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData))
+        && localAppData)
+    {
+        std::wstring folder = localAppData;
+        CoTaskMemFree(localAppData);
+        folder += L"\\AloParticleEditor\\WebView2";
+        SHCreateDirectoryExW(nullptr, folder.c_str(), nullptr); // best-effort
+        return folder;
+    }
+    // Fallback to temp.
+    wchar_t tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    return std::wstring(tempDir) + L"AloParticleEditor_WebView2";
+}
+
+// Log file under %LOCALAPPDATA%\AloParticleEditor\host.log — handy for
+// diagnostics when there's no debugger attached.
+std::wstring ComputeHostLogPath()
+{
+    PWSTR localAppData = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppData))
+        && localAppData)
+    {
+        std::wstring path = localAppData;
+        CoTaskMemFree(localAppData);
+        path += L"\\AloParticleEditor";
+        SHCreateDirectoryExW(nullptr, path.c_str(), nullptr);
+        return path + L"\\host.log";
+    }
+    wchar_t tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    return std::wstring(tempDir) + L"AloParticleEditor_host.log";
+}
+
+// Convert UTF-16 → UTF-8 via WideCharToMultiByte. Used to hand WebView2
+// strings to BridgeDispatcher, and to hand the Win32 EXEPATH to
+// ComputeEditorDistPath's spdlog-style debug printf.
+std::string Utf16ToUtf8(const std::wstring& w)
+{
+    if (w.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                                  nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()),
+                        out.data(), len, nullptr, nullptr);
+    return out;
+}
+
+std::wstring Utf8ToUtf16(const std::string& s)
+{
+    if (s.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                                  nullptr, 0);
+    std::wstring out(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                        out.data(), len);
+    return out;
+}
+
+LRESULT CALLBACK HostMainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+LRESULT CALLBACK HostViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+
+} // namespace
+
+// -----------------------------------------------------------------------------
+// Impl
+// -----------------------------------------------------------------------------
+
+// File-scope pointer chased by the WndProc thunks below. Set by
+// HostWindowImpl::Run before any window is created, cleared after the
+// message loop returns. Single-instance is fine because Task 1.3
+// only ever runs one host window per process.
+struct HostWindowImpl;
+HostWindowImpl* g_self = nullptr;
+
+struct HostWindowImpl
+{
+    HINSTANCE        hInstance;
+    HWND             hMain         = nullptr;
+    HWND             hViewport     = nullptr;
+    IDirect3D9*      d3d           = nullptr;
+    IDirect3DDevice9* device       = nullptr;
+
+    ComPtr<ICoreWebView2Controller> webController;
+    ComPtr<ICoreWebView2>           webView;
+
+    ITextureManager& textureManager;
+    IShaderManager&  shaderManager;
+    IFileManager&    fileManager;
+    std::unique_ptr<Engine> engine;
+
+    LayoutBroker                       layout;
+    AcceleratorBridge                  accelerator;
+    std::unique_ptr<BridgeDispatcher>  dispatcher;
+
+    FILE*       logFile = nullptr;
+    std::mutex  logMutex;
+
+    HostWindowImpl(HINSTANCE inst,
+                   ITextureManager& tex,
+                   IShaderManager&  shd,
+                   IFileManager&    fil)
+        : hInstance(inst)
+        , textureManager(tex)
+        , shaderManager(shd)
+        , fileManager(fil)
+        , layout(nullptr)
+        , accelerator()
+    {
+    }
+
+    void Log(const char* fmt, ...);
+    void OpenLog();
+    void CloseLog();
+
+    bool InitD3D9();
+    void RenderD3D9();
+
+    HRESULT InitWebView2();
+    void    ResizeWebViewToClient();
+
+    void OnWebMessage(const std::wstring& json);
+
+    LRESULT MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+    LRESULT ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+
+    int Run(int nCmdShow);
+};
+
+// ---------- logging ----------
+
+void HostWindowImpl::OpenLog()
+{
+    std::wstring path = ComputeHostLogPath();
+    _wfopen_s(&logFile, path.c_str(), L"w");
+    if (logFile) Log("[host] === --new-ui session started ===\n");
+}
+
+void HostWindowImpl::CloseLog()
+{
+    std::lock_guard<std::mutex> lock(logMutex);
+    if (logFile)
+    {
+        fputs("[host] === --new-ui session ending ===\n", logFile);
+        fclose(logFile);
+        logFile = nullptr;
+    }
+}
+
+void HostWindowImpl::Log(const char* fmt, ...)
+{
+    char buf[2048];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    OutputDebugStringA(buf);
+    std::lock_guard<std::mutex> lock(logMutex);
+    if (logFile)
+    {
+        fputs(buf, logFile);
+        fflush(logFile);
+    }
+}
+
+// ---------- D3D9 ----------
+
+bool HostWindowImpl::InitD3D9()
+{
+    d3d = Direct3DCreate9(D3D_SDK_VERSION);
+    if (!d3d)
+    {
+        Log("[host] Direct3DCreate9 failed\n");
+        return false;
+    }
+
+    D3DPRESENT_PARAMETERS pp = {};
+    pp.Windowed              = TRUE;
+    pp.SwapEffect            = D3DSWAPEFFECT_DISCARD;
+    pp.BackBufferFormat      = D3DFMT_UNKNOWN;
+    pp.hDeviceWindow         = hViewport;
+    pp.PresentationInterval  = D3DPRESENT_INTERVAL_IMMEDIATE;
+    pp.EnableAutoDepthStencil = FALSE;
+
+    HRESULT hr = d3d->CreateDevice(
+        D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
+        D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
+    if (FAILED(hr))
+    {
+        Log("[host] CreateDevice HWVP failed 0x%08lx, trying MIXED\n", hr);
+        hr = d3d->CreateDevice(
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
+            D3DCREATE_MIXED_VERTEXPROCESSING, &pp, &device);
+    }
+    if (FAILED(hr))
+    {
+        Log("[host] CreateDevice MIXED failed 0x%08lx, trying SOFTWARE\n", hr);
+        hr = d3d->CreateDevice(
+            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
+            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
+    }
+    if (FAILED(hr))
+    {
+        Log("[host] CreateDevice all paths failed 0x%08lx\n", hr);
+        d3d->Release();
+        d3d = nullptr;
+        return false;
+    }
+    Log("[host] D3D9 device created OK\n");
+    return true;
+}
+
+void HostWindowImpl::RenderD3D9()
+{
+    if (!device) return;
+
+    // For Task 1.3 we don't run the engine's render loop yet (Phase 3
+    // wiring). Clear to the engine's current background colour so the
+    // viewport visibly carries Engine state — a quick eyeball check that
+    // the snapshot path is reading the right data.
+    DWORD clear = 0xFF101820u; // dark slate fallback
+    if (engine)
+    {
+        COLORREF bg = engine->GetBackground();      // 0x00BBGGRR
+        BYTE r = GetRValue(bg);
+        BYTE g = GetGValue(bg);
+        BYTE b = GetBValue(bg);
+        clear = D3DCOLOR_XRGB(r, g, b);
+    }
+    device->Clear(0, nullptr, D3DCLEAR_TARGET, clear, 1.0f, 0);
+    device->BeginScene();
+    device->EndScene();
+    device->Present(nullptr, nullptr, nullptr, nullptr);
+}
+
+// ---------- WebView2 ----------
+
+void HostWindowImpl::ResizeWebViewToClient()
+{
+    if (!webController) return;
+    RECT r;
+    GetClientRect(hMain, &r);
+    webController->put_Bounds(r);
+}
+
+void HostWindowImpl::OnWebMessage(const std::wstring& json)
+{
+    Log("[host] WebMsg (%zu chars)\n", json.size());
+    if (dispatcher)
+        dispatcher->Dispatch(Utf16ToUtf8(json));
+}
+
+HRESULT HostWindowImpl::InitWebView2()
+{
+    std::wstring userDataFolder = ComputeUserDataFolder();
+    Log("[host] WebView2 user-data folder: %ls\n", userDataFolder.c_str());
+
+    return CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, userDataFolder.c_str(), nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [this](HRESULT envHr, ICoreWebView2Environment* env) -> HRESULT
+            {
+                if (FAILED(envHr) || !env)
+                {
+                    Log("[host] WebView2 env failed 0x%08lx\n", envHr);
+                    return E_FAIL;
+                }
+                env->CreateCoreWebView2Controller(
+                    hMain,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [this](HRESULT ctlHr, ICoreWebView2Controller* controller) -> HRESULT
+                        {
+                            if (FAILED(ctlHr) || !controller)
+                            {
+                                Log("[host] WebView2 controller failed 0x%08lx\n", ctlHr);
+                                return E_FAIL;
+                            }
+                            webController = controller;
+                            controller->get_CoreWebView2(&webView);
+
+                            // PROVEN FIX (PoC visual gate, polish 4b23425):
+                            // Force the WebView2 surface to fully transparent so
+                            // the sibling D3D9 child HWND is visible through the
+                            // viewport slot's transparent <div>.
+                            ComPtr<ICoreWebView2Controller2> ctrl2;
+                            if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&ctrl2))))
+                            {
+                                COREWEBVIEW2_COLOR transparent = {};
+                                transparent.A = 0;
+                                transparent.R = 0;
+                                transparent.G = 0;
+                                transparent.B = 0;
+                                ctrl2->put_DefaultBackgroundColor(transparent);
+                                Log("[host] WebView2 bg => transparent\n");
+                            }
+
+                            // Fit to client.
+                            RECT bounds;
+                            GetClientRect(hMain, &bounds);
+                            controller->put_Bounds(bounds);
+
+                            // Map app.local → web/apps/editor/dist so the
+                            // React app loads from a stable virtual origin.
+                            ComPtr<ICoreWebView2_3> wv3;
+                            webView.As(&wv3);
+                            if (wv3)
+                            {
+                                std::wstring distPath = ComputeEditorDistPath();
+                                Log("[host] editor dist: %ls\n", distPath.c_str());
+                                wv3->SetVirtualHostNameToFolderMapping(
+                                    kVirtualHostName, distPath.c_str(),
+                                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                            }
+
+                            // Subscribe to JS → host messages.
+                            EventRegistrationToken tok;
+                            webView->add_WebMessageReceived(
+                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                    [this](ICoreWebView2*,
+                                           ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
+                                    {
+                                        LPWSTR raw = nullptr;
+                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw)
+                                        {
+                                            OnWebMessage(raw);
+                                            CoTaskMemFree(raw);
+                                        }
+                                        return S_OK;
+                                    }).Get(), &tok);
+
+                            // Navigate to the React app.
+                            webView->Navigate(L"https://app.local/index.html");
+                            Log("[host] Navigate dispatched\n");
+                            return S_OK;
+                        }).Get());
+                return S_OK;
+            }).Get());
+}
+
+// ---------- WndProc dispatch ----------
+
+LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        // Create the D3D9 viewport child sibling. Initial size 320×240 so
+        // the visual is non-degenerate even before React's first layout
+        // message arrives. SetWindowPos with HWND_TOP after creation puts
+        // it above WebView2 in z-order, so it composes on top of the
+        // transparent slot.
+        hViewport = CreateWindowExW(
+            0, kHostViewportClassName, L"",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+            16, 16, 320, 240, hwnd, nullptr,
+            hInstance, nullptr);
+        if (!hViewport)
+        {
+            Log("[host] CreateWindowExW viewport failed (gle=%lu)\n", GetLastError());
+            return -1;
+        }
+        layout.SetViewport(hViewport);
+
+        if (!InitD3D9())
+        {
+            MessageBoxW(hwnd, L"Direct3D 9 initialisation failed.",
+                        L"AloParticleEditor", MB_ICONERROR);
+            return -1;
+        }
+
+        SetWindowPos(hViewport, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+        // Construct the Engine now that both HWNDs exist. hFocus = parent,
+        // hDevice = viewport child — same wiring as legacy main.cpp.
+        try
+        {
+            engine = std::make_unique<Engine>(
+                hwnd, hViewport, textureManager, shaderManager, fileManager);
+            if (dispatcher) dispatcher->SetEngine(engine.get());
+            Log("[host] Engine constructed OK\n");
+        }
+        catch (const std::exception& e)
+        {
+            Log("[host] Engine construction threw: %s\n", e.what());
+            MessageBoxA(hwnd, e.what(), "Engine init failed", MB_ICONERROR);
+            // Continue — viewport will still clear, just without engine state.
+        }
+        catch (...)
+        {
+            Log("[host] Engine construction threw unknown exception\n");
+            // Continue without engine; snapshot will return ok:false.
+        }
+
+        // Seed the first paint (suppresses white-flash on startup; see
+        // PoC visual gate notes in the task brief).
+        InvalidateRect(hViewport, nullptr, FALSE);
+        return 0;
+    }
+
+    case WM_SIZE:
+        ResizeWebViewToClient();
+        return 0;
+
+    case WM_DESTROY:
+        if (webController)
+        {
+            webController->Close();
+            webController.Reset();
+        }
+        webView.Reset();
+        if (device)  { device->Release();  device = nullptr; }
+        if (d3d)     { d3d->Release();     d3d    = nullptr; }
+        engine.reset();
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg)
+    {
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        BeginPaint(hwnd, &ps);
+        RenderD3D9();
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        // Suppress GDI erase — D3D9 owns the surface.
+        return 1;
+    }
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+namespace {
+
+LRESULT CALLBACK HostMainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (auto* self = reinterpret_cast<HostWindowImpl*>(g_self))
+        return self->MainWndProc(hwnd, msg, wp, lp);
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+LRESULT CALLBACK HostViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (auto* self = reinterpret_cast<HostWindowImpl*>(g_self))
+        return self->ViewportWndProc(hwnd, msg, wp, lp);
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+} // namespace
+
+// ---------- Run ----------
+
+int HostWindowImpl::Run(int nCmdShow)
+{
+    OpenLog();
+
+    // DPI awareness — PMv2 so child-window coords are physical pixels and
+    // match what React sends from getBoundingClientRect under WebView2.
+    // The PoC ran with this and the visual gate passed.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    // COM init — WebView2 needs an STA. main.cpp doesn't call
+    // CoInitializeEx before invoking host::Run, so we do it here.
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    Log("[host] CoInitializeEx hr=0x%08lx\n", coHr);
+
+    g_self = this;
+
+    WNDCLASSEXW wc{};
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = HostMainWndProc;
+    wc.hInstance     = hInstance;
+    wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
+    // IDI_LOGO == 109 in src/Resources/resource.h. Fall back to the
+    // generic application icon if the resource isn't linked in (e.g.
+    // running the host TU as part of a stripped-down test binary).
+    wc.hIcon         = LoadIconW(hInstance, MAKEINTRESOURCEW(109));
+    if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.lpszClassName = kHostWindowClassName;
+    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.hbrBackground = nullptr;
+    RegisterClassExW(&wc);
+
+    WNDCLASSEXW vc{};
+    vc.cbSize        = sizeof(vc);
+    vc.lpfnWndProc   = HostViewportWndProc;
+    vc.hInstance     = hInstance;
+    vc.lpszClassName = kHostViewportClassName;
+    vc.hbrBackground = nullptr;
+    RegisterClassExW(&vc);
+
+    hMain = CreateWindowExW(
+        0, kHostWindowClassName, L"AloParticleEditor",
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        CW_USEDEFAULT, CW_USEDEFAULT, kInitialWidth, kInitialHeight,
+        nullptr, nullptr, hInstance, nullptr);
+    if (!hMain)
+    {
+        Log("[host] CreateWindowEx parent failed (gle=%lu)\n", GetLastError());
+        g_self = nullptr;
+        CoUninitialize();
+        CloseLog();
+        return 1;
+    }
+
+    // Construct dispatcher AFTER hMain exists (it captures the WebView2
+    // pointer-to-PostWebMessageAsString via its EmitFn). engine ptr is
+    // wired in WM_CREATE when the Engine is built.
+    auto emitFn = [this](const std::string& js)
+    {
+        if (!webView) return;
+        std::wstring w = Utf8ToUtf16(js);
+        webView->PostWebMessageAsJson(w.c_str());
+    };
+    dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, emitFn);
+
+    // WM_CREATE fired during CreateWindowEx; viewport + engine now exist.
+    // Wire the engine into the dispatcher (it was null when we constructed
+    // the dispatcher because hMain hadn't been created yet).
+    if (engine) dispatcher->SetEngine(engine.get());
+
+    HRESULT hr = InitWebView2();
+    if (FAILED(hr))
+    {
+        wchar_t msg[256];
+        swprintf(msg, 256,
+                 L"WebView2 initialisation failed (0x%08lx).\n"
+                 L"Is the Evergreen runtime installed?", hr);
+        MessageBoxW(hMain, msg, L"AloParticleEditor", MB_ICONERROR);
+        DestroyWindow(hMain);
+        g_self = nullptr;
+        CoUninitialize();
+        CloseLog();
+        return 1;
+    }
+
+    ShowWindow(hMain, nCmdShow);
+    UpdateWindow(hMain);
+
+    MSG m;
+    while (GetMessage(&m, nullptr, 0, 0))
+    {
+        // TODO Task 1.6: pre-translate accelerator combos here.
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+
+    g_self = nullptr;
+    CoUninitialize();
+    CloseLog();
+    return static_cast<int>(m.wParam);
+}
+
+// -----------------------------------------------------------------------------
+// HostWindow public surface
+// -----------------------------------------------------------------------------
+
+HostWindow::HostWindow(HINSTANCE hInstance,
+                       ITextureManager& textureManager,
+                       IShaderManager&  shaderManager,
+                       IFileManager&    fileManager)
+    : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager))
+{
+}
+
+HostWindow::~HostWindow()
+{
+    delete static_cast<HostWindowImpl*>(m_impl);
+    m_impl = nullptr;
+}
+
+int HostWindow::Run(int nCmdShow)
+{
+    return static_cast<HostWindowImpl*>(m_impl)->Run(nCmdShow);
+}
+
+// -----------------------------------------------------------------------------
+// host::Run entry point
+// -----------------------------------------------------------------------------
+
+int Run(HINSTANCE hInstance,
+        int nCmdShow,
+        ITextureManager& textureManager,
+        IShaderManager&  shaderManager,
+        IFileManager&    fileManager)
+{
+    HostWindow host(hInstance, textureManager, shaderManager, fileManager);
+    return host.Run(nCmdShow);
+}
+
+} // namespace host

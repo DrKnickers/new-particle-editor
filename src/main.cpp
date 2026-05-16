@@ -24,6 +24,16 @@
 #include "Rescale.h"
 #include "resource.h"
 
+// LT-4 Task 1.3: --new-ui flag dispatches to the WebView2 + D3D9 host
+// declared here. Legacy mode (no flag) ignores this include entirely.
+// The host requires Windows 10+ (DPI awareness v2, WebView2) and is
+// only built for x64 — the legacy Win32 configuration silently treats
+// --new-ui as unrecognised. The .sln only exposes x64, so this gate is
+// purely belt-and-suspenders against an out-of-tree Win32 build.
+#ifdef _WIN64
+#include "host/Run.h"
+#endif
+
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <shellapi.h>
@@ -8121,6 +8131,47 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		typedef HRESULT (WINAPI *PFN_SetAppId)(PCWSTR);
 		PFN_SetAppId pSet = (PFN_SetAppId)GetProcAddress(hShell32, "SetCurrentProcessExplicitAppUserModelID");
 		if (pSet) pSet(L"DrKnickers.AloParticleEditor");
+	}
+
+	// LT-4 Task 1.3 — `--new-ui` runs the WebView2 + D3D9 host instead of
+	// the legacy chrome. Detect the flag, build the same three managers
+	// legacy main() builds (so the host can construct Engine identically),
+	// then return early. No legacy WNDCLASS / windows are registered.
+	//
+	// Without the flag, behaviour is unchanged from before this commit.
+	{
+		const std::vector<std::wstring> argv = parseCommandLine();
+		bool newUi = false;
+		for (size_t i = 1; i < argv.size(); ++i)
+		{
+			if (argv[i] == L"--new-ui") { newUi = true; break; }
+		}
+		if (newUi)
+		{
+#ifdef _WIN64
+			FileManager* fileManager = createFileManager(NULL, argv);
+			if (fileManager == NULL)
+			{
+				// Same semantics as legacy: user cancelled the data-path
+				// picker. Exit cleanly with the same -1 sentinel.
+				return -1;
+			}
+			TextureManager textureManager(fileManager, "Data\\Art\\Textures\\");
+			ShaderManager  shaderManager (fileManager, "Data\\Art\\Shaders\\");
+			int hostResult = host::Run(hInstance, SW_SHOWDEFAULT,
+			                           textureManager, shaderManager, *fileManager);
+			delete fileManager;
+#ifndef NDEBUG
+			FreeConsole();
+#endif
+			return hostResult;
+#else
+			MessageBoxW(NULL,
+				L"--new-ui is only available in the x64 build of this editor.",
+				L"AloParticleEditor", MB_ICONERROR);
+			return -1;
+#endif
+		}
 	}
 
 	int result = -1;
