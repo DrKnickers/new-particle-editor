@@ -1634,7 +1634,7 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
             // session-only and resets each launch; we still reset the
             // in-memory spawner state here for parity.
             if (MessageBox(info->hMainWnd,
-                           L"Reset background color, ground plane visibility, ground texture, ground Z offset, bloom, lighting, and the color picker's custom colors to defaults?",
+                           L"Reset background color, ground plane visibility, ground texture, ground Z offset, skydome, bloom, lighting, and the color picker's custom colors to defaults?",
                            L"Reset View Settings",
                            MB_YESNO | MB_ICONQUESTION) == IDYES)
             {
@@ -1671,8 +1671,9 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     info->engine->SetSkydomeSlot(0);
                     WriteSkydomeIndex(0);
                     RebuildSkydomePreviewBitmap(info);
+                    InvalidateRect(info->hSkydomePreview, NULL, TRUE);
                     // Reseed the picker if it's open.
-                    if (info->hSkydomePicker != NULL)
+                    if (info->hSkydomePicker != NULL && IsWindowVisible(info->hSkydomePicker))
                         SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
                     {
                         SPINNER_INFO si;
@@ -7234,6 +7235,14 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
             // any subsequent selection change.
             RebuildGroundTexturePreviewBitmap(info);
             InvalidateRect(info->hGroundTexturePreview, NULL, TRUE);
+
+            // MT-3: skydome restore. Custom paths first so SetSkydomeSlot can
+            // reload a previously-active custom slot.
+            for (int s = Engine::kSkydomeFirstCustomSlot; s < Engine::kSkydomeSlotCount; ++s)
+            {
+                info->engine->SetSkydomeCustomPath(s, ReadSkydomeCustomPath(s));
+            }
+            info->engine->SetSkydomeSlot(ReadSkydomeIndex(0));
 
             // MT-3: build the skydome toolbar preview thumbnail.
             RebuildSkydomePreviewBitmap(info);
