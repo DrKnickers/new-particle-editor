@@ -56,6 +56,21 @@ constexpr int     kInitialHeight             = 800;
 constexpr wchar_t kVirtualHostName[]         = L"app.local";
 constexpr INTERNET_PORT kDevServerPort       = 5174;
 
+// Probe the installed WebView2 Evergreen runtime. Returns true if
+// GetAvailableCoreWebView2BrowserVersionString succeeds and returns a
+// non-empty version string. Call AFTER CoInitializeEx so that
+// ShellExecuteW works cleanly in the error branch, but BEFORE any
+// window creation so the dialog is the only visible artifact when the
+// runtime is absent.
+static bool WebView2RuntimeInstalled()
+{
+    LPWSTR versionInfo = nullptr;
+    HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &versionInfo);
+    bool installed = SUCCEEDED(hr) && versionInfo != nullptr && versionInfo[0] != L'\0';
+    if (versionInfo) CoTaskMemFree(versionInfo);
+    return installed;
+}
+
 // Probe the Vite dev server at http://localhost:5174/. Used when
 // --dev-ui is active to verify the server is listening before
 // navigating. Returns true only if a 2xx response is received.
@@ -636,6 +651,29 @@ int HostWindowImpl::Run(int nCmdShow)
     // CoInitializeEx before invoking host::Run, so we do it here.
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     Log("[host] CoInitializeEx hr=0x%08lx\n", coHr);
+
+    // LT-4 Task 1.5: verify the WebView2 Evergreen runtime is present before
+    // creating any window. If missing the dialog is the only visible artifact.
+    if (!WebView2RuntimeInstalled())
+    {
+        Log("[host] WebView2 runtime not found — showing install dialog\n");
+        int r = MessageBoxW(nullptr,
+            L"AloParticleEditor requires the Microsoft Edge WebView2 Runtime.\n\n"
+            L"Install it from https://aka.ms/webview2 and relaunch.\n\n"
+            L"Click OK to open the download page in your browser.\n"
+            L"Click Cancel to exit.",
+            L"WebView2 Runtime Required",
+            MB_OKCANCEL | MB_ICONERROR);
+        if (r == IDOK)
+        {
+            ShellExecuteW(nullptr, L"open", L"https://aka.ms/webview2",
+                          nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        CoUninitialize();
+        CloseLog();
+        return 1;
+    }
+    Log("[host] WebView2 runtime detected — proceeding\n");
 
     g_self = this;
 
