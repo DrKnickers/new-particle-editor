@@ -452,6 +452,7 @@ static const UINT ID_MOD_LAST     = 0xAFFF;
 // below ID_MOD_NONE to avoid collisions in WM_COMMAND.
 static const UINT ID_GROUNDZ_SPINNER          = 0x5000;
 static const UINT ID_GROUND_TEXTURE_PREVIEW   = 0x5001;   // MT-2 toolbar preview button
+static const UINT ID_SKYDOME_PREVIEW          = 0x5002;   // MT-3 toolbar skydome preview button
 
 // Posted to the main window from WM_MENURBUTTONUP to defer the nickname
 // dialog until after the menu's modal loop has finished tearing down.
@@ -487,6 +488,16 @@ static HBITMAP          MakeGroundSlotThumbnail(IDirect3DDevice9* pDevice,
                                                   COLORREF solidColor);
 static void             RebuildGroundTexturePreviewBitmap(APPLICATION_INFO* info);
 static void             ShowGroundTexturePicker(HWND hParent, APPLICATION_INFO* info);
+static HBITMAP          MakeSkydomeSlotThumbnail(IDirect3DDevice9* pDevice,
+                                                   int slot, int sizePx,
+                                                   const std::wstring& customPath,
+                                                   COLORREF bgColor);
+static void             RebuildSkydomePreviewBitmap(APPLICATION_INFO* info);
+static void             ShowSkydomePicker(HWND hParent, APPLICATION_INFO* info);
+static void             WriteSkydomeIndex(int value);
+static void             WriteSkydomeCustomPath(int slot, const std::wstring& path);
+static bool             ReadSkydomePickerPos(RECT& out);
+static void             WriteSkydomePickerPos(const RECT& in);
 struct GroundPickerPos;
 static void             WriteGroundPickerPos(int x, int y);
 static bool             ReadBloomEnabled(bool defaultValue);
@@ -583,6 +594,14 @@ struct APPLICATION_INFO
 	// creates the dialog; routed into the main message pump's
 	// IsDialogMessage chain so Tab / Esc / arrow-key navigation work.
 	HWND            hGroundPicker;
+
+	// MT-3: skydome picker (modeless). Same lifecycle as hGroundPicker.
+	HWND            hSkydomePicker;
+	// MT-3: toolbar owner-drawn preview button for the active skydome slot.
+	HWND            hSkydomePreview;
+	// MT-3: 24×24 thumbnail of the current skydome slot; rebuilt on any
+	// slot change. NULL until the engine finishes its first init.
+	HBITMAP         hSkydomePreviewBitmap;
 
 	// Bloom config dialog (View → Bloom… / Ctrl+B). Same modeless
 	// toggle pattern as the spawner. Engine owns the bloom state
@@ -1648,6 +1667,13 @@ static bool DoMenuItem(APPLICATION_INFO* info, UINT id)
                     // in the picker dialog handles that.
                     RebuildGroundTexturePreviewBitmap(info);
                     InvalidateRect(info->hGroundTexturePreview, NULL, TRUE);
+                    // MT-3: reset skydome to Off (slot 0) and rebuild preview.
+                    info->engine->SetSkydomeSlot(0);
+                    WriteSkydomeIndex(0);
+                    RebuildSkydomePreviewBitmap(info);
+                    // Reseed the picker if it's open.
+                    if (info->hSkydomePicker != NULL)
+                        SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
                     {
                         SPINNER_INFO si;
                         si.Mask = SPIF_VALUE;
@@ -1979,6 +2005,19 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             // Thumbnail is built later (after engine init + registry
             // load) by RebuildGroundTexturePreviewBitmap().
 
+            // MT-3: skydome preview button (owner-drawn, 24×24) sits to the
+            // left of the Ground Texture preview in the header strip.
+            // Positioned during WM_SIZE like all other header controls.
+            if ((info->hSkydomePreview = CreateWindowEx(0, L"BUTTON", NULL,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                0, 0, 24, 24, hWnd, (HMENU)(UINT_PTR)ID_SKYDOME_PREVIEW,
+                pcs->hInstance, NULL)) == NULL)
+            {
+                return -1;
+            }
+            info->hSkydomePreviewBitmap = NULL;
+            // Thumbnail built after engine init by RebuildSkydomePreviewBitmap().
+
             if ((info->hGroundZSpinner = CreateWindowEx(WS_EX_CLIENTEDGE, L"Spinner", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                 0, 0, 80, 20, hWnd, (HMENU)(UINT_PTR)ID_GROUNDZ_SPINNER, pcs->hInstance, NULL)) == NULL)
             {
@@ -2205,6 +2244,50 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				}
 				return TRUE;
 			}
+			// MT-3: skydome preview button — same shape as ground texture preview.
+			if (dis->CtlType == ODT_BUTTON &&
+			    dis->CtlID   == ID_SKYDOME_PREVIEW &&
+			    info != NULL)
+			{
+				RECT rc = dis->rcItem;
+				HBITMAP hbm = info->hSkydomePreviewBitmap;
+				if (hbm != NULL)
+				{
+					HDC hMem = CreateCompatibleDC(dis->hDC);
+					HGDIOBJ old = SelectObject(hMem, hbm);
+					BITMAP bm = {};
+					GetObject(hbm, sizeof(bm), &bm);
+					int w = rc.right - rc.left;
+					int h = rc.bottom - rc.top;
+					SetStretchBltMode(dis->hDC, HALFTONE);
+					StretchBlt(dis->hDC, rc.left, rc.top, w, h,
+					           hMem, 0, 0, bm.bmWidth, bm.bmHeight, SRCCOPY);
+					SelectObject(hMem, old);
+					DeleteDC(hMem);
+				}
+				else
+				{
+					FillRect(dis->hDC, &rc,
+					         (HBRUSH)(COLOR_BTNFACE + 1));
+				}
+				// Border + focus / pressed indication.
+				HPEN penSky = CreatePen(PS_SOLID, 1,
+				    (dis->itemState & ODS_SELECTED) ? GetSysColor(COLOR_HIGHLIGHT)
+				                                    : RGB(0x60, 0x60, 0x60));
+				HGDIOBJ oldPenSky   = SelectObject(dis->hDC, penSky);
+				HGDIOBJ oldBrushSky = SelectObject(dis->hDC, GetStockObject(NULL_BRUSH));
+				Rectangle(dis->hDC, rc.left, rc.top, rc.right, rc.bottom);
+				SelectObject(dis->hDC, oldBrushSky);
+				SelectObject(dis->hDC, oldPenSky);
+				DeleteObject(penSky);
+				if (dis->itemState & ODS_FOCUS)
+				{
+					RECT fr = rc;
+					InflateRect(&fr, -2, -2);
+					DrawFocusRect(dis->hDC, &fr);
+				}
+				return TRUE;
+			}
 			if (dis->CtlType != ODT_MENU) break;
 			if (dis->itemID < ID_MOD_FIRST || dis->itemID > ID_MOD_LAST) break;
 
@@ -2379,6 +2462,12 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                     if (hControl == info->hGroundTexturePreview && info->engine != NULL)
                     {
                         ShowGroundTexturePicker(hWnd, info);
+                        break;
+                    }
+                    // MT-3: skydome preview button — toggle the skydome picker.
+                    if (hControl == info->hSkydomePreview && info->engine != NULL)
+                    {
+                        ShowSkydomePicker(hWnd, info);
                         break;
                     }
                     if (hControl == info->hLeaveParticles && info->particleSystem != NULL)
@@ -2568,25 +2657,30 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                 const int GROUND_COMBO_H   = 20;
                 MoveWindow(info->hLeaveParticles, props.right + 8, top + 4 + (height - checkbox.bottom) / 2, checkbox.right, label.bottom, TRUE);
                 // Right side of the header strip, anchored from the right edge:
-                //   [Ground tex label] [Ground tex combo]  [Ground Z label] [Ground Z spinner]  [Background label] [Background btn]
+                //   [Skydome preview] [Ground tex label] [Ground tex preview]  [Ground Z label] [Ground Z spinner]  [Background label] [Background btn]
                 // Background button is 4 px from the right edge; the
                 // Ground Z group sits 16 px to its left; the Ground
-                // texture group sits 16 px to the left of that. Same
-                // anchoring pattern across all three; narrow-window
-                // overflow degrades gracefully (combo + spinner widths
-                // are fixed; labels truncate via Win32 default).
-                const int GT_PREVIEW_SIZE = 24;
-                int bgLabelX  = LOWORD(lParam) - 32 - label.right;
-                int gzSpinnerX = bgLabelX - 16 - GROUND_SPINNER_W;
-                int gzLabelX   = gzSpinnerX - 4 - groundLabel.right;
-                int gtPreviewX = gzLabelX - 16 - GT_PREVIEW_SIZE;
-                int gtLabelX   = gtPreviewX - 4 - groundTexLabel.right;
+                // texture group sits 16 px to the left of that; the
+                // skydome preview sits 8 px to the left of the ground
+                // texture preview. Same anchoring pattern; narrow-window
+                // overflow degrades gracefully (spinner widths are fixed;
+                // labels truncate via Win32 default).
+                const int GT_PREVIEW_SIZE  = 24;
+                const int SKY_PREVIEW_SIZE = 24;
+                int bgLabelX    = LOWORD(lParam) - 32 - label.right;
+                int gzSpinnerX  = bgLabelX - 16 - GROUND_SPINNER_W;
+                int gzLabelX    = gzSpinnerX - 4 - groundLabel.right;
+                int gtPreviewX  = gzLabelX - 16 - GT_PREVIEW_SIZE;
+                int gtLabelX    = gtPreviewX - 4 - groundTexLabel.right;
+                int skyPreviewX = gtLabelX - 8 - SKY_PREVIEW_SIZE;
 				MoveWindow(info->hBackgroundBtn,   LOWORD(lParam) - 28, top + 4 + (height - 24) / 2, 24, 24, TRUE);
 				MoveWindow(info->hBackgroundLabel, bgLabelX, top + 4 + (height - label.bottom) / 2, label.right, label.bottom, TRUE);
                 MoveWindow(info->hGroundZSpinner,  gzSpinnerX, top + 4 + (height - GROUND_SPINNER_H) / 2, GROUND_SPINNER_W,  GROUND_SPINNER_H,   TRUE);
                 MoveWindow(info->hGroundZLabel,    gzLabelX,   top + 4 + (height - groundLabel.bottom) / 2, groundLabel.right, groundLabel.bottom, TRUE);
                 MoveWindow(info->hGroundTexturePreview, gtPreviewX, top + 4 + (height - GT_PREVIEW_SIZE) / 2, GT_PREVIEW_SIZE, GT_PREVIEW_SIZE, TRUE);
                 MoveWindow(info->hGroundTextureLabel,   gtLabelX,   top + 4 + (height - groundTexLabel.bottom) / 2, groundTexLabel.right, groundTexLabel.bottom, TRUE);
+                if (info->hSkydomePreview != NULL)
+                    MoveWindow(info->hSkydomePreview, skyPreviewX, top + 4 + (height - SKY_PREVIEW_SIZE) / 2, SKY_PREVIEW_SIZE, SKY_PREVIEW_SIZE, TRUE);
 
 				// Move render window
 				MoveWindow(info->hRenderWnd, props.right + 8, top + 32, LOWORD(lParam) - (props.right + 8), HIWORD(lParam) - tabs.bottom - 36, TRUE);
@@ -4421,6 +4515,800 @@ static void ShowGroundTexturePicker(HWND hParent, APPLICATION_INFO* info)
         // while hidden (custom paths added via the right-click menu in
         // another popup, etc.).
         GroundTexturePicker_RefreshList(s_hPicker, &s_data);
+    }
+    ShowWindow(s_hPicker, SW_SHOW);
+    SetForegroundWindow(s_hPicker);
+}
+
+// ---------------------------------------------------------------------------
+// MT-3  Skydome picker dialog + toolbar preview
+// ---------------------------------------------------------------------------
+
+// MakeSkydomeSlotThumbnail — produces a sizePx×sizePx HBITMAP for `slot`.
+//
+//  Slot 0        (Off)         flat bgColor square with centred "✕" glyph.
+//  Slots 1-8     (bundled)     decoded from RCDATA via D3DX into a DIB.
+//  Slots 9-11    (custom)      loaded from customPath if non-empty;
+//                              falls back to "+" placeholder if empty or
+//                              load fails.
+//
+// Mirrors MakeGroundSlotThumbnail's LockRect + CreateDIBSection pattern.
+static HBITMAP MakeSkydomeSlotThumbnail(IDirect3DDevice9*    pDevice,
+                                         int                  slot,
+                                         int                  sizePx,
+                                         const std::wstring&  customPath,
+                                         COLORREF             bgColor)
+{
+    // Helper: create a placeholder HBITMAP. `empty`=true → "+" glyph on
+    // light grey; `empty`=false → "?" on muted red (load failure).
+    auto MakePlaceholder = [&](bool empty) -> HBITMAP {
+        HDC hScreen = GetDC(NULL);
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize        = sizeof(bmi.bmiHeader);
+        bmi.bmiHeader.biWidth       = sizePx;
+        bmi.bmiHeader.biHeight      = -sizePx;
+        bmi.bmiHeader.biPlanes      = 1;
+        bmi.bmiHeader.biBitCount    = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* pBits = NULL;
+        HBITMAP hbm = CreateDIBSection(hScreen, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+        ReleaseDC(NULL, hScreen);
+        if (hbm == NULL) return NULL;
+        HDC hMem = CreateCompatibleDC(NULL);
+        HGDIOBJ old = SelectObject(hMem, hbm);
+        RECT r = { 0, 0, sizePx, sizePx };
+        HBRUSH bg = CreateSolidBrush(empty ? RGB(0xE8, 0xE8, 0xE8) : RGB(0xC8, 0xA0, 0xA0));
+        FillRect(hMem, &r, bg);
+        DeleteObject(bg);
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(0x80, 0x80, 0x80));
+        HGDIOBJ oldPen   = SelectObject(hMem, pen);
+        HGDIOBJ oldBrush = SelectObject(hMem, GetStockObject(NULL_BRUSH));
+        Rectangle(hMem, 0, 0, sizePx, sizePx);
+        SelectObject(hMem, oldBrush);
+        SelectObject(hMem, oldPen);
+        DeleteObject(pen);
+        HFONT hFont = CreateFont(sizePx / 2, 0, 0, 0, FW_NORMAL,
+                                  FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HGDIOBJ oldFont = SelectObject(hMem, hFont);
+        SetBkMode(hMem, TRANSPARENT);
+        SetTextColor(hMem, RGB(0x80, 0x80, 0x80));
+        DrawText(hMem, empty ? L"+" : L"?", -1, &r,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hMem, oldFont);
+        DeleteObject(hFont);
+        SelectObject(hMem, old);
+        DeleteDC(hMem);
+        return hbm;
+    };
+
+    // Slot 0 — Off: flat background colour + centred "✕" (drawn as
+    // two crossing lines at 1/3 of the cell size).
+    if (slot == Engine::kSkydomeOffSlot)
+    {
+        HDC hScreen = GetDC(NULL);
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize        = sizeof(bmi.bmiHeader);
+        bmi.bmiHeader.biWidth       = sizePx;
+        bmi.bmiHeader.biHeight      = -sizePx;
+        bmi.bmiHeader.biPlanes      = 1;
+        bmi.bmiHeader.biBitCount    = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        void* pBits = NULL;
+        HBITMAP hbm = CreateDIBSection(hScreen, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+        ReleaseDC(NULL, hScreen);
+        if (hbm == NULL) return MakePlaceholder(true);
+        HDC hMem = CreateCompatibleDC(NULL);
+        HGDIOBJ old = SelectObject(hMem, hbm);
+        RECT r = { 0, 0, sizePx, sizePx };
+        HBRUSH br = CreateSolidBrush(bgColor);
+        FillRect(hMem, &r, br);
+        DeleteObject(br);
+        // 1 px outline.
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(0x60, 0x60, 0x60));
+        HGDIOBJ oldPen   = SelectObject(hMem, pen);
+        HGDIOBJ oldBrush = SelectObject(hMem, GetStockObject(NULL_BRUSH));
+        Rectangle(hMem, 0, 0, sizePx, sizePx);
+        SelectObject(hMem, oldBrush);
+        SelectObject(hMem, oldPen);
+        DeleteObject(pen);
+        // "x" glyph using DrawText — matches ground picker's empty-slot style.
+        HFONT hFont = CreateFont(sizePx / 2, 0, 0, 0, FW_BOLD,
+                                  FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HGDIOBJ oldFont = SelectObject(hMem, hFont);
+        SetBkMode(hMem, TRANSPARENT);
+        SetTextColor(hMem, RGB(0xC0, 0xC0, 0xC0));
+        DrawText(hMem, L"x", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hMem, oldFont);
+        DeleteObject(hFont);
+        SelectObject(hMem, old);
+        DeleteDC(hMem);
+        return hbm;
+    }
+
+    // Without a D3D device we can only produce a placeholder.
+    if (pDevice == NULL) return MakePlaceholder(true);
+
+    // Helper: copy level-0 surface of a D3D texture into a new HBITMAP.
+    auto TextureToHBitmap = [&](IDirect3DTexture9* pTex) -> HBITMAP {
+        if (pTex == NULL) return NULL;
+        IDirect3DSurface9* pSurf = NULL;
+        if (FAILED(pTex->GetSurfaceLevel(0, &pSurf))) return NULL;
+        D3DLOCKED_RECT lr;
+        if (FAILED(pSurf->LockRect(&lr, NULL, D3DLOCK_READONLY)))
+        {
+            pSurf->Release();
+            return NULL;
+        }
+        BITMAPINFO bmi = {};
+        bmi.bmiHeader.biSize        = sizeof(bmi.bmiHeader);
+        bmi.bmiHeader.biWidth       = sizePx;
+        bmi.bmiHeader.biHeight      = -sizePx;
+        bmi.bmiHeader.biPlanes      = 1;
+        bmi.bmiHeader.biBitCount    = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        HDC hScreen = GetDC(NULL);
+        void* pBits = NULL;
+        HBITMAP hbm = CreateDIBSection(hScreen, &bmi, DIB_RGB_COLORS, &pBits, NULL, 0);
+        ReleaseDC(NULL, hScreen);
+        if (hbm != NULL && pBits != NULL)
+        {
+            const uint8_t* src  = (const uint8_t*)lr.pBits;
+            uint8_t*       dst  = (uint8_t*)pBits;
+            const int      rowB = sizePx * 4;
+            for (int y = 0; y < sizePx; ++y)
+                memcpy(dst + y * rowB, src + y * lr.Pitch, rowB);
+        }
+        pSurf->UnlockRect();
+        pSurf->Release();
+        return hbm;
+    };
+
+    IDirect3DTexture9* pTex = NULL;
+    HRESULT hr = E_FAIL;
+
+    // Custom path has highest priority (applies to all slot types,
+    // though in practice only slots 9-11 have custom paths in MT-3).
+    if (!customPath.empty())
+    {
+        hr = D3DXCreateTextureFromFileExW(
+            pDevice, customPath.c_str(),
+            sizePx, sizePx, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH,
+            D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &pTex);
+    }
+
+    // Bundled fallback: slots 1-8.
+    if (FAILED(hr) && slot >= 1 && slot < Engine::kSkydomeBundledCount)
+    {
+        const int* ids = Engine::GetSkydomeBundledResources();
+        int resId = ids[slot];
+        if (resId != 0)
+        {
+            HMODULE hMod  = GetModuleHandle(NULL);
+            HRSRC   hRes  = FindResource(hMod, MAKEINTRESOURCE(resId), RT_RCDATA);
+            HGLOBAL hData = (hRes != NULL) ? LoadResource(hMod, hRes) : NULL;
+            void*   pData = (hData != NULL) ? LockResource(hData)     : NULL;
+            DWORD   dwSz  = (hRes  != NULL) ? SizeofResource(hMod, hRes) : 0;
+            if (pData != NULL && dwSz > 0)
+            {
+                hr = D3DXCreateTextureFromFileInMemoryEx(
+                    pDevice, pData, dwSz,
+                    sizePx, sizePx, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH,
+                    D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &pTex);
+            }
+        }
+    }
+
+    HBITMAP hbm = NULL;
+    if (SUCCEEDED(hr) && pTex != NULL)
+        hbm = TextureToHBitmap(pTex);
+    if (pTex != NULL) pTex->Release();
+
+    if (hbm == NULL)
+    {
+        // Determine whether the slot has ANY configured source.
+        const bool hasBundled =
+            (slot >= 1 && slot < Engine::kSkydomeBundledCount);
+        const bool slotHasSource = !customPath.empty() || hasBundled;
+        hbm = MakePlaceholder(!slotHasSource);
+    }
+    return hbm;
+}
+
+// RebuildSkydomePreviewBitmap — regenerates the 24×24 toolbar thumbnail
+// from the current engine skydome slot and stores it in info->hSkydomePreviewBitmap.
+// Releases the previous bitmap before replacing (no double-free).
+// Called at startup, after every slot change, and after Reset View Settings.
+static void RebuildSkydomePreviewBitmap(APPLICATION_INFO* info)
+{
+    if (info == NULL || info->engine == NULL) return;
+    HBITMAP hbmOld = info->hSkydomePreviewBitmap;
+    int slot = info->engine->GetSkydomeSlot();
+    std::wstring customPath;
+    if (slot >= Engine::kSkydomeFirstCustomSlot && slot < Engine::kSkydomeSlotCount)
+        customPath = info->engine->GetSkydomeCustomPath(slot);
+    info->hSkydomePreviewBitmap = MakeSkydomeSlotThumbnail(
+        info->engine->GetDevice(), slot, 24,
+        customPath, info->engine->GetBackground());
+    if (hbmOld != NULL) DeleteObject(hbmOld);
+    if (info->hSkydomePreview != NULL)
+        InvalidateRect(info->hSkydomePreview, NULL, TRUE);
+}
+
+// ---------------------------------------------------------------------------
+// MT-3 Skydome picker dialog state
+// ---------------------------------------------------------------------------
+struct SkydomePickerData
+{
+    APPLICATION_INFO* info;
+    HIMAGELIST        hImageList;
+    int               originalSlot;   // slot active at dialog open; for Cancel revert
+};
+
+// Slot display name — matches the ground picker's GroundSlotDisplayName pattern.
+static std::wstring SkydomeSlotDisplayName(int slot, const std::wstring& customPath)
+{
+    if (slot < 0 || slot >= Engine::kSkydomeSlotCount) return L"";
+    // Bundled range (0-8): use string table; Off and named skydomes.
+    if (slot < Engine::kSkydomeBundledCount)
+    {
+        static const int kIds[Engine::kSkydomeBundledCount] = {
+            IDS_SKYDOME_OFF,
+            IDS_SKYDOME_SPACE,
+            IDS_SKYDOME_ATMOSPHERE,
+            IDS_SKYDOME_SUNSET,
+            IDS_SKYDOME_DAWN,
+            IDS_SKYDOME_NIGHT,
+            IDS_SKYDOME_OVERCAST,
+            IDS_SKYDOME_STUDIO,
+            IDS_SKYDOME_INDOOR,
+        };
+        return LoadString(kIds[slot]);
+    }
+    // Custom slots (9-11).
+    if (!customPath.empty())
+    {
+        size_t sep = customPath.find_last_of(L"\\/");
+        return (sep == std::wstring::npos) ? customPath : customPath.substr(sep + 1);
+    }
+    return LoadString(IDS_SKYDOME_CUSTOM_BASE + (slot - Engine::kSkydomeFirstCustomSlot));
+}
+
+// Picker-specific thumbnail size — 192 px, matching the ground picker.
+static const int kSkydomePickerThumbSize = 192;
+
+// ListView subclass state for the skydome picker.
+static WNDPROC s_skyLVOriginalProc = NULL;
+static int     s_skyLVHoverIdx     = -1;
+
+static void SkydomeLV_PaintAll(HWND hList, HDC hdcScreen, const RECT& rcClient);
+static LRESULT CALLBACK SkydomeLVSubclassProc(HWND hList, UINT msg,
+                                               WPARAM wParam, LPARAM lParam);
+
+// Rebuild the skydome picker's ListView — image list, labels, selection.
+static void SkydomePicker_RefreshList(HWND hDlg, SkydomePickerData* data)
+{
+    HWND hList = GetDlgItem(hDlg, IDC_SKYDOME_PICKER_LIST);
+    int  prevSel = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+    ListView_DeleteAllItems(hList);
+    if (data->hImageList != NULL) ImageList_Destroy(data->hImageList);
+
+    data->hImageList = ImageList_Create(kSkydomePickerThumbSize,
+                                         kSkydomePickerThumbSize,
+                                         ILC_COLOR32, Engine::kSkydomeSlotCount, 0);
+    ListView_SetImageList(hList, data->hImageList, LVSIL_NORMAL);
+
+    for (int slot = 0; slot < Engine::kSkydomeSlotCount; ++slot)
+    {
+        std::wstring path;
+        if (slot >= Engine::kSkydomeFirstCustomSlot)
+            path = data->info->engine->GetSkydomeCustomPath(slot);
+        HBITMAP hThumb = MakeSkydomeSlotThumbnail(
+            data->info->engine->GetDevice(),
+            slot, kSkydomePickerThumbSize, path,
+            data->info->engine->GetBackground());
+        int imgIdx = ImageList_Add(data->hImageList, hThumb, NULL);
+        if (hThumb != NULL) DeleteObject(hThumb);
+
+        std::wstring label = SkydomeSlotDisplayName(slot, path);
+        LVITEM item = {};
+        item.mask     = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+        item.iItem    = slot;
+        item.iSubItem = 0;
+        item.iImage   = imgIdx;
+        item.lParam   = slot;
+        item.pszText  = const_cast<LPWSTR>(label.c_str());
+        ListView_InsertItem(hList, &item);
+    }
+
+    // Restore selection: prefer prevSel, else the engine's current slot.
+    int sel = (prevSel >= 0) ? prevSel : data->info->engine->GetSkydomeSlot();
+    if (sel >= 0 && sel < Engine::kSkydomeSlotCount)
+    {
+        ListView_SetItemState(hList, sel, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(hList, sel, FALSE);
+    }
+}
+
+// File picker for a custom skydome slot. Returns true if a file was assigned.
+static bool SkydomePicker_PickCustomFile(HWND hDlg, SkydomePickerData* data, int slot)
+{
+    if (slot < Engine::kSkydomeFirstCustomSlot || slot >= Engine::kSkydomeSlotCount)
+        return false;
+    wchar_t buf[1024] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = hDlg;
+    ofn.lpstrFilter = L"Texture Files (*.dds;*.tga;*.bmp;*.png;*.jpg;*.jpeg)\0*.dds;*.tga;*.bmp;*.png;*.jpg;*.jpeg\0All Files (*.*)\0*.*\0\0";
+    ofn.lpstrFile   = buf;
+    ofn.nMaxFile    = (DWORD)(sizeof(buf) / sizeof(buf[0]));
+    ofn.lpstrTitle  = L"Choose Skydome Texture File";
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&ofn)) return false;
+    std::wstring path = buf;
+    data->info->engine->SetSkydomeCustomPath(slot, path);
+    WriteSkydomeCustomPath(slot, path);
+    SkydomePicker_RefreshList(hDlg, data);
+    if (data->info->engine->GetSkydomeSlot() == slot)
+    {
+        RebuildSkydomePreviewBitmap(data->info);
+        RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                     RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+    return true;
+}
+
+static INT_PTR CALLBACK SkydomePickerProc(HWND hDlg, UINT uMsg,
+                                           WPARAM wParam, LPARAM lParam)
+{
+    SkydomePickerData* data =
+        (SkydomePickerData*)(LONG_PTR)GetWindowLongPtr(hDlg, DWLP_USER);
+    switch (uMsg)
+    {
+    case WM_INITDIALOG:
+    {
+        data = (SkydomePickerData*)lParam;
+        SetWindowLongPtr(hDlg, DWLP_USER, (LONG_PTR)data);
+        data->hImageList = NULL;
+        HWND hList = GetDlgItem(hDlg, IDC_SKYDOME_PICKER_LIST);
+        ListView_SetExtendedListViewStyle(hList, LVS_EX_DOUBLEBUFFER);
+        // 192×192 thumb, 208×232 spacing — matches the ground picker
+        // so the two dialogs look identical.
+        ListView_SetIconSpacing(hList, 208, 232);
+        // Subclass for full custom paint.
+        if (s_skyLVOriginalProc == NULL)
+        {
+            s_skyLVOriginalProc = (WNDPROC)SetWindowLongPtr(
+                hList, GWLP_WNDPROC, (LONG_PTR)SkydomeLVSubclassProc);
+        }
+        else
+        {
+            SetWindowLongPtr(hList, GWLP_WNDPROC, (LONG_PTR)SkydomeLVSubclassProc);
+        }
+        s_skyLVHoverIdx = -1;
+        // Hide the path label — slot labels already tell the story.
+        HWND hPath = GetDlgItem(hDlg, IDC_SKYDOME_PICKER_PATH_LABEL);
+        if (hPath != NULL) ShowWindow(hPath, SW_HIDE);
+        SkydomePicker_RefreshList(hDlg, data);
+        return TRUE;
+    }
+    case WM_USER:
+        // Re-seed from engine state (e.g. after Reset View Settings).
+        if (data != NULL)
+        {
+            HWND hList = GetDlgItem(hDlg, IDC_SKYDOME_PICKER_LIST);
+            int slot = data->info->engine->GetSkydomeSlot();
+            if (slot >= 0 && slot < Engine::kSkydomeSlotCount)
+            {
+                ListView_SetItemState(hList, slot,
+                    LVIS_SELECTED | LVIS_FOCUSED,
+                    LVIS_SELECTED | LVIS_FOCUSED);
+                ListView_EnsureVisible(hList, slot, FALSE);
+            }
+            SkydomePicker_RefreshList(hDlg, data);
+        }
+        return TRUE;
+    case WM_NOTIFY:
+    {
+        NMHDR* hdr = (NMHDR*)lParam;
+        if (hdr->idFrom != IDC_SKYDOME_PICKER_LIST) break;
+
+        if (hdr->code == NM_CUSTOMDRAW)
+        {
+            // Delegate to our subclassed WM_PAINT; suppress native draw.
+            LPNMLVCUSTOMDRAW lpc = (LPNMLVCUSTOMDRAW)lParam;
+            if (lpc->nmcd.dwDrawStage == CDDS_PREPAINT)
+            {
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_NOTIFYITEMDRAW);
+                return TRUE;
+            }
+            if (lpc->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
+            {
+                SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_SKIPDEFAULT);
+                return TRUE;
+            }
+            SetWindowLongPtr(hDlg, DWLP_MSGRESULT, CDRF_DODEFAULT);
+            return TRUE;
+        }
+
+        if (hdr->code == LVN_ITEMCHANGED)
+        {
+            NMLISTVIEW* nlv = (NMLISTVIEW*)lParam;
+            if ((nlv->uNewState & LVIS_SELECTED) && !(nlv->uOldState & LVIS_SELECTED))
+            {
+                int slot = nlv->iItem;
+                if (slot >= 0 && slot < Engine::kSkydomeSlotCount &&
+                    !data->info->engine->IsSkydomeSlotEmpty(slot))
+                {
+                    data->info->engine->SetSkydomeSlot(slot);
+                    WriteSkydomeIndex(slot);
+                    RebuildSkydomePreviewBitmap(data->info);
+                    RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                                 RDW_INVALIDATE | RDW_UPDATENOW);
+                }
+            }
+        }
+        else if (hdr->code == NM_CLICK || hdr->code == NM_DBLCLK)
+        {
+            NMITEMACTIVATE* nia = (NMITEMACTIVATE*)lParam;
+            int slot = nia->iItem;
+            if (slot < 0 || slot >= Engine::kSkydomeSlotCount) break;
+            // Empty custom slot: single click opens file picker.
+            if (data->info->engine->IsSkydomeSlotEmpty(slot))
+            {
+                SkydomePicker_PickCustomFile(hDlg, data, slot);
+                if (!data->info->engine->IsSkydomeSlotEmpty(slot))
+                {
+                    HWND hList = GetDlgItem(hDlg, IDC_SKYDOME_PICKER_LIST);
+                    ListView_SetItemState(hList, slot,
+                        LVIS_SELECTED | LVIS_FOCUSED,
+                        LVIS_SELECTED | LVIS_FOCUSED);
+                }
+            }
+            else
+            {
+                // Populated slot: commit and close — matches ground picker
+                // and texture palette "click closes" convention.
+                RECT r; GetWindowRect(hDlg, &r);
+                WriteSkydomePickerPos(r);
+                ShowWindow(hDlg, SW_HIDE);
+            }
+        }
+        else if (hdr->code == NM_RCLICK)
+        {
+            NMITEMACTIVATE* nia = (NMITEMACTIVATE*)lParam;
+            int slot = nia->iItem;
+            if (slot < 0 || slot >= Engine::kSkydomeSlotCount) break;
+            // Only custom slots get a context menu.
+            if (slot < Engine::kSkydomeFirstCustomSlot) break;
+            const std::wstring& path = data->info->engine->GetSkydomeCustomPath(slot);
+            const bool hasCustom = !path.empty();
+            HMENU hMenu = CreatePopupMenu();
+            if (hasCustom)
+            {
+                AppendMenuW(hMenu, MF_STRING, ID_SKYDOME_SLOT_CHANGE_CUSTOM,
+                            L"Change skydome...");
+                AppendMenuW(hMenu, MF_STRING, ID_SKYDOME_SLOT_CLEAR_CUSTOM,
+                            L"Clear slot");
+            }
+            else
+            {
+                AppendMenuW(hMenu, MF_STRING, ID_SKYDOME_SLOT_SET_CUSTOM,
+                            L"Set custom skydome...");
+            }
+            POINT pt; GetCursorPos(&pt);
+            INT cmd = TrackPopupMenu(hMenu,
+                                      TPM_LEFTALIGN | TPM_TOPALIGN |
+                                      TPM_RETURNCMD | TPM_NONOTIFY,
+                                      pt.x, pt.y, 0, hDlg, NULL);
+            DestroyMenu(hMenu);
+            if (cmd == ID_SKYDOME_SLOT_SET_CUSTOM ||
+                cmd == ID_SKYDOME_SLOT_CHANGE_CUSTOM)
+            {
+                SkydomePicker_PickCustomFile(hDlg, data, slot);
+            }
+            else if (cmd == ID_SKYDOME_SLOT_CLEAR_CUSTOM)
+            {
+                data->info->engine->SetSkydomeCustomPath(slot, L"");
+                WriteSkydomeCustomPath(slot, L"");
+                // If the active slot was cleared, fall back to Off.
+                if (data->info->engine->GetSkydomeSlot() == slot)
+                {
+                    data->info->engine->SetSkydomeSlot(Engine::kSkydomeOffSlot);
+                    WriteSkydomeIndex(Engine::kSkydomeOffSlot);
+                }
+                SkydomePicker_RefreshList(hDlg, data);
+                RebuildSkydomePreviewBitmap(data->info);
+                RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                             RDW_INVALIDATE | RDW_UPDATENOW);
+            }
+        }
+        break;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDC_SKYDOME_PICKER_RESET_CUSTOM:
+        {
+            if (MessageBox(hDlg,
+                           L"Reset all custom skydome slots to empty? "
+                           L"Custom file assignments will be lost — "
+                           L"but the files themselves are not deleted.",
+                           L"Reset Custom Slots",
+                           MB_YESNO | MB_ICONQUESTION) != IDYES) return TRUE;
+            // Wipe all 3 custom slots.
+            for (int s = Engine::kSkydomeFirstCustomSlot;
+                 s < Engine::kSkydomeSlotCount; ++s)
+            {
+                data->info->engine->SetSkydomeCustomPath(s, L"");
+                WriteSkydomeCustomPath(s, L"");
+            }
+            // If the active slot was a custom, fall back to Off.
+            int cur = data->info->engine->GetSkydomeSlot();
+            if (cur >= Engine::kSkydomeFirstCustomSlot)
+            {
+                data->info->engine->SetSkydomeSlot(Engine::kSkydomeOffSlot);
+                WriteSkydomeIndex(Engine::kSkydomeOffSlot);
+            }
+            SkydomePicker_RefreshList(hDlg, data);
+            RebuildSkydomePreviewBitmap(data->info);
+            RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                         RDW_INVALIDATE | RDW_UPDATENOW);
+            return TRUE;
+        }
+        case IDOK:
+        {
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteSkydomePickerPos(r);
+            ShowWindow(hDlg, SW_HIDE);
+            return TRUE;
+        }
+        case IDCANCEL:
+        {
+            // Revert slot selection; slot-path mutations stay.
+            if (data->info->engine->GetSkydomeSlot() != data->originalSlot)
+            {
+                data->info->engine->SetSkydomeSlot(data->originalSlot);
+                WriteSkydomeIndex(data->originalSlot);
+                RebuildSkydomePreviewBitmap(data->info);
+                RedrawWindow(data->info->hRenderWnd, NULL, NULL,
+                             RDW_INVALIDATE | RDW_UPDATENOW);
+            }
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteSkydomePickerPos(r);
+            ShowWindow(hDlg, SW_HIDE);
+            return TRUE;
+        }
+        }
+        break;
+    case WM_CLOSE:
+    {
+        RECT r; GetWindowRect(hDlg, &r);
+        WriteSkydomePickerPos(r);
+        ShowWindow(hDlg, SW_HIDE);
+        return TRUE;
+    }
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE)
+        {
+            RECT r; GetWindowRect(hDlg, &r);
+            WriteSkydomePickerPos(r);
+            ShowWindow(hDlg, SW_HIDE);
+            return TRUE;
+        }
+        break;
+    case WM_DESTROY:
+        if (data != NULL && data->hImageList != NULL)
+        {
+            ImageList_Destroy(data->hImageList);
+            data->hImageList = NULL;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+// Off-screen paint for the skydome picker's ListView — mirrors
+// GroundLV_PaintAll so the two dialogs look visually identical.
+static void SkydomeLV_PaintAll(HWND hList, HDC hdcScreen, const RECT& rcClient)
+{
+    HWND hDlg = GetParent(hList);
+    SkydomePickerData* data =
+        (SkydomePickerData*)(LONG_PTR)GetWindowLongPtr(hDlg, DWLP_USER);
+
+    HDC     hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmMem = CreateCompatibleBitmap(hdcScreen,
+                                            rcClient.right, rcClient.bottom);
+    HGDIOBJ hOldBmp = SelectObject(hdcMem, hbmMem);
+    HDC     hdc = hdcMem;
+
+    HBRUSH bgBrush = CreateSolidBrush(RGB(240, 240, 240));
+    FillRect(hdc, &rcClient, bgBrush);
+    DeleteObject(bgBrush);
+
+    if (data == NULL || data->info == NULL || data->info->engine == NULL)
+    {
+        BitBlt(hdcScreen, 0, 0, rcClient.right, rcClient.bottom,
+               hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, hOldBmp);
+        DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        return;
+    }
+
+    HFONT hFont = (HFONT)SendMessage(hDlg, WM_GETFONT, 0, 0);
+    if (hFont == NULL) hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, hFont);
+
+    const int currentSlot = data->info->engine->GetSkydomeSlot();
+    const int itemCount   = ListView_GetItemCount(hList);
+    HIMAGELIST hIL        = ListView_GetImageList(hList, LVSIL_NORMAL);
+
+    for (int i = 0; i < itemCount; ++i)
+    {
+        RECT bounds, iconRc, labelRc;
+        ListView_GetItemRect(hList, i, &bounds,  LVIR_BOUNDS);
+        ListView_GetItemRect(hList, i, &iconRc,  LVIR_ICON);
+        ListView_GetItemRect(hList, i, &labelRc, LVIR_LABEL);
+
+        const bool hovered  = (s_skyLVHoverIdx == i);
+        const bool selected = (i == currentSlot);
+
+        const COLORREF bgCol = hovered ? RGB(160, 200, 250) : RGB(240, 240, 240);
+        HBRUSH bg = CreateSolidBrush(bgCol);
+        FillRect(hdc, &bounds, bg);
+        DeleteObject(bg);
+
+        if (hIL != NULL)
+        {
+            LVITEMW item = {};
+            item.mask  = LVIF_IMAGE;
+            item.iItem = i;
+            ListView_GetItem(hList, &item);
+            if (item.iImage >= 0)
+            {
+                IMAGEINFO ii = {};
+                ImageList_GetImageInfo(hIL, item.iImage, &ii);
+                const int imgW = ii.rcImage.right  - ii.rcImage.left;
+                const int imgH = ii.rcImage.bottom - ii.rcImage.top;
+                const int ix = iconRc.left + (iconRc.right  - iconRc.left - imgW) / 2;
+                const int iy = iconRc.top  + (iconRc.bottom - iconRc.top  - imgH) / 2;
+                ImageList_Draw(hIL, item.iImage, hdc, ix, iy, ILD_NORMAL);
+            }
+        }
+
+        HPEN pen;
+        if (selected)
+            pen = CreatePen(PS_SOLID, 2, RGB(40, 100, 220));
+        else if (hovered)
+            pen = CreatePen(PS_SOLID, 3, RGB(70, 150, 240));
+        else
+            pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 150));
+        HGDIOBJ oldP = SelectObject(hdc, pen);
+        HGDIOBJ oldB = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc,
+                  iconRc.left + 1, iconRc.top + 1,
+                  iconRc.right - 1, iconRc.bottom - 1);
+        SelectObject(hdc, oldP);
+        SelectObject(hdc, oldB);
+        DeleteObject(pen);
+
+        WCHAR labelBuf[256] = L"";
+        ListView_GetItemText(hList, i, 0, labelBuf, (int)_countof(labelBuf));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(40, 40, 40));
+        DrawTextW(hdc, labelBuf, -1, &labelRc,
+                  DT_SINGLELINE | DT_CENTER | DT_VCENTER
+                  | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+
+    SelectObject(hdc, hOldFont);
+    BitBlt(hdcScreen, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
+    SelectObject(hdcMem, hOldBmp);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
+}
+
+static LRESULT CALLBACK SkydomeLVSubclassProc(HWND hList, UINT msg,
+                                               WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hList, &ps);
+        RECT rcClient;
+        GetClientRect(hList, &rcClient);
+        SkydomeLV_PaintAll(hList, hdc, rcClient);
+        EndPaint(hList, &ps);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+    {
+        POINT cur = { (LONG)(short)LOWORD(lParam), (LONG)(short)HIWORD(lParam) };
+        LVHITTESTINFO ht = {};
+        ht.pt = cur;
+        const int newHot = ListView_HitTest(hList, &ht);
+        if (newHot != s_skyLVHoverIdx)
+        {
+            s_skyLVHoverIdx = newHot;
+            InvalidateRect(hList, NULL, FALSE);
+            TRACKMOUSEEVENT tme = {};
+            tme.cbSize    = sizeof(tme);
+            tme.dwFlags   = TME_LEAVE;
+            tme.hwndTrack = hList;
+            TrackMouseEvent(&tme);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        if (s_skyLVHoverIdx != -1)
+        {
+            s_skyLVHoverIdx = -1;
+            InvalidateRect(hList, NULL, FALSE);
+        }
+        break;
+    }
+    return CallWindowProc(s_skyLVOriginalProc, hList, msg, wParam, lParam);
+}
+
+// Modeless skydome picker. Lazy-create on first toggle; subsequent calls
+// show/hide. Restores saved window position from registry.
+static void ShowSkydomePicker(HWND hParent, APPLICATION_INFO* info)
+{
+    if (info == NULL || info->engine == NULL) return;
+    static HWND              s_hPicker = NULL;
+    static SkydomePickerData s_data;
+    s_data.info         = info;
+    s_data.hImageList   = NULL;
+    s_data.originalSlot = info->engine->GetSkydomeSlot();
+
+    if (s_hPicker != NULL && IsWindowVisible(s_hPicker))
+    {
+        // Already visible — toggle hide.
+        RECT r; GetWindowRect(s_hPicker, &r);
+        WriteSkydomePickerPos(r);
+        ShowWindow(s_hPicker, SW_HIDE);
+        return;
+    }
+
+    if (s_hPicker == NULL)
+    {
+        s_hPicker = CreateDialogParamW(GetModuleHandle(NULL),
+                                        MAKEINTRESOURCEW(IDD_SKYDOME_PICKER),
+                                        hParent, SkydomePickerProc,
+                                        (LPARAM)&s_data);
+        if (s_hPicker == NULL) return;
+        info->hSkydomePicker = s_hPicker;
+        // Slim tool-window title bar — applied after creation because
+        // WS_EX_TOOLWINDOW isn't in the dialog template EXSTYLE.
+        LONG_PTR ex = GetWindowLongPtr(s_hPicker, GWL_EXSTYLE);
+        SetWindowLongPtr(s_hPicker, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
+        SetWindowPos(s_hPicker, NULL, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        // Restore saved position if any; validate that it's on-screen.
+        RECT pos;
+        if (ReadSkydomePickerPos(pos))
+        {
+            POINT pt = { pos.left, pos.top };
+            if (MonitorFromPoint(pt, MONITOR_DEFAULTTONULL) != NULL)
+            {
+                SetWindowPos(s_hPicker, NULL, pos.left, pos.top, 0, 0,
+                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
+    }
+    else
+    {
+        // Existing hidden instance — refresh in case engine state changed.
+        SkydomePicker_RefreshList(s_hPicker, &s_data);
     }
     ShowWindow(s_hPicker, SW_SHOW);
     SetForegroundWindow(s_hPicker);
@@ -6347,6 +7235,9 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
             RebuildGroundTexturePreviewBitmap(info);
             InvalidateRect(info->hGroundTexturePreview, NULL, TRUE);
 
+            // MT-3: build the skydome toolbar preview thumbnail.
+            RebuildSkydomePreviewBitmap(info);
+
             // Sync the ground-toggle toolbar button to the (possibly
             // restored-from-registry) engine state. The TBBUTTON definition
             // hardcodes TBSTATE_CHECKED at init time; without this re-sync
@@ -6475,6 +7366,13 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
 				if (!consumed && info->hGroundPicker != NULL
 				    && IsWindowVisible(info->hGroundPicker)
 				    && IsDialogMessage(info->hGroundPicker, &msg))
+				{
+					consumed = true;
+				}
+				// MT-3: skydome picker — same modeless routing.
+				if (!consumed && info->hSkydomePicker != NULL
+				    && IsWindowVisible(info->hSkydomePicker)
+				    && IsDialogMessage(info->hSkydomePicker, &msg))
 				{
 					consumed = true;
 				}
@@ -6679,6 +7577,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	info.hSpawnerDlg            = NULL;
 	info.spawnerVisible         = false;
 	info.hGroundPicker          = NULL;
+	info.hSkydomePicker         = NULL;
+	info.hSkydomePreview        = NULL;
+	info.hSkydomePreviewBitmap  = NULL;
 	memset(&info.spawnerWindowRect, 0, sizeof(info.spawnerWindowRect));
 	info.hBloomDlg              = NULL;
 	info.bloomDlgVisible        = false;

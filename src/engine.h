@@ -238,6 +238,9 @@ public:
 	const std::wstring& GetSkydomeCustomPath(int slot) const;
 	bool SetSkydomeCustomPath(int slot, const std::wstring& path);
 	bool IsSkydomeSlotEmpty(int slot) const;
+	// Returns the file-scope RCDATA resource-ID table (length kSkydomeBundledCount).
+	// Slot 0 entry is 0 (Off — no texture); slots 1-8 map to IDR_SKYDOME_* constants.
+	static const int* GetSkydomeBundledResources();
 
 	void SetHeatDebug(bool debug);
 	void SetBloom(bool enable);
