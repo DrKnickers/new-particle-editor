@@ -48,7 +48,7 @@ divergence is possible and cross-validation is cheap.
   game; record observed behaviour (renders both, renders one,
   refuses-to-load, crashes).
 - Close MT-5 *and* answer the broader question with a single
-  CHANGELOG / ROADMAP update — outcome decides which.
+  DEVELOPMENT_LOG / ROADMAP update — outcome decides which.
 
 **Out of scope (and why):**
 - *Editor format change.* If the engine supports >1 life-child, the
@@ -257,7 +257,7 @@ Each fixture loads in:
   60 minutes for the hand-crafted two-`0x39` file (needs a tiny
   hex-edit script — `tasks/dump_alo_rotation.ps1` is a useful prior
   reference). Total 1.5 hours.
-- Writeup (CHANGELOG, ROADMAP update, possible new ROADMAP item):
+- Writeup (DEVELOPMENT_LOG, ROADMAP update, possible new ROADMAP item):
   30 minutes.
 
 Total target: 4–5 hours. Falls back to "fixtures only, no
@@ -363,7 +363,7 @@ disassembly" if Ghidra stalls past 2 hours.
 - This file gets a `## Review` section at the bottom on completion,
   matching `tasks/find_bloom_iterations.md`'s structure (outcome,
   how-we-found-it, risks revisited).
-- CHANGELOG entry describes outcome path (best / worst / latent) and
+- DEVELOPMENT_LOG entry describes outcome path (best / worst / latent) and
   what shipped — either fixture files + MT-5 closure, or fixture
   files + MT-5 closure + a new ROADMAP entry for the format
   extension.
@@ -552,7 +552,7 @@ of disassembly chasing for no incremental certainty.
   Not a path worth taking.
 - **One-line provenance comment** added next to `spawnDuringLife` in
   `src/ParticleSystem.h` citing the binary evidence.
-- **CHANGELOG entry** records the investigation outcome.
+- **DEVELOPMENT_LOG entry** records the investigation outcome.
 
 **Tooling produced this round (committed alongside the bloom RE
 artefacts).**

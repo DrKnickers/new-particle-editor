@@ -433,7 +433,7 @@ existing batched operations). Ctrl+Z rolls back the entire import.
 10. **Build Debug x64.** Fix errors / warnings. ~20 min loop.
 11. **Build Release x64.** ~5 min.
 12. **Smoke-walk every test row in §5.** Document results. ~45 min.
-13. **CHANGELOG + ROADMAP entries.** New shipped entry; LT-3 moves from §3
+13. **DEVELOPMENT_LOG + ROADMAP entries.** New shipped entry; LT-3 moves from §3
     to §5 (shifts long-term §3.4 LT-4 to §3.3, vacates `[LT-3]` tag). ~30 min.
 14. **Commit (2 commits: feature + docs), push, PR, merge, backfill.** ~30 min.
 

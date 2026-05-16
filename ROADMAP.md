@@ -425,7 +425,7 @@ user intended.
   `SetWindowRgn` to exclude the viewport, focus-dependent primary
   highlight, marquee row hit-test edge cases) ate the rest. The
   resolved cases are recorded under *Issues encountered and
-  resolutions* in the CHANGELOG so the next contributor working with
+  resolutions* in the development log so the next contributor working with
   layered overlays or marquee selection has a paper trail.
 
 ### 5.9 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
