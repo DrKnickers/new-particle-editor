@@ -173,7 +173,13 @@ Loaded via `LoadAccelerators` at `src/main.cpp:7913`; translated in the message 
 
 ## 5. Engine API surface used by UI
 
-Inventory of `Engine` methods called from `src/main.cpp` (all call sites verified by grep). No `src/UI/*.cpp` file calls engine methods directly — all engine access is routed through `APPLICATION_INFO* info` in `main.cpp`. Methods that exist in `engine.h` but are not called from any UI code (e.g. `SetWind`, `SetGravity`, `GetWind`, `GetGravity`, `GetLight`, `GetAmbient`, `GetShadow`, `GetShader`, `GetTexture`, `GetBillboardMatrix`, `GetViewRotationMatrix`, `GetProjectionMatrix` *(via `&engine->` not through UI results)*, `DetachParticleSystem`) are excluded.
+Inventory of `Engine` methods called from `src/main.cpp` (all call sites verified by grep). No `src/UI/*.cpp` file calls engine methods directly — all engine access is routed through `APPLICATION_INFO* info` in `main.cpp`.
+
+Two exclusion categories apply:
+
+1. **Methods with no UI caller** — exist in `engine.h` but never called from UI code: `SetWind`, `SetGravity`, `GetWind`, `GetGravity`, `GetLight`, `GetAmbient`, `GetShadow`, `GetShader`, `GetTexture`, `GetBillboardMatrix`, `GetViewRotationMatrix`. Excluded for lack of any bridge use case.
+
+2. **Methods called from UI but not bridgeable** — called from UI code but not appropriate as bridge commands because they are render-loop internals, lifecycle teardown, or D3D-resource accessors that can't cross the JSON wire: `DetachParticleSystem` (called at `src/main.cpp:2801` on WM_LBUTTONUP — internal lifecycle), `Update`, `Render` (render-loop calls driven by the host's WM_PAINT pump, not by user gesture), `Reset` (device-lost recovery; host-internal), `SpawnParticleSystem` / `KillParticleSystem` (return raw `ParticleSystemInstance*` — instance lifecycle stays native-side). These appear in section 5.1 with their `Kind` classification (ACTION) but are intentionally omitted from sections 6.1 / 6.3 — see the 6.1 footnote.
 
 ### 5.1 Methods called
 
@@ -282,6 +288,8 @@ Inventory of `Engine` methods called from `src/main.cpp` (all call sites verifie
 | `engine/action/reload-shaders` | `{}` | `engine->ReloadShaders()` | `engine/state/changed` |
 | `engine/action/reload-textures` | `{}` | `engine->ReloadTextures()` | `engine/state/changed` |
 | `engine/action/on-particle-system-changed` | `{ track: number }` | `engine->OnParticleSystemChanged(params.track)` | *(no separate event — engine re-renders next frame)* |
+
+> **Note on omitted ACTION methods.** Section 5.1 classifies 9 methods as `ACTION`; only 4 appear here. The other 5 — `Update`, `Render`, `Reset`, `SpawnParticleSystem`, `KillParticleSystem` — are render-loop internals or instance-lifecycle calls that stay host-side and are not exposed as bridge commands. Rationale: `Update`/`Render` are driven by the host's frame pump, `Reset` is device-lost recovery, and the spawn/kill pair returns raw `ParticleSystemInstance*` pointers that can't cross the JSON wire (the bridge surface for spawning a system from React would be a separate `emitters/spawn-from-system` request taking a serialised `ParticleSystem`, designed in Task 2.1 if needed). See section 5's preamble for the full exclusion-category breakdown.
 
 ### 6.2 Requests (Query)
 
