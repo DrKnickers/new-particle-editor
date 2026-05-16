@@ -8141,12 +8141,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	// Without the flag, behaviour is unchanged from before this commit.
 	{
 		const std::vector<std::wstring> argv = parseCommandLine();
-		bool newUi   = false;
-		bool devUi   = false;
+		bool newUi    = false;
+		bool devUi    = false;
+		bool testHost = false;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
-			if (argv[i] == L"--new-ui") newUi  = true;
-			if (argv[i] == L"--dev-ui") devUi  = true;
+			if (argv[i] == L"--new-ui")    newUi    = true;
+			if (argv[i] == L"--dev-ui")    devUi    = true;
+			if (argv[i] == L"--test-host") testHost = true;
 		}
 		if (newUi)
 		{
@@ -8162,7 +8164,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			ShaderManager  shaderManager (fileManager, "Data\\Art\\Shaders\\");
 			int hostResult = host::Run(hInstance, SW_SHOWDEFAULT,
 			                           textureManager, shaderManager, *fileManager,
-			                           devUi);
+			                           devUi, testHost);
 			delete fileManager;
 #ifndef NDEBUG
 			FreeConsole();

@@ -18,10 +18,12 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <wrl.h>
+#include <wrl/implements.h>
 #include <d3d9.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 #include "WebView2.h"
+#include "WebView2EnvironmentOptions.h"
 
 #include <atomic>
 #include <cstdarg>
@@ -233,7 +235,8 @@ struct HostWindowImpl
     AcceleratorBridge                  accelerator;
     std::unique_ptr<BridgeDispatcher>  dispatcher;
 
-    bool        useDevUi  = false;   // --dev-ui: navigate to Vite HMR server
+    bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
+    bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
     std::mutex  logMutex;
 
@@ -241,12 +244,14 @@ struct HostWindowImpl
                    ITextureManager& tex,
                    IShaderManager&  shd,
                    IFileManager&    fil,
-                   bool devUi = false)
+                   bool devUi    = false,
+                   bool testHost = false)
         : hInstance(inst)
         , textureManager(tex)
         , shaderManager(shd)
         , fileManager(fil)
         , useDevUi(devUi)
+        , useTestHost(testHost)
         , layout(nullptr)
         , accelerator()
     {
@@ -398,8 +403,27 @@ HRESULT HostWindowImpl::InitWebView2()
     std::wstring userDataFolder = ComputeUserDataFolder();
     Log("[host] WebView2 user-data folder: %ls\n", userDataFolder.c_str());
 
-    return CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, userDataFolder.c_str(), nullptr,
+    // Task 2.2: when --test-host is set, pass --remote-debugging-port=9222
+    // to the underlying Chromium runtime so Playwright (and any CDP client)
+    // can attach. Opt-in only: production launches use nullptr options.
+    // CoreWebView2EnvironmentOptions is the SDK's ready-made implementation
+    // (WebView2EnvironmentOptions.h) — it correctly defaults the
+    // TargetCompatibleBrowserVersion to the SDK's compiled version, which
+    // a hand-rolled class would have to know explicitly.
+    ComPtr<ICoreWebView2EnvironmentOptions> envOptions;
+    if (useTestHost)
+    {
+        Log("[host] test-host: enabling CDP on :9222 via AdditionalBrowserArguments\n");
+        auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+        if (opts)
+        {
+            opts->put_AdditionalBrowserArguments(L"--remote-debugging-port=9222");
+            opts.As(&envOptions);
+        }
+    }
+
+    HRESULT envCreateHr = CreateCoreWebView2EnvironmentWithOptions(
+        nullptr, userDataFolder.c_str(), envOptions.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [this](HRESULT envHr, ICoreWebView2Environment* env) -> HRESULT
             {
@@ -435,6 +459,20 @@ HRESULT HostWindowImpl::InitWebView2()
                                 transparent.B = 0;
                                 ctrl2->put_DefaultBackgroundColor(transparent);
                                 Log("[host] WebView2 bg => transparent\n");
+                            }
+
+                            // Task 2.2: test-host mode enables DevTools (F12) so
+                            // CDP debugging is fully functional for Playwright. No
+                            // effect in normal launches — production users don't
+                            // see DevTools unless they explicitly pass --test-host.
+                            if (useTestHost && webView)
+                            {
+                                ComPtr<ICoreWebView2Settings> settings;
+                                if (SUCCEEDED(webView->get_Settings(&settings)) && settings)
+                                {
+                                    settings->put_AreDevToolsEnabled(TRUE);
+                                    Log("[host] test-host: DevTools enabled (F12)\n");
+                                }
                             }
 
                             // Task 1.6: intercept registered accelerator keys before
@@ -513,10 +551,33 @@ HRESULT HostWindowImpl::InitWebView2()
                                            ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
                                     {
                                         LPWSTR raw = nullptr;
-                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw)
+                                        HRESULT hr1 = args->TryGetWebMessageAsString(&raw);
+                                        if (SUCCEEDED(hr1) && raw)
                                         {
                                             OnWebMessage(raw);
                                             CoTaskMemFree(raw);
+                                        }
+                                        else
+                                        {
+                                            // Fall back: maybe the page posted a JSON value
+                                            // (chrome.webview.postMessage(obj) rather than
+                                            // postMessage(JSON.stringify(obj))). Surface a
+                                            // dedicated log so we can tell the difference
+                                            // between "no event" and "event but parse failed".
+                                            LPWSTR json = nullptr;
+                                            HRESULT hr2 = args->get_WebMessageAsJson(&json);
+                                            if (SUCCEEDED(hr2) && json)
+                                            {
+                                                Log("[host] WMR JSON-only (%zu chars), hr1=0x%08lx\n",
+                                                    wcslen(json), hr1);
+                                                OnWebMessage(json);
+                                                CoTaskMemFree(json);
+                                            }
+                                            else
+                                            {
+                                                Log("[host] WMR empty: hr1=0x%08lx hr2=0x%08lx\n",
+                                                    hr1, hr2);
+                                            }
                                         }
                                         return S_OK;
                                     }).Get(), &tok);
@@ -536,6 +597,9 @@ HRESULT HostWindowImpl::InitWebView2()
                         }).Get());
                 return S_OK;
             }).Get());
+    Log("[host] CreateCoreWebView2EnvironmentWithOptions returned 0x%08lx (testHost=%d)\n",
+        envCreateHr, useTestHost ? 1 : 0);
+    return envCreateHr;
 }
 
 // ---------- WndProc dispatch ----------
@@ -670,6 +734,11 @@ LRESULT CALLBACK HostViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 int HostWindowImpl::Run(int nCmdShow)
 {
     OpenLog();
+
+    if (useTestHost)
+    {
+        Log("[host] === --test-host MODE: CDP on :9222 + DevTools enabled ===\n");
+    }
 
     // LT-4 Task 1.4: when --dev-ui is requested, verify the Vite dev server
     // is reachable before proceeding. A missing server is a common mistake
@@ -823,8 +892,10 @@ HostWindow::HostWindow(HINSTANCE hInstance,
                        ITextureManager& textureManager,
                        IShaderManager&  shaderManager,
                        IFileManager&    fileManager,
-                       bool useDevUi)
-    : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager, useDevUi))
+                       bool useDevUi,
+                       bool useTestHost)
+    : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager,
+                                useDevUi, useTestHost))
 {
 }
 
@@ -848,9 +919,11 @@ int Run(HINSTANCE hInstance,
         ITextureManager& textureManager,
         IShaderManager&  shaderManager,
         IFileManager&    fileManager,
-        bool useDevUi)
+        bool useDevUi,
+        bool useTestHost)
 {
-    HostWindow host(hInstance, textureManager, shaderManager, fileManager, useDevUi);
+    HostWindow host(hInstance, textureManager, shaderManager, fileManager,
+                    useDevUi, useTestHost);
     return host.Run(nCmdShow);
 }
 

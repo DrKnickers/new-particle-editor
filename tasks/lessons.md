@@ -65,3 +65,62 @@ negation rules before committing. The root `.gitignore`'s
 `**/packages/*` is inherited from the Visual Studio C++ project's
 NuGet package-restore boilerplate — it's load-bearing for that side
 and shouldn't be removed. Scoped negation is the right fix.
+
+---
+
+## L-003 — WebView2 drops `chrome.webview.postMessage` when CDP is attached
+
+**Rule.** Don't plan a Playwright/CDP-driven test architecture that
+relies on `chrome.webview.postMessage` to deliver bridge requests from
+the page to the C++ host. The moment a CDP debugger is attached to
+the WebView2 instance, the host stops receiving postMessage events —
+even for calls made from page-internal JS (setInterval, RAF, event
+handlers). The block is silent: `WebMessageReceived` never fires and
+no error surfaces on either side.
+
+**Trigger.** Any task that wants to drive the WebView2 bridge over
+CDP for end-to-end testing. The natural design ("connectOverCDP →
+`page.evaluate(window.bridge.request(...))`") will appear to work
+during initial debugging (the first few requests from `App.tsx`'s
+mount-time useEffects deliver successfully, before CDP attaches),
+then silently fail for the entire test run.
+
+**How to apply.**
+- For Playwright contract tests against the native bridge, route
+  test traffic through `ICoreWebView2::AddHostObjectToScript`
+  instead of postMessage. That channel is a separate IPC and is
+  not affected by CDP attachment.
+- Alternative: use Playwright with a Vite-served standalone build
+  loaded in headless Chromium (no WebView2, no CDP conflict). This
+  exercises the TypeScript bridge surface but not the C++
+  handlers — so it's only useful if MockBridge contract coverage
+  is the goal, which Vitest already provides.
+- If a CDP-based design is still preferred, do not lean on the
+  six WebMsg log lines that appear during boot — those are
+  pre-attach. Verify postMessage delivery post-attach (look for
+  `[host] WMR` log lines in `%LOCALAPPDATA%\AloParticleEditor\host.log`
+  *after* the CDP probe succeeds) before declaring the round-trip
+  works.
+
+**Source incident (2026-05-16).** During LT-4 Task 2.2, the planned
+architecture (Playwright `connectOverCDP` + `page.evaluate(bridge.request(...))`)
+failed every test with "context closed" timeouts. Diagnosis took
+multiple iterations:
+- Confirmed via `/json` that the CDP target was correct.
+- Confirmed via direct WebSocket CDP probe that `window.bridge`
+  was attached and `chrome.webview` was an `object`.
+- Confirmed via host-side logging that `WebMessageReceived`
+  fired during boot but not for any post-attach request, including
+  ones scheduled via `setTimeout(() => bridge.request(...))` from
+  inside the page.
+- Confirmed via `Page.bringToFront` + `Emulation.setFocusEmulationEnabled`
+  that visibility/focus state wasn't the cause.
+- Confirmed bridge instance was `NativeBridge` (not MockBridge)
+  by introspecting prototype methods.
+
+The Task 2.2 deliverables (host `--test-host` flag, CDP enablement
+via the SDK's `CoreWebView2EnvironmentOptions`, DevTools toggle,
+`window.bridge` exposure, harness script, smoke-test spec) all
+landed and pass; the four schema-contract specs are committed as
+`test.fixme` so the assertions they encode survive into whatever
+IPC channel replaces postMessage for tests.

@@ -36,7 +36,8 @@ public:
                ITextureManager& textureManager,
                IShaderManager&  shaderManager,
                IFileManager&    fileManager,
-               bool useDevUi = false);
+               bool useDevUi   = false,
+               bool useTestHost = false);
     ~HostWindow();
 
     HostWindow(const HostWindow&)            = delete;

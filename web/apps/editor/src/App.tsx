@@ -1,9 +1,17 @@
 import { useEffect, useMemo } from "react";
 import { makeBridge } from "@/bridge";
+import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
 
 export function App() {
-  const bridge = useMemo(() => makeBridge(), []);
+  const bridge = useMemo(() => {
+    const b = makeBridge();
+    // Task 2.2: attach to window.bridge so Playwright (via CDP) and
+    // anyone poking at DevTools can drive the bridge. Diagnostic-only —
+    // no production code path reads window.bridge.
+    exposeBridgeForTests(b);
+    return b;
+  }, []);
 
   // TODO Phase 3: remove this debug block once real per-screen shortcut
   // handlers are wired in. Until then it proves the round-trip works:

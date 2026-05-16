@@ -7,6 +7,12 @@
 // and navigate there instead of the bundled app.local build. If the
 // probe fails the function shows a MessageBox and returns 1 immediately.
 //
+// useTestHost — when true (Task 2.2), pass
+// `--remote-debugging-port=9222` to WebView2 via the environment's
+// AdditionalBrowserArguments and enable DevTools (F12). This exposes a
+// CDP endpoint for Playwright contract tests. Opt-in only: production
+// launches (no flag) never expose the port.
+//
 // Returns the WM_QUIT wParam (process exit code).
 #ifndef HOST_RUN_H
 #define HOST_RUN_H
@@ -25,7 +31,8 @@ int Run(HINSTANCE hInstance,
         ITextureManager& textureManager,
         IShaderManager&  shaderManager,
         IFileManager&    fileManager,
-        bool useDevUi = false);
+        bool useDevUi   = false,
+        bool useTestHost = false);
 
 } // namespace host
 
