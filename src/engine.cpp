@@ -580,6 +580,17 @@ bool Engine::Render()
 
     D3DCOLOR clearColor = D3DCOLOR_XRGB(GetRValue(m_background), GetGValue(m_background), GetBValue(m_background));
 	m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clearColor, 1.0f, 0);
+
+	// MT-3: optional skydome pass, after Clear, before ground.
+	// Skipped when slot 0 (Off) is active or when effect/texture isn't
+	// ready (e.g. effect compile failure during init).
+	if (m_skydomeIndex != kSkydomeOffSlot
+	    && m_pSkydomeTexture != NULL
+	    && m_pSkydomeEffect != NULL)
+	{
+	    RenderSkydome();
+	}
+
 	if (m_showGround)
 	{
 		static const float TEXTURE_SCALE  = 256;
@@ -1432,6 +1443,46 @@ bool Engine::ReloadSkydomeTexture(int slot)
             &m_pSkydomeTexture));
     }
     return false;
+}
+
+void Engine::RenderSkydome()
+{
+    // World = Translation(camera.Position) — keeps the sphere camera-locked.
+    D3DXMATRIX world, wvp;
+    D3DXMatrixTranslation(&world, m_eye.Position.x, m_eye.Position.y, m_eye.Position.z);
+    wvp = world * m_view * m_projection;
+
+    // Save render state so the skydome pass doesn't pollute the rest of the frame.
+    DWORD oldZWrite, oldZEnable, oldCull;
+    m_pDevice->GetRenderState(D3DRS_ZWRITEENABLE, &oldZWrite);
+    m_pDevice->GetRenderState(D3DRS_ZENABLE,      &oldZEnable);
+    m_pDevice->GetRenderState(D3DRS_CULLMODE,     &oldCull);
+    m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+    m_pDevice->SetRenderState(D3DRS_ZENABLE,      D3DZB_FALSE);
+    m_pDevice->SetRenderState(D3DRS_CULLMODE,     D3DCULL_CW); // we're inside the sphere
+
+    m_pSkydomeEffect->SetMatrix (m_hSkydomeWVP, &wvp);
+    m_pSkydomeEffect->SetTexture(m_hSkydomeTex, m_pSkydomeTexture);
+
+    UINT passes = 0;
+    m_pSkydomeEffect->Begin(&passes, 0);
+    m_pSkydomeEffect->BeginPass(0);
+
+    m_pDevice->SetVertexDeclaration(m_pSkydomeDecl);
+    m_pDevice->SetStreamSource(0, m_pSkydomeVB, 0, sizeof(SkydomeVertex));
+    m_pDevice->SetIndices(m_pSkydomeIB);
+    const UINT vertCount = (kSkydomeLongSegments + 1) * (kSkydomeLatSegments + 1);
+    m_pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0,
+                                    vertCount,
+                                    0,
+                                    m_skydomeIndexCount / 3);
+
+    m_pSkydomeEffect->EndPass();
+    m_pSkydomeEffect->End();
+
+    m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, oldZWrite);
+    m_pDevice->SetRenderState(D3DRS_ZENABLE,      oldZEnable);
+    m_pDevice->SetRenderState(D3DRS_CULLMODE,     oldCull);
 }
 
 bool Engine::SetSkydomeSlot(int newIndex)

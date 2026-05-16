@@ -282,6 +282,9 @@ private:
 	void				InitSkydomeEffect();
 	// MT-3: release m_pSkydomeTexture and re-load from slot (bundled or custom).
 	bool				ReloadSkydomeTexture(int slot);
+	// MT-3: draw the skydome sphere, camera-locked, depth off, cull CW.
+	// Called from Render() when slot != Off and effect/texture are ready.
+	void				RenderSkydome();
 
 	//
 	// Data members
