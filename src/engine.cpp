@@ -1466,18 +1466,19 @@ void Engine::RenderSkydome()
 
     UINT passes = 0;
     m_pSkydomeEffect->Begin(&passes, 0);
-    m_pSkydomeEffect->BeginPass(0);
-
-    m_pDevice->SetVertexDeclaration(m_pSkydomeDecl);
-    m_pDevice->SetStreamSource(0, m_pSkydomeVB, 0, sizeof(SkydomeVertex));
-    m_pDevice->SetIndices(m_pSkydomeIB);
-    const UINT vertCount = (kSkydomeLongSegments + 1) * (kSkydomeLatSegments + 1);
-    m_pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0,
-                                    vertCount,
-                                    0,
-                                    m_skydomeIndexCount / 3);
-
-    m_pSkydomeEffect->EndPass();
+    for (UINT i = 0; i < passes; ++i)
+    {
+        m_pSkydomeEffect->BeginPass(i);
+        m_pDevice->SetVertexDeclaration(m_pSkydomeDecl);
+        m_pDevice->SetStreamSource(0, m_pSkydomeVB, 0, sizeof(SkydomeVertex));
+        m_pDevice->SetIndices(m_pSkydomeIB);
+        const UINT vertCount = (kSkydomeLongSegments + 1) * (kSkydomeLatSegments + 1);
+        m_pDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0,
+                                        vertCount,
+                                        0,
+                                        m_skydomeIndexCount / 3);
+        m_pSkydomeEffect->EndPass();
+    }
     m_pSkydomeEffect->End();
 
     m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, oldZWrite);
