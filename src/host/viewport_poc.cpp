@@ -211,6 +211,19 @@ HRESULT InitWebView2(HWND parent) {
                             g_webviewController = controller;
                             controller->get_CoreWebView2(&g_webview);
 
+                            // Set WebView2 background to fully transparent so the
+                            // D3D9 sibling child HWND is visible through the slot.
+                            ComPtr<ICoreWebView2Controller2> ctrl2;
+                            if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&ctrl2)))) {
+                                COREWEBVIEW2_COLOR transparent = {};
+                                transparent.A = 0;
+                                transparent.R = 0;
+                                transparent.G = 0;
+                                transparent.B = 0;
+                                ctrl2->put_DefaultBackgroundColor(transparent);
+                                LogDbg("[PoC] WebView2 default bg set to transparent\n");
+                            }
+
                             // Fit to client.
                             RECT bounds;
                             GetClientRect(g_mainWnd, &bounds);

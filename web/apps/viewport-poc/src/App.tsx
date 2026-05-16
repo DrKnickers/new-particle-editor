@@ -21,11 +21,18 @@ function postToHost(msg: LayoutMessage): void {
 function rectFromElement(el: HTMLElement): ViewportRect {
   const r = el.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
+  // The slot has a 4px solid border. Inset to the content box so the
+  // D3D9 sibling HWND below doesn't overpaint the pink border.
+  const SLOT_BORDER_PX = 4;
+  const insetLeft = r.left + SLOT_BORDER_PX;
+  const insetTop = r.top + SLOT_BORDER_PX;
+  const insetWidth = Math.max(0, r.width - SLOT_BORDER_PX * 2);
+  const insetHeight = Math.max(0, r.height - SLOT_BORDER_PX * 2);
   return {
-    x: Math.round(r.left * dpr),
-    y: Math.round(r.top * dpr),
-    w: Math.round(r.width * dpr),
-    h: Math.round(r.height * dpr),
+    x: Math.round(insetLeft * dpr),
+    y: Math.round(insetTop * dpr),
+    w: Math.round(insetWidth * dpr),
+    h: Math.round(insetHeight * dpr),
   };
 }
 
