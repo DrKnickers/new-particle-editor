@@ -1,7 +1,7 @@
 # Session Handoff — AloParticleEditor
 
-**Last updated:** 2026-05-15
-**Last conversation context:** MT-3 implementation + ship via subagent-driven-development; MT-4 shipped earlier in the same session.
+**Last updated:** 2026-05-16
+**Last conversation context:** Single long session that shipped four PRs in series: MT-3 unified Background button → skydome game textures + Z-up poles → LT-3 import emitters from other `.alo` files → Ground Z resets to 0 on launch. Each landed with its own docs-backfill PR for the merge-commit hash.
 
 ---
 
@@ -11,10 +11,10 @@ If you are a fresh Claude session resuming this project: read in this order.
 
 1. **This file** (top to bottom).
 2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline, the trust-but-verify rule. The authoritative behaviour spec.
-3. **[ROADMAP.md](../ROADMAP.md)** — what's queued, what's shipped, the renumber rules.
-4. **[CHANGELOG.md](../CHANGELOG.md)** — most-recent shipped work. Top entry is MT-3.
+3. **[ROADMAP.md](../ROADMAP.md)** — what's queued, what's shipped, the renumber rules. Near-term and medium-term tiers are both empty as of 2026-05-16; only long-term remains.
+4. **[CHANGELOG.md](../CHANGELOG.md)** — most-recent shipped work. Top entry is the Ground Z reset (2026-05-16).
 5. **Recent `git log`** — last ~20 commits to understand the rhythm.
-6. Open PRs: `gh pr list --state open`.
+6. Open PRs: `gh pr list --state open` (none expected as of handoff).
 
 Don't start touching code or writing plans until you've read all six.
 
@@ -24,248 +24,140 @@ Don't start touching code or writing plans until you've read all six.
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\serene-benz-b7d2af` |
-| **Branch** | `feat/mt3-skydome` |
-| **HEAD** | `ba19b1a` — `docs(MT-3): ship — CHANGELOG entry + ROADMAP renumber` |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\musing-poitras-dcc19d` (the `serene-benz-b7d2af` worktree from the previous handoff was auto-removed mid-session; we continued here after a fast-forward to master) |
+| **Branch** | `claude/musing-poitras-dcc19d` |
+| **HEAD** | `5c1ceb9` — `Merge pull request #80 from DrKnickers/docs/backfill-pr79` |
 | **Working tree** | clean |
-| **Open PR** | **#73** — MT-3 selectable skydome backgrounds. **Not yet merged.** |
-| **Upstream master** | last merged was MT-4 (PR #71) + its docs backfill (PR #72), merge commit `556dbf3`. |
-| **Build status** | Debug + Release x64 clean (0/0). Verified after the most recent commit. |
+| **Open PRs** | none |
+| **Upstream master** | aligned with `claude/musing-poitras-dcc19d` |
+| **Build status** | Debug + Release x64 clean (0/0). Verified after every ship. |
 
-Test plan for PR #73 is in the PR body on GitHub — the user (Anthony) drives the UI verification because the controller's screenshot/click tooling hit a multi-monitor / DPI-scaling wall during Task 10. The implementation has been spec-compliance- and code-quality-reviewed by independent subagents per task (see "How MT-3 was built" below).
+The repo has two checked-out worktrees per `git worktree list`: the main `C:\Modding\Particle Editor` (on `master`) and this one. Both should be in sync at HEAD `5c1ceb9`.
 
 ---
 
-## What to do first when resuming
+## What shipped this session
 
-```dot
-digraph next_steps {
-    "Is PR #73 merged?" [shape=diamond];
-    "Drive PR #73 test plan with user" [shape=box];
-    "User finds issues?" [shape=diamond];
-    "Fix issues on feat/mt3-skydome, push" [shape=box];
-    "Merge PR #73" [shape=box];
-    "Backfill PR" [shape=box style=filled fillcolor=lightyellow];
-    "Pick next roadmap item with user" [shape=box style=filled fillcolor=lightgreen];
+Eight merges, paired feature + backfill. In order:
 
-    "Is PR #73 merged?" -> "Drive PR #73 test plan with user" [label="no"];
-    "Drive PR #73 test plan with user" -> "User finds issues?";
-    "User finds issues?" -> "Fix issues on feat/mt3-skydome, push" [label="yes"];
-    "Fix issues on feat/mt3-skydome, push" -> "Drive PR #73 test plan with user";
-    "User finds issues?" -> "Merge PR #73" [label="no"];
-    "Merge PR #73" -> "Backfill PR";
-    "Is PR #73 merged?" -> "Backfill PR" [label="yes, but TODO still in CHANGELOG"];
-    "Backfill PR" -> "Pick next roadmap item with user";
-}
-```
-
-### If PR #73 is unmerged
-
-User drives the test plan (it's in the PR description). Key checks:
-
-- **Camera-lock invariant**: orbit camera with a non-Off skydome → sphere stays "infinite", doesn't translate with camera.
-- **Skydome contributes to bloom naturally** (intentional — same RT).
-- **Slot 0 (Off)** reverts to flat `Background:` colour.
-- **Custom slot file picker** filters `*.dds;*.tga` only (the two native EaW formats).
-- **Reset View Settings** wipes `SkydomeIndex` but **preserves** `SkydomeCustomSlot{9,10,11}` paths (user data, not view settings — MT-2 convention).
-- **Persistence** across editor restart.
-
-If issues surface, fix on `feat/mt3-skydome`, push, drive again. Don't merge until clean.
-
-### Merge protocol
-
-Same as MT-4 (PR #71). Default to GitHub UI's "Merge pull request" button (regular merge commit, not squash, not rebase) so the per-task commit trail is preserved. Or:
-
-```bash
-gh pr merge 73 --merge --delete-branch=false
-git fetch origin master
-git log origin/master --oneline -1   # grab the merge-commit short hash
-```
-
-### Backfill protocol (mandatory after every feat: merge)
-
-[`CHANGELOG.md`](../CHANGELOG.md) currently has `[`TODO`](.../commit/TODO)` placeholder in the MT-3 entry's date line. After merge:
-
-```bash
-git checkout -b docs/backfill-pr73 origin/master
-# Edit CHANGELOG.md: replace both `TODO`s with the merge-commit short hash from step above
-git add CHANGELOG.md
-git commit -m "docs: backfill MT-3 ship — merge-commit hash for PR #73"
-git push -u origin docs/backfill-pr73
-gh pr create --title "docs: backfill MT-3 ship — merge-commit hash for PR #73" --body "..."
-gh pr merge <number> --merge --delete-branch=false
-```
-
-This pattern was established by PR #70 (MT-1 backfill) and PR #72 (MT-4 backfill). Always a separate small PR, never folded into the feature PR — keeps the feature PR's hash stable.
+1. **[PR #73](https://github.com/DrKnickers/new-particle-editor/pull/73)** + **[#74](https://github.com/DrKnickers/new-particle-editor/pull/74)** — *MT-3 unified Background button (rework + ship)*. Replaced the two-button toolbar surface (standalone Skydome preview + ColorButton Background button) with a single unified Background button. Owner-drawn `BS_OWNERDRAW BUTTON` paints either a flat colour swatch (`SkydomeIndex == 0`) or the current skydome thumbnail. Click opens the picker; slot 0 is "Solid colour" and clicking it opens `ChooseColor`. Picker is sticky-on-commit (matches MT-1 palette popup model, not MT-2 ground picker's click-closes). Merge commit `f83a26c`.
+2. **[PR #75](https://github.com/DrKnickers/new-particle-editor/pull/75)** + **[#76](https://github.com/DrKnickers/new-particle-editor/pull/76)** — *Skydome textures: real base-game art + mod overlays + Z-up poles*. Routed `Engine::ReloadSkydomeTexture` through `FileManager::getFile()` so slots 1–8 resolve real EaW textures (`DATA\ART\TEXTURES\W_SKY*.DDS`) and pick up mod overrides automatically. RCDATA placeholders kept as graceful fallback when `FileManager` can't resolve. `Engine` constructor gained an `IFileManager&` alongside `ITextureManager&` / `IShaderManager&`. Sphere rotated Y↔Z to put poles at top/bottom of scene; the swap is a reflection so the skydome pass's cull mode flipped from `D3DCULL_CW` to `D3DCULL_CCW`. Mod switches via the Mods menu refresh the active skydome live. Slot labels relabeled: Storm / Murky Clouds / Smog Clouds / Blue Horizon / Blue Sky / Orange Horizon / Orange Sky / Volcanic Storm. Merge commit `b4d2415`.
+3. **[PR #77](https://github.com/DrKnickers/new-particle-editor/pull/77)** + **[#78](https://github.com/DrKnickers/new-particle-editor/pull/78)** — *LT-3: import emitters from other `.alo` files*. New **File → Import Emitters from File…** entry opens an `.alo` picker, then a modal dialog with the source file's emitter tree as a `TVS_CHECKBOXES` TreeView. Ticked emitters land as new roots in the current particle system. Three-pass import engine: clone via existing `Emitter::write(copy=true)` + `Emitter(ChunkReader&)` through a `MemoryFile` buffer, rewrite spawn fields via a source→destination index map, re-create source link groups in destination (≥2 imported members per group → fresh ID). Auto-include-children cascade on by default. Single atomic undo step via `CaptureUndo(info, 0)`. Merge commit `7640798`.
+4. **[PR #79](https://github.com/DrKnickers/new-particle-editor/pull/79)** + **[#80](https://github.com/DrKnickers/new-particle-editor/pull/80)** — *Ground Z resets to 0 on every editor launch*. Two-line change in `main.cpp` — startup init hard-codes `SetGroundZ(0.0f)` instead of reading from registry, and the spinner `SN_CHANGE` handler drops the `WriteGroundZ(z)` call. `ReadGroundZ` / `WriteGroundZ` helpers stay in place as legacy code (re-introducing persistence later is a 2-line revert). Merge commit `380380a`.
 
 ---
 
 ## What's next on the roadmap
 
-After MT-3 merges, **medium-term is empty for the first time** — every MT-N has shipped. The remaining queue:
+Near term (§1) and medium term (§2) are **both empty**. Every NT-* and MT-* item has shipped. The remaining queue is long-term:
 
-- **Near term (§1)**: empty.
-- **Medium term (§2)**: empty.
-- **Long term (§3)**:
-  - **LT-1** Programmable spawner v2 (~5–9 h, ★★★) — polish items deferred from v1: arc paths, velocity shorthand, path visualisation, named presets, clear-active-spawns button.
-  - **LT-2** Template particle systems (~6–10 h, ★★★) — curated starter `.alo` files + *File → New from Template…*. Most effort is curating the templates.
-  - **LT-3** Import emitters from other particle files (~8–14 h, ★★★★) — *File → Import Emitters from File…* with a tree-of-emitters picker and spawn-field re-mapping.
-  - **LT-4** UI overhaul (WebView2 + React chrome) — huge undertaking. Mockup in Claude Designer, full rewrite of the chrome layer, JS↔C++ bridge. Don't tackle without explicit user direction.
+- **[LT-1] Programmable spawner v2** — ~5–9 h, ★★★. Polish items deferred from v1: arc paths, velocity shorthand, path visualisation in the preview, named presets, clear-active-spawns button. Smallest open item.
+- **[LT-2] Template particle systems** — ~6–10 h, ★★★. Curated starter `.alo` files + *File → New from Template…* dialog. Most of the work is *authoring* the templates, not engineering. Different mode than what the recent sessions have done.
+- **[LT-4] UI overhaul (WebView2 + React chrome)** — weeks, ★★★★★. **Don't tackle without explicit user direction.** Mockup exists in Claude Designer; the implementation would be a full chrome rewrite + a JS↔C++ bridge.
 
-Pick next with the user; don't just dive into LT-1. The natural conversation opener after the MT-3 dust settles: *"Medium-term tier is empty. Want to take a long-term item or do a polish pass? LT-1 is the smallest — about 5–9 h."*
-
----
-
-## Conversation context the new session needs
-
-### Project at a glance
-
-- **AloParticleEditor**: Win32 + D3D9 + C++ tool for editing Star Wars: Empire at War / Forces of Corruption's `.alo` particle-effect format. Modernisation of an originally Petroglyph-internal tool.
-- **Codebase shape**: huge `src/main.cpp` (~7000+ LOC, owns all UI), `src/engine.cpp/.h` (the D3D9 render layer), `src/UI/` for custom controls (Spinner, ColorButton, TexturePalette, etc.), `src/Resources/` for `.rc` + `.h` resource files (split by locale: `.en.h` and `.de.h`).
-- **Game engine for Star Wars: EaW** ships as a 64-bit binary today (Petroglyph released an official patch ~2023+). Treat that as canonical, not a community fork.
-- **Build**: `MSBuild.exe ParticleEditor.sln -p:Configuration=Debug -p:Platform=x64`. Use the `.sln` not the `.vcxproj` directly — `$(SolutionDir)` resolves from the sln.
-- **User's editor**: Anthony Nguyen (anthonyhnguyen99@gmail.com). Direct, technically rigorous, welcomes pushback. Release-notes voice: matter-of-fact, no "Dev note" callouts, no glib closer lines.
-- **DirectX runtime**: release zips bundle `d3dx9_43.dll` next to the .exe; install instructions never ask users to install the DirectX runtime separately.
-
-### Recently-shipped work that informs ongoing decisions
-
-- **MT-1** (PR #69): Frequently-used textures palette popup. Modeless, sticky, multi-pin. Per-mod state in `%APPDATA%\AloParticleEditor\texture-palettes.ini`. **Visual-style baseline** for thumbnail grids.
-- **MT-2** (PR #67): Selectable ground texture picker. Modeless, single-commit, click-to-select. **Interaction-model baseline** for slot pickers (MT-3 cloned this exactly).
-- **MT-4** (PR #71): Adjustable environment lighting dialog. Established the **modeless tool-window** chrome (`WS_EX_TOOLWINDOW | WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU`) shared by MT-1/MT-2/MT-3/Bloom/Lighting. Also discovered and fixed the **Win11 disabled-EDIT-text-invisible quirk** (see "Hard-won lessons" below).
-- **MT-3** (PR #73, this session): Selectable skydome picker. Combines MT-1's visual style with MT-2's interaction model.
+The natural conversation opener after this session: *"Two pragmatic long-term items left — LT-1 (spawner polish, smallest) and LT-2 (template library, mostly content authoring). LT-4 is queued but explicitly hold for direction. Which sounds right, or something off-roadmap?"*
 
 ---
 
 ## Hard-won lessons (preserve!)
 
-These bit us in the recent sessions; preserve them so the next session doesn't rediscover at cost.
+These bit us during the session; preserve so the next session doesn't rediscover at cost.
 
-### Win11 themed-control quirks (from MT-4)
+### File menu's `AppendHistory` deletes static entries after the first separator (from LT-3)
 
-**Symptom**: `EnableWindow(hSpinner, FALSE)` makes the spinner's inner EDIT render with no text — not just greyed-out, *invisible*. Win11 default theme actively suppresses text drawing on disabled EDITs.
+`AppendHistory` at [`src/main.cpp:700`](../src/main.cpp:700) walks the File menu, finds the first `MFT_SEPARATOR`, then **deletes everything between it and `ID_FILE_EXIT`** to make room for the dynamic recent-files list. Any static menu entry inserted *after* that first separator silently disappears on the first File-menu open.
 
-**Failed fixes**:
-- Return a brush from `WM_CTLCOLORSTATIC` — fires but text still invisible.
-- Return a brush from `WM_CTLCOLOREDIT` for an ES_READONLY edit — also breaks text rendering.
+**Rule for new File-menu entries**: insert them *before* the first separator (i.e., grouped with `New / Open / Save / Save As / Import / …` rather than near the recent-files / Exit block). Verified by `LT-3`'s import entry, which initially landed in the deletion zone and rendered as nothing until moved.
 
-**Working fix** (lives at [`src/UI/Spinner.cpp:115`](../src/UI/Spinner.cpp:115) in `SpinnerEditWindowProc`'s WM_PAINT branch): subclass the EDIT's `WM_PAINT` and draw text manually with `DrawText` + `FillRect`. Bypasses the themed-control paint path entirely. Triggered by a new `Spinner_SetReadOnly(HWND, bool)` API + matching `Spinner_IsReadOnly` getter.
+### Most-vexing parse on `Emitter clone(r);` (from LT-3)
 
-Pattern to remember: **on Win11, if a themed common control "should" display text but doesn't, subclass `WM_PAINT` and own the rendering.** Don't rely on `WM_CTLCOLOR*` overrides — they're advisory at best, ignored at worst.
+`ParticleSystem::Emitter clone(r);` where `r` is a local `ChunkReader&` reads as a function declaration (`clone` returns Emitter, takes a `ChunkReader&` named `r`) instead of a variable definition. The cascade of "operator= ambiguous" errors goes away once you force braced init: `ParticleSystem::Emitter clone{r};`. Same trap any time you initialise an object from a single in-scope variable.
 
-### `wcx.hIcon` clobbered between two `RegisterClassEx` calls (from MT-4)
+### `NMTVITEMCHANGE` / `TVN_ITEMCHANGED` gating is inconsistent across SDK versions (from LT-3)
 
-`InitializeWindows` registers two window classes from the same `WNDCLASSEX` struct: the main window class (which wants the IDI_LOGO icon) and the renderer child class (which doesn't). Between the two `RegisterClassEx` calls, `wcx.hIcon` gets reset to NULL. Any code reading `wcx.hIcon` *after* that reset gets NULL.
+Bumping `_WIN32_IE` to `0x0600` *did not* pull the type/macro in on this build environment. For checkbox-tree cascades in `TVS_CHECKBOXES` TreeViews, use the portable `NM_CLICK` + `TreeView_HitTest(TVHT_ONITEMSTATEICON)` + `PostMessage(WM_APP+1, 0, (LPARAM)hItem)` pattern instead. The post-message handler reads the now-post-toggle check state and cascades to descendants. Works on every Windows version. Mirror with `TVN_KEYDOWN` + `VK_SPACE` for keyboard users.
 
-**Fix**: cache HICONs in `hIconBig` / `hIconSmall` locals *before* the renderer-class registration, then pass those locals to `WM_SETICON` and `SetClassLongPtr(GCLP_HICON / GCLP_HICONSM)` after `CreateWindow`. Plus `SetCurrentProcessExplicitAppUserModelID(L"DrKnickers.AloParticleEditor")` (loaded dynamically out of shell32 because the project's `_WIN32_WINNT = 0x0501` predates that API) for a stable taskbar identity that doesn't cache off the .exe path.
+### Skydome FileManager routing wants `IFileManager::getFile` directly, not `TextureManager` (from skydome game-textures)
 
-### Bundled-asset format: DDS vs TGA trade-off (from MT-3)
+`TextureManager::getTexture` returns the magenta `IDB_MISSING` placeholder on miss — right for emitter textures (the user can see something's broken) but wrong for the skydome, where we'd rather fall back to the bundled RCDATA placeholder so the slot stays usable. Wrote a thin `LoadTextureViaFileManager` helper in [`src/engine.cpp`](../src/engine.cpp) that calls `IFileManager::getFile` directly and returns NULL on miss, letting the caller decide what to do next.
 
-**Plan said**: BC1 (DXT1) compressed DDS for bundled skydome textures — matches game-engine native compression, ~256 KB per file.
+This pattern incidentally fixes a quiet MT-2 ground-picker divergence: its custom-colour palette was stored in a local `static COLORREF s_custom[16]` that never propagated to the shared `ColorButton` library state. The new code path in `BackgroundPicker_PickSolidColor` (LT-3-era reshuffle but landed earlier) seeds/pushes through `ColorButton_GetCustomColors` / `ColorButton_SetCustomColors` so palette additions survive a restart *and* show up in MT-4's Lighting dialog colour fields.
 
-**Reality**: Pillow's BC1 DDS write path requires external tooling (`texconv.exe` from DirectXTex, or `wand`/ImageMagick). Neither is guaranteed on the dev box. The procedural placeholder generator can't reliably ship BC1.
+### Y↔Z axis swap reverses triangle handedness (from skydome poles)
 
-**Resolution**: v1 ships 24-bit RGB TGA placeholders via Pillow's native TGA writer (~1.5 MB per file, ~12 MB total bundle). The engine loader (`D3DXCreateTextureFromFileInMemory`) handles both formats identically, so curated BC1 DDS assets are a content-only follow-up that doesn't touch any code.
+Swapping two coordinates in a vertex position formula is a *reflection*, not a rotation — orientation-reversing. The skydome pass's `D3DRS_CULLMODE` had to flip from `D3DCULL_CW` to `D3DCULL_CCW` after the Y↔Z swap put the poles on ±Z. Render-state save/restore around the pass at [`src/engine.cpp`](../src/engine.cpp) keeps the change scoped — doesn't leak into ground / particle rendering.
 
-**Convention to remember**: when bundling assets via `RCDATA`, prefer formats Pillow can write natively (`.tga`, `.png`, `.bmp`) unless an asset pipeline with `texconv` is already established. Document the size trade-off if the bundle grows past ~10 MB.
+If you ever need axis re-orientation without a winding fix, use a true rotation (cos/sin in two coordinates) rather than a swap.
 
-### `D3DXCreateEffect` failures are silent without an error buffer (from MT-3)
+### Engine doesn't broadcast "new emitter added" — instances spawn from `m_emitters` at construction (from LT-3 diagnostic chase)
 
-The `LPD3DXBUFFER* ppErrors` out-parameter on `D3DXCreateEffect` is the ONLY way to see why a shader compile failed. The HRESULT alone tells you "it failed" but not why. **Always pass a non-NULL `pErrors` and surface it under `#ifndef NDEBUG`** — see `Engine::InitSkydomeEffect` for the pattern.
+When the user reported their imported emitter wasn't spawning, the suspicion was that the engine didn't know about the new emitter. It was actually fine: `ParticleSystemInstance(Engine&, system, parent)` walks `system->getEmitters()` at construction and calls `SpawnEmitter()` for each root. New emitters added to `m_emitters` get picked up by the *next* Shift+Click. The diagnostic that confirmed this (now lives behind `#ifndef NDEBUG` with tag prefix `[Spawn]`) is your first-look tool for future "imported emitter doesn't emit" reports.
 
-### `HRESULT`s from D3D9 init calls (from MT-3 Task 1 review)
+If a user reports "default spawns, imported doesn't" — most likely the imported emitter's runtime config (track values, blend mode, spawn-cube relative to a parent that no longer exists) is what's silencing it, not a structural bug in the import path.
 
-The engine's existing constructor pattern: `if (FAILED(...)) throw runtime_error("Unable to create ...")`. New init code must honour this contract. A `Create*` failure followed by an unguarded `Lock()` is a guaranteed null-deref. **All `m_pDevice->Create*` and `pBuffer->Lock` calls at init time must be FAILED-guarded.**
+### Worktree got auto-removed mid-session
 
-### Sphere geometry: triangle count math (from MT-3 Task 1)
+The previous handoff's worktree (`serene-benz-b7d2af`) was removed by something — auto-cleanup, `git worktree prune`, or a deliberate-from-elsewhere action — between the LT-3 ship and the Ground Z work. The fix: continue in the still-mounted `musing-poitras-dcc19d` worktree, fast-forward its branch to `origin/master`, proceed. The branches and PRs are all preserved on `origin`, so nothing was lost. Just a small "where am I?" moment.
 
-For a UV sphere with `lon` longitude × `lat` latitude segments:
-- Quads = `lon × lat`
-- Triangles = `lon × lat × 2`  ← off-by-2× from the quad count
-- Vertices = `(lon + 1) × (lat + 1)`  ← seam duplication
-
-If `lon=32, lat=16`: 561 vertices, 1024 triangles. The MT-3 plan typo'd it as `tris=512`; the code at `Engine::InitSkydomeMesh` is correct.
-
-### ROADMAP renumber discipline (always applies)
-
-- **`[TIER-K]` tags (NT-3, MT-5, LT-1) are permanent.** Never reused, never renamed, even if the item moves between tiers (which is rare).
-- **`N.M` positions are transient.** They renumber freely when items ship.
-- **When an item ships**: strikethrough title, append `✅ Shipped (#NN)`, add `**Actual:**` line, move entry to top of §5 Shipped (position 5.1), shift all other §5 entries down by 1, close the source-tier gap by renumbering remaining items in that tier.
-- **Renumber bottom-up** so each `### N.M ` pattern is unique-findable at the moment of its Edit call. Top-down causes collisions.
-
-### Subagent-driven development workflow
-
-The `superpowers:subagent-driven-development` skill works well for tasks with:
-- Clean plan with code-quoted source.
-- Mechanical-to-medium complexity per task.
-- Existing-pattern analogs in the codebase (e.g. MT-2's ground picker as model for MT-3's skydome picker).
-
-Per-task: dispatch implementer → dispatch spec reviewer → if compliant, dispatch code-quality reviewer → if approved, mark task done. Fix loops where reviewers flag Important issues; dispatch a focused fix subagent.
-
-**Model selection**: cheap (haiku) for mechanical tasks (RC files, resource IDs, registry helpers); standard (sonnet) for multi-file integration with judgement (engine state, render pass, dialog procs); most capable (opus) for true architecture/design — but in practice almost everything in this codebase fits sonnet.
-
-**Per-task PR-style review** catches real bugs early. MT-3 fix loops caught: missing HRESULT checks, magic-number array size, unused variable, RCDATA comment correctness, off-by-2× triangle count typo. None were show-stoppers, but all were worth fixing before merging.
-
-### CLAUDE.md plan-location vs writing-plans skill default
-
-The `superpowers:writing-plans` skill defaults to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`. **The project's `CLAUDE.md` overrides this** and routes plans to `tasks/todo.md`. Per the priority hierarchy (user instructions > skills > defaults), `tasks/todo.md` wins. Don't accidentally create `docs/superpowers/` subdirs.
-
-After a plan ships, `tasks/todo.md` is *not* archived — it gets overwritten by the next plan. The shipped work lives in CHANGELOG / ROADMAP / commit history, which is enough.
-
-### Pre-handoff testing discipline (from MT-1, codified in CLAUDE.md)
-
-Before saying "take a look" / "let me know what you see" to the user:
-
-1. Build the binary yourself (clean compile is the floor).
-2. Mentally walk every code path: branches, edge cases (empty input, missing file, first-run state, mod-switch mid-action).
-3. Verify rendered geometry: compute pixel positions yourself; match against what the user will see.
-4. Static-analyse for Win32 canonical failure modes: `WS_CLIPSIBLINGS` / `WS_CLIPCHILDREN`, sibling z-order, font defaults, message routing through subclasses, stale HWND handles.
-5. Smoke-run the binary if you can — even a cold launch catches startup crashes.
-6. Document the test pass in the handoff message: what you tested, what you fixed, what you couldn't verify.
-
-The user's time is much more expensive than yours. One round-trip "boot the editor, hit the obvious problem, report back" costs more than any amount of pre-handoff static review.
-
-### Backup / archive convention
-
-- **`tasks/todo.md`**: current/active plan. Overwritten when a new plan begins.
-- **`tasks/HANDOFF.md`** (this file): session-resumption notes. Update it when a session ends with significant in-flight context. Commit it to the working branch.
-- **`tasks/lessons.md`**: persistent corrections from user feedback. Per CLAUDE.md: "After any correction the user makes, update `tasks/lessons.md` with a rule that prevents the same mistake."
-- **`CHANGELOG.md`**: shipped feature history. Top entry is most recent.
-- **`ROADMAP.md`**: queued + shipped roadmap items with tier tags.
+For next session: `git worktree list` first, confirm you're somewhere that exists, fast-forward to master if behind.
 
 ---
 
-## File-level breadcrumbs
+## Conversation context the new session needs
 
-If you need to find specific patterns quickly:
+### Project at a glance (unchanged from prior handoff, kept here for completeness)
 
-| Need | Where to look |
-|---|---|
-| Modeless tool-window chrome | `ShowGroundTexturePicker` / `ShowSkydomePicker` / `ToggleBloomDialog` / `ToggleLightingDialog` in [`src/main.cpp`](../src/main.cpp) |
-| Owner-drawn 24×24 toolbar preview button | `WM_DRAWITEM` handler in main wndproc, branches on `dis->CtlID == hGroundTexturePreview` / `ID_SKYDOME_PREVIEW` |
-| Thumbnail generation via D3D9 → DIB | `MakeGroundSlotThumbnail` and `MakeSkydomeSlotThumbnail` |
-| Custom-paint ListView (escape native selection chrome) | `GroundLVSubclassProc` and `SkydomeLVSubclassProc` |
-| Registry helpers (DWORD / float / REG_SZ / RECT) | Around `Read/WriteBloomFloat`, `Read/WriteSkydomeIndex` |
-| Reset View Settings handler | Around [`src/main.cpp:1593`](../src/main.cpp:1593), `case ID_VIEW_RESET_VIEW_SETTINGS` |
-| Render-pipeline structure | `Engine::Render` in [`src/engine.cpp`](../src/engine.cpp), starting around line 492 |
-| FX shader file format | [`src/Resources/Engine/Skydome.fx`](../src/Resources/Engine/Skydome.fx) — minimal D3DX9 effect, vs_2_0/ps_2_0 |
-| Dialog template patterns | [`src/ParticleEditor.en.rc`](../src/ParticleEditor.en.rc) (and `.de.rc`) — `IDD_*` blocks |
-| Resource ID conventions | [`src/Resources/resource.h`](../src/Resources/resource.h) (locale-agnostic — `IDR_*`, `IDB_*`), `resource.en.h` / `resource.de.h` (locale-specific — `IDD_*`, `IDC_*`, `IDS_*`) |
+- **AloParticleEditor**: Win32 + D3D9 + C++ tool for editing Star Wars: Empire at War / Forces of Corruption's `.alo` particle-effect format.
+- **Codebase shape**: huge `src/main.cpp` (~8000+ LOC, owns all UI), `src/engine.cpp/.h` (the D3D9 render layer), `src/UI/` for custom controls (Spinner, ColorButton, TexturePalette, **EmitterList**, etc.), `src/Resources/` for `.rc` + `.h` resource files (split by locale: `.en.h` and `.de.h`).
+- **Game engine for Star Wars: EaW** ships as a 64-bit binary today (Petroglyph released an official patch ~2023+). Treat that as canonical.
+- **Build**: `MSBuild.exe ParticleEditor.sln -p:Configuration=Debug -p:Platform=x64`. Use the `.sln` not the `.vcxproj` directly — `$(SolutionDir)` resolves from the sln.
+- **User's editor**: Anthony Nguyen (anthonyhnguyen99@gmail.com). Direct, technically rigorous, welcomes pushback. Release-notes voice: matter-of-fact, no "Dev note" callouts, no glib closer lines.
+- **DirectX runtime**: release zips bundle `d3dx9_43.dll` next to the .exe; install instructions never ask users to install the DirectX runtime separately.
+- **`EmitterList.cpp`** is at [`src/UI/EmitterList.cpp`](../src/UI/EmitterList.cpp). The previous handoff said this file was at the codebase root — that was wrong; it lives under `UI/`. Verified during the LT-3 work.
 
----
+### Convention reminders that came up this session
 
-## Open questions / deferrals (do *not* silently address)
+- **Ground Z does NOT persist** anymore. Future code that touches Ground Height should *not* re-introduce registry persistence without explicit user direction. The helpers `ReadGroundZ` / `WriteGroundZ` are intentionally dormant — they exist so a future revert is a 2-line change.
+- **Skydome render is Z-up.** Poles at ±Z, horizon ring on the XY plane. Don't accidentally regress this when touching the sphere mesh.
+- **`Engine` constructor signature is now** `Engine(HWND, HWND, ITextureManager&, IShaderManager&, IFileManager&)` — three references, in that order. Any future construction site must pass all three.
+- **CHANGELOG / ROADMAP backfill pattern** (now five PRs deep): every feature PR ships with `TODO` placeholders for the merge-commit short hash in the date line and the ROADMAP shipped-entry's `(#NN)`. After merge, a separate small docs PR replaces them. **Never fold the backfill into the feature PR** — keeps the feature PR's hash stable as a permanent reference.
 
-- **MT-3 bundle size**: 12 MB of placeholder TGA. Acceptable for v1 ship. If user complains post-merge, the follow-up is curated BC1 DDS at ~2 MB total. Don't pre-emptively optimise.
-- **Skydome → bloom interaction**: bright skies (Space) on Bloom can blow out particles. Currently acceptable; if user reports, add a "skydome contributes to bloom" toggle in a follow-up. Don't add speculatively.
-- **Cubemap (6-face) skydomes**: out of scope for MT-3. Equirectangular 2D is simpler to source/load/thumbnail and meets the use case. If anyone asks, it's a follow-up that adds a second loader path.
-- **Skydome → directional-light coupling** (e.g. Sunset auto-shifts the sun direction): explicitly out of scope. MT-4's lighting panel is the manual coupling surface.
-- **Picker dialog text in German**: `.de.rc` mirrors `.en.rc` structure with English placeholder strings, consistent with project convention (German translation perennially lags English). Don't translate without explicit user direction.
+### Recently-shipped work that informs ongoing decisions
+
+- **MT-3 (PR #73, #75)**: skydome backgrounds with real game art + mod overlays + Z-up poles + unified Background button (consolidated picker, sticky on commit). Visual-style baseline for backgrounds.
+- **MT-4 (PR #71)**: lighting dialog. Modeless tool-window chrome pattern.
+- **LT-3 (PR #77)**: emitter import flow. Reference for *batch operations with cross-reference re-mapping + atomic undo*. Future work touching `m_emitters` should consider whether it needs the same shape (capture-before-batch, single ELN_LISTCHANGED-or-equivalent at the end).
+- **Ground Z reset (PR #79)**: precedent for "this setting is session-only, not persisted" — small change, no helper removal, harmless dormant code.
 
 ---
 
 ## Authoritative pointers
 
 - **Commit log** (recent): `git log --oneline -20`
-- **PR list**: `gh pr list --state all --limit 10`
-- **Build command**: `"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" -p:Configuration=Debug -p:Platform=x64 -nologo -clp:Summary 2>&1 | tail -5`
-- **Smoke launch**: `cd "<worktree>" && start "" "./x64/Debug/ParticleEditor.exe"` then `Get-Process -Name "ParticleEditor"` to confirm alive.
+- **PR list**: `gh pr list --state all --limit 12`
+- **Build command**: `"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" -p:Configuration=Debug -p:Platform=x64 -nologo -clp:Summary 2>&1 | tail -8`
+- **Smoke launch**: `cd "<worktree>" && start "" "./x64/Debug/ParticleEditor.exe"` then `tasklist 2>/dev/null | grep -i particle` to confirm alive.
+
+---
+
+## File-level breadcrumbs (additions / updates this session)
+
+| Need | Where to look |
+|---|---|
+| Unified Background button (MT-3 rework) | `WM_DRAWITEM` two-path branch and `BN_CLICKED → ShowSkydomePicker` in [`src/main.cpp`](../src/main.cpp). Slot 0 click → `BackgroundPicker_PickSolidColor` (which mirrors MT-2's ground-picker `PickSolidColor` but uses shared `ColorButton` library state). |
+| Skydome FileManager routing | `Engine::ReloadSkydomeTexture` in [`src/engine.cpp`](../src/engine.cpp), with `kSkydomeBundledGamePaths[]` table + `LoadTextureViaFileManager` helper. `RebuildBackgroundPreviewBitmap` short-circuits when `SkydomeIndex == 0`. |
+| Z-up sphere mesh | `Engine::InitSkydomeMesh` in [`src/engine.cpp`](../src/engine.cpp) — `vx.Position = D3DXVECTOR3(sinTheta * cosPhi, sinTheta * sinPhi, cosTheta)`. Cull mode `D3DCULL_CCW` in `Engine::RenderSkydome`. |
+| LT-3 import flow | `DoImportEmittersFromFile` + `ImportEmittersDialogProc` + `ImportEmitters_Execute` in [`src/main.cpp`](../src/main.cpp), inserted between `NicknameDialogProc` and `createFileManager`. Resource scaffolding in `resource.en.h` / `.de.h`. Menu entry under File. |
+| Per-spawn debug printf | `ParticleSystemInstance::SpawnEmitter` in [`src/ParticleSystemInstance.cpp`](../src/ParticleSystemInstance.cpp), tag prefix `[Spawn]`, gated by `#ifndef NDEBUG`. |
+| Ground Z session-only behaviour | Startup `SetGroundZ(0.0f)` in `info->engine` init block; spinner `SN_CHANGE` handler no longer calls `WriteGroundZ` (both in [`src/main.cpp`](../src/main.cpp)). |
+
+---
+
+## Open questions / deferrals (do *not* silently address)
+
+- **Link-group preservation across files**: LT-3 v1 re-creates the source group in destination when ≥2 members are imported, and leaves single-member buckets unlinked. Future PR could add a confirmation prompt for partial-group imports ("source had 4 members, you imported 3 — re-link the 3 as a new group?"). Not requested; defer.
+- **Importing into a parent emitter's child slot**: LT-3 v1 always lands imports as roots; user re-parents via drag-and-drop. Adding a destination-parent picker in the import dialog is UX overhead with marginal value. Future PR if requested.
+- **Preview thumbnails in the LT-3 import tree**: not implemented; tree shows names + hierarchy only. Adding per-emitter thumbnails would require partial-load + render of each source emitter in isolation. Future PR if requested.
+- **Skydome → bloom interaction**: bright skies on Bloom can blow out particles. Currently acceptable; if user reports, add a "skydome contributes to bloom" toggle in a follow-up.
+- **Cubemap skydomes**: out of scope; equirectangular 2D meets the use case for EaW's `W_SKY*.DDS` art.
+- **Skydome → directional-light coupling** (Sunset auto-shifts sun direction): explicitly out of scope. MT-4's lighting panel is the manual coupling surface.
