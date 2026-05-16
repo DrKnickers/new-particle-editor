@@ -104,6 +104,7 @@
 #define IDR_SKYDOME_STUDIO              157
 #define IDR_SKYDOME_INDOOR              158
 
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
