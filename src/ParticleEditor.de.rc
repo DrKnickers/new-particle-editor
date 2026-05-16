@@ -286,7 +286,7 @@ END
 IDD_SKYDOME_PICKER DIALOGEX 0, 0, 432, 388
 STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
 EXSTYLE WS_EX_TOOLWINDOW
-CAPTION "Skydome"
+CAPTION "Background"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL         "",IDC_SKYDOME_PICKER_LIST,"SysListView32",
@@ -755,7 +755,7 @@ BEGIN
     IDS_STATUS_SHIFT_TO_SPAWN "Drücke UMSCHALT um eine Instanz zu starten"
     IDS_STATUS_INSTANCES    "%d Instanzen (%d emitters)"
     IDS_STATUS_PARTICLES    "%d Partikel"
-    IDS_SKYDOME_OFF         "Off"
+    IDS_SKYDOME_OFF         "Solid colour"
     IDS_SKYDOME_SPACE       "Space"
     IDS_SKYDOME_ATMOSPHERE  "Atmosphere"
     IDS_SKYDOME_SUNSET      "Sunset"
