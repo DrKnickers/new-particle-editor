@@ -35,7 +35,8 @@ public:
     HostWindow(HINSTANCE hInstance,
                ITextureManager& textureManager,
                IShaderManager&  shaderManager,
-               IFileManager&    fileManager);
+               IFileManager&    fileManager,
+               bool useDevUi = false);
     ~HostWindow();
 
     HostWindow(const HostWindow&)            = delete;

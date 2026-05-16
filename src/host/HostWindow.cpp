@@ -19,6 +19,8 @@
 #include <shlobj.h>
 #include <wrl.h>
 #include <d3d9.h>
+#include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 #include "WebView2.h"
 
 #include <atomic>
@@ -52,6 +54,55 @@ constexpr wchar_t kHostViewportClassName[]   = L"AloHostViewport";
 constexpr int     kInitialWidth              = 1280;
 constexpr int     kInitialHeight             = 800;
 constexpr wchar_t kVirtualHostName[]         = L"app.local";
+constexpr INTERNET_PORT kDevServerPort       = 5174;
+
+// Probe the Vite dev server at http://localhost:5174/. Used when
+// --dev-ui is active to verify the server is listening before
+// navigating. Returns true only if a 2xx response is received.
+// Short timeouts (≤2 s total) so startup never hangs.
+bool ProbeDevServer()
+{
+    HINTERNET hSession = WinHttpOpen(L"AloParticleEditor-DevProbe",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return false;
+
+    // resolve: 1 s, connect: 1 s, send: 1.5 s, receive: 1.5 s
+    WinHttpSetTimeouts(hSession, 1000, 1000, 1500, 1500);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, L"localhost", kDevServerPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/",
+        nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest)
+    {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return false;
+    }
+
+    bool ok = false;
+    BOOL sent = WinHttpSendRequest(hRequest,
+        WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+        WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (sent && WinHttpReceiveResponse(hRequest, nullptr))
+    {
+        DWORD statusCode = 0, len = sizeof(statusCode);
+        if (WinHttpQueryHeaders(hRequest,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &len,
+                WINHTTP_NO_HEADER_INDEX))
+        {
+            ok = (statusCode >= 200 && statusCode < 300);
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
 
 // Walk up from x64/<Config>/ParticleEditor.exe to the repo root, then
 // descend to web/apps/editor/dist (Vite's build output). Same pattern as
@@ -166,17 +217,20 @@ struct HostWindowImpl
     AcceleratorBridge                  accelerator;
     std::unique_ptr<BridgeDispatcher>  dispatcher;
 
+    bool        useDevUi  = false;   // --dev-ui: navigate to Vite HMR server
     FILE*       logFile = nullptr;
     std::mutex  logMutex;
 
     HostWindowImpl(HINSTANCE inst,
                    ITextureManager& tex,
                    IShaderManager&  shd,
-                   IFileManager&    fil)
+                   IFileManager&    fil,
+                   bool devUi = false)
         : hInstance(inst)
         , textureManager(tex)
         , shaderManager(shd)
         , fileManager(fil)
+        , useDevUi(devUi)
         , layout(nullptr)
         , accelerator()
     {
@@ -372,17 +426,22 @@ HRESULT HostWindowImpl::InitWebView2()
                             GetClientRect(hMain, &bounds);
                             controller->put_Bounds(bounds);
 
-                            // Map app.local → web/apps/editor/dist so the
-                            // React app loads from a stable virtual origin.
-                            ComPtr<ICoreWebView2_3> wv3;
-                            webView.As(&wv3);
-                            if (wv3)
+                            // Production mode: map app.local → web/apps/editor/dist
+                            // so the React app loads from a stable virtual origin.
+                            // Dev mode (--dev-ui): skip the mapping; Vite's own
+                            // dev server serves everything from localhost:5174.
+                            if (!useDevUi)
                             {
-                                std::wstring distPath = ComputeEditorDistPath();
-                                Log("[host] editor dist: %ls\n", distPath.c_str());
-                                wv3->SetVirtualHostNameToFolderMapping(
-                                    kVirtualHostName, distPath.c_str(),
-                                    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                                ComPtr<ICoreWebView2_3> wv3;
+                                webView.As(&wv3);
+                                if (wv3)
+                                {
+                                    std::wstring distPath = ComputeEditorDistPath();
+                                    Log("[host] editor dist: %ls\n", distPath.c_str());
+                                    wv3->SetVirtualHostNameToFolderMapping(
+                                        kVirtualHostName, distPath.c_str(),
+                                        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+                                }
                             }
 
                             // Subscribe to JS → host messages.
@@ -402,7 +461,15 @@ HRESULT HostWindowImpl::InitWebView2()
                                     }).Get(), &tok);
 
                             // Navigate to the React app.
-                            webView->Navigate(L"https://app.local/index.html");
+                            if (useDevUi)
+                            {
+                                Log("[host] dev-ui: Navigate to Vite dev server\n");
+                                webView->Navigate(L"http://localhost:5174/");
+                            }
+                            else
+                            {
+                                webView->Navigate(L"https://app.local/index.html");
+                            }
                             Log("[host] Navigate dispatched\n");
                             return S_OK;
                         }).Get());
@@ -535,6 +602,31 @@ int HostWindowImpl::Run(int nCmdShow)
 {
     OpenLog();
 
+    // LT-4 Task 1.4: when --dev-ui is requested, verify the Vite dev server
+    // is reachable before proceeding. A missing server is a common mistake
+    // (forgot to run `pnpm dev`) — fail fast with a clear message rather than
+    // navigating to an empty page.
+    if (useDevUi)
+    {
+        Log("[host] dev-ui: probing http://localhost:5174/ ...\n");
+        if (!ProbeDevServer())
+        {
+            Log("[host] dev-ui: probe failed — server not reachable\n");
+            CloseLog();
+            MessageBoxW(nullptr,
+                L"Dev UI mode requested but no dev server detected at http://localhost:5174.\n\n"
+                L"Did you forget to run `pnpm dev` in `web/apps/editor/`?\n\n"
+                L"Start the dev server in one terminal:\n"
+                L"    cd web/apps/editor\n"
+                L"    pnpm dev\n\n"
+                L"Then relaunch ParticleEditor.exe --new-ui --dev-ui.",
+                L"Dev UI server not detected",
+                MB_OK | MB_ICONERROR);
+            return 1;
+        }
+        Log("[host] dev-ui: probe OK — navigating to Vite server\n");
+    }
+
     // DPI awareness — PMv2 so child-window coords are physical pixels and
     // match what React sends from getBoundingClientRect under WebView2.
     // The PoC ran with this and the visual gate passed.
@@ -639,8 +731,9 @@ int HostWindowImpl::Run(int nCmdShow)
 HostWindow::HostWindow(HINSTANCE hInstance,
                        ITextureManager& textureManager,
                        IShaderManager&  shaderManager,
-                       IFileManager&    fileManager)
-    : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager))
+                       IFileManager&    fileManager,
+                       bool useDevUi)
+    : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager, useDevUi))
 {
 }
 
@@ -663,9 +756,10 @@ int Run(HINSTANCE hInstance,
         int nCmdShow,
         ITextureManager& textureManager,
         IShaderManager&  shaderManager,
-        IFileManager&    fileManager)
+        IFileManager&    fileManager,
+        bool useDevUi)
 {
-    HostWindow host(hInstance, textureManager, shaderManager, fileManager);
+    HostWindow host(hInstance, textureManager, shaderManager, fileManager, useDevUi);
     return host.Run(nCmdShow);
 }
 
