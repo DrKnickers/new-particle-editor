@@ -96,8 +96,9 @@ IDB_GROUND_SAND         RCDATA                  "Resources\\sand.dds"
 IDB_GROUND_SNOW         RCDATA                  "Resources\\snow.dds"
 
 // MT-3 skydome textures. Declared RCDATA so D3DXCreateTextureFromFileInMemory
-// can load TGA procedural placeholder files. Eventually these will be user-authored
-// cubemap DDS files, but TGA suffices for now.
+// can load them. Procedural-gradient TGA placeholders today; a follow-up
+// PR can replace with curated equirectangular DDS (BC1) assets without
+// touching the loader.
 IDR_SKYDOME_SPACE       RCDATA                  "Resources\\skydomes\\space.tga"
 IDR_SKYDOME_ATMOSPHERE  RCDATA                  "Resources\\skydomes\\atmosphere.tga"
 IDR_SKYDOME_SUNSET      RCDATA                  "Resources\\skydomes\\sunset.tga"
