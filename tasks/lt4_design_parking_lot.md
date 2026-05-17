@@ -350,7 +350,7 @@ Enter to OK).
 **Sub-screens to check off individually:**
 
 - [ ] Lighting dialog — 🟡 pending
-- [ ] Background picker — done as Phase 2 validator (will be ✅ here once Phase 2 lands)
+- [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge)
 - [ ] Ground picker — 🟡 pending
 - [ ] Import Emitters — 🟡 pending
 - [ ] Rescale — 🟡 pending
@@ -364,7 +364,83 @@ Enter to OK).
 
 **Decisions locked once ✅:**
 
-> _(empty)_
+### Background picker (sub-screen) — locked Task 2.3
+
+**Affordance.** A compact pill `[● Background]` in the top bar after the
+"AloParticleEditor" title. The 12×12 swatch reflects the *current*
+background:
+
+- Slot 0 (solid colour) → the engine `background` COLORREF rendered as
+  CSS hex.
+- Slots 1-8 (bundled) → a fixed representative colour per skydome
+  (`BUNDLED_SLOTS[i].swatch` in `BackgroundPicker.tsx`), so there's a
+  deterministic preview without round-tripping for thumbnails.
+- Slots 9-11 (custom) → neutral-600 placeholder until the native host
+  ships per-skydome thumbnails.
+
+The pill toggles the panel (`aria-pressed` reflects open state).
+
+**Layout.** Right-side slide-in panel, 320 px wide, anchored to the
+right edge of the main row. `absolute right-0 top-0 bottom-0 z-10`,
+above the viewport-slot but inside the existing app shell. Tailwind
+transition: `transform translate-x-0` / `translate-x-full`. Header
+40 px, dark surface (`bg-neutral-900`), bottom border
+(`border-b border-neutral-800`), 16 px padding. "Background" title
+(left, semibold), Unicode `×` close button (right).
+
+**Slot grid.** Single 3-column grid throughout, three sections separated
+by `gap-3`:
+
+1. **Solid colour** — `col-span-3` tile, 64 px tall. Background colour
+   = current `background` rendered live. Click switches to slot 0 *and*
+   triggers a hidden `<input type="color">` for hex selection. Hex
+   change → `engine/set/background { rgb: hexToColorref(hex) }`.
+2. **Bundled (slots 1-8)** — 8 individual square tiles (`aspect-square`).
+   Each tile fills with the per-slot CSS gradient (no real thumbnail in
+   browser mode; native host wires real previews later). Bottom strip
+   shows the skydome name on `bg-neutral-950/80 backdrop-blur-sm`.
+   Click → `engine/set/skydome-slot { slot }`.
+3. **Custom (slots 9-11)** — 3 square tiles. Empty: dashed border
+   (`border-dashed border-neutral-700`), "+" glyph + "Browse..." label.
+   Click in browser mode alerts "File picker requires native host —
+   coming in Task 2.4". Populated: dark tile + basename + small
+   "↺" replace glyph top-right. Click → `engine/set/skydome-slot { slot }`.
+
+**Selection visual.** `border-2`. Selected tile: `border-sky-500` +
+filled circle `✓` glyph in the top-right (top-left for custom tiles to
+avoid overlapping the replace glyph). Unselected: `border-neutral-800`
+with hover `border-neutral-700`.
+
+**State subscription.** On mount: `engine/state/snapshot` once. Then
+`bridge.on("engine/state/changed", …)` for live updates. Unsubscribe in
+the `useEffect` cleanup. Both the pill and the panel mirror state from
+the same DTO, so external mutations (DevTools, Playwright,
+`engine/action/*`) reflect immediately.
+
+**Bridge surface used.**
+
+- Request `engine/state/snapshot` — initial DTO.
+- Request `engine/set/skydome-slot { slot }` — every bundled / custom
+  tile click. Slot 0 also fires from the solid-colour tile click to
+  guarantee the engine is in solid-colour mode before the colour input
+  opens.
+- Request `engine/set/background { rgb }` — solid-colour `<input
+  type="color">` change. RGB encoded as COLORREF
+  (`(b << 16) | (g << 8) | r`, see `lib/colorref.ts`).
+- Request `engine/set/skydome-custom-path { slot, path }` — *not yet
+  emitted in browser mode*; the empty-state click alerts and the
+  populated-state click only fires `skydome-slot`. Task 2.4 wires the
+  native file picker into this surface.
+- Event `engine/state/changed` — drives both the pill swatch
+  (`BackgroundButton`) and the picker's selection / preview state.
+
+**Out of scope (Task 2.4+).**
+
+- Native `file/open` for custom slots — currently a `window.alert`.
+- Real skydome thumbnails — placeholder swatches today.
+- Replace / clear right-click context menu on populated custom tiles —
+  ↺ glyph is currently decorative; clicking it just behaves like the
+  tile itself.
 
 ---
 

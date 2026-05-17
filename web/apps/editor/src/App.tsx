@@ -1,7 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
+import { BackgroundButton } from "@/screens/BackgroundButton";
+import { BackgroundPicker } from "@/screens/BackgroundPicker";
 
 export function App() {
   const bridge = useMemo(() => {
@@ -12,6 +14,8 @@ export function App() {
     exposeBridgeForTests(b);
     return b;
   }, []);
+
+  const [panelOpen, setPanelOpen] = useState(false);
 
   // TODO Phase 3: remove this debug block once real per-screen shortcut
   // handlers are wired in. Until then it proves the round-trip works:
@@ -47,13 +51,20 @@ export function App() {
   return (
     <div className="flex h-full w-full flex-col bg-neutral-950 text-neutral-100">
       {/* Top bar */}
-      <header className="flex h-10 shrink-0 items-center border-b border-neutral-800 px-4 text-sm">
+      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-neutral-800 px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>
-        <span className="ml-3 text-neutral-500">— Phase 1 scaffold</span>
+        <span className="text-neutral-500">— Phase 1 scaffold</span>
+        <div className="ml-auto flex items-center gap-2">
+          <BackgroundButton
+            open={panelOpen}
+            onToggle={() => setPanelOpen((v) => !v)}
+            bridge={bridge}
+          />
+        </div>
       </header>
 
       {/* Main row */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside className="w-64 shrink-0 border-r border-neutral-800 p-3 text-sm">
           <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">Emitters</div>
@@ -62,6 +73,11 @@ export function App() {
 
         {/* Viewport */}
         <ViewportSlot bridge={bridge} />
+
+        {/* Background picker slides over the right edge of the main row. */}
+        {panelOpen && (
+          <BackgroundPicker bridge={bridge} onClose={() => setPanelOpen(false)} />
+        )}
       </div>
 
       {/* Status bar */}
