@@ -638,10 +638,10 @@ verification pass. Each sub-dialog has its own checkbox above.
 
 **Sub-screens to check off individually:**
 
-- [ ] Lighting dialog — 🟡 pending
+- [ ] Lighting dialog — 🟡 pending (Batch 2 dispatch in flight)
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge)
-- [ ] Ground picker — 🟡 pending
-- [ ] Bloom settings — 🟡 pending
+- [ ] Ground picker — 🟡 pending (Batch 2 dispatch in flight)
+- [ ] Bloom settings — 🟡 pending (Batch 2 dispatch in flight)
 - [ ] Import Emitters — 🟡 pending
 - [x] Rescale System — ✅ shipped Batch 1
 - [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
@@ -782,6 +782,173 @@ verification pass. Each sub-dialog has its own checkbox above.
   own checkbox added now since the inventory list didn't include
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
+
+### Batch 2 — Modeless tool windows: Lighting + Bloom + Ground Texture (locked 2026-05-17)
+
+**Shared `ToolPanel` host pattern (the architectural call):**
+
+- **Single open panel at a time.** Zustand atom
+  `openToolPanel: "background" | "lighting" | "bloom" | "ground" | null`
+  drives `App.tsx`'s right-sidebar slot. Opening any panel (via menu,
+  via BackgroundButton, via any future trigger) sets the atom and
+  closes whichever was previously open.
+- **Why not multi-panel tabbed sidebar or stacked panels?** Tabbed
+  is a bigger architectural change — defer to a later refactor if
+  user feedback says one-at-a-time is too restrictive. Stacked has
+  layout-math complexity and matches a Win32 affordance (floating
+  HWNDs) that doesn't map well to WebView2. One-at-a-time matches
+  the existing BackgroundPicker pattern and ships in this batch.
+- **`ToolPanel` shell** at
+  `web/apps/editor/src/components/ToolPanel.tsx`. Compound
+  component: `<ToolPanel title="…" onClose={…}>…</ToolPanel>`.
+  Same chrome as BackgroundPicker (320 px wide, dark surface, 48 px
+  header with title + `×` close glyph, scrollable body). The
+  existing BackgroundPicker is refactored to use this shell in this
+  batch — it's currently inline in `BackgroundPicker.tsx`.
+- **Migration plan for BackgroundPicker.** Extract its panel shell
+  into `ToolPanel`; BackgroundPicker stays a screen but uses the
+  shell. The existing `panelOpen` state in App.tsx becomes the
+  Zustand atom's `"background"` value. All existing Background
+  Playwright specs must still pass — this refactor is invisible
+  externally.
+
+**Lighting panel (largest sub-dialog):**
+
+- **Trigger**: Tools → Lighting menu item (currently `todo("Lighting")`
+  at [web/apps/editor/src/components/MenuBar.tsx:288]). Replace with
+  `setOpenToolPanel("lighting")`.
+- **Section layout** (top to bottom in the panel body):
+  1. **Sun light** (expanded by default, `<details>` collapsible):
+     intensity Spinner (`0..2`, step `0.05`), azimuth Spinner
+     (`-180..180`, suffix `°`), altitude Spinner (`-90..90`, suffix
+     `°`), diffuse ColorButton, specular ColorButton.
+  2. **Fill light 1** (collapsed by default): intensity, azimuth,
+     altitude, diffuse (no specular for fill lights — matches legacy).
+  3. **Fill light 2** (collapsed by default): same as Fill 1.
+  4. **Ambient** (always visible): ColorButton (the global ambient
+     tint, `engine/set/ambient`).
+  5. **Shadow** (always visible): ColorButton (the global shadow
+     tint, `engine/set/shadow`).
+  6. **Footer row**: `Mirror Sun` button (copies sun direction to
+     Fill 1 — composed in React via `engine/set/light` calls; no new
+     bridge), `Reset` button (resets all lights to default values
+     baked into the component), `Force Align` checkbox (Lighting-tab
+     toggle — if no bridge call exists for this, omit it from this
+     batch and TODO it).
+- **State sync**: subscribe to `engine/state/changed`. Each
+  ColorButton / Spinner derives its `value` from the latest snapshot.
+  Local edits commit immediately to the bridge (no draft state) so
+  the engine re-renders live.
+- **Bridge surface**: `engine/set/light { which, ...LightDto }`
+  (per-light intensity/angles/colours — note: legacy stores
+  intensity separately from the LightDto's diffuse/specular RGB;
+  the React layer either folds intensity into the diffuse alpha
+  channel of `Vec4` or maintains it as a local computed value
+  multiplied into the bridge call. **Defer to the subagent's read
+  of the legacy LightingDlgProc to make the right call**).
+  `engine/set/ambient { color: Vec4 }`. `engine/set/shadow { color:
+  Vec4 }`.
+- **Vec4 ↔ COLORREF helpers**: ColorButton works in COLORREF; bridge
+  takes Vec4 for lights. Add a `colorrefToVec4(rgb): Vec4` /
+  `vec4ToColorref(v): Color` pair in `web/apps/editor/src/lib/colorref.ts`
+  (companion to the existing helpers).
+- **Legacy delete**: NOT in this batch. `LightingDlgProc` at
+  [src/main.cpp:6574] stays for `--legacy-ui`.
+
+**Bloom Settings panel (smallest sub-dialog):**
+
+- **Trigger**: new "View → Bloom Settings…" menu item. The existing
+  View → Bloom item stays as a toggle (do not replace). The new
+  item is inserted directly under it. Replace its `todo(...)` with
+  `setOpenToolPanel("bloom")`.
+- **Section layout**:
+  1. **Enable Bloom** checkbox (mirrors `engine/set/bloom`; gives the
+     panel a master toggle independent of the menu).
+  2. **Strength** Spinner (`0..5`, step `0.05`).
+  3. **Cutoff** Spinner (`0..1`, step `0.01`).
+  4. **Size** Spinner (`0..32`, step `0.5`).
+- **Bloom-available gate**: call `engine/query/bloom-available` on
+  mount. If false, render a disabled-state body with greyed Spinners
+  and a small "(Bloom is not supported on this device)" placeholder.
+  Subscribe to `engine/state/changed` to re-derive in case bloom
+  availability flips (rare but possible after reload-shaders).
+- **Bridge surface**: existing `engine/set/bloom`,
+  `engine/set/bloom-strength`, `engine/set/bloom-cutoff`,
+  `engine/set/bloom-size`, `engine/query/bloom-available`. No
+  additions.
+- **Legacy delete**: NOT in this batch. `BloomDlgProc` at
+  [src/main.cpp:5987] stays for `--legacy-ui`.
+
+**Ground Texture Picker panel (mirrors Background pattern):**
+
+- **Trigger**: the existing ground-affordance in the toolbar /
+  whatever surface the audit cites as the launcher. Inspect the
+  current code (legacy uses `hGroundTexturePreview` button BN_CLICKED
+  → `ShowGroundTexturePicker`); the React UI doesn't yet have a
+  ground-preview button in the toolbar, so EITHER add a menu item
+  under View → "Ground Texture…" OR add a small pill in the toolbar
+  matching BackgroundButton. **Subagent decision: pick the smaller
+  one (menu item) and TODO the toolbar pill for a future batch.**
+- **Section layout** (mirrors BackgroundPicker's slot grid):
+  1. **Show Ground** master checkbox at top (mirrors `engine/set/ground`).
+  2. **Grid** of `groundSlotCustomPaths.length + bundled-count + 1`
+     slot tiles. Read `groundTexture` snapshot for current selection,
+     `groundSolidColor` for slot 0's swatch.
+  3. **Slot 0 (Solid colour)** — wide tile showing the current
+     `groundSolidColor` swatch; click switches to slot 0 + opens the
+     ColorButton popover (composes existing Screen 7 ColorButton).
+     On color commit → `engine/set/ground-solid-color { rgb }` +
+     `engine/set/ground-texture { slot: 0 }`.
+  4. **Bundled slots** — square tiles with placeholder colour
+     gradients (same approach as BackgroundPicker). Click →
+     `engine/set/ground-texture { slot }`.
+  5. **Custom slots** — empty tiles say "+ Browse"; populated show
+     basename. Click empty → no-op for now (file picker requires
+     native host wiring, defer as TODO matching BackgroundPicker's
+     custom-slot deferred behavior). Click populated → switches to
+     that slot.
+- **Selection visual**: `border-2 border-sky-500` on selected tile,
+  `border-neutral-800` otherwise (matches BackgroundPicker).
+- **Bridge surface**: existing `engine/set/ground`,
+  `engine/set/ground-texture`, `engine/set/ground-solid-color`,
+  `engine/query/ground-slot-empty`. No additions.
+- **Legacy delete**: NOT in this batch. `GroundTexturePickerProc` at
+  [src/main.cpp:3799] stays for `--legacy-ui`.
+
+**Test surface for Batch 2:**
+
+- **Vitest** (+9 specs, target 46 → 55+):
+  - `ToolPanel.test.tsx` (3 specs): renders the title; close glyph
+    fires onClose; switching between panels closes the previous one.
+  - `LightingPanel.test.tsx` (3 specs): Sun section renders 3
+    Spinners + 2 ColorButtons; changing Sun intensity fires
+    `engine/set/light` with the correct `which: "sun"`; Mirror Sun
+    button copies sun → fill1 via two `engine/set/light` calls.
+  - `BloomPanel.test.tsx` (2 specs): renders 3 Spinners; changing
+    Strength fires `engine/set/bloom-strength`.
+  - `GroundTexturePanel.test.tsx` (1 spec): clicking a bundled slot
+    fires `engine/set/ground-texture` with the right slot index.
+- **Playwright** (+6 specs, target 28 → 34+):
+  - `tools.spec.ts` (6 specs):
+    - Lighting: Tools → Lighting opens the panel; opening Background
+      closes Lighting (mutual exclusion).
+    - Bloom: View → Bloom Settings opens the panel; toggling Enable
+      fires `engine/set/bloom` and updates the menu's check glyph.
+    - Ground: View → Ground Texture opens the panel; clicking a
+      bundled slot updates `engine/state/changed` snapshot's
+      `groundTexture`.
+
+**Migration of existing Background plumbing:**
+
+- `App.tsx`'s `panelOpen: boolean` state goes away. Replaced with
+  the new `openToolPanel` Zustand atom + selector.
+- `BackgroundButton`'s `open` prop becomes
+  `open === "background"` from the atom.
+- `BackgroundPicker.tsx` extracts its panel-shell JSX into the new
+  `ToolPanel.tsx` shared component; the picker's body content stays
+  in `BackgroundPicker.tsx`.
+- All existing Background Playwright specs MUST still pass without
+  modification. The refactor is invisible externally.
 
 ### Background picker (sub-screen) — locked Task 2.3
 

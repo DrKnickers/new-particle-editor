@@ -22,6 +22,7 @@ import type {
   EngineStateDto,
 } from "@particle-editor/bridge-schema";
 import { colorrefToHex, hexToColorref } from "@/lib/colorref";
+import { ToolPanel } from "@/components/ToolPanel";
 
 type Props = {
   bridge: Bridge;
@@ -121,26 +122,8 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
   };
 
   return (
-    <div
-      className="absolute right-0 top-0 bottom-0 z-10 w-80 transform border-l border-neutral-800 bg-neutral-950 transition-transform translate-x-0"
-      role="dialog"
-      aria-label="Background picker"
-    >
-      {/* Header */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-900 px-4">
-        <span className="text-sm font-semibold">Background</span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close background picker"
-          className="flex size-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Body */}
-      <div className="flex flex-col gap-3 overflow-y-auto p-3" style={{ height: "calc(100% - 40px)" }}>
+    <ToolPanel title="Background picker" onClose={onClose}>
+      <div className="flex flex-col gap-3">
         {/* Solid-colour row */}
         <div className="grid grid-cols-3 gap-2">
           <button
@@ -254,6 +237,6 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
           })}
         </div>
       </div>
-    </div>
+    </ToolPanel>
   );
 }

@@ -7,9 +7,16 @@ import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
+import { LightingPanel } from "@/screens/LightingPanel";
+import { BloomPanel } from "@/screens/BloomPanel";
+import { GroundTexturePanel } from "@/screens/GroundTexturePanel";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
 import { AboutDialog } from "@/screens/AboutDialog";
 import { RescaleDialog } from "@/screens/RescaleDialog";
+import {
+  setOpenToolPanel,
+  useOpenToolPanel,
+} from "@/lib/tool-panel";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -29,7 +36,10 @@ function AppShell() {
     return b;
   }, []);
 
-  const [panelOpen, setPanelOpen] = useState(false);
+  // Screen 8 Batch 2: single-open-panel state. Replaces the per-panel
+  // `panelOpen` boolean that used to live here. Opening any panel from
+  // the menu / Background pill closes whichever was previously open.
+  const openPanel = useOpenToolPanel();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
 
@@ -85,14 +95,19 @@ function AppShell() {
         <span className="font-semibold">AloParticleEditor</span>
         <MenuBar
           bridge={bridge}
-          onOpenBackgroundPanel={() => setPanelOpen(true)}
+          onOpenBackgroundPanel={() => setOpenToolPanel("background")}
+          onOpenLightingPanel={() => setOpenToolPanel("lighting")}
+          onOpenBloomPanel={() => setOpenToolPanel("bloom")}
+          onOpenGroundTexturePanel={() => setOpenToolPanel("ground")}
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}
         />
         <div className="ml-auto flex items-center gap-2">
           <BackgroundButton
-            open={panelOpen}
-            onToggle={() => setPanelOpen((v) => !v)}
+            open={openPanel === "background"}
+            onToggle={() =>
+              setOpenToolPanel(openPanel === "background" ? null : "background")
+            }
             bridge={bridge}
           />
         </div>
@@ -112,9 +127,19 @@ function AppShell() {
         {/* Viewport */}
         <ViewportSlot bridge={bridge} />
 
-        {/* Background picker slides over the right edge of the main row. */}
-        {panelOpen && (
-          <BackgroundPicker bridge={bridge} onClose={() => setPanelOpen(false)} />
+        {/* Tool-panel host. Single panel mounted at a time, driven by
+            the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
+        {openPanel === "background" && (
+          <BackgroundPicker bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+        )}
+        {openPanel === "lighting" && (
+          <LightingPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+        )}
+        {openPanel === "bloom" && (
+          <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+        )}
+        {openPanel === "ground" && (
+          <GroundTexturePanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
         )}
       </div>
 

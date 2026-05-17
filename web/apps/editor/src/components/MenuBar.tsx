@@ -10,6 +10,9 @@ import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 type Props = {
   bridge: Bridge;
   onOpenBackgroundPanel: () => void;
+  onOpenLightingPanel: () => void;
+  onOpenBloomPanel: () => void;
+  onOpenGroundTexturePanel: () => void;
   onOpenAboutDialog: () => void;
   onOpenRescaleDialog: () => void;
 };
@@ -42,6 +45,9 @@ const todo = (label: string) => () =>
 export function MenuBar({
   bridge,
   onOpenBackgroundPanel,
+  onOpenLightingPanel,
+  onOpenBloomPanel,
+  onOpenGroundTexturePanel,
   onOpenAboutDialog,
   onOpenRescaleDialog,
 }: Props) {
@@ -205,6 +211,13 @@ export function MenuBar({
             </Menubar.Item>
             <Menubar.Item
               className={ITEM}
+              onSelect={() => onOpenGroundTexturePanel()}
+            >
+              <CheckSlot active={false} />
+              Ground Texture…
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
               onSelect={() => onOpenBackgroundPanel()}
             >
               <CheckSlot active={false} />
@@ -221,6 +234,13 @@ export function MenuBar({
               <CheckSlot active={bloom} />
               Bloom
               {!bloomAvailable && <Hint>unavailable</Hint>}
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => onOpenBloomPanel()}
+            >
+              <CheckSlot active={false} />
+              Bloom Settings…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
             <Menubar.Item
@@ -292,7 +312,7 @@ export function MenuBar({
             align="start"
             sideOffset={4}
           >
-            <Menubar.Item className={ITEM} onSelect={todo("Lighting")}>
+            <Menubar.Item className={ITEM} onSelect={() => onOpenLightingPanel()}>
               Lighting…
             </Menubar.Item>
             <Menubar.Sub>
