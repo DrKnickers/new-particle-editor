@@ -92,6 +92,7 @@ async function main() {
       playwrightCli, "test",
       "tests/bridge-native.spec.ts",
       "tests/background-picker.spec.ts",
+      "tests/app-shell.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

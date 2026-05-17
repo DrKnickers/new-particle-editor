@@ -210,7 +210,10 @@ export class MockBridge implements Bridge {
       // surface a raw rejection in dev. Resolve with the schema's
       // cancellation shape instead so the chain aborts cleanly.
       case "file/open":
-        return { ok: false, error: "browser-mode" } as ResponseFor<R>;
+        // request() casts handle()'s unknown return back to ResponseFor<R>,
+        // so no inline cast is needed here. The schema's file/open response
+        // is { ok: true; path?: string } | { ok: false; error: string }.
+        return { ok: false, error: "browser-mode" };
 
       // ---------------- emitters / file / undo / spawner: Phase 3+ ----------------
       case "emitters/list":
