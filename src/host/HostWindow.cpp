@@ -319,6 +319,19 @@ struct HostWindowImpl
     float                              m_lastRenderTime        = 0.0f;
     int                                m_lastEmittedActiveCount = -1;
 
+    // LT-4 viewport interaction (camera controls). Mirror of legacy
+    // src/main.cpp:2920-3060 drag-state. On WM_LBUTTONDOWN /
+    // WM_RBUTTONDOWN we snapshot the camera + cursor XY, then
+    // WM_MOUSEMOVE deltas are applied relative to the snapshot
+    // (matches legacy "drag relative to start" feel — releasing and
+    // re-pressing resets the reference frame). NONE means no drag in
+    // progress; the wheel handler only fires when dragMode == NONE.
+    enum class DragMode { NONE, MOVE, ROTATE, ZOOM };
+    DragMode        m_dragMode      = DragMode::NONE;
+    Engine::Camera  m_dragStartCam  = {};
+    int             m_dragStartX    = 0;
+    int             m_dragStartY    = 0;
+
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
@@ -827,6 +840,141 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_ERASEBKGND:
         // Suppress GDI erase — D3D9 owns the surface.
         return 1;
+
+    // ---------------------------------------------------------------
+    // LT-4 viewport interaction — camera controls.
+    //
+    // Mirrors the legacy handler at src/main.cpp:2917-3060. The math
+    // for MOVE / ROTATE / ZOOM is lifted verbatim from legacy so the
+    // user's muscle-memory carries over: drag delta scales /2.0f for
+    // rotate (full-window-width drag ≈ 180°), distance/1000 for
+    // MOVE multiplier, sqrt(olddist)-based scaling for ZOOM.
+    //
+    // Scope: camera only. The shift-click-to-spawn path
+    // (legacy 2956) depends on the MouseCursor Object3D port and is
+    // explicitly deferred. The status-bar mouse-coord push
+    // (legacy 3041) is a Screen 1 polish item.
+    //
+    // Engine state emission: SetCamera bypasses the dispatcher
+    // setter ladder, so we must call EmitEngineStateChanged()
+    // ourselves after each mutation to keep React subscribers in
+    // sync. View state is not file content — no markDirty here
+    // (matches legacy, which never calls SetFileChanged for camera).
+    // ---------------------------------------------------------------
+    case WM_LBUTTONDOWN:
+    {
+        if (!engine) return 0;
+        m_dragMode     = (wp & MK_CONTROL) ? DragMode::ZOOM : DragMode::MOVE;
+        m_dragStartCam = engine->GetCamera();
+        m_dragStartX   = (short)LOWORD(lp);
+        m_dragStartY   = (short)HIWORD(lp);
+        SetCapture(hwnd);
+        SetFocus(hwnd);
+        return 0;
+    }
+    case WM_RBUTTONDOWN:
+    {
+        if (!engine) return 0;
+        m_dragMode     = (wp & MK_CONTROL) ? DragMode::ZOOM : DragMode::ROTATE;
+        m_dragStartCam = engine->GetCamera();
+        m_dragStartX   = (short)LOWORD(lp);
+        m_dragStartY   = (short)HIWORD(lp);
+        SetCapture(hwnd);
+        SetFocus(hwnd);
+        return 0;
+    }
+    case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
+    {
+        m_dragMode = DragMode::NONE;
+        ReleaseCapture();
+        return 0;
+    }
+    case WM_CAPTURECHANGED:
+    {
+        // Capture lost (Alt-Tab away mid-drag, foreign SetCapture, etc.).
+        // Drop drag state so the next mouse-move doesn't ride a stale
+        // start camera.
+        m_dragMode = DragMode::NONE;
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+    {
+        if (m_dragMode == DragMode::NONE || !engine) return 0;
+
+        long x = (short)LOWORD(lp) - m_dragStartX;
+        long y = (short)HIWORD(lp) - m_dragStartY;
+
+        Engine::Camera camera = m_dragStartCam;
+        D3DXVECTOR3    orthVec;
+        D3DXVECTOR3    diff = m_dragStartCam.Position - m_dragStartCam.Target;
+
+        // Orthogonal vector in the camera plane (legacy line 2997-2998).
+        D3DXVec3Cross(&orthVec, &diff, &camera.Up);
+        D3DXVec3Normalize(&orthVec, &orthVec);
+
+        if (m_dragMode == DragMode::ROTATE)
+        {
+            // Orbit Position around Target. Z rotation around camera-up
+            // axis (horizontal drag); XY rotation around orthVec
+            // (vertical drag). /2.0f keeps a full-window drag at ~180°.
+            D3DXMATRIX rotateXY, rotateZ, rotate;
+            D3DXMatrixRotationZ(&rotateZ, -D3DXToRadian(x / 2.0f));
+            D3DXMatrixRotationAxis(&rotateXY, &orthVec, D3DXToRadian(y / 2.0f));
+            D3DXMatrixMultiply(&rotate, &rotateXY, &rotateZ);
+            D3DXVec3TransformCoord(&camera.Position, &diff, &rotate);
+            camera.Position += camera.Target;
+        }
+        else if (m_dragMode == DragMode::MOVE)
+        {
+            // Translate Target (Position rides along). Multiplier scales
+            // with distance so a far camera moves proportionally faster —
+            // legacy comment: "Large distance: move a lot, small
+            // distance: move a little".
+            D3DXVECTOR3 Up;
+            D3DXVec3Cross(&Up, &orthVec, &diff);
+            D3DXVec3Normalize(&Up, &Up);
+
+            float multiplier = D3DXVec3Length(&diff) / 1000;
+
+            camera.Target  += (float)x * multiplier * orthVec;
+            camera.Target  += (float)y * multiplier * Up;
+            camera.Position = diff + camera.Target;
+        }
+        else if (m_dragMode == DragMode::ZOOM)
+        {
+            // Scale (Position - Target) by a sqrt(distance)-based
+            // factor. Floor at 1.0f to prevent flipping through the
+            // target. -y so dragging up zooms in (matches legacy).
+            float olddist = D3DXVec3Length(&diff);
+            float newdist = max(1.0f, olddist - sqrtf(olddist) * (float)-y);
+            D3DXVec3Scale(&camera.Position, &diff, newdist / olddist);
+            camera.Position += camera.Target;
+        }
+
+        engine->SetCamera(camera);
+        if (dispatcher) dispatcher->EmitEngineStateChanged();
+        return 0;
+    }
+    case WM_MOUSEWHEEL:
+    {
+        // Wheel-zoom only when no drag is in progress (legacy line 3046).
+        // wParam high word is the wheel delta in WHEEL_DELTA units (120).
+        if (m_dragMode != DragMode::NONE || !engine) return 0;
+
+        Engine::Camera camera = engine->GetCamera();
+        D3DXVECTOR3    diff   = camera.Position - camera.Target;
+
+        float olddist = D3DXVec3Length(&diff);
+        float wheel   = (float)((SHORT)HIWORD(wp)) / (float)WHEEL_DELTA;
+        float newdist = max(1.0f, olddist - sqrtf(olddist) * wheel);
+        D3DXVec3Scale(&camera.Position, &diff, newdist / olddist);
+        camera.Position += camera.Target;
+
+        engine->SetCamera(camera);
+        if (dispatcher) dispatcher->EmitEngineStateChanged();
+        return 0;
+    }
     }
     return DefWindowProc(hwnd, msg, wp, lp);
 }

@@ -102,6 +102,7 @@ async function main() {
       "tests/spawner-import-mod.spec.ts",
       "tests/host-state-plumbing.spec.ts",
       "tests/render-loop.spec.ts",
+      "tests/viewport-camera.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

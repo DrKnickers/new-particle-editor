@@ -783,6 +783,119 @@ verification pass. Each sub-dialog has its own checkbox above.
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
 
+### Viewport interaction — camera controls (locked 2026-05-17)
+
+First user-input batch for the new-UI viewport. Adds mouse + wheel
+camera controls on the D3D9 sibling HWND, mirroring the legacy
+interaction model at [src/main.cpp:2923-3060]. After this batch,
+the user can MOVE / ROTATE / ZOOM the camera in `--new-ui`, matching
+`--legacy-ui`'s feel.
+
+**Scope: camera only.** Shift-click-to-spawn (legacy line 2956) is
+explicitly out of scope — it depends on porting the legacy
+`MouseCursor` `Object3D` (line 393), which is its own batch. Status-
+bar mouse coordinates (legacy line 3041) are also out of scope —
+they're a Screen 1 polish item.
+
+**Legacy interaction model** (from [src/main.cpp:2923-3060]):
+
+| Input | Modifier | Drag mode |
+|---|---|---|
+| L-button down | none | MOVE (translate camera) |
+| L-button down | Ctrl | ZOOM |
+| R-button down | none | ROTATE (orbit around target) |
+| R-button down | Ctrl | ZOOM |
+| Wheel | none | ZOOM (sqrt-distance-scaled) |
+
+Each drag mode mutates the camera relative to its start pose:
+
+- **MOVE**: translate `camera.Target` (and `camera.Position`) in
+  the camera plane via orthogonal-vector math. Multiplier scales
+  with distance from target.
+- **ROTATE**: orbit `camera.Position` around `camera.Target`. Z
+  rotation around camera-up axis (horizontal drag); XY rotation
+  around the orthogonal of view-direction (vertical drag). Drag
+  delta scaled by `/2.0f` so a full window-width drag is ~180°.
+- **ZOOM**: scale `(Position - Target)` by `sqrt(distance)`-based
+  factor. Floor at 1.0f to prevent flipping through the target.
+
+**Wheel**: same ZOOM math, delta = `WHEEL_DELTA`-normalized.
+
+**Implementation in `HostWindowImpl::ViewportWndProc`** (at
+[src/host/HostWindow.cpp:811]):
+
+- Add drag-state members to `HostWindowImpl`:
+  ```cpp
+  enum class DragMode { NONE, MOVE, ROTATE, ZOOM };
+  DragMode m_dragMode = DragMode::NONE;
+  Engine::Camera m_dragStartCam;
+  int m_dragStartX = 0;
+  int m_dragStartY = 0;
+  ```
+- Handle `WM_LBUTTONDOWN` / `WM_RBUTTONDOWN`: capture, set
+  dragMode based on button + Ctrl modifier, snapshot
+  `m_dragStartCam = engine->GetCamera()`, save start XY.
+- Handle `WM_LBUTTONUP` / `WM_RBUTTONUP`: `ReleaseCapture()`,
+  reset dragMode = NONE.
+- Handle `WM_MOUSEMOVE` (when dragMode != NONE): compute deltas
+  from start, run the mode-specific math from legacy, call
+  `engine->SetCamera(camera)`. Manually trigger
+  `dispatcher->EmitEngineStateChanged()` so React subscribers see
+  the new camera state in their next `engine/state/snapshot`.
+- Handle `WM_MOUSEWHEEL`: only when dragMode == NONE. Standard
+  wheel-zoom math.
+- Handle `WM_CAPTURECHANGED`: reset dragMode to NONE (handles
+  Alt-Tab away mid-drag, etc.).
+
+**Engine state emission discipline:**
+
+Camera changes via direct C++ `Engine::SetCamera` don't go through
+the bridge dispatcher's setter ladder, so they don't auto-emit
+`engine/state/changed`. The mouse handler MUST call
+`dispatcher->EmitEngineStateChanged()` after each `SetCamera` so
+the snapshot stays current. Same applies to the wheel handler.
+
+**Camera is NOT a dirty-marking operation.** View state isn't
+file content — moving the camera shouldn't mark the file dirty.
+This is consistent with legacy (camera changes never call
+`SetFileChanged`). Our `markDirty()` lambda lives in the
+dispatcher's setter handlers, which the C++ mouse code bypasses
+entirely. No special handling needed.
+
+**Test surface for this batch:**
+
+Mouse drag on a sibling D3D9 HWND is hard to automate from
+Playwright — Playwright drives input through WebView2's surface,
+not the sibling viewport window. So:
+
+- **Existing tests stay green.** No regressions in 74 Vitest +
+  47 Playwright.
+- **One new Playwright spec**: drive `engine/set/camera` via the
+  bridge directly (already wired), assert the next
+  `engine/state/snapshot` returns the new camera Position /
+  Target / Up. This tests the C++ camera setter path that the
+  mouse handler depends on — even though the mouse path itself
+  isn't covered. Adds 1 to the count.
+- **Manual smoke** — subagent (or controller after) runs
+  `ParticleEditor.exe --new-ui --dev-ui`, drags with L+R buttons,
+  scroll-zooms, confirms camera moves. Not a strict gate; report
+  what's observed.
+
+**Open follow-ups** (explicitly deferred):
+- *Shift-click-to-spawn.* Needs `MouseCursor` `Object3D` port +
+  cursor-position-as-3D conversion via `GetCursorPos3D` from
+  legacy. Its own batch.
+- *Status-bar mouse coordinates.* Screen 1 polish.
+- *Reset View Settings menu item* ([web/apps/editor/src/components/MenuBar.tsx:364]
+  `todo("Reset View Settings")`) — it's a registry-cleanup
+  operation (clears BackgroundColor / ShowGround / BloomEnabled /
+  etc.), not a camera reset. Deserves its own batch once
+  `--new-ui`'s persistence story matures (we don't yet persist
+  to the same registry keys consistently).
+- *Touch gestures / pen input.* Not in scope.
+- *Camera-control-keyboard-shortcut* (legacy has none for the
+  camera — only for scene mutations). Skip.
+
 ### Render loop + per-frame tick (locked 2026-05-17)
 
 The capstone foundation batch: makes particles visible in `--new-ui`
