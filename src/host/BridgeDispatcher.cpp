@@ -289,6 +289,12 @@ json SpawnerConfigToJson(const SpawnerConfig& cfg)
 // from each emitter's `spawnDuringLife` / `spawnOnDeath` indices in
 // the same order as legacy `ImportEmitters_AddTreeItem` (during-life
 // before on-death) so the import dialog tree matches.
+//
+// Screen 4 Batch A: extended with `role` / `linkGroup` / `visible`.
+// `role` is derived from how this emitter is attached to its parent's
+// spawn slot (lifetime vs death); top-level emitters return "root".
+// The sentinel for "no spawn child" is `(size_t)-1` — matches the
+// legacy EmitterList.cpp usage at e.g. [src/UI/EmitterList.cpp:1349].
 json BuildEmitterTreeNode(const ParticleSystem* sys, size_t idx)
 {
     if (sys == nullptr || idx >= sys->getEmitters().size()) return json::object();
@@ -298,10 +304,28 @@ json BuildEmitterTreeNode(const ParticleSystem* sys, size_t idx)
         children.push_back(BuildEmitterTreeNode(sys, emit.spawnDuringLife));
     if (emit.spawnOnDeath != static_cast<size_t>(-1))
         children.push_back(BuildEmitterTreeNode(sys, emit.spawnOnDeath));
+
+    // Role: walk to parent's spawn slots. If parent is null we're a
+    // top-level root. Otherwise check whether parent's lifetime slot
+    // or death slot points at our index. Default to "lifetime" if
+    // somehow neither matches (shouldn't happen — every non-root must
+    // be referenced by exactly one slot — but treats the case as the
+    // less-disruptive fallback).
+    const char* role = "root";
+    if (emit.parent != nullptr)
+    {
+        if (emit.parent->spawnOnDeath == idx)         role = "death";
+        else if (emit.parent->spawnDuringLife == idx) role = "lifetime";
+        else                                          role = "lifetime";
+    }
+
     return json{
-        {"id",       static_cast<int>(idx)},
-        {"name",     emit.name},
-        {"children", children},
+        {"id",        static_cast<int>(idx)},
+        {"name",      emit.name},
+        {"role",      role},
+        {"linkGroup", static_cast<unsigned int>(emit.linkGroup)},
+        {"visible",   emit.visible},
+        {"children",  children},
     };
 }
 
@@ -337,7 +361,8 @@ json DefaultSpawnerConfigJson()
 json BuildEngineStateSnapshot(Engine* engine,
                               const std::wstring& currentFilePath,
                               bool dirty,
-                              const json& spawnerConfig)
+                              const json& spawnerConfig,
+                              int selectedEmitterId)
 {
     if (!engine) return json::object();
 
@@ -418,6 +443,13 @@ json BuildEngineStateSnapshot(Engine* engine,
         {"spawner",               spawnerConfig.is_null() || spawnerConfig.empty()
                                       ? DefaultSpawnerConfigJson()
                                       : spawnerConfig},
+
+        // Screen 4 Batch A — selected emitter (editor state). Serialise
+        // -1 as JSON null so the schema's `number | null` discriminator
+        // works without a sentinel-aware client.
+        {"selectedEmitterId",     selectedEmitterId < 0
+                                      ? json(nullptr)
+                                      : json(selectedEmitterId)},
     };
 }
 
@@ -594,7 +626,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         json spawnerJson = m_spawnerDriver
             ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
             : m_spawnerConfig;
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson));
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId));
         return res;
     }
 
@@ -1296,12 +1328,101 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
                 children.push_back(BuildEmitterTreeNode(tmp.get(), i));
             }
         }
+        // Synthetic root carries id 0 (legacy convention for preview)
+        // but uses the new shape fields (role / linkGroup / visible)
+        // so consumers don't see undefined when the schema is read
+        // strictly.
         json tree = {
-            {"id",       0},
-            {"name",     "root"},
-            {"children", children},
+            {"id",        0},
+            {"name",      "root"},
+            {"role",      "root"},
+            {"linkGroup", 0},
+            {"visible",   true},
+            {"children",  children},
         };
         sendOk(json{{"ok", true}, {"tree", tree}});
+        return res;
+    }
+
+    // -------- emitters/list -----------------------------------------
+    //
+    // Screen 4 Batch A — real implementation. Walks the live particle
+    // system and returns a synthetic-root wrapper whose children are
+    // the real top-level emitters. Returns an empty wrapper if no
+    // system is bound (e.g. tests that haven't wired BindHostState).
+    if (kind == "emitters/list")
+    {
+        json children = json::array();
+        if (m_pParticleSystem != nullptr && *m_pParticleSystem)
+        {
+            const ParticleSystem* sys = m_pParticleSystem->get();
+            const auto& emitters = sys->getEmitters();
+            for (size_t i = 0; i < emitters.size(); ++i)
+            {
+                if (emitters[i] != nullptr && emitters[i]->parent == nullptr)
+                {
+                    children.push_back(BuildEmitterTreeNode(sys, i));
+                }
+            }
+        }
+        json tree = {
+            {"id",        -1},
+            {"name",      ""},
+            {"role",      "root"},
+            {"linkGroup", 0},
+            {"visible",   true},
+            {"children",  children},
+        };
+        sendOk(json{{"root", tree}});
+        return res;
+    }
+
+    // -------- emitters/select ---------------------------------------
+    //
+    // Screen 4 Batch A — selection state lives on the dispatcher (it's
+    // editor state, not engine state). Update the scalar, emit the
+    // narrow `emitters/selected` event (subscribed to by EmitterTree)
+    // and a follow-up engine/state/changed so any snapshot consumer
+    // sees the new selectedEmitterId.
+    if (kind == "emitters/select")
+    {
+        // params.id is `number | null` on the wire. Null deserialises
+        // to a JSON null; we store as -1 internally and re-serialise
+        // as JSON null on the way out (in BuildEngineStateSnapshot).
+        int newId = -1;
+        if (params.contains("id") && !params["id"].is_null())
+            newId = params["id"].get<int>();
+
+        // Validate against the live tree when bound — selecting an
+        // index that isn't a real emitter resets to no-selection. This
+        // matches the MockBridge's behaviour and keeps the snapshot
+        // honest. When no system is bound we accept the id as-is so
+        // tests without BindHostState still round-trip.
+        if (newId >= 0 && m_pParticleSystem != nullptr && *m_pParticleSystem)
+        {
+            const auto& emitters = (*m_pParticleSystem)->getEmitters();
+            if (static_cast<size_t>(newId) >= emitters.size() || emitters[newId] == nullptr)
+                newId = -1;
+        }
+
+        m_selectedEmitterId = newId;
+        sendOk(json::object());
+
+        // emitters/selected event — narrow payload for components that
+        // care only about the selection scalar (EmitterTree).
+        if (m_emit)
+        {
+            json env = {
+                {"type",    "evt"},
+                {"kind",    "emitters/selected"},
+                {"payload", json{{"id", newId < 0 ? json(nullptr) : json(newId)}}},
+            };
+            m_emit(env.dump());
+        }
+
+        // engine/state/changed so the snapshot's selectedEmitterId is
+        // observable through the standard snapshot channel too.
+        EmitEngineStateChanged();
         return res;
     }
 
@@ -1330,7 +1451,7 @@ void BridgeDispatcher::EmitEngineStateChanged()
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId)},
     };
     m_emit(env.dump());
 }

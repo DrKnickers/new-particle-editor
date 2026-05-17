@@ -225,6 +225,14 @@ private:
     // user's last-committed config. JSON-shaped to avoid pulling
     // SpawnerDriver.h into the dispatcher header.
     nlohmann::json m_spawnerConfig;
+
+    // Phase 3 Screen 4 Batch A — selected-emitter id (editor state, not
+    // engine state). -1 means "no selection"; the snapshot serialises
+    // that as JSON null. `emitters/select` writes this directly; the
+    // snapshot builder reads it. Kept on the dispatcher (not plumbed
+    // through BindHostState) because selection is a UI concern the host
+    // window doesn't otherwise need.
+    int m_selectedEmitterId = -1;
 };
 
 } // namespace host

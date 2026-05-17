@@ -6,8 +6,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { MockBridge } from "../mock";
 import {
+  useMockEmitterTree,
   useMockEngineState,
   useMockRecentFiles,
+  makeDefaultEmitterTree,
   makeDefaultEngineState,
 } from "../mock-state";
 import type { EngineStateDto, Event } from "@particle-editor/bridge-schema";
@@ -16,6 +18,7 @@ beforeEach(() => {
   // Reset the store between tests so state mutations don't leak.
   useMockEngineState.setState(makeDefaultEngineState());
   useMockRecentFiles.getState().reset();
+  useMockEmitterTree.setState({ tree: makeDefaultEmitterTree() });
 });
 
 describe("MockBridge contract", () => {
@@ -51,6 +54,9 @@ describe("MockBridge contract", () => {
     expect(s.camera.position).toHaveLength(3);
     expect(s).toHaveProperty("wind");
     expect(s).toHaveProperty("gravity");
+    // Screen 4 Batch A: selected-emitter scalar.
+    expect(s).toHaveProperty("selectedEmitterId");
+    expect(s.selectedEmitterId).toBeNull();
   });
 
   it("engine/set/ground-z patches state and fires state/changed", async () => {
@@ -227,10 +233,13 @@ describe("MockBridge contract", () => {
     off();
   });
 
-  it("rejects emitters/* requests as not implemented", async () => {
+  it("rejects unimplemented emitters/* requests (mutations) as not implemented", async () => {
     const b = new MockBridge();
+    // emitters/list and emitters/select are implemented as of Screen 4
+    // Batch A. The other emitters/* kinds (update, import-from-file)
+    // remain Phase 3+ work.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(b.request({ kind: "emitters/list", params: {} } as any))
+    await expect(b.request({ kind: "emitters/update", params: { id: 0, patch: {} } } as any))
       .rejects.toThrow(/not implemented/);
   });
 
@@ -412,6 +421,59 @@ describe("MockBridge contract", () => {
       const names = r.tree.children.map((c) => c.name);
       expect(names).toEqual(expect.arrayContaining(["Smoke", "Sparks", "Flash"]));
     }
+  });
+
+  // ─── Screen 4 Batch A — emitter tree + selection ──────────────────
+  it("emitters/list returns the fixture tree with the synthetic root + populated real roots", async () => {
+    const b = new MockBridge();
+    const tree = await b.request({ kind: "emitters/list", params: {} });
+    // Synthetic root has id=-1 and is the only level the rest descends from.
+    expect(tree.root.id).toBe(-1);
+    expect(tree.root.role).toBe("root");
+    // Three real roots from the fixture.
+    expect(tree.root.children).toHaveLength(3);
+    const names = tree.root.children.map((c) => c.name);
+    expect(names).toEqual(["Smoke", "Sparks", "Flash"]);
+    // Smoke has one lifetime child + one death child.
+    const smoke = tree.root.children[0];
+    expect(smoke.linkGroup).toBe(1);
+    expect(smoke.children).toHaveLength(2);
+    expect(smoke.children[0].role).toBe("lifetime");
+    expect(smoke.children[1].role).toBe("death");
+    // Sparks has just a lifetime child.
+    const sparks = tree.root.children[1];
+    expect(sparks.children).toHaveLength(1);
+    expect(sparks.children[0].role).toBe("lifetime");
+    // Flash is a bare leaf with no link group.
+    const flash = tree.root.children[2];
+    expect(flash.children).toHaveLength(0);
+    expect(flash.linkGroup).toBe(0);
+    // All emitters in the fixture are visible.
+    expect(smoke.visible).toBe(true);
+  });
+
+  it("emitters/select updates snapshot.selectedEmitterId and fires emitters/selected", async () => {
+    const b = new MockBridge();
+    let lastEvent: { id: number | null } | null = null;
+    const off = b.on("emitters/selected", (e) => { lastEvent = e.payload; });
+
+    // Initial snapshot: no selection.
+    const before = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(before.selectedEmitterId).toBeNull();
+
+    // Select Smoke (id=0).
+    await b.request({ kind: "emitters/select", params: { id: 0 } });
+    expect(lastEvent).not.toBeNull();
+    expect(lastEvent!.id).toBe(0);
+    const after = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(after.selectedEmitterId).toBe(0);
+
+    // Selecting null clears.
+    await b.request({ kind: "emitters/select", params: { id: null } });
+    expect(lastEvent!.id).toBeNull();
+    const cleared = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(cleared.selectedEmitterId).toBeNull();
+    off();
   });
 
   it("on() returns a working unsubscribe", async () => {

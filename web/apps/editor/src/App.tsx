@@ -7,6 +7,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
+import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
 import { BloomPanel } from "@/screens/BloomPanel";
 import { GroundTexturePanel } from "@/screens/GroundTexturePanel";
@@ -158,10 +159,12 @@ function AppShell() {
 
       {/* Main row */}
       <div className="relative flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-64 shrink-0 border-r border-neutral-800 p-3 text-sm">
-          <div className="mb-2 text-xs uppercase tracking-wide text-neutral-500">Emitters</div>
-          <div className="text-neutral-600">(placeholder — Phase 3 Screen 4)</div>
+        {/* Sidebar — Phase 3 Screen 4 Batch A. Read-only tree view of
+            the live ParticleSystem's emitters with click-to-select.
+            Mutations / drag-drop / context menu / inline rename land in
+            Batches B and C. */}
+        <aside className="w-64 shrink-0 overflow-y-auto border-r border-neutral-800 p-3 text-sm">
+          <EmitterTree bridge={bridge} />
         </aside>
 
         {/* Viewport */}

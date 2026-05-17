@@ -103,6 +103,7 @@ async function main() {
       "tests/host-state-plumbing.spec.ts",
       "tests/render-loop.spec.ts",
       "tests/viewport-camera.spec.ts",
+      "tests/emitter-tree.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

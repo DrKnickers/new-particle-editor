@@ -327,11 +327,174 @@ property panel on selection change.
 > Inline-edit affordance (single-click vs. double-click vs. F2-only)?
 > Where does the embedded toolbar live — top of tree, contextual, both?_
 
-**Bridge surface used:** filled in at Task 3.4.1.
+**Bridge surface used:** filled in per batch (see "Decisions locked"
+below).
 
-**Decisions locked once ✅:**
+**Decisions locked:**
 
-> _(empty)_
+### Batching strategy (locked 2026-05-17)
+
+Screen 4 is the load-bearing surface — drag-reorder, multi-select,
+inline rename, link-group badges, context menus. Original handoff
+estimate: ~1 week. Too big for one dispatch. Splits into three
+batches, each independently shippable:
+
+- **Batch A — Foundation (read-only tree + selection).** Real
+  `emitters/list` impl (was placeholder), `emitters/select` +
+  `emitters/selected` event wiring, `selectedEmitterId` on
+  `EngineStateDto`, React `EmitterTree` replacing the sidebar
+  placeholder. NO mutations, NO drag/drop, NO context menu, NO
+  rename. Just see + click-to-select.
+- **Batch B — Manipulation (mutate + drag-reorder + context
+  menu).** Duplicate / delete / drag-reorder. Wires the three
+  Screen-4-blocked Screen-8 sub-dialogs (Rescale Emitter,
+  Increment Index, Link Group Settings) via the new context
+  menu. Multi-select state. `emitters/update` + new mutation
+  bridge calls.
+- **Batch C — Polish (link-group visuals + inline rename +
+  keyboard nav).** Link-group bracket badges (MT-9 port).
+  F2/double-click inline rename. Keyboard nav (arrows, Enter,
+  Delete, Cut/Copy/Paste).
+
+Each batch ends with all gates green and a commit. The full
+Screen 4 ✅ flips after Batch C.
+
+### Batch A — Foundation (locked 2026-05-17)
+
+**Schema additions:**
+
+- **Extend `EmitterTreeNode`** with role + link-group + visibility:
+  ```ts
+  type EmitterRole = "root" | "lifetime" | "death";
+  type EmitterTreeNode = {
+    id: number;
+    name: string;
+    role: EmitterRole;
+    linkGroup: number;       // 0 = unlinked; non-zero = group ID
+    visible: boolean;
+    children: EmitterTreeNode[];
+  };
+  ```
+  Existing fields (`id`, `name`, `children`) preserved — Batch 4's
+  `emitters/preview-from-file` continues to work (preview tree
+  populates the new fields too: role from source slot, linkGroup
+  from source linkGroup, visible always true).
+- **`EmitterTreeDto`** — keep the `{ root: EmitterTreeNode }`
+  single-synthetic-root wrapper from Batch 4. The live tree's
+  multiple real roots become children of the synthetic `id=-1`
+  root. The wrapper stays so the existing import-preview path
+  doesn't churn.
+- **Extend `EngineStateDto`** with `selectedEmitterId: number | null`.
+  Mirrors the existing `currentFilePath` / `dirty` / `spawner`
+  pattern — fields the React side needs at mount without an
+  extra round-trip.
+
+**MockBridge:**
+
+- `emitters/list` returns a fixture tree: 3 roots, one with a
+  lifetime child + a death child, one with a lifetime child only,
+  one bare. Populate `role` and `linkGroup` (one pair linked,
+  rest unlinked) and `visible: true` for all.
+- `emitters/select { id }` updates `mock-state.selectedEmitterId`,
+  emits `emitters/selected { id }`, emits `engine/state/changed`
+  with the new snapshot.
+- `emitters/selected` event (already in schema) wired.
+- `emitters/tree/changed` event NOT emitted yet (no mutations
+  this batch).
+
+**C++ host (`BridgeDispatcher.cpp` / `BridgeDispatcher.h`):**
+
+- `emitters/list` — walk `(*m_pps)->getEmitters()`. Build the
+  tree by:
+  1. For each emitter `e`, identify role via parent slot:
+     `e->parent == NULL` → root; else inspect parent's
+     `spawnDuringLife` / `spawnOnDeath` indices to determine
+     lifetime vs death.
+  2. Collect roots into the synthetic-root's children. Recurse
+     into each emitter's lifetime + death children if their
+     `spawnDuringLife` / `spawnOnDeath` are valid indices.
+  3. Populate `name`, `linkGroup`, `visible` from the emitter.
+  4. Return `{ root: { id: -1, name: "", role: "root",
+     linkGroup: 0, visible: true, children: [...] } }`.
+- `emitters/select { id }` — store selection in HostWindowImpl
+  state (new `int m_selectedEmitterId = -1` member, accessible
+  via `BindHostState` extension OR a new `BindSelectedSlot`).
+  Subagent decides: extend `BindHostState` if other state
+  pointers benefit; otherwise add a separate `BindSelectedSlot`
+  pointer to `int`. Emit `emitters/selected { id }` event.
+  Update snapshot's `selectedEmitterId`.
+- Snapshot extension: include `selectedEmitterId` in
+  `BuildEngineStateSnapshot`.
+- No `emitters/tree/changed` emission this batch (no mutations).
+
+**React component** `web/apps/editor/src/screens/EmitterTree.tsx`:
+
+- Replaces the placeholder at `App.tsx`'s sidebar (the
+  `<aside>` block currently rendering "(placeholder — Phase 3
+  Screen 4)" at [web/apps/editor/src/App.tsx:~91]).
+- Reads tree via `bridge.request({ kind: "emitters/list" })` on
+  mount. Subscribes to `emitters/tree/changed` (handler ready
+  for Batch B; no-op until then). Subscribes to
+  `emitters/selected` for selection updates.
+- Renders the synthetic root's children as the top-level list.
+  Each node:
+  - Indented per depth (`pl-{depth*4}`).
+  - Small role glyph (root: `●`, lifetime: `↻`, death: `✕`
+    or similar — subagent picks). Greyed for `visible: false`.
+  - Name (default font, semibold when selected).
+  - Optional link-group dot (`bg-sky-500` size-2 rounded-full)
+    when `linkGroup !== 0`. Tooltip shows "Link group <N>" on
+    hover. Real coloured bracket comes in Batch C.
+  - Click → fires `emitters/select { id }`. Selection state
+    derived from snapshot's `selectedEmitterId` (no local
+    state).
+- Selected row: `bg-sky-500/15 border-l-2 border-sky-500`.
+  Hover: `bg-neutral-900/40`.
+- Empty tree state: greyed "(no emitters)" placeholder.
+
+**State sync:**
+
+- Initial mount: `emitters/list` round-trip OR pull from
+  `engine/state/snapshot` if the snapshot includes the tree.
+  **Decision: keep separate.** The snapshot already has
+  `selectedEmitterId`; the tree itself stays a separate request
+  because tree data is bigger (could be 100s of nodes for
+  complex systems) and shouldn't ride every snapshot. Subscribe
+  to `emitters/tree/changed` for live updates.
+- On every `emitters/selected` event, re-derive the selected
+  styling. No local selection state in the React side — the
+  server is the source of truth.
+
+**Test surface for Batch A:**
+
+- **Vitest** (+4 specs, target 74 → 78+):
+  - `bridge-contract.test.ts` (+2): `emitters/list` returns the
+    fixture tree with role + linkGroup + visible populated;
+    `emitters/select` updates `selectedEmitterId` in snapshot
+    and fires `emitters/selected`.
+  - `EmitterTree.test.tsx` (2): renders 3 roots from the fixture
+    tree with lifetime/death children correctly indented;
+    clicking a row fires `emitters/select` with the right id.
+- **Playwright** (+2 specs, target 48 → 50+):
+  - Sidebar renders the emitter tree (assert at least 3 rows
+    visible with names).
+  - Clicking a row updates `engine/state/snapshot.selectedEmitterId`.
+
+**Legacy delete:**
+
+NOT in Batch A. `EmitterList.cpp` (4955 LOC) stays for `--legacy-ui`.
+Phase 4.2 removes it.
+
+**Open follow-ups** (explicitly Batch B/C):
+- Mutations (duplicate / delete / move / rename) → Batch B.
+- Context menu → Batch B.
+- Drag-and-drop → Batch B.
+- Multi-select → Batch B.
+- Link-group bracket visualization (MT-9 port) → Batch C.
+- Inline rename (F2 / double-click) → Batch C.
+- Keyboard nav → Batch C.
+- Per-emitter property panel sync (Appearance / Physics / etc.
+  tabs that the right-side panel will host) — separate batches.
 
 ---
 

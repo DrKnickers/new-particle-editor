@@ -26,7 +26,9 @@ import type {
   LightDto,
 } from "@particle-editor/bridge-schema";
 import {
+  findEmitterNode,
   makeDefaultEngineState,
+  useMockEmitterTree,
   useMockEngineState,
   useMockRecentFiles,
   snapshotEngineState,
@@ -427,9 +429,30 @@ export class MockBridge implements Bridge {
           },
         };
 
-      // ---------------- emitters / undo: Phase 3+ ----------------
+      // ---------------- emitters/list + emitters/select (Screen 4 Batch A)
+      //
+      // The fixture tree lives in `mock-state.useMockEmitterTree`. The
+      // list response returns a fresh copy so React-side consumers can't
+      // mutate the store. `emitters/select` updates the snapshot's
+      // selectedEmitterId scalar and emits both `emitters/selected` and
+      // `engine/state/changed` so subscribers picking up either channel
+      // see the change. Selection of an unknown id resets to null.
       case "emitters/list":
-      case "emitters/select":
+        return JSON.parse(JSON.stringify(useMockEmitterTree.getState().tree));
+
+      case "emitters/select": {
+        const reqId = req.params.id;
+        const tree = useMockEmitterTree.getState().tree;
+        const valid = reqId !== null && findEmitterNode(tree, reqId) !== null
+          ? reqId
+          : null;
+        useMockEngineState.getState().applyPatch({ selectedEmitterId: valid });
+        this.emit({ kind: "emitters/selected", payload: { id: valid } });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      // ---------------- emitters / undo: Phase 3+ ----------------
       case "emitters/update":
       case "emitters/import-from-file":
       case "undo/perform":

@@ -11,7 +11,13 @@
 //   RGB(0x14,0x08,0x34) = 0x00340814  → dark-purple background
 
 import { create } from "zustand";
-import type { EngineStateDto, LightDto, SpawnerParamsDto } from "@particle-editor/bridge-schema";
+import type {
+  EmitterTreeDto,
+  EmitterTreeNode,
+  EngineStateDto,
+  LightDto,
+  SpawnerParamsDto,
+} from "@particle-editor/bridge-schema";
 
 /** Defaults mirror `SpawnerConfig()` at [src/SpawnerDriver.h:18]:
  *  Auto mode + disabled + burst 1 + 0 s spacing + 10 s interval + origin
@@ -92,6 +98,10 @@ export function makeDefaultEngineState(): EngineStateDto {
     gravity: [0, 0, -1],
 
     spawner: makeDefaultSpawnerParams(),
+
+    // Screen 4 Batch A: nothing selected by default. Single-select only
+    // in Batch A; multi-select is Batch B.
+    selectedEmitterId: null,
   };
 }
 
@@ -133,6 +143,79 @@ type RecentFilesStore = {
   push: (path: string) => string[];
   reset: () => void;
 };
+
+// ─── Emitter-tree fixture (Screen 4 Batch A) ─────────────────────────
+//
+// Three roots covering the role + link-group combinations that the
+// EmitterTree component needs to render:
+//   - root "Smoke"   (linkGroup 1) — has a lifetime child + death child
+//   - root "Sparks"  (linkGroup 1) — has a lifetime child only
+//   - root "Flash"   (linkGroup 0) — leaf
+// One linked pair (Smoke + Sparks share group 1) so the link-group dot
+// styling is exercised. All emitters are visible=true; the disabled
+// glyph state isn't reachable in Batch A (no visibility toggle yet).
+//
+// IDs are flat 0..5 and stable across resets so test assertions can
+// pin to specific rows.
+
+export function makeDefaultEmitterTree(): EmitterTreeDto {
+  return {
+    root: {
+      id: -1,
+      name: "",
+      role: "root",
+      linkGroup: 0,
+      visible: true,
+      children: [
+        {
+          id: 0, name: "Smoke", role: "root", linkGroup: 1, visible: true,
+          children: [
+            { id: 1, name: "Smoke embers", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+            { id: 2, name: "Smoke puff",   role: "death",    linkGroup: 0, visible: true, children: [] },
+          ],
+        },
+        {
+          id: 3, name: "Sparks", role: "root", linkGroup: 1, visible: true,
+          children: [
+            { id: 4, name: "Spark trail", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+          ],
+        },
+        {
+          id: 5, name: "Flash", role: "root", linkGroup: 0, visible: true,
+          children: [],
+        },
+      ],
+    },
+  };
+}
+
+type EmitterTreeStore = {
+  tree: EmitterTreeDto;
+  setTree: (tree: EmitterTreeDto) => void;
+  reset: () => void;
+};
+
+export const useMockEmitterTree = create<EmitterTreeStore>((set) => ({
+  tree: makeDefaultEmitterTree(),
+  setTree: (tree) => set({ tree }),
+  reset: () => set({ tree: makeDefaultEmitterTree() }),
+}));
+
+/** Walks the fixture and returns the node with the matching id, or null
+ *  when the id isn't present in the tree. The synthetic id=-1 root
+ *  matches too — callers that explicitly forbid the synthetic root must
+ *  guard themselves. */
+export function findEmitterNode(tree: EmitterTreeDto, id: number): EmitterTreeNode | null {
+  const visit = (n: EmitterTreeNode): EmitterTreeNode | null => {
+    if (n.id === id) return n;
+    for (const c of n.children) {
+      const hit = visit(c);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return visit(tree.root);
+}
 
 export const useMockRecentFiles = create<RecentFilesStore>((set, get) => ({
   paths: [],

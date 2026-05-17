@@ -82,15 +82,35 @@ export type SpawnerParamsDto = {
   jitterVelocity: Vec3;
 };
 
-// ─── Emitter tree DTO (Phase 3 Screen 8 Batch 4) ─────────────────────
+// ─── Emitter tree DTO (Phase 3 Screen 8 Batch 4 + Screen 4 Batch A) ──
 //
-// Minimal-but-extensible shape used by `emitters/preview-from-file` so
-// the Import Emitters modal can render the checkbox tree. Screen 4 will
-// add fields (texture path, link-group id, etc.) when it lands.
+// Shape used by both `emitters/list` (live tree) and
+// `emitters/preview-from-file` (import preview). Screen 4 Batch A
+// extends with role + link-group + visibility so the sidebar tree can
+// render glyphs and link-group dots without an additional round-trip.
+//
+// `role` identifies the slot the emitter occupies in its parent:
+//   - "root"     : top-level (no parent). The synthetic id=-1 wrapper
+//                  also uses this role.
+//   - "lifetime" : parent->spawnDuringLife points at this emitter
+//                  (continuous spawning during parent's lifetime).
+//   - "death"    : parent->spawnOnDeath points at this emitter (spawned
+//                  once when the parent particle dies).
+//
+// `linkGroup` mirrors `ParticleSystem::Emitter::linkGroup` (MT-5). 0
+// means unlinked; non-zero IDs are stable within a single system.
+//
+// `visible` mirrors `ParticleSystem::Emitter::visible` — an editor-only
+// per-emitter visibility toggle.
+
+export type EmitterRole = "root" | "lifetime" | "death";
 
 export type EmitterTreeNode = {
   id: number;
   name: string;
+  role: EmitterRole;
+  linkGroup: number;
+  visible: boolean;
   children: EmitterTreeNode[];
 };
 
@@ -155,6 +175,14 @@ export type EngineStateDto = {
   // BridgeDispatcher) for snapshot parity; mutations route through
   // spawner/start.
   spawner: SpawnerParamsDto;
+
+  // Currently-selected emitter id, or null when nothing is selected
+  // (Screen 4 Batch A). The full tree itself is fetched via
+  // `emitters/list` because trees can be large (hundreds of nodes for
+  // complex systems) and shouldn't ride every snapshot; only the
+  // (cheap) scalar selection rides here so React derives the selected
+  // row styling from the snapshot without an extra round-trip.
+  selectedEmitterId: number | null;
 };
 
 // ============================================================================
