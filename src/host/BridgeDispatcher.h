@@ -139,6 +139,13 @@ public:
     void EmitEngineStateChanged();
     void EmitStatsTick(float fps, int emitters, int particles, int instances);
 
+    // Phase 3 Screen 4 Batch B1 — emit `emitters/tree/changed` with the
+    // live ParticleSystem's tree as payload. Called after each
+    // mutation handler (duplicate / delete / rename / rescale /
+    // link-group exempt-set edit) so the React EmitterTree re-fetches
+    // via `emitters/list`.
+    void EmitEmittersTreeChanged();
+
     // LT-4 render loop: real spawner/active-count source. Called from
     // HostWindow::RenderD3D9 once per frame when Engine::GetNumInstances()
     // changes. Replaces the MockBridge-driven mock-only timer source —

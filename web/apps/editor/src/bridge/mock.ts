@@ -26,10 +26,15 @@ import type {
   LightDto,
 } from "@particle-editor/bridge-schema";
 import {
+  deleteEmitter,
+  duplicateEmitter,
+  duplicateWithIndexIncrement,
   findEmitterNode,
   makeDefaultEngineState,
+  renameEmitter,
   useMockEmitterTree,
   useMockEngineState,
+  useMockLinkGroupExempt,
   useMockRecentFiles,
   snapshotEngineState,
 } from "./mock-state";
@@ -55,6 +60,18 @@ function isMutating(kind: Request["kind"]): boolean {
   if (kind === "engine/action/clear") return true;
   // engine/action/rescale-system mutates emitter parameters.
   if (kind === "engine/action/rescale-system") return true;
+  // Screen 4 Batch B1: per-emitter rescale + structural mutations are
+  // all mutating. Link-group exempt-set edits change propagation
+  // behaviour but not engine-observable particle output; flag them
+  // anyway so the dirty-bit + save-prompt gate matches the native
+  // host's `markDirty` rule.
+  if (kind === "engine/action/rescale-emitter") return true;
+  if (kind === "emitters/duplicate") return true;
+  if (kind === "emitters/delete") return true;
+  if (kind === "emitters/rename") return true;
+  if (kind === "emitters/duplicate-with-index-increment") return true;
+  if (kind === "linkGroups/set-exempt-fields") return true;
+  if (kind === "linkGroups/reset-exempt-fields") return true;
   return false;
 }
 
@@ -449,6 +466,116 @@ export class MockBridge implements Bridge {
         useMockEngineState.getState().applyPatch({ selectedEmitterId: valid });
         this.emit({ kind: "emitters/selected", payload: { id: valid } });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      // ---------------- emitters/* mutations (Screen 4 Batch B1) -----
+      //
+      // The fixture tree is mutated in place via the helpers in
+      // mock-state. Each handler emits `emitters/tree/changed` so the
+      // React EmitterTree re-fetches via `emitters/list`. Selection
+      // bookkeeping mirrors the native host: deleting the selected
+      // emitter clears the selection scalar.
+      case "emitters/duplicate": {
+        const cur = useMockEmitterTree.getState().tree;
+        const result = duplicateEmitter(cur, req.params.id);
+        if (result === null) {
+          return { ok: false, error: "emitter not found" };
+        }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { ok: true, newId: result.newId };
+      }
+
+      case "emitters/delete": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = deleteEmitter(cur, req.params.id);
+        if (next === null) {
+          // Nothing to delete — still emit so subscribers know we tried.
+          this.emit({ kind: "emitters/tree/changed", payload: cur });
+          return {};
+        }
+        useMockEmitterTree.getState().setTree(next);
+        // If the deleted id was selected, clear the selection.
+        const snap = snapshotEngineState();
+        if (snap.selectedEmitterId === req.params.id) {
+          useMockEngineState.getState().applyPatch({ selectedEmitterId: null });
+          this.emit({ kind: "emitters/selected", payload: { id: null } });
+        }
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      case "emitters/rename": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = renameEmitter(cur, req.params.id, req.params.name);
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        return {};
+      }
+
+      case "emitters/duplicate-with-index-increment": {
+        const cur = useMockEmitterTree.getState().tree;
+        const result = duplicateWithIndexIncrement(cur, req.params.id, req.params.delta);
+        if (result === null) {
+          // Shape says { newId: number } unconditionally. We surface
+          // the failure by returning newId=-1; native handler errors
+          // via the wire's ok:false path (the schema variant is the
+          // single-arm `{ newId }`). Tests that assert success branch
+          // pre-stage a valid id.
+          this.emit({ kind: "emitters/tree/changed", payload: cur });
+          return { newId: -1 };
+        }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { newId: result.newId };
+      }
+
+      // ---------------- engine/action/rescale-emitter (Screen 4 B1) --
+      //
+      // Per-emitter rescale. The mock has no engine state to mutate so
+      // the handler is a logging stub; the dirty-bit ride-along via
+      // isMutating still fires, matching the native host's contract.
+      case "engine/action/rescale-emitter": {
+        console.log(
+          "[MockBridge] engine/action/rescale-emitter",
+          req.params,
+        );
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        // The rescale changes per-emitter scalars but not the tree's
+        // structural shape; still emit tree/changed so future inspector
+        // panels relying on it re-fetch.
+        this.emit({
+          kind: "emitters/tree/changed",
+          payload: useMockEmitterTree.getState().tree,
+        });
+        return {};
+      }
+
+      // ---------------- linkGroups/* (Screen 4 Batch B1, MT-10) ------
+      case "linkGroups/list-exempt-fields": {
+        const fields = useMockLinkGroupExempt.getState().get(req.params.groupId);
+        return { fields };
+      }
+
+      case "linkGroups/set-exempt-fields": {
+        useMockLinkGroupExempt.getState().set(req.params.groupId, req.params.fields);
+        this.emit({
+          kind: "emitters/tree/changed",
+          payload: useMockEmitterTree.getState().tree,
+        });
+        return {};
+      }
+
+      case "linkGroups/reset-exempt-fields": {
+        useMockLinkGroupExempt.getState().reset(req.params.groupId);
+        this.emit({
+          kind: "emitters/tree/changed",
+          payload: useMockEmitterTree.getState().tree,
+        });
         return {};
       }
 

@@ -26,11 +26,13 @@
 // coloured-bracket visualization (MT-9 port) is Batch C.
 
 import { useCallback, useEffect, useState } from "react";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import type {
   Bridge,
   EmitterTreeDto,
   EmitterTreeNode,
 } from "@particle-editor/bridge-schema";
+import { openTreeContextDialog } from "@/lib/tree-context";
 
 type Props = {
   bridge: Bridge;
@@ -60,46 +62,104 @@ type RowProps = {
   depth: number;
   selectedId: number | null;
   onSelect: (id: number) => void;
+  bridge: Bridge;
 };
 
-function EmitterRow({ node, depth, selectedId, onSelect }: RowProps) {
+function EmitterRow({ node, depth, selectedId, onSelect, bridge }: RowProps) {
   const selected = selectedId === node.id;
   // Indent by 12px per depth level. Depth 0 (real roots) sits flush
   // against the left edge of the row's padding; nested children step
   // in by depth*12.
   const indentPx = depth * 12;
+  const isLinked = node.linkGroup !== 0;
+
+  // Context-menu item handlers. Each one routes through the
+  // `tree-context` atom (modal openers) or directly to the bridge
+  // (no-prompt mutations: Duplicate, Delete).
+  const handleRename = () => openTreeContextDialog("rename", node.id);
+  const handleDuplicate = () => {
+    void bridge.request({ kind: "emitters/duplicate", params: { id: node.id } });
+  };
+  const handleDelete = () => {
+    void bridge.request({ kind: "emitters/delete", params: { id: node.id } });
+  };
+  const handleIncrement = () => openTreeContextDialog("increment", node.id);
+  const handleRescale = () => openTreeContextDialog("rescale", node.id);
+  const handleLinkGroupSettings = () =>
+    openTreeContextDialog("link-group", node.id, node.linkGroup);
+
+  const menuItemClass =
+    "flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800";
+  const separatorClass =
+    "my-1 h-px bg-neutral-800";
 
   return (
     <li role="treeitem" aria-selected={selected}>
-      <button
-        type="button"
-        onClick={() => onSelect(node.id)}
-        data-emitter-id={node.id}
-        className={[
-          "flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm transition-colors",
-          "border-l-2",
-          selected
-            ? "bg-sky-500/15 border-sky-500 text-neutral-50 font-medium"
-            : "border-transparent text-neutral-300 hover:bg-neutral-900/40",
-          node.visible ? "" : "opacity-50",
-        ].join(" ")}
-        style={{ paddingLeft: `${8 + indentPx}px` }}
-      >
-        <span
-          aria-label={roleLabel(node.role)}
-          className="inline-block w-3 shrink-0 text-center font-mono text-xs text-neutral-500"
-        >
-          {roleGlyph(node.role)}
-        </span>
-        <span className="truncate">{node.name}</span>
-        {node.linkGroup !== 0 && (
-          <span
-            title={`Link group ${node.linkGroup}`}
-            aria-label={`Link group ${node.linkGroup}`}
-            className="ml-auto inline-block size-2 shrink-0 rounded-full bg-sky-500"
-          />
-        )}
-      </button>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
+          <button
+            type="button"
+            onClick={() => onSelect(node.id)}
+            data-emitter-id={node.id}
+            data-link-group={node.linkGroup}
+            className={[
+              "flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm transition-colors",
+              "border-l-2",
+              selected
+                ? "bg-sky-500/15 border-sky-500 text-neutral-50 font-medium"
+                : "border-transparent text-neutral-300 hover:bg-neutral-900/40",
+              node.visible ? "" : "opacity-50",
+            ].join(" ")}
+            style={{ paddingLeft: `${8 + indentPx}px` }}
+          >
+            <span
+              aria-label={roleLabel(node.role)}
+              className="inline-block w-3 shrink-0 text-center font-mono text-xs text-neutral-500"
+            >
+              {roleGlyph(node.role)}
+            </span>
+            <span className="truncate">{node.name}</span>
+            {isLinked && (
+              <span
+                title={`Link group ${node.linkGroup}`}
+                aria-label={`Link group ${node.linkGroup}`}
+                className="ml-auto inline-block size-2 shrink-0 rounded-full bg-sky-500"
+              />
+            )}
+          </button>
+        </ContextMenu.Trigger>
+        <ContextMenu.Portal>
+          <ContextMenu.Content
+            data-testid={`emitter-context-menu-${node.id}`}
+            className="z-50 min-w-[200px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+          >
+            <ContextMenu.Item onSelect={handleRename} className={menuItemClass}>
+              Rename
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={handleDuplicate} className={menuItemClass}>
+              Duplicate
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={handleDelete} className={menuItemClass}>
+              Delete
+            </ContextMenu.Item>
+            <ContextMenu.Separator className={separatorClass} />
+            <ContextMenu.Item onSelect={handleIncrement} className={menuItemClass}>
+              Increment Index…
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={handleRescale} className={menuItemClass}>
+              Rescale Emitter…
+            </ContextMenu.Item>
+            <ContextMenu.Separator className={separatorClass} />
+            <ContextMenu.Item
+              onSelect={handleLinkGroupSettings}
+              disabled={!isLinked}
+              className={menuItemClass}
+            >
+              Link Group Settings…
+            </ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
+      </ContextMenu.Root>
       {node.children.length > 0 && (
         <ul role="group" className="m-0 list-none p-0">
           {node.children.map((c) => (
@@ -109,6 +169,7 @@ function EmitterRow({ node, depth, selectedId, onSelect }: RowProps) {
               depth={depth + 1}
               selectedId={selectedId}
               onSelect={onSelect}
+              bridge={bridge}
             />
           ))}
         </ul>
@@ -200,6 +261,7 @@ export function EmitterTree({ bridge }: Props) {
               depth={0}
               selectedId={selectedId}
               onSelect={handleSelect}
+              bridge={bridge}
             />
           ))}
         </ul>

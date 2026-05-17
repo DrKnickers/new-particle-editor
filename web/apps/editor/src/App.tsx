@@ -17,6 +17,10 @@ import { ModNicknameDialog } from "@/screens/ModNicknameDialog";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
 import { AboutDialog } from "@/screens/AboutDialog";
 import { RescaleDialog } from "@/screens/RescaleDialog";
+import { RenameEmitterDialog } from "@/screens/RenameEmitterDialog";
+import { IncrementIndexDialog } from "@/screens/IncrementIndexDialog";
+import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
+import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import {
   setOpenToolPanel,
@@ -215,6 +219,14 @@ function AppShell() {
           pendingAction slot is null. Driven from any destructive op
           handler via `promptSaveChanges(...)`. */}
       <SaveChangesPrompt bridge={bridge} />
+      {/* Screen 4 Batch B1 — emitter-tree context-menu modals. All
+          four observe the `tree-context` Zustand atom for open state;
+          the EmitterTree row's ContextMenu items poke the atom to
+          mount whichever one was chosen. */}
+      <RenameEmitterDialog bridge={bridge} />
+      <IncrementIndexDialog bridge={bridge} />
+      <RescaleEmitterDialog bridge={bridge} />
+      <LinkGroupSettingsDialog bridge={bridge} />
     </div>
   );
 }

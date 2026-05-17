@@ -201,6 +201,248 @@ export const useMockEmitterTree = create<EmitterTreeStore>((set) => ({
   reset: () => set({ tree: makeDefaultEmitterTree() }),
 }));
 
+// ─── Link-group exempt-field fixture (Screen 4 Batch B1) ────────────
+//
+// The native MT-10 side persists per-group LinkExemptFlags bitfields;
+// the wire shape is `string[]` of field names that are exempt
+// (per-emitter). MockBridge owns an in-memory map so the React modal
+// can round-trip a fixture without the C++ host. Defaults to "name +
+// colorTexture + normalTexture + trackIndex" — matches
+// GetDefaultLinkExemptFlags() at [src/LinkGroup.cpp].
+
+type LinkGroupExemptStore = {
+  exempts: Map<number, string[]>;
+  get: (groupId: number) => string[];
+  set: (groupId: number, fields: string[]) => void;
+  reset: (groupId: number) => void;
+  resetAll: () => void;
+};
+
+export const DEFAULT_LINK_EXEMPT_FIELDS: readonly string[] = Object.freeze([
+  "colorTexture",
+  "normalTexture",
+  "trackIndex",
+  // Note: "name" is intrinsically exempt at the data-model layer (see
+  // LinkExemptFlags::name) but legacy's settings dialog hides it from
+  // the field table. Mock fixture mirrors that — the wire surface
+  // returns only fields the user can toggle.
+]);
+
+export const useMockLinkGroupExempt = create<LinkGroupExemptStore>(
+  (set, get) => ({
+    exempts: new Map(),
+    get: (groupId) => {
+      const explicit = get().exempts.get(groupId);
+      if (explicit !== undefined) return [...explicit];
+      return [...DEFAULT_LINK_EXEMPT_FIELDS];
+    },
+    set: (groupId, fields) => {
+      const next = new Map(get().exempts);
+      next.set(groupId, [...fields]);
+      set({ exempts: next });
+    },
+    reset: (groupId) => {
+      const next = new Map(get().exempts);
+      next.delete(groupId);
+      set({ exempts: next });
+    },
+    resetAll: () => set({ exempts: new Map() }),
+  }),
+);
+
+// ─── Tree-mutation helpers (Screen 4 Batch B1) ──────────────────────
+//
+// MockBridge invokes these to mutate the fixture in-place while
+// preserving the parent-pointer / role invariants. Each helper returns
+// the new tree (immutable swap) so the Zustand setTree triggers
+// subscribers and the contract test can assert on the resulting shape.
+
+function cloneNode(n: EmitterTreeNode): EmitterTreeNode {
+  return {
+    ...n,
+    children: n.children.map(cloneNode),
+  };
+}
+
+/** Walk and apply a transform to every node matching `id`. Returns a
+ *  new tree (structurally cloned) with the transform applied. */
+function mapNode(
+  tree: EmitterTreeDto,
+  id: number,
+  transform: (n: EmitterTreeNode) => EmitterTreeNode,
+): EmitterTreeDto {
+  const walk = (n: EmitterTreeNode): EmitterTreeNode => {
+    if (n.id === id) return transform(n);
+    return { ...n, children: n.children.map(walk) };
+  };
+  return { root: walk(tree.root) };
+}
+
+/** Returns the highest `id` currently present in the tree. -1 means
+ *  the tree is empty (only the synthetic root). */
+function maxIdIn(tree: EmitterTreeDto): number {
+  let m = -1;
+  const visit = (n: EmitterTreeNode) => {
+    if (n.id > m) m = n.id;
+    n.children.forEach(visit);
+  };
+  visit(tree.root);
+  return m;
+}
+
+/** Generate a duplicate-suffix name. Mirrors `GenerateDuplicateName`
+ *  at [src/UI/EmitterList.cpp:309]: strips a trailing `_<digits>` if
+ *  present, then appends `_<next>` where next is `max+1` across all
+ *  emitters whose name shares the same base. */
+export function generateDuplicateName(
+  tree: EmitterTreeDto,
+  sourceName: string,
+): string {
+  // Strip trailing _<digits> from the base.
+  let base = sourceName;
+  const underscore = base.lastIndexOf("_");
+  if (underscore !== -1) {
+    const tail = base.slice(underscore + 1);
+    if (tail.length > 0 && /^\d+$/.test(tail)) {
+      base = base.slice(0, underscore);
+    }
+  }
+  // Walk tree, find max N among names matching `<base>` or `<base>_<N>`.
+  let maxN = 0;
+  const visit = (n: EmitterTreeNode) => {
+    if (n.id === -1) {
+      n.children.forEach(visit);
+      return;
+    }
+    if (n.name === base) {
+      // n=0; maxN already starts there.
+    } else if (
+      n.name.length > base.length + 1 &&
+      n.name.slice(0, base.length) === base &&
+      n.name[base.length] === "_"
+    ) {
+      const tail = n.name.slice(base.length + 1);
+      if (/^\d+$/.test(tail)) {
+        const num = Number.parseInt(tail, 10);
+        if (num > maxN) maxN = num;
+      }
+    }
+    n.children.forEach(visit);
+  };
+  visit(tree.root);
+  return `${base}_${maxN + 1}`;
+}
+
+/** Duplicate the emitter at `id` as a fresh root (matches legacy
+ *  `EmitterList_DuplicateEmitter`). The duplicate's subtree gets new
+ *  ids; the duplicate itself + descendants are inserted as a top-level
+ *  child of the synthetic root. Returns the new tree + the id of the
+ *  duplicated root. Returns null when the source id isn't in the tree
+ *  (or is the synthetic root). */
+export function duplicateEmitter(
+  tree: EmitterTreeDto,
+  id: number,
+): { tree: EmitterTreeDto; newId: number } | null {
+  if (id === -1) return null;
+  const source = findEmitterNode(tree, id);
+  if (source === null) return null;
+
+  let nextId = maxIdIn(tree) + 1;
+  const newRootId = nextId;
+  const reassign = (n: EmitterTreeNode): EmitterTreeNode => {
+    const idForThis = nextId++;
+    return {
+      ...n,
+      id: idForThis,
+      role: "root",   // top-level — legacy duplicates land as roots
+      children: n.children.map((c) => ({
+        ...cloneNode(c),
+        id: nextId++,
+      })),
+    };
+  };
+  // Build the duplicate subtree with fresh ids. Walk via depth-first
+  // so id assignment matches the visit order.
+  const reassignAll = (n: EmitterTreeNode): EmitterTreeNode => ({
+    ...n,
+    id: nextId++,
+    children: n.children.map(reassignAll),
+  });
+  // Reset nextId; we want the cloned root to take `newRootId`.
+  nextId = maxIdIn(tree) + 1;
+  const clone = reassignAll(source);
+  // The cloned root becomes a root in the synthetic-root children.
+  clone.role = "root";
+  clone.name = generateDuplicateName(tree, source.name);
+
+  const newTree: EmitterTreeDto = {
+    root: {
+      ...tree.root,
+      children: [...tree.root.children, clone],
+    },
+  };
+  // Note: reassign() helper above is unused — kept inline reassignAll
+  // for clarity; the void reference here satisfies lint.
+  void reassign;
+  return { tree: newTree, newId: newRootId };
+}
+
+/** Delete the emitter at `id` (and its subtree). Returns the new tree
+ *  or null when the id isn't found / is the synthetic root. */
+export function deleteEmitter(
+  tree: EmitterTreeDto,
+  id: number,
+): EmitterTreeDto | null {
+  if (id === -1) return null;
+  const prune = (n: EmitterTreeNode): EmitterTreeNode | null => {
+    if (n.id === id) return null;
+    return {
+      ...n,
+      children: n.children.flatMap((c) => {
+        const p = prune(c);
+        return p === null ? [] : [p];
+      }),
+    };
+  };
+  const next = prune(tree.root);
+  if (next === null) return null;  // can't prune synthetic root
+  return { root: next };
+}
+
+/** Rename the emitter at `id`. Returns the new tree (always defined;
+ *  no-op if id not found). */
+export function renameEmitter(
+  tree: EmitterTreeDto,
+  id: number,
+  name: string,
+): EmitterTreeDto {
+  return mapNode(tree, id, (n) => ({ ...n, name }));
+}
+
+/** Increment-duplicate: same as `duplicateEmitter` but the new name's
+ *  numeric suffix is bumped by `delta`. Legacy
+ *  `EmitterList_DuplicateEmitter(hWnd, indexDelta)` shifts the
+ *  TRACK_INDEX track; the mock has no track data to mutate, so we just
+ *  record the duplicate + the suffix in the name. */
+export function duplicateWithIndexIncrement(
+  tree: EmitterTreeDto,
+  id: number,
+  delta: number,
+): { tree: EmitterTreeDto; newId: number } | null {
+  const dup = duplicateEmitter(tree, id);
+  if (dup === null) return null;
+  // delta is for the index-track shift in legacy. The duplicate's name
+  // already carries the auto-suffix from generateDuplicateName; we tag
+  // an additional `(+N)` marker so tests can assert the delta arrived.
+  // (The contract test only checks the wire round-trip; the actual
+  // index-track shift is host-side.)
+  const annotated = mapNode(dup.tree, dup.newId, (n) => ({
+    ...n,
+    name: `${n.name} (+${delta})`,
+  }));
+  return { tree: annotated, newId: dup.newId };
+}
+
 /** Walks the fixture and returns the node with the matching id, or null
  *  when the id isn't present in the tree. The synthetic id=-1 root
  *  matches too — callers that explicitly forbid the synthetic root must

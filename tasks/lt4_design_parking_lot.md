@@ -359,6 +359,102 @@ batches, each independently shippable:
 Each batch ends with all gates green and a commit. The full
 Screen 4 ✅ flips after Batch C.
 
+### Batch B1 — Mutations + context menu + 3 Screen-8 sub-dialogs (locked 2026-05-17)
+
+Mid-batch in the three-batch Screen 4 sequence. Adds the essential
+mutations (duplicate, delete, rename), wires the right-click
+context menu on tree rows, and ships the three Screen-8 sub-dialogs
+blocked on Screen 4 (Rescale Emitter, Increment Index, Link Group
+Settings). After this batch, 13 of 13 Screen 8 sub-dialogs are
+shipped — the parking-lot Screen 8 checkbox list fully flips. Drag/
+drop, Add Lifetime/Death Child, Set/Leave Link Group, Move Up/Down,
+multi-select, inline rename, and keyboard nav stay deferred to
+Batches B2 + C.
+
+**Schema additions (8 new bridge call kinds):**
+
+- `emitters/duplicate { id: number }` → `{ ok: true; newId: number } | { ok: false; error: string }`. Duplicates the emitter + its subtree as a new root (matches legacy `EmitterList_DuplicateEmitter` semantics).
+- `emitters/delete { id: number }` → `Record<string, never>`. Removes the emitter + its subtree (matches legacy `EmitterList_DeleteEmitter`).
+- `emitters/rename { id: number; name: string }` → `Record<string, never>`. Sets the emitter's name.
+- `emitters/duplicate-with-index-increment { id: number; delta: number }` → `{ newId: number }`. Duplicates and bumps an in-name numeric suffix by `delta` (legacy increment-index flow).
+- `engine/action/rescale-emitter { id: number; durationScalePercent: number; sizeScalePercent: number }` → `Record<string, never>`. Per-emitter rescale via `DoRescaleEmitter` (already exposed in `src/Rescale.h` per host-state-plumbing batch).
+- `linkGroups/list-exempt-fields { groupId: number }` → `{ fields: string[] }`. Reads the exempt field set for a group.
+- `linkGroups/set-exempt-fields { groupId: number; fields: string[] }` → `Record<string, never>`. Replaces the exempt set.
+- `linkGroups/reset-exempt-fields { groupId: number }` → `Record<string, never>`. Clears the exempt set (resets to "everything inherited").
+
+**Event additions:**
+
+- `emitters/tree/changed { tree: EmitterTreeDto }` already in schema (Batch A wired the React subscription). C++ host **starts emitting** this after every mutation in Batch B1 (was no-op until this batch). MockBridge already emits it from mutation paths.
+
+**C++ host work** (`BridgeDispatcher.cpp` + handlers):
+
+- **`emitters/duplicate`**: call `(*m_pps)->insertEmitterAfter(referenceEmitter, sourceEmitter)`. The `referenceEmitter` is the last root in the tree (matches legacy "duplicates land as roots after existing roots"); `sourceEmitter` is a copy of the source emitter. Capture undo. Emit `emitters/tree/changed` + `engine/state/changed` + dirty. Return `{ ok: true, newId: <new index> }`.
+- **`emitters/delete`**: `(*m_pps)->deleteEmitter(emitter)`. Capture undo. Emit tree-changed + state-changed + dirty. If the deleted emitter was selected, clear `m_selectedEmitterId` and emit `emitters/selected { id: null }`.
+- **`emitters/rename`**: `emitter.setName(name)`. Capture undo. Emit tree-changed + dirty. (No `engine/state/changed` needed — name isn't in the snapshot's engine state fields, but `emitters/tree/changed` will trigger React to re-fetch the tree which carries the new name.)
+- **`emitters/duplicate-with-index-increment`**: legacy `EmitterList_DuplicateEmitter(hWnd, indexDelta)` at [src/UI/EmitterList.cpp:4707]. Read the legacy to find the index-bump algorithm (probably regex on name's trailing number suffix + bump by delta; if no suffix, append the delta). Mirror it in the C++ handler. Same capture-undo + tree-changed + dirty pattern.
+- **`engine/action/rescale-emitter`**: `DoRescaleEmitter(emitterPtr, dScale/100.0f, sScale/100.0f)` from `src/Rescale.h`. Capture undo. Emit tree-changed + dirty.
+- **`linkGroups/list-exempt-fields`**: there's MT-10 infrastructure in legacy somewhere — find it. The exempt set is a `std::set<std::string>` (or similar) keyed by group ID, persisted in the .alo's MT-10 chunk. Read out the set, return as a `string[]`. **Subagent decision**: if the legacy MT-10 implementation isn't cleanly accessible from outside `EmitterList.cpp`, factor a tiny helper into `src/LinkGroups.h` (or fold into `src/ParticleSystem.h` if it lives on the system). Forward-defer with `{ fields: [] }` placeholder + TODO if structural factor-out is too tangled.
+- **`linkGroups/set-exempt-fields`**: same access pattern, write the set. Capture undo. Emit tree-changed (because the visual representation of linked emitters may change) + dirty.
+- **`linkGroups/reset-exempt-fields`**: clear the set. Same path as set with `fields: []`.
+
+**MockBridge implementations:**
+
+Mutate `mock-state` directly. The fixture tree gets mutated on each call. Maintain consistency: after duplicate, the new emitter appears in the tree at the right position; after delete, it disappears; etc. Emit `emitters/tree/changed { tree }` after each mutation so the React side re-renders.
+
+**React side:**
+
+- **Context menu on tree rows** — wrap each row in a Radix `ContextMenu`. Items (with separators):
+  1. **Rename** — opens `RenameEmitterDialog` (simple text-input modal; inline rename is Batch C).
+  2. **Duplicate** — `emitters/duplicate { id }`. No prompt.
+  3. **Delete** — `emitters/delete { id }`. No confirmation prompt in Batch B1 (legacy doesn't have one either).
+  4. ─── separator ───
+  5. **Increment Index…** — opens `IncrementIndexDialog`.
+  6. **Rescale Emitter…** — opens `RescaleEmitterDialog`.
+  7. ─── separator ───
+  8. **Link Group Settings…** — opens `LinkGroupSettingsDialog`. **Disabled** when `emitter.linkGroup === 0`. The disabled state shows a tooltip "Emitter is not in a link group".
+
+- **New modals** under `web/apps/editor/src/screens/`:
+  - `RenameEmitterDialog.tsx`: single text input + OK/Cancel. Pre-fills with current name. OK fires `emitters/rename { id, name }`.
+  - `IncrementIndexDialog.tsx`: single Spinner (label "Increment by N", default 1, min 1, max 99, no unit). OK fires `emitters/duplicate-with-index-increment { id, delta }`.
+  - `RescaleEmitterDialog.tsx`: mirrors `RescaleDialog.tsx` (Rescale System) — 2 Spinners (Duration %, Size %), OK/Cancel. Title "Rescale Emitter". Hint text below: "Applies to the selected emitter only. Use *Rescale Particle System…* to rescale the entire system." OK fires `engine/action/rescale-emitter { id, durationScalePercent, sizeScalePercent }`.
+  - `LinkGroupSettingsDialog.tsx`: medium-sized modal. On mount, fires `linkGroups/list-exempt-fields { groupId }` to fetch current exempts. Renders a list of checkboxes for each field name. Toggling a checkbox does NOT auto-commit (matches legacy "OK to confirm" pattern). Footer: Reset All button (left), Cancel + OK (right). Reset All sets all checkboxes off in local state. OK fires `linkGroups/set-exempt-fields { groupId, fields }` with the checked fields. Cancel discards.
+
+- **EmitterTree.tsx** updates:
+  - Wrap each tree row's `<button>` in `<ContextMenu.Root>` + `<ContextMenu.Trigger>` (or use `<ContextMenu.Trigger asChild>` so the button is the trigger).
+  - Mount the four new modal components in App.tsx, controlled by a small Zustand atom (`tree-context.ts` or similar) that holds `{ open: "rename" | "increment" | "rescale" | "link-group" | null; targetEmitterId: number | null; targetLinkGroupId?: number }`.
+  - On `emitters/tree/changed` event arrival, re-fetch the tree via `emitters/list`. Already wired as a no-op in Batch A; B1 just makes the re-fetch real.
+
+- **MenuBar.tsx** — no changes. Rescale Emitter / Increment Index / Link Group Settings have NO menu trigger (they live in the right-click context menu only, matching legacy).
+
+**Test surface for Batch B1:**
+
+- **Vitest** (+12 specs, target 78 → 90+):
+  - `bridge-contract.test.ts` (+8): one round-trip per new kind.
+  - `RenameEmitterDialog.test.tsx` (1): renders text input + OK fires emitters/rename.
+  - `IncrementIndexDialog.test.tsx` (1): renders Spinner + OK fires duplicate-with-index-increment.
+  - `RescaleEmitterDialog.test.tsx` (1): clicking OK fires engine/action/rescale-emitter.
+  - `LinkGroupSettingsDialog.test.tsx` (1): renders exempt-field checkboxes from mock + Reset All clears them.
+- **Playwright** (+4 specs, target 50 → 54+):
+  - Right-click an emitter row opens the context menu.
+  - Delete via context menu removes the emitter (assert tree row count decreases via snapshot or DOM).
+  - Increment Index → OK fires the bridge call (observe via state/changed + tree/changed events).
+  - Link Group Settings → renders exempt-field checkboxes (observe modal DOM); skip if Mock fixture doesn't have a linked emitter (subagent decision).
+
+**Legacy delete:**
+
+NOT in Batch B1. Legacy `EmitterList.cpp` mutations stay for `--legacy-ui` until Phase 4.2.
+
+**Open follow-ups** (Batches B2 + C carryover):
+- Add Lifetime/Death Child operations → Batch B2.
+- Set Link Group / Leave Link Group operations → Batch B2.
+- Move Up / Move Down → Batch B2 (or fold into drag/drop in B3).
+- Multi-select state → Batch B2.
+- Drag/drop reordering → Batch B3.
+- Reparent via drag/drop → Batch B3.
+- Link-group bracket visualisation (MT-9 port) → Batch C.
+- F2 / double-click inline rename (replaces the modal from B1) → Batch C.
+- Keyboard nav (arrows / Enter / Delete / Cut / Copy / Paste) → Batch C.
+
 ### Batch A — Foundation (locked 2026-05-17)
 
 **Schema additions:**

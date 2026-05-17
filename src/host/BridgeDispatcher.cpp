@@ -5,6 +5,9 @@
 #include "third_party/nlohmann/json.hpp"
 
 #include "../engine.h"
+#include "../files.h"
+#include "../ChunkFile.h"
+#include "../LinkGroup.h"
 #include "../ParticleSystem.h"
 #include "../ParticleSystemIO.h"
 #include "../Rescale.h"
@@ -20,6 +23,13 @@
 #include <commdlg.h>
 
 using nlohmann::json;
+
+// Defined in src/UI/EmitterList.cpp; reused by the new-UI Phase 3
+// Screen 4 Batch B1 emitter-mutation handlers. Stays non-static so the
+// host's dispatcher can link against it without a header dependency on
+// EmitterList.cpp (which still belongs to the legacy --legacy-ui chrome).
+extern std::string GenerateDuplicateName(const ParticleSystem* system,
+                                          const std::string&     sourceName);
 
 namespace host {
 
@@ -281,6 +291,129 @@ json SpawnerConfigToJson(const SpawnerConfig& cfg)
         {"jitterPosition", Vec3ToJson(cfg.jitterPosition)},
         {"jitterVelocity", Vec3ToJson(cfg.jitterVelocity)},
     };
+}
+
+// Screen 4 Batch B1 — wire-name ↔ LinkExemptFlags::member mapping.
+// Mirrors the legacy field table at [src/UI/EmitterList.cpp:2381]
+// (kLinkSettingsFields), but uses camelCase field names that match the
+// schema's wire surface. Excludes `name` (intrinsically exempt;
+// settings dialog doesn't display it) and the `unknownXX` set (no
+// inspector representation). The dispatcher converts the wire's
+// `string[]` of exempt field names into a LinkExemptFlags bitfield by
+// looking each name up in this table.
+struct LinkFieldEntry
+{
+    const char*               name;
+    bool LinkExemptFlags::*   flag;
+};
+
+static const LinkFieldEntry kLinkFieldTable[] = {
+    // Textures.
+    { "colorTexture",            &LinkExemptFlags::colorTexture },
+    { "normalTexture",           &LinkExemptFlags::normalTexture },
+    // Curves.
+    { "trackIndex",              &LinkExemptFlags::trackIndex },
+    { "trackRed",                &LinkExemptFlags::trackRed },
+    { "trackGreen",              &LinkExemptFlags::trackGreen },
+    { "trackBlue",               &LinkExemptFlags::trackBlue },
+    { "trackAlpha",              &LinkExemptFlags::trackAlpha },
+    { "trackScale",              &LinkExemptFlags::trackScale },
+    { "trackRotationSpeed",      &LinkExemptFlags::trackRotationSpeed },
+    // Lifetime / spawning.
+    { "lifetime",                &LinkExemptFlags::lifetime },
+    { "initialDelay",            &LinkExemptFlags::initialDelay },
+    { "burstDelay",              &LinkExemptFlags::burstDelay },
+    { "nBursts",                 &LinkExemptFlags::nBursts },
+    { "nParticlesPerBurst",      &LinkExemptFlags::nParticlesPerBurst },
+    { "nParticlesPerSecond",     &LinkExemptFlags::nParticlesPerSecond },
+    { "useBursts",               &LinkExemptFlags::useBursts },
+    // Physics.
+    { "gravity",                 &LinkExemptFlags::gravity },
+    { "acceleration",            &LinkExemptFlags::acceleration },
+    { "inwardSpeed",             &LinkExemptFlags::inwardSpeed },
+    { "inwardAcceleration",      &LinkExemptFlags::inwardAcceleration },
+    { "bounciness",              &LinkExemptFlags::bounciness },
+    { "groundBehavior",          &LinkExemptFlags::groundBehavior },
+    { "objectSpaceAcceleration", &LinkExemptFlags::objectSpaceAcceleration },
+    { "affectedByWind",          &LinkExemptFlags::affectedByWind },
+    // Appearance.
+    { "blendMode",               &LinkExemptFlags::blendMode },
+    { "textureSize",             &LinkExemptFlags::textureSize },
+    { "nTriangles",              &LinkExemptFlags::nTriangles },
+    { "randomScalePerc",         &LinkExemptFlags::randomScalePerc },
+    { "randomLifetimePerc",      &LinkExemptFlags::randomLifetimePerc },
+    { "hasTail",                 &LinkExemptFlags::hasTail },
+    { "tailSize",                &LinkExemptFlags::tailSize },
+    { "noDepthTest",             &LinkExemptFlags::noDepthTest },
+    { "randomColors",            &LinkExemptFlags::randomColors },
+    // Weather.
+    { "isWeatherParticle",       &LinkExemptFlags::isWeatherParticle },
+    { "weatherCubeSize",         &LinkExemptFlags::weatherCubeSize },
+    { "weatherCubeDistance",     &LinkExemptFlags::weatherCubeDistance },
+    { "weatherFadeoutDistance",  &LinkExemptFlags::weatherFadeoutDistance },
+    // Rotation.
+    { "randomRotation",          &LinkExemptFlags::randomRotation },
+    { "randomRotationDirection", &LinkExemptFlags::randomRotationDirection },
+    { "randomRotationAverage",   &LinkExemptFlags::randomRotationAverage },
+    { "randomRotationVariance",  &LinkExemptFlags::randomRotationVariance },
+    // Misc.
+    { "linkToSystem",            &LinkExemptFlags::linkToSystem },
+    { "parentLinkStrength",      &LinkExemptFlags::parentLinkStrength },
+    { "doColorAddGrayscale",     &LinkExemptFlags::doColorAddGrayscale },
+    { "isHeatParticle",          &LinkExemptFlags::isHeatParticle },
+    { "isWorldOriented",         &LinkExemptFlags::isWorldOriented },
+    { "freezeTime",              &LinkExemptFlags::freezeTime },
+    { "skipTime",                &LinkExemptFlags::skipTime },
+    { "emitFromMesh",            &LinkExemptFlags::emitFromMesh },
+    { "emitFromMeshOffset",      &LinkExemptFlags::emitFromMeshOffset },
+    { "groupSpeed",              &LinkExemptFlags::groupSpeed },
+    { "groupLifetime",           &LinkExemptFlags::groupLifetime },
+    { "groupPosition",           &LinkExemptFlags::groupPosition },
+};
+
+constexpr size_t kLinkFieldCount =
+    sizeof(kLinkFieldTable) / sizeof(kLinkFieldTable[0]);
+
+// Translate a LinkExemptFlags bitfield to the wire's `string[]` of
+// exempt field names.
+json LinkExemptFlagsToJsonArray(const LinkExemptFlags& flags)
+{
+    json arr = json::array();
+    for (size_t i = 0; i < kLinkFieldCount; ++i)
+    {
+        if (flags.*(kLinkFieldTable[i].flag))
+            arr.push_back(kLinkFieldTable[i].name);
+    }
+    return arr;
+}
+
+// Translate a `string[]` wire payload to a LinkExemptFlags bitfield.
+// Unknown names are silently ignored (forward-compat with newer
+// schemas adding fields the host doesn't yet recognise).
+LinkExemptFlags LinkExemptFlagsFromJsonArray(const json& arr)
+{
+    LinkExemptFlags out;  // default-constructed = v1 defaults
+    // Clear the table-mapped fields; we want to honor only what the
+    // wire specifies. `name` + unknowns are left at their defaults
+    // (intrinsic per-emitter for name; defaults for the unknowns).
+    for (size_t i = 0; i < kLinkFieldCount; ++i)
+        out.*(kLinkFieldTable[i].flag) = false;
+
+    if (!arr.is_array()) return out;
+    for (const auto& v : arr)
+    {
+        if (!v.is_string()) continue;
+        const std::string s = v.get<std::string>();
+        for (size_t i = 0; i < kLinkFieldCount; ++i)
+        {
+            if (s == kLinkFieldTable[i].name)
+            {
+                out.*(kLinkFieldTable[i].flag) = true;
+                break;
+            }
+        }
+    }
+    return out;
 }
 
 // LT-4: walk a ParticleSystem and build an EmitterTreeNode-shaped JSON
@@ -894,20 +1027,9 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();
-        // Emitter parameters changed → notify the React tree (Phase 3
-        // emitter UI subscribes to this event). Payload is intentionally
-        // an empty tree for now; the full emitter-tree DTO lands when
-        // Screen 4 ships the list panel. Sending the event with an
-        // empty payload still lets Playwright assert the event fires.
-        if (m_emit)
-        {
-            json env = {
-                {"type",    "evt"},
-                {"kind",    "emitters/tree/changed"},
-                {"payload", json{{"root", json{{"id", 0}, {"name", "root"}, {"children", json::array()}}}}},
-            };
-            m_emit(env.dump());
-        }
+        // Emitter parameters changed → notify the React tree so the
+        // sidebar re-fetches via emitters/list.
+        EmitEmittersTreeChanged();
         return res;
     }
 
@@ -1426,6 +1548,353 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- Screen 4 Batch B1 — emitter mutations -----------------
+    //
+    // Each handler validates the target emitter, captures an undo
+    // snapshot before mutating (best-effort — the UndoStack baseline
+    // is still empty pre-Phase-3 capture wiring), mutates via the
+    // ParticleSystem API, then emits `emitters/tree/changed` + dirty.
+
+    // Lookup helper: find an emitter pointer by integer index. Returns
+    // nullptr on out-of-range / no-system / null-slot. Used by all
+    // emitter-mutation handlers below.
+    auto getEmitterById = [&](int id) -> ParticleSystem::Emitter* {
+        if (id < 0) return nullptr;
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem) return nullptr;
+        const auto& emitters = (*m_pParticleSystem)->getEmitters();
+        if (static_cast<size_t>(id) >= emitters.size()) return nullptr;
+        return emitters[id];
+    };
+
+    // Capture-undo helper. Wraps the dispatcher's m_undo with the
+    // current selection index so a future undo restores the
+    // pre-mutation state. coalesceKey=0 disables coalescing
+    // (structural ops should never fold).
+    auto captureUndo = [&]() {
+        if (m_undo == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem) return;
+        const ParticleSystem* sys = m_pParticleSystem->get();
+        size_t selIdx = SIZE_MAX;
+        if (m_selectedEmitterId >= 0
+            && static_cast<size_t>(m_selectedEmitterId) < sys->getEmitters().size())
+        {
+            selIdx = static_cast<size_t>(m_selectedEmitterId);
+        }
+        m_undo->Capture(*sys, selIdx, 0);
+    };
+
+    // -------- emitters/duplicate -------------------------------------
+    //
+    // Mirrors legacy `EmitterList_DuplicateEmitter` at
+    // [src/UI/EmitterList.cpp:4707]. Round-trips the source through
+    // the chunk serializer so the duplicate starts with empty
+    // m_instances (a direct copy-construct would shallow-copy that
+    // std::set and double-free on later deletion). The duplicate
+    // becomes a root via `insertEmitterAfter`.
+    if (kind == "emitters/duplicate")
+    {
+        int id = params.value("id", -1);
+        ParticleSystem::Emitter* source = getEmitterById(id);
+        if (source == nullptr)
+        {
+            sendOk(json{{"ok", false}, {"error", "emitter not found"}});
+            return res;
+        }
+
+        captureUndo();
+
+        ParticleSystem* sys = m_pParticleSystem->get();
+        ParticleSystem::Emitter* dup = nullptr;
+        MemoryFile* memfile = new MemoryFile;
+        try
+        {
+            ChunkWriter writer(memfile);
+            source->copy(writer);
+
+            memfile->seek(0);
+            ChunkReader reader(memfile);
+            ParticleSystem::Emitter cleanCopy(reader);
+
+            // Auto-suffix the name to avoid collisions; mirrors the
+            // legacy convention from EmitterList.cpp:4731.
+            cleanCopy.name = GenerateDuplicateName(sys, source->name);
+
+            dup = sys->insertEmitterAfter(source, cleanCopy);
+        }
+        catch (...)
+        {
+            memfile->Release();
+            sendOk(json{{"ok", false}, {"error", "emitter copy failed"}});
+            return res;
+        }
+        memfile->Release();
+
+        if (dup == nullptr)
+        {
+            sendOk(json{{"ok", false}, {"error", "insertEmitterAfter returned null"}});
+            return res;
+        }
+        const int newId = static_cast<int>(dup->index);
+        sendOk(json{{"ok", true}, {"newId", newId}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/delete ---------------------------------------
+    //
+    // Mirrors legacy `EmitterList_DeleteEmitter` at
+    // [src/UI/EmitterList.cpp:4651]. ParticleSystem::deleteEmitter
+    // recursively deletes a subtree. If the deleted id matches the
+    // selection scalar, clear it and emit emitters/selected { id: null }.
+    if (kind == "emitters/delete")
+    {
+        int id = params.value("id", -1);
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            // No-op delete still returns success — matches the
+            // mock's permissive behaviour.
+            sendOk(json::object());
+            return res;
+        }
+
+        captureUndo();
+
+        ParticleSystem* sys = m_pParticleSystem->get();
+        const bool wasSelected = (m_selectedEmitterId == id);
+        sys->deleteEmitter(target);
+
+        if (wasSelected)
+        {
+            m_selectedEmitterId = -1;
+            if (m_emit)
+            {
+                json env = {
+                    {"type",    "evt"},
+                    {"kind",    "emitters/selected"},
+                    {"payload", json{{"id", json(nullptr)}}},
+                };
+                m_emit(env.dump());
+            }
+        }
+
+        sendOk(json::object());
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/rename ---------------------------------------
+    //
+    // Legacy uses an inline tree-view edit (EmitterList_RenameEmitter
+    // at line 4814 → TreeView_EditLabel). The new-UI flow uses a modal,
+    // dispatched here as a plain setName. Capture-undo guards against
+    // mid-edit Ctrl-Z weirdness.
+    if (kind == "emitters/rename")
+    {
+        int id = params.value("id", -1);
+        std::string name = params.value("name", std::string{});
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        captureUndo();
+        target->name = name;
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/duplicate-with-index-increment ---------------
+    //
+    // Legacy `EmitterList_DuplicateEmitter(hWnd, indexDelta)` at
+    // [src/UI/EmitterList.cpp:4707]. Duplicate first (same path as
+    // above), then shift the TRACK_INDEX track on the duplicate by
+    // `delta` via `ShiftIndexTrack` (legacy helper at
+    // [src/UI/EmitterList.cpp:2307]). The shift adds `delta` to every
+    // keyframe value; if the track is empty, inserts a single key at
+    // t=0 with value=delta.
+    if (kind == "emitters/duplicate-with-index-increment")
+    {
+        int id = params.value("id", -1);
+        float delta = params.value("delta", 0.0f);
+        ParticleSystem::Emitter* source = getEmitterById(id);
+        if (source == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        captureUndo();
+
+        ParticleSystem* sys = m_pParticleSystem->get();
+        ParticleSystem::Emitter* dup = nullptr;
+        MemoryFile* memfile = new MemoryFile;
+        try
+        {
+            ChunkWriter writer(memfile);
+            source->copy(writer);
+            memfile->seek(0);
+            ChunkReader reader(memfile);
+            ParticleSystem::Emitter cleanCopy(reader);
+            cleanCopy.name = GenerateDuplicateName(sys, source->name);
+            dup = sys->insertEmitterAfter(source, cleanCopy);
+        }
+        catch (...)
+        {
+            memfile->Release();
+            sendErr("emitter copy failed");
+            return res;
+        }
+        memfile->Release();
+
+        if (dup == nullptr)
+        {
+            sendErr("insertEmitterAfter returned null");
+            return res;
+        }
+
+        // Mirror legacy ShiftIndexTrack at [src/UI/EmitterList.cpp:2307].
+        // The set's iterators are const, so rebuild via a temporary
+        // vector + clear + reinsert.
+        if (delta != 0.0f)
+        {
+            ParticleSystem::Emitter::Track* track =
+                dup->tracks[ParticleSystem::TRACK_INDEX];
+            if (track->keys.empty())
+            {
+                track->keys.insert(
+                    ParticleSystem::Emitter::Track::Key(0.0f, delta));
+            }
+            else
+            {
+                std::vector<ParticleSystem::Emitter::Track::Key> tmp(
+                    track->keys.begin(), track->keys.end());
+                track->keys.clear();
+                for (size_t i = 0; i < tmp.size(); ++i)
+                {
+                    track->keys.insert(
+                        ParticleSystem::Emitter::Track::Key(
+                            tmp[i].time, tmp[i].value + delta));
+                }
+            }
+        }
+
+        const int newId = static_cast<int>(dup->index);
+        sendOk(json{{"newId", newId}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- engine/action/rescale-emitter -------------------------
+    //
+    // Per-emitter rescale (vs `engine/action/rescale-system` which
+    // walks every emitter). Mirrors the inner loop body of legacy
+    // `RescaleEmitter` at src/Rescale.cpp; here we just call
+    // DoRescaleEmitter once on the chosen emitter.
+    if (kind == "engine/action/rescale-emitter")
+    {
+        int id = params.value("id", -1);
+        float durPct  = params.value("durationScalePercent", 100.0f);
+        float sizePct = params.value("sizeScalePercent",     100.0f);
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        captureUndo();
+        DoRescaleEmitter(target, durPct / 100.0f, sizePct / 100.0f);
+
+        sendOk(json::object());
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- linkGroups/list-exempt-fields -------------------------
+    //
+    // Read the per-group LinkExemptFlags via
+    // `ParticleSystem::getLinkExemptFlags`. Unknown groups return the
+    // v1 default exempt set (handled inside getLinkExemptFlags).
+    if (kind == "linkGroups/list-exempt-fields")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        uint32_t groupId =
+            params.value("groupId", static_cast<uint32_t>(0));
+        const LinkExemptFlags& flags =
+            (*m_pParticleSystem)->getLinkExemptFlags(groupId);
+        sendOk(json{{"fields", LinkExemptFlagsToJsonArray(flags)}});
+        return res;
+    }
+
+    // -------- linkGroups/set-exempt-fields --------------------------
+    //
+    // Write the per-group exempt set. ParticleSystem normalises an
+    // all-default value back out of the map (see
+    // [src/ParticleSystem.h:351]); calling with the v1 default fields
+    // therefore leaves the on-disk chunk untouched, matching legacy
+    // save behaviour.
+    if (kind == "linkGroups/set-exempt-fields")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        uint32_t groupId =
+            params.value("groupId", static_cast<uint32_t>(0));
+        const json& fieldsJson =
+            params.contains("fields") ? params["fields"] : json::array();
+        LinkExemptFlags flags = LinkExemptFlagsFromJsonArray(fieldsJson);
+
+        captureUndo();
+        (*m_pParticleSystem)->setLinkExemptFlags(groupId, flags);
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- linkGroups/reset-exempt-fields ------------------------
+    //
+    // Reset = set to v1 defaults. ParticleSystem normalises that back
+    // out of the map, so this effectively erases the per-group entry.
+    if (kind == "linkGroups/reset-exempt-fields")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        uint32_t groupId =
+            params.value("groupId", static_cast<uint32_t>(0));
+
+        captureUndo();
+        (*m_pParticleSystem)->setLinkExemptFlags(groupId, LinkExemptFlags{});
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
     return res;
@@ -1438,6 +1907,40 @@ void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
         {"type",    "evt"},
         {"kind",    "accelerator/pressed"},
         {"payload", {{"combo", combo}}},
+    };
+    m_emit(env.dump());
+}
+
+void BridgeDispatcher::EmitEmittersTreeChanged()
+{
+    if (!m_emit) return;
+    // Build the synthetic root + per-actual-root children, matching the
+    // shape returned by `emitters/list`.
+    json children = json::array();
+    if (m_pParticleSystem != nullptr && *m_pParticleSystem)
+    {
+        const ParticleSystem* sys = m_pParticleSystem->get();
+        const auto& emitters = sys->getEmitters();
+        for (size_t i = 0; i < emitters.size(); ++i)
+        {
+            if (emitters[i] != nullptr && emitters[i]->parent == nullptr)
+            {
+                children.push_back(BuildEmitterTreeNode(sys, i));
+            }
+        }
+    }
+    json tree = {
+        {"id",        -1},
+        {"name",      ""},
+        {"role",      "root"},
+        {"linkGroup", 0},
+        {"visible",   true},
+        {"children",  children},
+    };
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "emitters/tree/changed"},
+        {"payload", json{{"root", tree}}},
     };
     m_emit(env.dump());
 }

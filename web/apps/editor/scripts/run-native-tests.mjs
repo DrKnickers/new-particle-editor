@@ -104,6 +104,7 @@ async function main() {
       "tests/render-loop.spec.ts",
       "tests/viewport-camera.spec.ts",
       "tests/emitter-tree.spec.ts",
+      "tests/emitter-mutations.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

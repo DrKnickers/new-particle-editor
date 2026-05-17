@@ -259,6 +259,20 @@ export type Request =
   | { kind: "emitters/import-from-file";  params: { path: string; selected: number[] } }
   | { kind: "emitters/preview-from-file"; params: { path: string } }
 
+  // Emitter mutations (Phase 3 Screen 4 Batch B1)
+  | { kind: "emitters/duplicate";                       params: { id: number } }
+  | { kind: "emitters/delete";                          params: { id: number } }
+  | { kind: "emitters/rename";                          params: { id: number; name: string } }
+  | { kind: "emitters/duplicate-with-index-increment";  params: { id: number; delta: number } }
+
+  // Per-emitter rescale (Phase 3 Screen 4 Batch B1 — Screen-8 sub-dialog)
+  | { kind: "engine/action/rescale-emitter";  params: { id: number; durationScalePercent: number; sizeScalePercent: number } }
+
+  // Link-group exempt-set CRUD (Phase 3 Screen 4 Batch B1 — MT-10 surface)
+  | { kind: "linkGroups/list-exempt-fields";   params: { groupId: number } }
+  | { kind: "linkGroups/set-exempt-fields";    params: { groupId: number; fields: string[] } }
+  | { kind: "linkGroups/reset-exempt-fields";  params: { groupId: number } }
+
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
@@ -320,6 +334,22 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/preview-from-file" } ?
     | { ok: true; tree: EmitterTreeNode }
     | { ok: false; error: string } :
+
+  // Emitter mutations (Phase 3 Screen 4 Batch B1)
+  R extends { kind: "emitters/duplicate" } ?
+    | { ok: true; newId: number }
+    | { ok: false; error: string } :
+  R extends { kind: "emitters/delete" }                         ? Record<string, never> :
+  R extends { kind: "emitters/rename" }                         ? Record<string, never> :
+  R extends { kind: "emitters/duplicate-with-index-increment" } ? { newId: number } :
+
+  // Per-emitter rescale (Phase 3 Screen 4 Batch B1)
+  R extends { kind: "engine/action/rescale-emitter" } ? Record<string, never> :
+
+  // Link-group exempt-set CRUD (Phase 3 Screen 4 Batch B1)
+  R extends { kind: "linkGroups/list-exempt-fields" }  ? { fields: string[] } :
+  R extends { kind: "linkGroups/set-exempt-fields" }   ? Record<string, never> :
+  R extends { kind: "linkGroups/reset-exempt-fields" } ? Record<string, never> :
 
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :

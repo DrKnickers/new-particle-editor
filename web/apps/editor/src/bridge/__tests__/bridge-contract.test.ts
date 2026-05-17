@@ -8,17 +8,23 @@ import { MockBridge } from "../mock";
 import {
   useMockEmitterTree,
   useMockEngineState,
+  useMockLinkGroupExempt,
   useMockRecentFiles,
   makeDefaultEmitterTree,
   makeDefaultEngineState,
 } from "../mock-state";
-import type { EngineStateDto, Event } from "@particle-editor/bridge-schema";
+import type {
+  EmitterTreeDto,
+  EngineStateDto,
+  Event,
+} from "@particle-editor/bridge-schema";
 
 beforeEach(() => {
   // Reset the store between tests so state mutations don't leak.
   useMockEngineState.setState(makeDefaultEngineState());
   useMockRecentFiles.getState().reset();
   useMockEmitterTree.setState({ tree: makeDefaultEmitterTree() });
+  useMockLinkGroupExempt.getState().resetAll();
 });
 
 describe("MockBridge contract", () => {
@@ -474,6 +480,131 @@ describe("MockBridge contract", () => {
     const cleared = await b.request({ kind: "engine/state/snapshot", params: {} });
     expect(cleared.selectedEmitterId).toBeNull();
     off();
+  });
+
+  // ─── Screen 4 Batch B1 — emitter mutations + Screen-8 dialogs ─────
+  it("emitters/duplicate clones the emitter as a new root and returns ok:true + newId", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+
+    const r = await b.request({ kind: "emitters/duplicate", params: { id: 0 } });
+    if (!r.ok) throw new Error("expected ok:true");
+    expect(r.newId).toBeGreaterThan(0);
+
+    expect(lastTree).not.toBeNull();
+    // Synthetic root now has 4 children (Smoke / Sparks / Flash / duplicate).
+    expect(lastTree!.root.children).toHaveLength(4);
+    // The duplicate inherits the source name with a `_<n>` suffix.
+    const dup = lastTree!.root.children[3];
+    expect(dup.name.startsWith("Smoke_")).toBe(true);
+    off();
+  });
+
+  it("emitters/delete removes the emitter + subtree and clears selection if it was selected", async () => {
+    const b = new MockBridge();
+    // Pre-select the target so we observe the auto-clear.
+    await b.request({ kind: "emitters/select", params: { id: 0 } });
+
+    let lastTree: EmitterTreeDto | null = null;
+    let lastSelected: number | null | "untouched" = "untouched";
+    const offTree = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    const offSel  = b.on("emitters/selected",     (e) => { lastSelected = e.payload.id; });
+
+    await b.request({ kind: "emitters/delete", params: { id: 0 } });
+
+    expect(lastTree).not.toBeNull();
+    expect(lastTree!.root.children).toHaveLength(2);  // Smoke + its 2 kids gone
+    expect(lastTree!.root.children.map((c) => c.name)).toEqual(["Sparks", "Flash"]);
+    expect(lastSelected).toBeNull();
+    offTree();
+    offSel();
+  });
+
+  it("emitters/rename updates the node name in the tree", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+
+    await b.request({
+      kind: "emitters/rename",
+      params: { id: 0, name: "Smoke (renamed)" },
+    });
+    expect(lastTree).not.toBeNull();
+    expect(lastTree!.root.children[0].name).toBe("Smoke (renamed)");
+    off();
+  });
+
+  it("emitters/duplicate-with-index-increment returns the new id and clones the subtree", async () => {
+    const b = new MockBridge();
+    const r = await b.request({
+      kind: "emitters/duplicate-with-index-increment",
+      params: { id: 0, delta: 5 },
+    });
+    expect(r.newId).toBeGreaterThan(0);
+    // Snapshot the tree and find the duplicate; its name carries the
+    // delta marker so we can assert the round-trip preserved `delta`.
+    const tree = await b.request({ kind: "emitters/list", params: {} });
+    const dup = tree.root.children[tree.root.children.length - 1];
+    expect(dup.name).toContain("(+5)");
+  });
+
+  it("engine/action/rescale-emitter round-trips with empty body and fires state/changed", async () => {
+    const b = new MockBridge();
+    let stateChanges = 0;
+    const off = b.on("engine/state/changed", () => { stateChanges += 1; });
+
+    const r = await b.request({
+      kind: "engine/action/rescale-emitter",
+      params: { id: 0, durationScalePercent: 150, sizeScalePercent: 75 },
+    });
+    expect(r).toEqual({});
+    expect(stateChanges).toBeGreaterThanOrEqual(1);
+    off();
+  });
+
+  it("linkGroups/list-exempt-fields returns the v1 default exempt set for an unknown group", async () => {
+    const b = new MockBridge();
+    const r = await b.request({
+      kind: "linkGroups/list-exempt-fields",
+      params: { groupId: 1 },
+    });
+    // Defaults: colorTexture + normalTexture + trackIndex.
+    expect(r.fields).toEqual(expect.arrayContaining([
+      "colorTexture", "normalTexture", "trackIndex",
+    ]));
+  });
+
+  it("linkGroups/set-exempt-fields replaces the per-group set", async () => {
+    const b = new MockBridge();
+    await b.request({
+      kind: "linkGroups/set-exempt-fields",
+      params: { groupId: 1, fields: ["lifetime", "gravity"] },
+    });
+    const r = await b.request({
+      kind: "linkGroups/list-exempt-fields",
+      params: { groupId: 1 },
+    });
+    expect(r.fields).toEqual(["lifetime", "gravity"]);
+  });
+
+  it("linkGroups/reset-exempt-fields drops the per-group entry back to defaults", async () => {
+    const b = new MockBridge();
+    await b.request({
+      kind: "linkGroups/set-exempt-fields",
+      params: { groupId: 1, fields: ["lifetime"] },
+    });
+    await b.request({
+      kind: "linkGroups/reset-exempt-fields",
+      params: { groupId: 1 },
+    });
+    const r = await b.request({
+      kind: "linkGroups/list-exempt-fields",
+      params: { groupId: 1 },
+    });
+    expect(r.fields).toEqual(expect.arrayContaining([
+      "colorTexture", "normalTexture", "trackIndex",
+    ]));
   });
 
   it("on() returns a working unsubscribe", async () => {
