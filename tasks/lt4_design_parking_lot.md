@@ -3699,3 +3699,128 @@ Commit: `aecfdab` (single feat — no new deps). Tests 105 Vitest
 | C — Link-group brackets + inline rename + keyboard nav | ⏳ pending |
 
 Screen 4 fully ✅ after B3 + C.
+
+### 2026-05-17 · Screen 4 Batch B3 (drag/drop reorder + reparent)
+
+Final structural Screen 4 batch. HTML5 drag-and-drop on tree rows
+with three drop-zones per row (upper third = reorder above, middle
+= reparent, lower = reorder below). Visual feedback: 2px insertion
+line for reorder, ring-tinted target for reparent. After this batch
+only Batch C (link-group brackets, inline rename, keyboard nav)
+remains on Screen 4.
+
+Commit: `2cbdad1` (single feat — no new deps). Tests 109 Vitest
+(105 → 109, +4) + 59 Playwright (57 → 59, +2). MSBuild 0/0.
+
+**What changed:**
+
+- *1 new bridge call kind.* `emitters/drop` tagged-union with
+  two `mode` variants: `"reorder"` (`{ id, rootIndex }`) wraps
+  `ParticleSystem::moveEmitterToRootIndex`; `"reparent"`
+  (`{ id, targetId, slot: "lifetime" | "death" }`) wraps
+  `::reparentEmitter` with `slot === "lifetime"` mapping to the
+  method's `useSpawnDuringLife: true`. Return shape is union
+  `{ ok: true } | { ok: false; error: string }`.
+- *Engine layer already has what we need.* Both methods are
+  public on `ParticleSystem` (no legacy factor-out needed —
+  pattern continues from B1's MT-10 and B2's `moveEmitter`).
+  Verified semantics from source comments: gap K means "before
+  root K"; both methods refuse same-position no-ops.
+- *React DnD via native HTML5 API.* No library dep. Each row
+  gets `draggable` + `onDragStart`/`Over`/`Leave`/`Drop`/`End`.
+  Drop-zone math is a pure helper in
+  `web/apps/editor/src/lib/drop-zone.ts` (`computeDropZone(y,
+  height)` returns `"above" | "onto" | "below"` per row-thirds).
+- *Drop indicator lifted to EmitterTree component.* Single
+  `{ targetId, zone } | null` state at the tree level instead
+  of per-row. Only one row at a time shows feedback. Rows check
+  `indicator.targetId === node.id` to decide rendering.
+- *`onDragLeave` bubbling correctly handled.* The perennial DnD
+  bug source — `dragleave` fires when the cursor crosses any
+  *child* element boundary. Guarded with
+  `e.relatedTarget && e.currentTarget.contains(next) → return`
+  so leaves to internal spans/icons don't clear prematurely.
+- *Pure validation helpers in `lib/drop-zone.ts`.* `isDescendant`
+  (DFS over `children`), `resolveReparentSlot` (returns null when
+  both slots filled), `computeRootGapIndex`. Pure functions =
+  easy Vitest. Self-drop / descendant-drop / slot-full reparent
+  / same-parent reparent all short-circuit BEFORE the bridge
+  call.
+- *Visual styling.* Insertion line: 2px `bg-sky-400`
+  absolutely-positioned at row top/bottom, `z-10`,
+  pointer-events-none. Reparent target: `bg-sky-500/30 ring-1
+  ring-sky-400` on the row button. Source row gets `opacity-50`
+  during drag.
+
+**Locks worth surfacing for future batches:**
+
+- *Engine-layer-first heuristic confirmed for a third batch.*
+  B1 found `getLinkExemptFlags`/`setLinkExemptFlags` public on
+  `ParticleSystem`. B2 found `moveEmitter` public. B3 found
+  `reparentEmitter` + `moveEmitterToRootIndex` public. **Always
+  grep `src/ParticleSystem.h` / `src/engine.h` for the verb
+  before searching `src/UI/`.** Three batches' worth of evidence
+  for promoting this to lessons.md as a documented rule.
+- *Pure helpers over DOM-coupled handlers when possible.* Drop-
+  zone math + validation in `lib/drop-zone.ts` made the Vitest
+  tests survive jsdom's DnD limitations. Pattern: when porting
+  any Win32 UI logic with subtle math, extract the pure parts
+  first (zone computation, validation predicates, sentinel
+  semantics). The DOM-coupled glue (event handlers, state
+  management) becomes a thin shim.
+- *Bridge-driven Playwright is the right fallback for any
+  CDP-flaky interaction.* Drag/drop, focus management, async
+  device events — all can be tricky to drive reliably through
+  CDP. When the bridge call has a clear contract, driving it
+  directly proves the C++/wire side works; the React-side glue
+  is then verified by Vitest alone. Saves debug time vs fighting
+  CDP DnD synthesis.
+
+**Implementer notes (from the commit + report):**
+
+1. *`moveEmitterToRootIndex` no-op detection*: gap K maps to
+   "source stays in place" when `K == sourceIdx || K == sourceIdx
+   + 1`. Both code paths return `false`. The mock helper had to
+   mirror this (otherwise `splice + insert` would generate an
+   apparent move that does nothing). Generalizable: when porting
+   engine refusal semantics to MockBridge, look for "same as
+   current state → false" edge cases.
+2. *`reparentEmitter` refuses same-parent drops* (slot-switching
+   is explicitly out of scope for v1 drag gesture per the source
+   comment). React's `onDragOver` validation matches so the
+   visual doesn't tease an operation the engine would refuse.
+3. *jsdom DragEvent doesn't propagate `clientY` via `fireEvent`.*
+   Surfaced as the first Vitest failure. Workaround:
+   `createEvent.dragOver` + `Object.defineProperty(ev, "clientY",
+   ...)` to force the property. Same approach for `dataTransfer`
+   (which jsdom doesn't provide at all). Pattern likely applies
+   to any future Vitest test of DnD or other "real-event"
+   handlers — `fireEvent`'s property-passing is unreliable for
+   non-trivial event types.
+4. *Playwright went bridge-driven up front.* Per the L-005-style
+   fallback note in the dispatch brief. The React DnD wiring is
+   covered by Vitest; Playwright asserts the C++ host's
+   `emitters/drop` semantics + wire contract by calling
+   `window.bridge.request` directly. Avoids CDP DnD synthesis
+   flakiness for sub-row positioning.
+
+**Open follow-ups for Batch C** (explicitly NOT in B3):
+- Link-group bracket visualisation (MT-9 port).
+- F2 / double-click inline rename (replaces B1's modal).
+- Keyboard nav (arrows / Enter / Delete / Cut / Copy / Paste).
+- *Slot-picker popup* for reparent (legacy line 1411 — small
+  Radix popover asking "Lifetime or Death child?" instead of
+  auto-pick). Polish, not blocking. Could fold into C or its
+  own micro-batch.
+
+### Screen 4 progress after Batch B3
+
+| Batch | Status |
+|---|---|
+| A — Foundation (read-only tree + click-to-select) | ✅ shipped |
+| B1 — Mutations + context menu + 3 Screen-8 sub-dialogs | ✅ shipped |
+| B2 — Add Child + Move + Link-group membership + multi-select | ✅ shipped |
+| **B3 — Drag/drop + reparent** | **✅ shipped** |
+| C — Link-group brackets + inline rename + keyboard nav | ⏳ pending |
+
+Only Batch C (polish) remains on Screen 4.
