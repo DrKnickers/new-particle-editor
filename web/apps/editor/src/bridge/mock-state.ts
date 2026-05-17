@@ -443,6 +443,124 @@ export function duplicateWithIndexIncrement(
   return { tree: annotated, newId: dup.newId };
 }
 
+// ─── Batch B2 helpers — Add child / Move / Link-group membership ────
+
+/** Add a lifetime child under `parentId`. Refused when the parent
+ *  already has a lifetime child (the underlying engine slot is a
+ *  single pointer, not a list). Returns null on missing parent or
+ *  already-filled slot. */
+export function addLifetimeChildEmitter(
+  tree: EmitterTreeDto,
+  parentId: number,
+): { tree: EmitterTreeDto; newId: number } | null {
+  if (parentId === -1) return null;
+  const parent = findEmitterNode(tree, parentId);
+  if (parent === null) return null;
+  if (parent.children.some((c) => c.role === "lifetime")) return null;
+  const newId = maxIdIn(tree) + 1;
+  const child: EmitterTreeNode = {
+    id: newId,
+    name: "",
+    role: "lifetime",
+    linkGroup: 0,
+    visible: true,
+    children: [],
+  };
+  const next = mapNode(tree, parentId, (n) => ({
+    ...n,
+    // Lifetime child renders before death child in the legacy tree
+    // (during-life before on-death). Splice it in at index 0 so the
+    // ordering remains stable when both children exist.
+    children: [child, ...n.children],
+  }));
+  return { tree: next, newId };
+}
+
+/** Add a death child under `parentId`. Refused when the parent
+ *  already has a death child. */
+export function addDeathChildEmitter(
+  tree: EmitterTreeDto,
+  parentId: number,
+): { tree: EmitterTreeDto; newId: number } | null {
+  if (parentId === -1) return null;
+  const parent = findEmitterNode(tree, parentId);
+  if (parent === null) return null;
+  if (parent.children.some((c) => c.role === "death")) return null;
+  const newId = maxIdIn(tree) + 1;
+  const child: EmitterTreeNode = {
+    id: newId,
+    name: "",
+    role: "death",
+    linkGroup: 0,
+    visible: true,
+    children: [],
+  };
+  const next = mapNode(tree, parentId, (n) => ({
+    ...n,
+    // Death child renders after lifetime child.
+    children: [...n.children, child],
+  }));
+  return { tree: next, newId };
+}
+
+/** Swap the emitter at `id` with its adjacent sibling in `direction`.
+ *  Returns null on missing id, non-root emitter, or move past edge —
+ *  matches `ParticleSystem::moveEmitter` semantics (children can't be
+ *  reordered since each parent has fixed-role slots). */
+export function moveEmitterInTree(
+  tree: EmitterTreeDto,
+  id: number,
+  direction: "up" | "down",
+): EmitterTreeDto | null {
+  if (id === -1) return null;
+  // Only root emitters can be moved; find the target in the root list.
+  const idx = tree.root.children.findIndex((c) => c.id === id);
+  if (idx === -1) return null;
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= tree.root.children.length) return null;
+  const next = [...tree.root.children];
+  [next[idx], next[swapIdx]] = [next[swapIdx]!, next[idx]!];
+  return { root: { ...tree.root, children: next } };
+}
+
+/** Find the smallest unused positive linkGroup id in the tree. Starts
+ *  at 1; matches the host's "smallest unused positive uint32_t" rule. */
+export function findUnusedLinkGroupId(tree: EmitterTreeDto): number {
+  let maxGroup = 0;
+  const visit = (n: EmitterTreeNode) => {
+    if (n.linkGroup > maxGroup) maxGroup = n.linkGroup;
+    n.children.forEach(visit);
+  };
+  visit(tree.root);
+  return maxGroup + 1;
+}
+
+/** Update linkGroup membership on a batch of emitters. `groupId === -1`
+ *  means "create a new group" (picks the smallest unused positive id
+ *  via `findUnusedLinkGroupId`). `null` or `0` clears membership. */
+export function setLinkGroupMembership(
+  tree: EmitterTreeDto,
+  ids: number[],
+  groupId: number | null,
+): EmitterTreeDto {
+  let resolved: number;
+  if (groupId === null || groupId === 0) {
+    resolved = 0;
+  } else if (groupId === -1) {
+    resolved = findUnusedLinkGroupId(tree);
+  } else {
+    resolved = groupId;
+  }
+  const idSet = new Set(ids);
+  const walk = (n: EmitterTreeNode): EmitterTreeNode => {
+    const transformed = idSet.has(n.id)
+      ? { ...n, linkGroup: resolved }
+      : n;
+    return { ...transformed, children: transformed.children.map(walk) };
+  };
+  return { root: walk(tree.root) };
+}
+
 /** Walks the fixture and returns the node with the matching id, or null
  *  when the id isn't present in the tree. The synthetic id=-1 root
  *  matches too — callers that explicitly forbid the synthetic root must

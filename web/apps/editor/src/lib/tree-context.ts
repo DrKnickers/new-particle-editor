@@ -21,6 +21,7 @@ export type TreeContextDialog =
   | "increment"
   | "rescale"
   | "link-group"
+  | "set-link-group"
   | null;
 
 type TreeContextStore = {

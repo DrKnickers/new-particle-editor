@@ -265,6 +265,30 @@ export type Request =
   | { kind: "emitters/rename";                          params: { id: number; name: string } }
   | { kind: "emitters/duplicate-with-index-increment";  params: { id: number; delta: number } }
 
+  // Emitter mutations (Phase 3 Screen 4 Batch B2)
+  //
+  // add-lifetime-child / add-death-child wrap
+  // `ParticleSystem::addLifetimeEmitter` / `::addDeathEmitter`. The new
+  // emitter inherits the parent's spawn slot (lifetime or death). When
+  // the slot is already filled the host responds with `newId: -1`; the
+  // React side disables the menu item before reaching that path so the
+  // negative-id branch is defensive coverage.
+  //
+  // move reorders the emitter among its siblings. Practically a root-
+  // only operation per legacy semantics (children of the same role can't
+  // be swapped — there's at most one of each). The host refuses bad
+  // moves silently; the React side disables the menu item at the edges.
+  //
+  // linkGroups/set-membership operates on a batch of ids:
+  //   - `groupId === null` or `0`: leave / clear membership (set to 0).
+  //   - `groupId > 0`: join the named group.
+  //   - `groupId === -1`: sentinel for "create a new group" — host picks
+  //     the smallest unused positive uint32_t.
+  | { kind: "emitters/add-lifetime-child";  params: { parentId: number } }
+  | { kind: "emitters/add-death-child";     params: { parentId: number } }
+  | { kind: "emitters/move";                params: { id: number; direction: "up" | "down" } }
+  | { kind: "linkGroups/set-membership";    params: { ids: number[]; groupId: number | null } }
+
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1 — Screen-8 sub-dialog)
   | { kind: "engine/action/rescale-emitter";  params: { id: number; durationScalePercent: number; sizeScalePercent: number } }
 
@@ -342,6 +366,12 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/delete" }                         ? Record<string, never> :
   R extends { kind: "emitters/rename" }                         ? Record<string, never> :
   R extends { kind: "emitters/duplicate-with-index-increment" } ? { newId: number } :
+
+  // Emitter mutations (Phase 3 Screen 4 Batch B2)
+  R extends { kind: "emitters/add-lifetime-child" } ? { newId: number } :
+  R extends { kind: "emitters/add-death-child" }    ? { newId: number } :
+  R extends { kind: "emitters/move" }               ? Record<string, never> :
+  R extends { kind: "linkGroups/set-membership" }   ? Record<string, never> :
 
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1)
   R extends { kind: "engine/action/rescale-emitter" } ? Record<string, never> :

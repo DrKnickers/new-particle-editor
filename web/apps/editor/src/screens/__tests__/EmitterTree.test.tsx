@@ -3,10 +3,11 @@
 // children at the right indentation and that clicking a row fires
 // emitters/select with the row's id.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Bridge, EmitterTreeDto } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
+import { useEmitterSelectionStore } from "@/lib/emitter-selection";
 
 function fixtureTree(): EmitterTreeDto {
   return {
@@ -49,6 +50,12 @@ function makeStubBridge() {
   } as unknown as Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
 }
 
+beforeEach(() => {
+  // The multi-select atom is module-scoped; reset between tests so
+  // state mutations from prior cases don't leak.
+  useEmitterSelectionStore.getState().clear();
+});
+
 describe("EmitterTree", () => {
   it("renders 3 root rows with their lifetime/death children", async () => {
     const bridge = makeStubBridge();
@@ -89,5 +96,45 @@ describe("EmitterTree", () => {
     const selectCall = calls.find((c) => c.kind === "emitters/select");
     expect(selectCall).toBeDefined();
     expect(selectCall.params).toEqual({ id: 1 });
+  });
+
+  // ─── Batch B2 — multi-select via Ctrl/Cmd + Shift modifiers ──────
+
+  it("Ctrl+click on an unselected row toggles it into the multi-selection (primary updates)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Establish a primary by clicking Smoke (id=0) first.
+    fireEvent.click(screen.getByText("Smoke"));
+    // Ctrl+click Sparks (id=3) — should add it without dropping Smoke.
+    fireEvent.click(screen.getByText("Sparks"), { ctrlKey: true });
+
+    const sel = useEmitterSelectionStore.getState();
+    expect(sel.ids).toEqual([0, 3]);
+    expect(sel.primary).toBe(3);
+
+    // data-selected-count is visible on the container.
+    const tree = screen.getByTestId("emitter-tree");
+    expect(tree.getAttribute("data-selected-count")).toBe("2");
+    expect(tree.getAttribute("data-primary-id")).toBe("3");
+  });
+
+  it("Shift+click on a downstream row selects the range from primary to clicked", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Primary = Smoke (id=0).
+    fireEvent.click(screen.getByText("Smoke"));
+    // Shift+click Spark trail (id=4). Tree order:
+    //   Smoke(0), Smoke embers(1), Smoke puff(2), Sparks(3), Spark trail(4), Flash(5).
+    fireEvent.click(screen.getByText("Spark trail"), { shiftKey: true });
+
+    const sel = useEmitterSelectionStore.getState();
+    expect(sel.ids).toEqual([0, 1, 2, 3, 4]);
+    expect(sel.primary).toBe(4);
   });
 });

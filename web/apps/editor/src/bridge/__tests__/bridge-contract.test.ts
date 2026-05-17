@@ -588,6 +588,101 @@ describe("MockBridge contract", () => {
     expect(r.fields).toEqual(["lifetime", "gravity"]);
   });
 
+  // ─── Screen 4 Batch B2 — add-child + move + link-group membership ─
+
+  it("emitters/add-lifetime-child adds a lifetime child under the parent and returns its newId", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Flash (id=5) starts as a leaf — no children. Adding a lifetime
+    // child should succeed and produce a child with role: "lifetime".
+    const r = await b.request({
+      kind: "emitters/add-lifetime-child",
+      params: { parentId: 5 },
+    });
+    expect(r.newId).toBeGreaterThan(0);
+    expect(lastTree).not.toBeNull();
+    const flash = lastTree!.root.children[2];
+    expect(flash.children).toHaveLength(1);
+    expect(flash.children[0].role).toBe("lifetime");
+    expect(flash.children[0].id).toBe(r.newId);
+    off();
+  });
+
+  it("emitters/add-death-child adds a death child under the parent and returns its newId", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Sparks (id=3) has one lifetime child but no death child. Add a
+    // death child and verify role + position (death child renders
+    // after lifetime).
+    const r = await b.request({
+      kind: "emitters/add-death-child",
+      params: { parentId: 3 },
+    });
+    expect(r.newId).toBeGreaterThan(0);
+    expect(lastTree).not.toBeNull();
+    const sparks = lastTree!.root.children[1];
+    expect(sparks.children).toHaveLength(2);
+    expect(sparks.children[1].role).toBe("death");
+    expect(sparks.children[1].id).toBe(r.newId);
+    off();
+  });
+
+  it("emitters/move swaps adjacent roots", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Fixture roots in order: Smoke(0), Sparks(3), Flash(5). Move
+    // Sparks (middle) up — should swap with Smoke.
+    await b.request({
+      kind: "emitters/move",
+      params: { id: 3, direction: "up" },
+    });
+    expect(lastTree).not.toBeNull();
+    const names = lastTree!.root.children.map((c) => c.name);
+    expect(names).toEqual(["Sparks", "Smoke", "Flash"]);
+    off();
+  });
+
+  it("linkGroups/set-membership applies groupId to each id; -1 picks the smallest unused id; null clears", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+
+    // Fixture: Smoke (id=0) + Sparks (id=3) share linkGroup=1.
+    // Flash (id=5) is unlinked. Add Flash to a new group via the -1
+    // sentinel — should pick group 2 (smallest unused positive).
+    await b.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [5], groupId: -1 },
+    });
+    expect(lastTree).not.toBeNull();
+    // Find Flash by walking the synthetic root.
+    const flashAfter = lastTree!.root.children.find((c) => c.id === 5)!;
+    expect(flashAfter.linkGroup).toBe(2);
+
+    // Clear Smoke + Sparks via null — both should drop to 0.
+    await b.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [0, 3], groupId: null },
+    });
+    const smokeAfter  = lastTree!.root.children.find((c) => c.id === 0)!;
+    const sparksAfter = lastTree!.root.children.find((c) => c.id === 3)!;
+    expect(smokeAfter.linkGroup).toBe(0);
+    expect(sparksAfter.linkGroup).toBe(0);
+
+    // Assign Flash + Smoke to an explicit group id — should land
+    // exactly there with no scan/rewrite.
+    await b.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [0, 5], groupId: 7 },
+    });
+    expect(lastTree!.root.children.find((c) => c.id === 0)!.linkGroup).toBe(7);
+    expect(lastTree!.root.children.find((c) => c.id === 5)!.linkGroup).toBe(7);
+    off();
+  });
+
   it("linkGroups/reset-exempt-fields drops the per-group entry back to defaults", async () => {
     const b = new MockBridge();
     await b.request({

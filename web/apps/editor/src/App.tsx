@@ -21,6 +21,7 @@ import { RenameEmitterDialog } from "@/screens/RenameEmitterDialog";
 import { IncrementIndexDialog } from "@/screens/IncrementIndexDialog";
 import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
 import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
+import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import {
   setOpenToolPanel,
@@ -227,6 +228,8 @@ function AppShell() {
       <IncrementIndexDialog bridge={bridge} />
       <RescaleEmitterDialog bridge={bridge} />
       <LinkGroupSettingsDialog bridge={bridge} />
+      {/* Screen 4 Batch B2 — multi-select link-group assignment. */}
+      <SetLinkGroupDialog bridge={bridge} />
     </div>
   );
 }

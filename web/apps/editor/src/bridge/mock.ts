@@ -26,12 +26,16 @@ import type {
   LightDto,
 } from "@particle-editor/bridge-schema";
 import {
+  addDeathChildEmitter,
+  addLifetimeChildEmitter,
   deleteEmitter,
   duplicateEmitter,
   duplicateWithIndexIncrement,
   findEmitterNode,
   makeDefaultEngineState,
+  moveEmitterInTree,
   renameEmitter,
+  setLinkGroupMembership,
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
@@ -70,6 +74,12 @@ function isMutating(kind: Request["kind"]): boolean {
   if (kind === "emitters/delete") return true;
   if (kind === "emitters/rename") return true;
   if (kind === "emitters/duplicate-with-index-increment") return true;
+  // Screen 4 Batch B2 — add-child / move / link-group-membership all
+  // change persisted tree state, so they ride the dirty bit.
+  if (kind === "emitters/add-lifetime-child") return true;
+  if (kind === "emitters/add-death-child") return true;
+  if (kind === "emitters/move") return true;
+  if (kind === "linkGroups/set-membership") return true;
   if (kind === "linkGroups/set-exempt-fields") return true;
   if (kind === "linkGroups/reset-exempt-fields") return true;
   return false;
@@ -532,6 +542,68 @@ export class MockBridge implements Bridge {
         this.emit({ kind: "emitters/tree/changed", payload: result.tree });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         return { newId: result.newId };
+      }
+
+      // ---------------- emitters/add-* / move / set-membership (B2) -
+      //
+      // Each mutates the fixture tree via mock-state helpers, then
+      // emits `emitters/tree/changed` + `engine/state/changed`. Refusal
+      // semantics mirror the host: add-child returns `{ newId: -1 }`
+      // when the parent's slot is already filled or the id is missing;
+      // move returns `{}` regardless (a refused move is a silent no-op
+      // because the React side disables the menu item at the edges).
+      case "emitters/add-lifetime-child": {
+        const cur = useMockEmitterTree.getState().tree;
+        const result = addLifetimeChildEmitter(cur, req.params.parentId);
+        if (result === null) {
+          this.emit({ kind: "emitters/tree/changed", payload: cur });
+          return { newId: -1 };
+        }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { newId: result.newId };
+      }
+
+      case "emitters/add-death-child": {
+        const cur = useMockEmitterTree.getState().tree;
+        const result = addDeathChildEmitter(cur, req.params.parentId);
+        if (result === null) {
+          this.emit({ kind: "emitters/tree/changed", payload: cur });
+          return { newId: -1 };
+        }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { newId: result.newId };
+      }
+
+      case "emitters/move": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = moveEmitterInTree(cur, req.params.id, req.params.direction);
+        if (next === null) {
+          // Refused (non-root or at edge). Still emit so subscribers
+          // that re-fetch defensively don't get stuck.
+          this.emit({ kind: "emitters/tree/changed", payload: cur });
+          return {};
+        }
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      case "linkGroups/set-membership": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = setLinkGroupMembership(
+          cur,
+          req.params.ids,
+          req.params.groupId,
+        );
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
       }
 
       // ---------------- engine/action/rescale-emitter (Screen 4 B1) --

@@ -1895,6 +1895,163 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- Screen 4 Batch B2 — add child / move / link-group memb -
+
+    // -------- emitters/add-lifetime-child ---------------------------
+    //
+    // Wraps `ParticleSystem::addLifetimeEmitter(parent, Emitter())`.
+    // The engine refuses (returns NULL) when the parent's lifetime
+    // slot is already filled — surface that as `newId: -1`. Otherwise
+    // return the new emitter's index in getEmitters().
+    if (kind == "emitters/add-lifetime-child")
+    {
+        int parentId = params.value("parentId", -1);
+        ParticleSystem::Emitter* parent = getEmitterById(parentId);
+        if (parent == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        captureUndo();
+        ParticleSystem::Emitter* child =
+            (*m_pParticleSystem)->addLifetimeEmitter(parent);
+        if (child == nullptr)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        sendOk(json{{"newId", static_cast<int>(child->index)}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/add-death-child -------------------------------
+    if (kind == "emitters/add-death-child")
+    {
+        int parentId = params.value("parentId", -1);
+        ParticleSystem::Emitter* parent = getEmitterById(parentId);
+        if (parent == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        captureUndo();
+        ParticleSystem::Emitter* child =
+            (*m_pParticleSystem)->addDeathEmitter(parent);
+        if (child == nullptr)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        sendOk(json{{"newId", static_cast<int>(child->index)}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/move ------------------------------------------
+    //
+    // Reorder the emitter among its siblings. Wraps
+    // `ParticleSystem::moveEmitter(emitter, direction)`. The engine
+    // already enforces "root-only" and "no-op at the edges" — a
+    // refused move returns false and is a silent no-op here (the React
+    // side disables the menu item at the edges; reaching this path with
+    // a refusal is defensive). Always sends `{}` to match the schema.
+    if (kind == "emitters/move")
+    {
+        int id = params.value("id", -1);
+        std::string dirStr = params.value("direction", std::string{"up"});
+        int dir = (dirStr == "down") ? +1 : -1;
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json::object());
+            return res;
+        }
+        captureUndo();
+        const bool moved = (*m_pParticleSystem)->moveEmitter(target, dir);
+        sendOk(json::object());
+        if (moved)
+        {
+            markDirty();
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+        }
+        return res;
+    }
+
+    // -------- linkGroups/set-membership ------------------------------
+    //
+    // Walk `ids` and assign each emitter's `linkGroup` to the resolved
+    // group:
+    //   - groupId === null OR === 0 → 0 (leave the group)
+    //   - groupId  >  0             → groupId
+    //   - groupId === -1            → create a new group (smallest
+    //                                 unused positive uint32_t)
+    //
+    // For the "new group" branch we scan every existing emitter for
+    // the highest current linkGroup; the new group is `max + 1`. This
+    // matches the legacy convention from MT-5 and avoids reusing a
+    // recently-vacated id.
+    if (kind == "linkGroups/set-membership")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        const json& idsJson =
+            params.contains("ids") ? params["ids"] : json::array();
+        // `groupId` may be a JSON number or null. The default-when-
+        // absent value matches "leave" (null → 0).
+        int groupIdRaw = 0;
+        if (params.contains("groupId") && !params["groupId"].is_null())
+        {
+            groupIdRaw = params["groupId"].get<int>();
+        }
+
+        ParticleSystem* sys = m_pParticleSystem->get();
+        uint32_t resolved = 0;
+        if (groupIdRaw == -1)
+        {
+            // Scan all emitters for the max existing linkGroup; new is
+            // max + 1.
+            uint32_t maxGroup = 0;
+            const auto& emitters = sys->getEmitters();
+            for (size_t i = 0; i < emitters.size(); ++i)
+            {
+                if (emitters[i] != nullptr
+                    && emitters[i]->linkGroup > maxGroup)
+                {
+                    maxGroup = emitters[i]->linkGroup;
+                }
+            }
+            resolved = maxGroup + 1;
+        }
+        else if (groupIdRaw > 0)
+        {
+            resolved = static_cast<uint32_t>(groupIdRaw);
+        }
+        // else: resolved stays 0 (leave).
+
+        captureUndo();
+        for (const auto& v : idsJson)
+        {
+            int id = v.get<int>();
+            ParticleSystem::Emitter* e = getEmitterById(id);
+            if (e == nullptr) continue;
+            e->linkGroup = resolved;
+        }
+        sendOk(json::object());
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
     return res;

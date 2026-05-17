@@ -359,6 +359,159 @@ batches, each independently shippable:
 Each batch ends with all gates green and a commit. The full
 Screen 4 ✅ flips after Batch C.
 
+### Batch B2 — Add child + Move Up/Down + Link Group membership + multi-select (locked 2026-05-17)
+
+Third of the three-batch Screen 4 sequence (after B1). Smaller scope
+than B1 — 4 new bridge call kinds + 1 new modal + 6 new context menu
+items + Zustand-driven multi-select. After this batch only Batch B3
+(drag/drop) and Batch C (polish: link-group brackets, inline rename,
+keyboard nav) remain on Screen 4.
+
+**Schema additions (4 new bridge call kinds):**
+
+- `emitters/add-lifetime-child { parentId: number }` → `{ newId: number }`. Wraps `ParticleSystem::addLifetimeEmitter(parent, Emitter())`. New emitter inherits the parent's `spawnDuringLife` slot.
+- `emitters/add-death-child { parentId: number }` → `{ newId: number }`. Wraps `ParticleSystem::addDeathEmitter`. Same shape.
+- `emitters/move { id: number; direction: "up" | "down" }` → `Record<string, never>`. Reorders the emitter among its siblings via the existing root-reorder helper (from NT-3-era — find it in `ParticleSystem.h` or legacy `EmitterList.cpp`). For roots, swap with adjacent root; for children, swap with sibling within the parent's lifetime/death slot. (Per legacy `MoveEmitterUp` / `MoveEmitterDown`.)
+- `linkGroups/set-membership { ids: number[]; groupId: number | null }` → `Record<string, never>`. `null` = leave (each emitter's `linkGroup` set to 0); `groupId > 0` = join the named group; `groupId === -1` = create a new group with these emitters (server picks an unused group ID).
+
+**No event additions.** `emitters/tree/changed` (B1) and
+`emitters/selected` (Batch A) cover all the necessary React-side
+updates.
+
+**Multi-select stays React-side.**
+
+Server tracks only the `primarySelectedEmitterId` (the focus row,
+the one that owns keyboard nav once Batch C lands). React maintains
+a `Set<number>` of all selected ids in a new
+`web/apps/editor/src/lib/emitter-selection.ts` Zustand atom. Batch
+operations (Set Link Group, Leave Link Group) take `ids: number[]`
+as input — no server-side multi-select state needed.
+
+- **Ctrl/Cmd+click** toggles a row's membership in the set
+  (without changing the primary).
+- **Shift+click** selects the range from the primary to the
+  clicked row (along the tree's visual order, NOT the underlying
+  index — match legacy).
+- **Plain click** sets the selection to `{ ids: [id], primary: id }`
+  (replaces).
+- Click outside the tree clears the selection.
+
+**Context menu additions** (after the existing B1 items, with
+separators):
+
+After the existing `Link Group Settings…` item:
+- ─── separator ───
+- **Add Lifetime Child** — disabled when the emitter already has a
+  lifetime child (`spawnDuringLife !== (size_t)-1`).
+- **Add Death Child** — disabled when the emitter already has a
+  death child (`spawnOnDeath !== (size_t)-1`).
+- ─── separator ───
+- **Move Up** — disabled when the emitter is the first sibling (no
+  prior root or no prior in-slot child).
+- **Move Down** — disabled when the emitter is the last sibling.
+- ─── separator ───
+- **Set Link Group…** — opens `SetLinkGroupDialog`. Operates on
+  the full multi-selection (uses `lib/emitter-selection.ts`'s
+  `ids`).
+- **Leave Link Group** — fires `linkGroups/set-membership { ids,
+  groupId: null }`. Disabled when every selected emitter has
+  `linkGroup === 0`.
+
+**New modal `SetLinkGroupDialog.tsx`:**
+
+- Triggered from "Set Link Group…" context-menu item.
+- Body: radio group with two options:
+  1. **Create new group** (selected by default). Shows a small
+     hint "All N selected emitters will be linked together as a
+     new group."
+  2. **Join existing group**: shows a `<select>` of existing group
+     IDs (gathered from the live tree's `linkGroup` values, deduped
+     and sorted). Disabled when no existing groups exist.
+- Footer: Cancel + OK. OK fires `linkGroups/set-membership { ids,
+  groupId: -1 }` for "new" or `linkGroups/set-membership { ids,
+  groupId: <chosen> }` for "existing".
+
+**C++ host implementations:**
+
+- `emitters/add-lifetime-child` / `add-death-child`: call the
+  matching `ParticleSystem::add*Emitter(parent, Emitter())`.
+  Capture undo. Emit `emitters/tree/changed`. Return the new
+  emitter's `id` (its index in `getEmitters()`).
+- `emitters/move`: legacy has `MoveEmitterUp` / `MoveEmitterDown`
+  helpers in `EmitterList.cpp` (find them — search for `swap` or
+  `reorder` near the move handlers). They typically work on roots
+  only — for children, swap is constrained by the parent's
+  `spawnDuringLife`/`spawnOnDeath` slot structure (a child can only
+  swap with a sibling of the SAME role, i.e. another lifetime child
+  or another death child; emitters typically have just 0 or 1 of
+  each so move-within-children may be a no-op for most cases).
+  Capture undo + emit tree/changed.
+- `linkGroups/set-membership`: walk `ids`, set each emitter's
+  `linkGroup`. For `groupId === -1` ("new group"), find the
+  smallest unused positive uint32_t (start at 1, scan existing
+  emitters' linkGroup values). For `groupId === null`, set to 0.
+  Capture undo + emit tree/changed.
+
+**MockBridge implementations:**
+
+- Add child handlers: mutate `mock-state`'s tree, push a new
+  emitter into the parent's lifetime/death slot. Emit
+  `emitters/tree/changed`.
+- Move handler: swap with adjacent sibling in the fixture tree.
+- Set-membership: update `linkGroup` on each id; for `groupId ===
+  -1`, MockBridge picks the next unused positive integer.
+
+**React side wiring:**
+
+- `EmitterTree.tsx`: extend with multi-select click handling
+  (ctrl/cmd/shift detection on row click) + render the new
+  context-menu items with their disabled states.
+- `App.tsx`: mount `SetLinkGroupDialog`, wire it into the
+  `tree-context.ts` atom (extend the `open` union with
+  `"set-link-group"`).
+- `lib/emitter-selection.ts` (new): Zustand store with `ids:
+  Set<number>` + `primary: number | null`, plus actions
+  `setSingle(id)`, `toggle(id)`, `range(fromId, toId, treeOrder)`,
+  `clear()`. Selector hooks subscribe to scalars per the L-005
+  pattern.
+- Selected rows: a row is "in selection" if its id is in `ids`; the
+  PRIMARY row gets a sharper border style (`border-l-2
+  border-sky-500`) while non-primary selected rows get a lighter
+  style (`border-l-2 border-sky-400/50`). Both get the
+  `bg-sky-500/15` background.
+
+**Test surface for Batch B2:**
+
+- **Vitest** (+8 specs, target 90 → 98+):
+  - `bridge-contract.test.ts` (+4): one round-trip per new kind.
+  - `SetLinkGroupDialog.test.tsx` (1): renders "Create new"
+    radio + Cancel/OK; OK with "Create new" fires
+    `linkGroups/set-membership { ids, groupId: -1 }`.
+  - `EmitterTree.test.tsx` (+2): Ctrl+click toggles selection;
+    Shift+click selects range.
+  - `emitter-selection.test.ts` (1): `toggle()` adds + removes;
+    `range()` selects in tree order.
+- **Playwright** (+3 specs, target 54 → 57+):
+  - Add Lifetime Child via context menu adds a lifetime child to
+    the selected emitter (observe `tree/changed` with new emitter
+    having `role: "lifetime"`).
+  - Move Down via context menu swaps siblings (observe tree
+    order change).
+  - Ctrl+click multi-selects (observe React state via a
+    `data-selected-count` attribute on the tree container).
+
+**Legacy delete:**
+
+NOT in Batch B2. `EmitterList.cpp` mutations stay for `--legacy-ui`
+until Phase 4.2.
+
+**Open follow-ups** (Batches B3 + C):
+- Drag/drop reordering + reparent → Batch B3.
+- Link-group bracket visualisation (MT-9 port) → Batch C.
+- F2 / double-click inline rename → Batch C.
+- Keyboard nav (arrows / Enter / Delete / Cut / Copy / Paste) →
+  Batch C.
+
 ### Batch B1 — Mutations + context menu + 3 Screen-8 sub-dialogs (locked 2026-05-17)
 
 Mid-batch in the three-batch Screen 4 sequence. Adds the essential
@@ -3129,6 +3282,79 @@ batch):
 - **Batch C**: link-group bracket visualisation (MT-9 port), F2 /
   double-click inline rename, keyboard nav (arrows / Enter /
   Delete / Cut / Copy / Paste).
+
+### 2026-05-17 · Screen 4 Batch B2 (add child + move + link-group membership + multi-select)
+
+Third of three batches for the load-bearing screen. Adds the
+remaining structural mutations (Add Lifetime/Death Child, Move
+Up/Down), the multi-emitter link-group membership flow (Set Link
+Group… modal + Leave Link Group), and React-side multi-select
+(Ctrl/Cmd / Shift / plain click). After this batch only Batch B3
+(drag/drop reorder + reparent) and Batch C (link-group bracket
+visualisation, F2 / double-click inline rename, keyboard nav) remain
+on Screen 4.
+
+Tests: 105 Vitest (90 → 105, +8 spec targets met with margin) + 57
+Playwright (54 → 57). MSBuild 0/0.
+
+**What changed:**
+
+- *4 new bridge call kinds.* `emitters/add-lifetime-child`,
+  `emitters/add-death-child`, `emitters/move`,
+  `linkGroups/set-membership`. All round-trip through MockBridge +
+  real C++ host implementations.
+- *Direct fit on the engine API.* `ParticleSystem::addLifetimeEmitter`
+  / `::addDeathEmitter` / `::moveEmitter` were already present and
+  had the exact semantics the schema needs (refuse when slot is
+  filled, swap adjacent roots only, return new emitter / true/false).
+  No factor-out from legacy needed. `Emitter::linkGroup` is a plain
+  uint32_t field — direct assignment suffices for membership writes.
+- *Six new context-menu items* with disabled states on EmitterTree
+  rows: Add Lifetime/Death Child, Move Up/Down, Set Link Group… /
+  Leave Link Group. Add-child disabled states derive from the child
+  list's roles (`children.some(c => c.role === "lifetime")`) — the
+  tree DTO doesn't expose `spawnDuringLife`/`spawnOnDeath` but the
+  derivation is equivalent. Move Up/Down only enabled on roots and
+  respect first/last-sibling edges.
+- *New `lib/emitter-selection.ts` Zustand atom* drives the React-side
+  multi-selection (`ids: number[]`, `primary: number | null`).
+  Actions: `setSingle` / `toggle` / `range(toId, orderedIds)` /
+  `clear`. Tree-order for shift-range = in-order walk of the
+  rendered tree (the new `flattenTree` helper). Server still tracks
+  only the primary via the existing `emitters/select` channel; the
+  ids list rides only on bridge calls that take a batch.
+- *EmitterTree rendering refactored to a flat in-order list.* The
+  previous nested `<ul role="group">` per-child render carried more
+  DOM cost than necessary; the depth-first flat render keeps
+  treeitem roles + per-row indentation while making the shift-click
+  ordered-id computation trivial.
+- *New `SetLinkGroupDialog`* modal with two radios: Create new group
+  (default; emits `groupId: -1`) and Join existing group (lists
+  every distinct linkGroup > 0 from the live tree in a `<select>`;
+  the radio is disabled when no groups exist).
+- *Right-click promotion.* If the user right-clicks a row that
+  isn't in the multi-selection, the menu open-path promotes the row
+  to a single-select before mounting the menu. Matches typical OS
+  behaviour and keeps the batch operations operating on the row the
+  user actually targeted.
+
+**Locks worth surfacing for future batches:**
+
+- *`ParticleSystem::moveEmitter` rewrites emitter indices.* Playwright
+  specs that hold on to an emitter `id` across a move call must
+  re-look-up the emitter (by name or other stable property) after
+  the call. The wire `id` is `index in m_emitters`, which the move
+  rebalances. Caught a flaky spec on the first run.
+- *Tree-DTO role derivation is sufficient for slot-fill checks.* No
+  need to extend the DTO with `spawnDuringLife` / `spawnOnDeath`
+  sentinels — `children.some(c => c.role === X)` is equivalent and
+  keeps the wire surface narrow. Generalizable: prefer deriving
+  state from the existing tree shape over widening the DTO.
+- *Multi-select stays React-side cleanly.* The decision to keep
+  `ids[]` in React + only `primary` on the server cost zero
+  schema entries beyond the batch's four mutation kinds. Generalizable
+  to any future "batch op over UI multi-selection" — the host
+  doesn't need to track the set.
 
 ### 2026-05-17 · Screen 4 Batch B1 (mutations + context menu + 3 Screen-8 sub-dialogs)
 
