@@ -913,3 +913,77 @@ four primitives, the demo route, and the test suite in one pass.
   external value changes if that pattern is needed.
 - Demo route `?demo=primitives` should be removed once Screen 4 or 5
   ships a real consumption site — track here.
+
+### 2026-05-17 · Screen 8 Batch 1 (Modal + About + Rescale System)
+
+First batch of Screen 8's many sub-dialogs. Locked the Modal
+foundation (Radix Dialog wrapper, compound `Modal.Body` /
+`Modal.Footer` / `Modal.OkButton` / `Modal.CancelButton` shape) plus
+the two trivial menu-wireable sub-dialogs: About (no bridge call,
+build-time version/date via Vite `define`) and Rescale System (one
+new bridge call `engine/action/rescale-system`, two Spinners,
+OK/Cancel). Both dialogs wired to their existing MenuBar TODO
+triggers (Help → About at line 324; Edit → Rescale… at line 164).
+
+Commits: `0121890` (feat) + `8304c41` (deps sync for
+`@radix-ui/react-dialog`). Tests 46 Vitest (40 → 46) + 28 Playwright
+(26 → 28). MSBuild Debug x64 0/0.
+
+**Locks worth surfacing for future batches:**
+- *Modal lives under `components/`, not `primitives/`.* Primitives
+  are form-field building blocks; Modal is a container. The boundary
+  matters because Screens 4/5/6 will mount primitives inside Modals,
+  and the import graph stays clean when each lives in its semantic
+  home.
+- *Legacy code paths stay.* The Phase 3 plan template's "delete the
+  legacy launcher in this same PR" line is misleading — the binary
+  still runs `--legacy-ui` until Phase 4.2 cutover. Phase 3
+  dispatches ADD the React surface alongside the legacy. `AboutProc`
+  at `src/main.cpp:400` stays; `RescaleParticleSystem` launcher at
+  `src/main.cpp:1524-1525` stays. Same applies to every future
+  Screen 8 sub-dialog.
+- *Bridge handler can be a forward-compatible no-op when the host
+  doesn't have the data yet.* The `engine/action/rescale-system` C++
+  handler logs the call, emits `engine/state/changed` for parity
+  with MockBridge, and returns OK — but doesn't actually call into
+  `src/Rescale.cpp`'s `DoRescaleEmitter` yet because the host has
+  no `ParticleSystem*` accessor (waits on file-load / Screen 4
+  wiring). End-to-end Playwright proof is via the `state/changed`
+  observation. When emitter wiring lands, the handler becomes a
+  one-liner: factor `DoRescaleEmitter` into `Rescale.h`, capture
+  via `UndoStack`, iterate `system->getEmitters()`.
+
+**Implementer surprises (from the subagent's report):**
+1. *Radix Dialog overlay-click doesn't work in jsdom.* The
+   `pointerDownOutside` hook needs event constructors jsdom doesn't
+   emulate. The Vitest Modal spec covers close-glyph click instead
+   (same `onOpenChange(false)` contract); Playwright covers
+   Esc-dismissal end-to-end. Same pattern as Screen 7's
+   Radix-Select-in-jsdom workaround — these Radix-uses-pointer-events
+   gaps may want a small `L-006` lesson if they bite a third time.
+2. *`window.bridge` monkey-patch under `--test-host` doesn't reach
+   React.* React captures the NativeBridge reference at mount;
+   `window.bridge` is swapped to TestHostBridge later. Spy-based
+   Playwright assertions against `window.bridge.request` can't
+   intercept React-initiated dispatches. Reworked the assertion to
+   observe the `engine/state/changed` event the C++ handler emits —
+   end-to-end proof of dispatch without spying on React internals.
+3. *`role="dialog"` selector collision.* BackgroundPicker's shell
+   also uses `role="dialog"`. Tightened the dialog selector to
+   `[role="dialog"][data-state="open"]` (Radix-only). Future
+   Modal-using specs should follow this pattern.
+
+**Open follow-ups for later Screen 8 batches:**
+- *Plumb a `ParticleSystem*` accessor to BridgeDispatcher* (probably
+  `SetParticleSystem(ParticleSystem**)` called from main.cpp at
+  startup). Unlocks the real rescale handler + every future
+  emitter-mutating bridge call. Worth doing as the first task of
+  whichever batch lands file/load wiring.
+- *Hand-bumped `VITE_APP_VERSION` in `vite.config.ts`* mirrors
+  `VERSION_MAJOR/MINOR` in `src/main.cpp:43-44`. A small Vite plugin
+  that reads those constants at build time would close the drift
+  risk — but it's a 5-minute future PR, not blocking anything.
+- *Rescale Emitter, Increment Index, Mod Nickname, Link Group
+  Settings* all depend on Screen 4 (emitter tree) for their trigger
+  sites. Bring them up in the same batch that lands Screen 4's
+  context menus.
