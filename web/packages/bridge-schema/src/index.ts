@@ -77,6 +77,9 @@ export type EngineStateDto = {
   // Debug
   heatDebug: boolean;               // GetHeatDebug()
 
+  // View state (preview clock)
+  paused: boolean;                  // IsPreviewPaused()
+
   // Camera
   camera: CameraDto;                // GetCamera()
 
@@ -134,11 +137,15 @@ export type Request =
   | { kind: "engine/set/ambient";             params: { color: Vec4 } }
   | { kind: "engine/set/shadow";              params: { color: Vec4 } }
 
+  // Engine setters — view state (preview clock)
+  | { kind: "engine/set/paused";              params: { paused: boolean } }
+
   // Engine actions
   | { kind: "engine/action/clear";            params: Record<string, never> }
   | { kind: "engine/action/reload-shaders";   params: Record<string, never> }
   | { kind: "engine/action/reload-textures";  params: Record<string, never> }
   | { kind: "engine/action/on-particle-system-changed"; params: { track: number } }
+  | { kind: "engine/action/step-frames";      params: { frames: number } }
 
   // Engine queries
   | { kind: "engine/query/ground-slot-empty";  params: { slot: number } }
@@ -186,12 +193,14 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/set/light" }                   ? Record<string, never> :
   R extends { kind: "engine/set/ambient" }                 ? Record<string, never> :
   R extends { kind: "engine/set/shadow" }                  ? Record<string, never> :
+  R extends { kind: "engine/set/paused" }                  ? Record<string, never> :
 
   // Engine actions — empty body
   R extends { kind: "engine/action/clear" }                       ? Record<string, never> :
   R extends { kind: "engine/action/reload-shaders" }              ? Record<string, never> :
   R extends { kind: "engine/action/reload-textures" }             ? Record<string, never> :
   R extends { kind: "engine/action/on-particle-system-changed" }  ? Record<string, never> :
+  R extends { kind: "engine/action/step-frames" }                 ? Record<string, never> :
 
   // Engine queries
   R extends { kind: "engine/query/ground-slot-empty" }   ? boolean :

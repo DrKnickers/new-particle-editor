@@ -57,6 +57,8 @@ export function makeDefaultEngineState(): EngineStateDto {
 
     heatDebug: false,
 
+    paused: false,
+
     camera: {
       position: [0, -250, 125],
       target:   [0, 0, 0],

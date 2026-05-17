@@ -14,6 +14,7 @@
   "dependencies": {
     "@particle-editor/bridge-schema": "workspace:*",
     "@particle-editor/design-tokens": "workspace:*",
+    "lucide-react": "^1.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zustand": "^5.0.0"

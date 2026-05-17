@@ -141,9 +141,9 @@ in `src/Resources/toolbar1.bmp` / `toolbar2.bmp`. Buttons: New / Open /
 Save / Undo / Redo / Pause / Step / Bloom toggle / Reload / Background
 picker / Ground picker / others.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅
 
-**Wire-up:** 🟡 pending
+**Wire-up:** ✅
 
 **Current behaviour (legacy):**
 
@@ -161,11 +161,74 @@ buttons (pressed when paused). Bloom toggle is enabled only when
 > + Ground picker buttons: keep as swatches that open dialogs, or
 > something else?_
 
-**Bridge surface used:** filled in at Task 3.3.1.
+**Bridge surface used.**
+
+- Request `engine/state/snapshot` — initial DTO read on mount.
+- Request `engine/set/paused { paused }` — View-group pause/resume.
+- Request `engine/action/step-frames { frames }` — View-group step.
+- Request `engine/set/bloom { enabled }` — Render-group bloom toggle.
+- Request `engine/action/reload-shaders` — Render-group action.
+- Request `engine/action/reload-textures` — Render-group action.
+- Request `undo/perform { direction }` — Edit-group undo / redo.
+- Event `engine/state/changed` — drives Pause glyph / Bloom active
+  state.
 
 **Decisions locked once ✅:**
 
-> _(empty)_
+**Layout.** Horizontal toolbar below the existing top bar (which has
+the "AloParticleEditor" title + Background pill) and above the main
+row (sidebar + viewport + Background panel). Height 36 px (`h-9`),
+`bg-neutral-950`, bottom border `border-b border-neutral-800`. Four
+groups in this order: **File · Edit · View · Render**, separated by
+1 px × 20 px `bg-neutral-800` dividers vertically centred.
+
+**Button anatomy.** 28 × 28 px square (`size-7`), icon-only (no
+labels), 16 px icon (`size-4`). Tooltip via HTML `title` attribute —
+no floating-ui / tippy dependency. Hover state: `bg-neutral-800` +
+brighter text. Disabled state: `opacity-40 cursor-not-allowed`.
+Active / pressed state (Pause when paused, Bloom when enabled):
+`bg-sky-500/20 text-sky-300`.
+
+**Icon set.** `lucide-react` (~4 KB tree-shaken). Specific imports:
+`FilePlus / FolderOpen / Save / Undo / Redo / Pause / Play /
+StepForward / Sparkles / RefreshCw`. Legacy `toolbar1.bmp` /
+`toolbar2.bmp` bitmaps are not reused.
+
+**Group contents.**
+
+- **File** (3 buttons): New, Open, Save. Console-log placeholders
+  until Phase 3 Screen 8 (real file ops). Tooltips reference
+  `Ctrl+N` / `Ctrl+O` / `Ctrl+S` to signal future intent; the
+  AcceleratorBridge does not yet register those combos.
+- **Edit** (2 buttons): Undo, Redo. Dispatches `undo/perform`. The
+  undo stack is currently empty (no captures wired) so `applied`
+  returns false until Phase 3 emitter work begins capturing
+  mutations.
+- **View** (2 buttons): Pause / Resume (toggle), Step Forward. The
+  Pause icon flips between `<Pause />` and `<Play />` based on
+  `state.paused`. Step Forward is disabled when not paused. Step
+  dispatches `engine/action/step-frames { frames: 1 }`; the host
+  handler does NOT broadcast `engine/state/changed` because the
+  action produces zero or more state ticks via the normal render
+  loop.
+- **Render** (3 buttons): Bloom (toggle), Reload shaders, Reload
+  textures. Bloom is dimmed when `state.bloomAvailable === false`.
+  Two `RefreshCw` icons are distinguished by tooltip text only.
+
+**Stateful buttons.** Pause and Bloom carry `aria-pressed`. All
+buttons have unique `aria-label` for Playwright DOM presence checks.
+
+**Out of scope (Screen 8 / future).**
+
+- New / Open / Save real implementations — console TODO for now.
+- Keyboard shortcuts beyond `Ctrl+Z` / `Ctrl+Shift+Z` (already
+  registered with AcceleratorBridge in Task 2.4). `F8` / `Ctrl+S` /
+  `Ctrl+N` / `Ctrl+O` referenced in tooltips but not wired.
+- Reload-Shaders progress / spinner UI — the action fires and the
+  host re-loads in the background. No status feedback.
+- Background / Ground picker buttons — Background lives on the
+  header pill (Task 2.3); Ground picker is its own Screen 8
+  sub-screen.
 
 ---
 

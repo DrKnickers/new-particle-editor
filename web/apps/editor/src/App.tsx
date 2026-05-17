@@ -3,6 +3,7 @@ import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
 import { StatusBar } from "@/components/StatusBar";
+import { Toolbar } from "@/components/Toolbar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
 
@@ -77,6 +78,9 @@ export function App() {
           />
         </div>
       </header>
+
+      {/* Toolbar — 4 groups (File · Edit · View · Render) */}
+      <Toolbar bridge={bridge} />
 
       {/* Main row */}
       <div className="relative flex flex-1 overflow-hidden">

@@ -93,6 +93,7 @@ async function main() {
       "tests/bridge-native.spec.ts",
       "tests/background-picker.spec.ts",
       "tests/app-shell.spec.ts",
+      "tests/toolbar.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

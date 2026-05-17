@@ -150,6 +150,11 @@ export class MockBridge implements Bridge {
         this.patchAndBroadcast({ shadow: req.params.color });
         return {};
 
+      // ---------------- engine setters: view state (preview clock) ----------------
+      case "engine/set/paused":
+        this.patchAndBroadcast({ paused: req.params.paused });
+        return {};
+
       // ---------------- engine actions ----------------
       case "engine/action/clear":
         // No engine-state mutation; emit anyway so any UI watching for the
@@ -161,6 +166,12 @@ export class MockBridge implements Bridge {
       case "engine/action/reload-textures":
       case "engine/action/on-particle-system-changed":
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+
+      // Step one or more frames. In browser mode there's no engine clock
+      // to advance; the response-only no-op keeps the schema reachable so
+      // UI surfaces can wire the dispatch without a runtime error.
+      case "engine/action/step-frames":
         return {};
 
       // ---------------- engine queries ----------------

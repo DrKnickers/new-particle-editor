@@ -176,6 +176,10 @@ json BuildEngineStateSnapshot(Engine* engine)
         // Debug
         {"heatDebug",             engine->GetHeatDebug()},
 
+        // View state (preview clock). IsPreviewPaused() is a free
+        // function declared in engine.h — not a method on Engine.
+        {"paused",                IsPreviewPaused()},
+
         // Camera
         {"camera",                CameraToJson(engine->GetCamera())},
 
@@ -490,6 +494,17 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         EmitEngineStateChanged();
         return res;
     }
+    // View state (preview clock). SetPreviewPaused is a free function in
+    // engine.h — sibling to IsPreviewPaused/StepPreviewFrames. Doesn't
+    // touch Engine state, but the snapshot reads paused so a broadcast
+    // keeps any subscriber's mirror in sync.
+    if (kind == "engine/set/paused")
+    {
+        SetPreviewPaused(params.value("paused", false));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return res;
+    }
 
     // -------- engine/action/* --------
     if (kind == "engine/action/clear")
@@ -522,6 +537,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         m_engine->OnParticleSystemChanged(params.value("track", 0));
         sendOk(json::object());
         // No engine/state/changed broadcast — engine re-renders next frame.
+        return res;
+    }
+    // Advance the preview clock by N frames. The free function is a
+    // no-op when not paused, so the React Toolbar disables the button in
+    // that state; no need to guard it here. Don't broadcast a state
+    // change — the action emits zero or more state ticks via the normal
+    // render loop, and an immediate broadcast would misleadingly suggest
+    // a sync-time mutation.
+    if (kind == "engine/action/step-frames")
+    {
+        StepPreviewFrames(params.value("frames", 1));
+        sendOk(json::object());
         return res;
     }
 

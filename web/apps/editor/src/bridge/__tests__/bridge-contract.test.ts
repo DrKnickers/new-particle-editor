@@ -36,6 +36,7 @@ describe("MockBridge contract", () => {
     expect(s).toHaveProperty("bloomCutoff");
     expect(s).toHaveProperty("bloomSize");
     expect(s).toHaveProperty("heatDebug");
+    expect(s).toHaveProperty("paused");
     expect(s).toHaveProperty("camera.position");
     expect(s.camera.position).toHaveLength(3);
     expect(s).toHaveProperty("wind");
@@ -73,6 +74,7 @@ describe("MockBridge contract", () => {
     ["engine/set/bloom-cutoff",       { v: 0.5 },                     "bloomCutoff",      0.5],
     ["engine/set/bloom-size",         { v: 0.25 },                    "bloomSize",        0.25],
     ["engine/set/heat-debug",         { enabled: true },              "heatDebug",        true],
+    ["engine/set/paused",             { paused: true },               "paused",           true],
   ] as const)("%s mutates the snapshot", async (kind, params, field, expected) => {
     const b = new MockBridge();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -182,6 +184,15 @@ describe("MockBridge contract", () => {
     const b = new MockBridge();
     const v = await b.request({ kind: "engine/query/bloom-available", params: {} });
     expect(v).toBe(true);
+  });
+
+  it("engine/action/step-frames resolves with an empty body in browser mode", async () => {
+    const b = new MockBridge();
+    // Pause first; the request is a response-only no-op either way, but
+    // mirrors how the React Toolbar dispatches it (pause → step).
+    await b.request({ kind: "engine/set/paused", params: { paused: true } });
+    const r = await b.request({ kind: "engine/action/step-frames", params: { frames: 1 } });
+    expect(r).toEqual({});
   });
 
   it("engine/action/clear fires state/changed without mutating fields", async () => {
