@@ -1393,3 +1393,87 @@ incremental no-op (zero C++ changes).
 - *Tab strip / multi-panel tabbed sidebar* — defer until user
   feedback says one-at-a-time mutual exclusion is too restrictive.
   The atom-based routing makes this a non-breaking change later.
+
+### 2026-05-17 · Screen 8 Batch 3 (file-ops backbone)
+
+Largest bridge surface addition so far. The entire File menu
+(New / Open / Save / Save As / Recent Files) is now wired through
+the React UI with full dirty-tracking + save-changes prompt + window
+title indicator. Bridge schema grew by 2 Requests, 1 Event, and 2
+new fields on `EngineStateDto`; MockBridge gained full
+implementations; C++ host gained registry-backed recent files,
+native pickers via `GetSaveFileNameW` / `GetOpenFileNameW`, and the
+dirty-flag plumbing through every mutating handler.
+
+Commit: `1a4975a` (single feat — no new deps). Tests 63 Vitest
+(55 → 63) + 38 Playwright (34 → 38). MSBuild 0/0 (pre-existing
+LIBCMTD warning unchanged).
+
+**Locks worth surfacing for future batches:**
+- *Forward-deferred engine-level I/O is the right call when the
+  host doesn't own the ParticleSystem yet.* Legacy `DoNewFile` /
+  `DoOpenFile` / `DoSaveFile` are inseparable from
+  `APPLICATION_INFO*` (ParticleSystem ownership, undo stack,
+  autosave, emitter list, menu rebuild). Trying to factor pure-IO
+  helpers out would require crashing on a null `info` or
+  fabricating one. Same precedent as Batch 1's rescale handler:
+  the bridge handler implements the *editor-level* portion (path
+  tracking, dirty flag, recents, native pickers) and leaves the
+  engine-level read/write as a forward-deferred no-op until the
+  new-UI host owns its own ParticleSystem*. Hooks are in place at
+  the bottom of each file handler for activation when that lands.
+- *Registry-backed recent files match legacy exactly.*
+  `HKCU\Software\AloParticleEditor`, values keyed by full filename,
+  payload `REG_BINARY` of `sizeof(FILETIME)`. Both legacy and
+  React-side see the same list — flipping between `--legacy-ui`
+  and `--new-ui` preserves the recent-files history. Cap
+  (`NUM_HISTORY_ITEMS = 9` from `src/main.cpp:47`) preserved.
+- *Save-changes prompt is a Zustand-atom + closure pattern.* The
+  `pendingAction: () => Promise<void> | null` slot stores the
+  user's destructive intent (New / Open / Recent click). Save runs
+  `file/save {}` and executes the closure on success; Don't Save
+  executes immediately; Cancel discards. This shape works because
+  there's exactly one pending action at any time. A more general
+  command queue would be overkill.
+
+**Implementer surprises (from the subagent's report):**
+1. *Zustand v5 + React 19 rejects fresh-object selectors.* The
+   `useFileState()` hook initially returned a freshly-built object
+   every render, which Zustand's `Object.is` guard caught as a
+   potential infinite-loop trigger. Fix: subscribe to each scalar
+   individually (`useFileStateStore((s) => s.currentFilePath)` ×
+   three) then compose at the call site. Generalizable pattern
+   for any future hook exposing multiple Zustand fields.
+2. *`engine/set/paused` marks dirty.* The parking-lot lock said
+   "every engine/set/* and engine/action/*" should mark dirty.
+   Pausing isn't really save-worthy (legacy never calls
+   `SetFileChanged` from the pause path) but the spec was followed
+   for mock/native parity. If annoying, fix is one line in
+   `isMutating()` (MockBridge) plus an early-return in the C++
+   handler. Same likely applies to `engine/set/heat-debug` — both
+   are view-only toggles.
+3. *MockBridge save-picker simulation.* `file/save` falls through
+   to a fixed `/mock/untitled.alo` when both `path` and
+   `currentFilePath` are missing. `file/save-as` always returns
+   `/mock/saved-as.alo`. `file/open` with no explicit path returns
+   `{ ok: false, error: "browser-mode" }` — matches the legacy
+   BackgroundPicker fallback that branches on `ok`. Just enough
+   to drive Vitest contract round-trips, not a real picker sim.
+
+**Open follow-ups for future batches:**
+- *Wire the actual ParticleSystem read/write.* When the new-UI
+  host owns a `ParticleSystem*` (likely the same batch that wires
+  Screen 4's emitter tree), the four hooks at the bottom of each
+  file handler activate. Smallest enabling change: pass a
+  `ParticleSystem**` accessor to BridgeDispatcher via
+  `BridgeDispatcher::SetParticleSystem(ParticleSystem**)` called
+  from main.cpp at startup or from the host-window init path.
+- *File → Exit* is a TODO. Closing the host window cleanly involves
+  window-placement persistence, auto-save flush, and possibly
+  `app/quit` schema addition. Revisit with the broader app
+  lifecycle work.
+- *Tighten the "is mutating" set.* Per surprise 2, view-only
+  toggles (`paused`, `heat-debug`) shouldn't mark dirty. A small
+  follow-up either updates `isMutating()` or moves dirty-marking
+  from the dispatcher case-ladder into engine setters themselves
+  so it tracks intent more accurately.
