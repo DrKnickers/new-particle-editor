@@ -1917,3 +1917,92 @@ Commit: `6845d37` (single feat — no new deps). Tests 72 Vitest
 
 10 of 13 Screen 8 sub-dialogs shipped. Remaining 3 all wait on
 Screen 4 (Emitter tree) for their trigger sites.
+
+### 2026-05-17 · Host state plumbing (cross-cutting foundation)
+
+Activated nine forward-deferred handlers from Batches 1/3/4 by
+giving `HostWindowImpl` ownership of a `unique_ptr<ParticleSystem>`
+and `unique_ptr<SpawnerDriver>`. `BridgeDispatcher` gained a single
+`BindHostState(unique_ptr<ParticleSystem>*, SpawnerDriver*,
+IFileManager*)` accessor; HostWindow's `Run` calls it once after
+construction. Pure-IO helpers `LoadParticleSystem` /
+`SaveParticleSystem` extracted into `src/ParticleSystemIO.h` so
+both legacy `LoadFile` / `DoSaveFile` / `ImportEmitters_LoadFile`
+and the new-UI bridge handlers share the same read/write code path.
+
+Commit: `8584669` (single feat — no new deps). Tests 74 Vitest
+(72 → 74) + 46 Playwright (43 → 46). MSBuild 0/0.
+
+**Handlers activated (all 9, no forward-defers needed):**
+
+`engine/action/rescale-system` (iterates `getEmitters()` → calls
+`DoRescaleEmitter` per emitter); `file/new` / `file/open` (with or
+without path; native picker when missing); `file/save` /
+`file/save-as` (picker fallback / always-picker semantics
+respectively); `spawner/start` / `spawner/trigger` / `spawner/stop`
+(via `SpawnerDriver::SetConfig` / `Trigger`); `emitters/preview-from-file`
+(loads into temp `ParticleSystem`, walks roots, builds
+`EmitterTreeNode` tree, drops at scope exit).
+
+**Locks worth surfacing for future batches:**
+- *Pure-IO factor-out is durable cross-mode infrastructure.* The
+  helpers in `src/ParticleSystemIO.h` are owned-pointer / path
+  in, success-bool / unique_ptr out. Side effects (MessageBox,
+  history append, autosave flush, OnFileChange) stay in the
+  legacy `Do*` callers. Both `--legacy-ui` and `--new-ui` exercise
+  the same IO path. Any future host-side feature that needs to
+  read or write a particle system uses these helpers, not
+  `APPLICATION_INFO*`-coupled code.
+- *Single `BindHostState` setter beats per-field setters.* All
+  three pointers (`unique_ptr<ParticleSystem>*`,
+  `SpawnerDriver*`, `IFileManager*`) wire at the same lifecycle
+  moment (HostWindow init). A single setter signals "all three
+  are now valid" atomically. The `**` for the particle system
+  is intentional — handlers access the *current* one, which
+  file/new and file/open replace; this mirrors the legacy
+  `info->particleSystem` pattern.
+- *Snapshot's `spawner` field is now driver-first with cache
+  fallback.* `m_spawnerDriver ? SpawnerConfigToJson(m_spawnerDriver
+  ->GetConfig()) : m_spawnerConfig`. The cache stays so unit-test
+  paths (no driver bound) keep working. Pattern is reusable for
+  any future field that has both a live source-of-truth and a
+  fallback cache.
+
+**Implementer surprises (from the subagent's report):**
+1. *`IFile` is `RefCounted`, not RAII.* `IFile*` returned by
+   `IFileManager::getFile` has refcount 1; caller calls
+   `Release()` exactly once when done. The new helpers follow
+   the same convention as legacy code. If a future batch wants
+   RAII, wrap in a `std::unique_ptr<IFile, ReleaseDeleter>`
+   typedef — but that's an opt-in refactor, not a required one.
+2. *No factor-outs needed forward-defer.* All three legacy
+   functions (`LoadFile`, `DoSaveFile`, `ImportEmitters_LoadFile`)
+   separated cleanly into pure-IO + side-effects. The
+   forward-defer escape hatch in the brief turned out unused. This
+   bodes well for similar factor-outs in future batches.
+3. *Snapshot `spawner` field changed shape silently.* Batch 4 had
+   a `m_spawnerConfig` JSON cache as a stand-in; this batch
+   replaced it with a live `m_spawnerDriver->GetConfig()` read,
+   keeping the cache as fallback. No schema change, no test
+   change required — the snapshot still returns the same shape.
+   But code reading the snapshot's `spawner` field is now seeing
+   driver state, not config-cache state.
+
+**Open follow-ups for future batches:**
+- *Render loop wiring.* `HostWindowImpl::RenderD3D9` at
+  [src/host/HostWindow.cpp:410] still clears to background colour
+  only. The particle system is owned + mutated but not visible.
+  Activating this needs `Engine::Update + Render` integration,
+  `SpawnerDriver::Tick` per-frame, and probably
+  `Engine::OnParticleSystemChanged(track)` notification when
+  `*m_pps` is replaced (file/new, file/open). This is the
+  "particles actually visible in --new-ui" batch and is the
+  natural next foundation step.
+- *Active-count event live source.* `spawner/active-count` is
+  still only sourced from MockBridge in browser mode. Goes live
+  once per-frame tick lands (same batch as render-loop wiring).
+- *Tighten the "is mutating" set for dirty flagging.* Batch 3
+  open item, still open. `engine/set/paused` and
+  `engine/set/heat-debug` shouldn't mark dirty; small follow-up
+  to `isMutating()` (MockBridge) + the `m_markDirty` lambda
+  branches (C++).
