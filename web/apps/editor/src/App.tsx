@@ -13,10 +13,12 @@ import { GroundTexturePanel } from "@/screens/GroundTexturePanel";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
 import { AboutDialog } from "@/screens/AboutDialog";
 import { RescaleDialog } from "@/screens/RescaleDialog";
+import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import {
   setOpenToolPanel,
   useOpenToolPanel,
 } from "@/lib/tool-panel";
+import { useFileState, useSeedFileState } from "@/lib/file-state";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -42,6 +44,37 @@ function AppShell() {
   const openPanel = useOpenToolPanel();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
+
+  // Screen 8 Batch 3: subscribe to file-state events (dirty/changed,
+  // recent/changed, engine/state/changed) and seed from snapshot +
+  // file/recent/list on mount. Stays mounted for the app's lifetime.
+  useSeedFileState(bridge);
+
+  // Window title — Phase 3 Screen 8 Batch 3. Reflects dirty + current
+  // file path:
+  //   - Dirty,   untitled : `* AloParticleEditor`
+  //   - Dirty,   named    : `* foo.alo — AloParticleEditor`
+  //   - Clean,   untitled : `AloParticleEditor`
+  //   - Clean,   named    : `foo.alo — AloParticleEditor`
+  // Mirrors legacy `SetFileChanged` title-bar logic at
+  // [src/main.cpp:1063-1085]. Em-dash separator matches the
+  // legacy "AloParticleEditor - [filename*]" pattern but in the
+  // friendlier modern form.
+  const { currentFilePath, dirty } = useFileState();
+  useEffect(() => {
+    const APP_NAME = "AloParticleEditor";
+    const dirtyMark = dirty ? "* " : "";
+    if (currentFilePath) {
+      const idx = Math.max(
+        currentFilePath.lastIndexOf("/"),
+        currentFilePath.lastIndexOf("\\"),
+      );
+      const base = idx >= 0 ? currentFilePath.slice(idx + 1) : currentFilePath;
+      document.title = `${dirtyMark}${base} — ${APP_NAME}`;
+    } else {
+      document.title = `${dirtyMark}${APP_NAME}`;
+    }
+  }, [currentFilePath, dirty]);
 
   // TODO Phase 3: remove this debug block once real per-screen shortcut
   // handlers are wired in. Until then it proves the round-trip works:
@@ -155,6 +188,11 @@ function AppShell() {
         open={rescaleOpen}
         onOpenChange={setRescaleOpen}
       />
+      {/* Save-changes prompt (Screen 8 Batch 3). Open state lives in
+          the file-state atom; this mount is invisible while the
+          pendingAction slot is null. Driven from any destructive op
+          handler via `promptSaveChanges(...)`. */}
+      <SaveChangesPrompt bridge={bridge} />
     </div>
   );
 }

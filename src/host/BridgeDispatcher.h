@@ -28,6 +28,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -89,6 +90,26 @@ public:
     void EmitEngineStateChanged();
     void EmitStatsTick(float fps, int emitters, int particles, int instances);
 
+    // Phase 3 Screen 8 Batch 3 — editor-level file state.
+    //
+    // The dispatcher owns three pieces of state that don't belong on
+    // Engine (Engine is engine parameters; these are editor state):
+    //   - m_currentFilePath  : path to the .alo backing the in-memory
+    //                          ParticleSystem; empty when untitled.
+    //   - m_dirty            : true if any engine mutation has occurred
+    //                          since the last file/new/open/save.
+    //   - m_recentFiles      : registry-backed history list (max 9
+    //                          entries), shared with legacy via
+    //                          HKCU\Software\AloParticleEditor.
+    //
+    // SetDirty(true) is called at the end of every mutating handler
+    // (engine/set/*, engine/action/clear, engine/action/rescale-system).
+    // SetDirty(false) is called in file/new, file/open, file/save
+    // success paths. Both transitions emit dirty/changed.
+    void SetDirty(bool dirty);
+    bool GetDirty() const { return m_dirty; }
+    const std::wstring& GetCurrentFilePath() const { return m_currentFilePath; }
+
     // Emits an `accelerator/pressed` event to React with the matched combo
     // string (e.g. "Ctrl+S"). Called by HostWindow's AcceleratorKeyPressed
     // handler after AcceleratorBridge::TryDispatch returns true.
@@ -106,12 +127,25 @@ private:
     // serialise it unambiguously.
     nlohmann::json DispatchInternal(const nlohmann::json& reqEnvelope);
 
+    // Emits a `dirty/changed` event with the current m_dirty value.
+    void EmitDirtyChanged();
+    // Emits a `recent/changed` event with the current m_recentFiles
+    // serialised as a JSON array of strings.
+    void EmitRecentChanged();
+
     Engine*            m_engine;
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;
     EmitFn             m_emit;
     UndoStack*         m_undo     = nullptr;
     HWND               m_hostHwnd = nullptr;
+
+    // Phase 3 Screen 8 Batch 3 — editor-level file state. Owned here
+    // rather than on Engine because they're editor concerns (not
+    // engine parameters). The snapshot builder reads both fields.
+    std::wstring              m_currentFilePath;
+    bool                      m_dirty = false;
+    std::vector<std::wstring> m_recentFiles;
 };
 
 } // namespace host

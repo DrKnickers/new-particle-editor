@@ -5,18 +5,28 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { MockBridge } from "../mock";
-import { useMockEngineState, makeDefaultEngineState } from "../mock-state";
+import {
+  useMockEngineState,
+  useMockRecentFiles,
+  makeDefaultEngineState,
+} from "../mock-state";
 import type { EngineStateDto, Event } from "@particle-editor/bridge-schema";
 
 beforeEach(() => {
   // Reset the store between tests so state mutations don't leak.
   useMockEngineState.setState(makeDefaultEngineState());
+  useMockRecentFiles.getState().reset();
 });
 
 describe("MockBridge contract", () => {
   it("engine/state/snapshot returns the full DTO shape", async () => {
     const b = new MockBridge();
     const s = await b.request({ kind: "engine/state/snapshot", params: {} });
+    // Editor-level state (Screen 8 Batch 3).
+    expect(s).toHaveProperty("currentFilePath");
+    expect(s).toHaveProperty("dirty");
+    expect(s.currentFilePath).toBeNull();
+    expect(s.dirty).toBe(false);
     // Spot-check every top-level field.
     expect(s).toHaveProperty("ground");
     expect(s).toHaveProperty("groundZ");
@@ -224,14 +234,69 @@ describe("MockBridge contract", () => {
       .rejects.toThrow(/not implemented/);
   });
 
-  it("rejects file/save and file/recent as not implemented", async () => {
+  // Phase 3 Screen 8 Batch 3: file/save / file/recent/list are now
+  // implemented in the mock (and the native host). The old "throws not
+  // implemented" assertion has been replaced by round-trip specs below
+  // covering file/new, file/save-as, recent/changed.
+
+  it("file/new round-trips through MockBridge and returns {}", async () => {
     const b = new MockBridge();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(b.request({ kind: "file/save", params: {} } as any))
-      .rejects.toThrow(/not implemented/);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(b.request({ kind: "file/recent/list", params: {} } as any))
-      .rejects.toThrow(/not implemented/);
+    // Pre-dirty the state so file/new has something to clear.
+    await b.request({ kind: "engine/set/ground-z", params: { z: 12 } });
+    expect((await b.request({ kind: "engine/state/snapshot", params: {} })).dirty)
+      .toBe(true);
+
+    const r = await b.request({ kind: "file/new", params: {} });
+    expect(r).toEqual({});
+    const snap = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(snap.dirty).toBe(false);
+    expect(snap.currentFilePath).toBeNull();
+    expect(snap.groundZ).toBe(0);  // reset to default
+  });
+
+  it("file/save-as round-trips and returns { ok: true, path }", async () => {
+    const b = new MockBridge();
+    const r = await b.request({ kind: "file/save-as", params: {} });
+    expect(r).toEqual({ ok: true, path: "/mock/saved-as.alo" });
+    const snap = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(snap.currentFilePath).toBe("/mock/saved-as.alo");
+    expect(snap.dirty).toBe(false);
+  });
+
+  it("recent/changed event fires when file/save adds a new path", async () => {
+    const b = new MockBridge();
+    let last: { paths: string[] } | null = null;
+    const off = b.on("recent/changed", (e) => { last = e.payload; });
+
+    await b.request({ kind: "file/save", params: { path: "C:/foo/bar.alo" } });
+
+    expect(last).not.toBeNull();
+    expect(last!.paths).toContain("C:/foo/bar.alo");
+
+    // file/recent/list now mirrors the recent-files list.
+    const list = await b.request({ kind: "file/recent/list", params: {} });
+    expect(list.paths).toEqual(last!.paths);
+    off();
+  });
+
+  it("engine setter sets dirty=true and emits dirty/changed once", async () => {
+    const b = new MockBridge();
+    let dirtyEvents = 0;
+    let lastDirty: boolean | null = null;
+    const off = b.on("dirty/changed", (e) => {
+      dirtyEvents++;
+      lastDirty = e.payload.dirty;
+    });
+
+    await b.request({ kind: "engine/set/ground-z", params: { z: 1 } });
+    expect(lastDirty).toBe(true);
+    expect(dirtyEvents).toBe(1);
+
+    // Second mutation while already dirty should NOT re-emit (debounce).
+    await b.request({ kind: "engine/set/ground-z", params: { z: 2 } });
+    expect(dirtyEvents).toBe(1);
+
+    off();
   });
 
   // Task 2.4: file/open is no longer a hard reject. The native handler

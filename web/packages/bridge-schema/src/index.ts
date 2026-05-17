@@ -48,6 +48,17 @@ export type LightDto = {
 export type LightWhich = "sun" | "fill1" | "fill2";
 
 export type EngineStateDto = {
+  // ─── File / editor-level state ─────────────────────────────────────
+  // Phase 3 Screen 8 Batch 3: dirty + current file path live at the top
+  // of the DTO so they group with editor-level state (not engine
+  // parameters). `currentFilePath` is null when the in-memory particle
+  // system has never been saved (untitled). `dirty` is true if any
+  // engine mutation has occurred since the last file/new/open/save
+  // success — drives the window title's `*` indicator and the
+  // SaveChangesPrompt on destructive ops (New / Open / Recent).
+  currentFilePath: string | null;
+  dirty: boolean;
+
   // Ground plane
   ground: boolean;                  // GetGround()
   groundZ: number;                  // GetGroundZ()
@@ -105,8 +116,10 @@ export type SpawnerParamsDto = Record<string, unknown>; // expanded later
 
 export type Request =
   // File / recents
+  | { kind: "file/new";                   params: Record<string, never> }
   | { kind: "file/open";                  params: { path?: string } }   // path undef = native picker
   | { kind: "file/save";                  params: { path?: string } }   // path undef = native picker
+  | { kind: "file/save-as";               params: Record<string, never> } // always opens native picker
   | { kind: "file/recent/list";           params: Record<string, never> }
 
   // Engine state — full snapshot
@@ -169,8 +182,10 @@ export type Request =
 // One response shape per Request kind.
 export type ResponseFor<R extends Request> =
   // File
+  R extends { kind: "file/new" }                  ? Record<string, never> :
   R extends { kind: "file/open" }                 ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/save" }                 ? { ok: true; path?: string } | { ok: false; error: string } :
+  R extends { kind: "file/save-as" }              ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/recent/list" }          ? { paths: string[] } :
 
   // Engine snapshot
@@ -233,6 +248,7 @@ export type Event =
   | { kind: "emitters/selected";      payload: { id: number | null } }
   | { kind: "stats/tick";             payload: { fps: number; emitters: number; particles: number; instances: number } }
   | { kind: "dirty/changed";          payload: { dirty: boolean } }
+  | { kind: "recent/changed";         payload: { paths: string[] } }
   | { kind: "undo/changed";           payload: { canUndo: boolean; canRedo: boolean; label?: string } }
   | { kind: "accelerator/pressed";    payload: { combo: string } }
   | { kind: "spawner/active-count";   payload: { count: number } };

@@ -7,8 +7,10 @@
 #include "../engine.h"
 #include "../UndoStack.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 #include <windows.h>
 #include <commdlg.h>
@@ -120,12 +122,130 @@ Engine::LightType ParseLightWhich(const std::string& s)
     return Engine::LT_SUN;  // default / "sun"
 }
 
+// Recent-files registry helpers. Phase 3 Screen 8 Batch 3.
+//
+// Storage layout matches legacy's `AddToHistory` / `GetHistory` in
+// src/main.cpp:650-768 — values under `HKCU\Software\AloParticleEditor`
+// keyed by filename, with the FILETIME payload encoded as REG_BINARY.
+// The list is ordered most-recent-first by reading the FILETIME values
+// and sorting descending. Cap of 9 matches `NUM_HISTORY_ITEMS` at
+// src/main.cpp:47. Legacy and new-UI share the same registry path, so
+// the recent-files menu stays consistent across both UI modes.
+
+constexpr int kMaxRecentFiles = 9;
+constexpr const wchar_t* kRegistryKeyPath = L"Software\\AloParticleEditor";
+
+// Read the registry-backed history into a vector ordered most-recent
+// first. Mirrors the loop in legacy GetHistory. Silently returns an
+// empty vector when the key does not exist (first-run case).
+std::vector<std::wstring> ReadRecentFiles()
+{
+    std::vector<std::pair<ULONGLONG, std::wstring>> entries;
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0,
+                      KEY_READ, &hKey) != ERROR_SUCCESS)
+    {
+        return {};
+    }
+
+    for (int i = 0;; ++i)
+    {
+        wchar_t name[1024] = {};
+        DWORD nameLen = static_cast<DWORD>(std::size(name));
+        DWORD type = 0, size = 0;
+        LONG err = RegEnumValueW(hKey, i, name, &nameLen, nullptr,
+                                 &type, nullptr, &size);
+        if (err != ERROR_SUCCESS) break;
+
+        if (type == REG_BINARY && size == sizeof(FILETIME))
+        {
+            FILETIME ft = {};
+            DWORD sz = sizeof(ft);
+            if (RegQueryValueExW(hKey, name, nullptr, &type,
+                                 reinterpret_cast<BYTE*>(&ft),
+                                 &sz) == ERROR_SUCCESS)
+            {
+                ULARGE_INTEGER ull;
+                ull.LowPart  = ft.dwLowDateTime;
+                ull.HighPart = ft.dwHighDateTime;
+                entries.emplace_back(ull.QuadPart, std::wstring(name));
+            }
+        }
+    }
+    RegCloseKey(hKey);
+
+    // Sort by timestamp descending (most recent first).
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    std::vector<std::wstring> out;
+    out.reserve(entries.size());
+    for (auto& e : entries) out.push_back(std::move(e.second));
+    // Cap to kMaxRecentFiles.
+    if (out.size() > static_cast<size_t>(kMaxRecentFiles))
+    {
+        out.resize(kMaxRecentFiles);
+    }
+    return out;
+}
+
+// Add (or move-to-top) `path` in the registry. Mirrors legacy
+// AddToHistory: writes the FILETIME for "now" under the path-as-key,
+// then trims entries beyond the cap by deleting the oldest. Returns
+// the resulting list (most-recent-first).
+std::vector<std::wstring> WriteRecentFile(const std::wstring& path)
+{
+    FILETIME ft;
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    SystemTimeToFileTime(&st, &ft);
+
+    HKEY hKey;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE,
+                        nullptr, &hKey, nullptr) == ERROR_SUCCESS)
+    {
+        // Set the value — if the key already exists, this updates the
+        // FILETIME so the path moves to the top of the most-recent list.
+        RegSetValueExW(hKey, path.c_str(), 0, REG_BINARY,
+                       reinterpret_cast<const BYTE*>(&ft), sizeof(ft));
+        RegCloseKey(hKey);
+    }
+
+    // Re-read and trim. Legacy does this lazily inside GetHistory; we
+    // do it eagerly here so the React side sees the post-trim list.
+    auto list = ReadRecentFiles();
+
+    // Trim by deleting any entries that fall off the end of the cap.
+    if (list.size() > static_cast<size_t>(kMaxRecentFiles))
+    {
+        HKEY hTrim;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0,
+                          KEY_READ | KEY_WRITE, &hTrim) == ERROR_SUCCESS)
+        {
+            for (size_t i = kMaxRecentFiles; i < list.size(); ++i)
+            {
+                RegDeleteValueW(hTrim, list[i].c_str());
+            }
+            RegCloseKey(hTrim);
+        }
+        list.resize(kMaxRecentFiles);
+    }
+    return list;
+}
+
+// Forward declaration so BuildEngineStateSnapshot can read editor-level
+// state from the dispatcher when serialising the snapshot.
+
 // Reads every getter on Engine into a JSON object whose shape matches
 // `EngineStateDto` in web/packages/bridge-schema/src/index.ts.
 //
 // Coupling note: any new field added to `EngineStateDto` MUST also be
 // added here, otherwise the React UI will read `undefined` for it.
-json BuildEngineStateSnapshot(Engine* engine)
+json BuildEngineStateSnapshot(Engine* engine,
+                              const std::wstring& currentFilePath,
+                              bool dirty)
 {
     if (!engine) return json::object();
 
@@ -146,7 +266,18 @@ json BuildEngineStateSnapshot(Engine* engine)
         {"fill2", LightToJson(engine->GetLight(Engine::LT_FILL2))},
     };
 
+    // currentFilePath as JSON: null when untitled, string otherwise.
+    // JSON null is correct semantically — the schema's
+    // `currentFilePath: string | null` discriminates by presence.
+    json filePathField = currentFilePath.empty()
+        ? json(nullptr)
+        : json(WideToUtf8(currentFilePath));
+
     return json{
+        // Editor-level state (Screen 8 Batch 3).
+        {"currentFilePath",       filePathField},
+        {"dirty",                 dirty},
+
         // Ground
         {"ground",                engine->GetGround()},
         {"groundZ",               engine->GetGroundZ()},
@@ -195,6 +326,11 @@ BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
                                     AcceleratorBridge& accel, EmitFn emit)
     : m_engine(engine), m_layout(layout), m_accel(accel), m_emit(std::move(emit))
 {
+    // Seed the recent-files list from the registry at construction so
+    // the first React-side `file/recent/list` request already has data
+    // (avoids the React menu rendering "(none)" momentarily on first
+    // mount even when the user has prior history).
+    m_recentFiles = ReadRecentFiles();
 }
 
 void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
@@ -311,6 +447,13 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return false;
     };
 
+    // Phase 3 Screen 8 Batch 3: every mutating engine/set/* and
+    // engine/action/* (the destructive ones) ends with a SetDirty(true)
+    // so the dirty flag + dirty/changed event fire after the parameter
+    // change. SetDirty itself debounces (no-op when already dirty), so
+    // repeated mutations don't spam the event channel.
+    auto markDirty = [&]() { SetDirty(true); };
+
     // -------- layout/viewport-rect --------
     if (kind == "layout/viewport-rect")
     {
@@ -337,7 +480,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     if (kind == "engine/state/snapshot")
     {
         if (!requireEngine("snapshot")) return res;
-        sendOk(BuildEngineStateSnapshot(m_engine));
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty));
         return res;
     }
 
@@ -347,6 +490,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetGround(params.value("enabled", false));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -355,6 +499,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetGroundZ(params.value("z", 0.0f));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -363,6 +508,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetGroundTexture(params.value("slot", 0));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -372,6 +518,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         unsigned int rgb = params.value("rgb", 0u);
         m_engine->SetGroundSolidColor(static_cast<COLORREF>(rgb));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -382,6 +529,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         std::string p = params.value("path", std::string{});
         m_engine->SetGroundSlotCustomPath(slot, Utf8ToWide(p));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -390,6 +538,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetSkydomeSlot(params.value("slot", 0));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -400,6 +549,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         std::string p = params.value("path", std::string{});
         m_engine->SetSkydomeCustomPath(slot, Utf8ToWide(p));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -409,6 +559,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         unsigned int rgb = params.value("rgb", 0u);
         m_engine->SetBackground(static_cast<COLORREF>(rgb));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -417,6 +568,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetBloom(params.value("enabled", false));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -425,6 +577,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetBloomStrength(params.value("v", 0.0f));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -433,6 +586,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetBloomCutoff(params.value("v", 0.0f));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -441,6 +595,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetBloomSize(params.value("v", 0.0f));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -449,6 +604,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetHeatDebug(params.value("enabled", false));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -461,6 +617,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         cam.Up       = JsonToVec3(params.value("up",       json::array()));
         m_engine->SetCamera(cam);
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -475,6 +632,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         l.Direction = JsonToVec4(params.value("direction", json::array()));
         m_engine->SetLight(ParseLightWhich(which), l);
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -483,6 +641,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetAmbient(JsonToVec4(params.value("color", json::array())));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -491,6 +650,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetShadow(JsonToVec4(params.value("color", json::array())));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -502,6 +662,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     {
         SetPreviewPaused(params.value("paused", false));
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -512,6 +673,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->Clear();
         sendOk(json::object());
+        markDirty();
         EmitEngineStateChanged();
         return res;
     }
@@ -520,6 +682,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->ReloadShaders();
         sendOk(json::object());
+        // No dirty: reload-shaders re-reads disk; user state is unchanged.
         EmitEngineStateChanged();
         return res;
     }
@@ -528,6 +691,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->ReloadTextures();
         sendOk(json::object());
+        // No dirty: reload-textures re-reads disk; user state is unchanged.
         EmitEngineStateChanged();
         return res;
     }
@@ -571,6 +735,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
                 "no-op for now.\n",
                 durPct, sizePct);
         sendOk(json::object());
+        // Rescale mutates emitter parameters → dirty.
+        markDirty();
         // Emit state/changed for parity with MockBridge so Playwright
         // specs can observe that the action completed via the standard
         // event channel (TestHostBridge subscribes to events normally
@@ -635,45 +801,187 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- file/* (Phase 3 Screen 8 Batch 3) ----------------------
+    //
+    // The new-UI host doesn't yet own a ParticleSystem* (emitter / file-
+    // load wiring is later-batch work in Phase 3+). So the file handlers
+    // perform the *editor-level* side of the operation — currentFilePath
+    // tracking, dirty flag, recent-files registry, native picker
+    // round-trip — but skip the engine-level ParticleSystem read/write
+    // until that pointer exists. Same forward-compatible no-op pattern
+    // as engine/action/rescale-system in Batch 1. Legacy `DoNewFile` /
+    // `DoOpenFile` / `DoSaveFile` at [src/main.cpp:1289-1393] continue
+    // to serve `--legacy-ui` unchanged — they're coupled to
+    // `APPLICATION_INFO*` which doesn't exist in --new-ui mode, so
+    // calling them directly from here isn't possible.
+
+    // -------- file/new --------
+    // Clears editor state. ParticleSystem-clear is deferred.
+    if (kind == "file/new")
+    {
+        m_currentFilePath.clear();
+        // Send the response BEFORE EmitEngineStateChanged so the
+        // request resolves promptly. File/new always reports success.
+        sendOk(json::object());
+        // Clear dirty AND broadcast state so the React side sees the
+        // new path (null) + dirty (false) in the next snapshot.
+        SetDirty(false);
+        EmitEngineStateChanged();
+        return res;
+    }
+
     // -------- file/open --------
     //
-    // Task 2.4: only the skydome-custom-path flow drives this. Future
-    // file/open consumers (alo open, texture import) will reuse the
-    // same handler — the `params.path` hint is currently ignored, but
-    // a future revision could use it as an initial directory.
+    // Two modes:
+    //   - If `params.path` is provided (Recent Files / drag-drop / Open
+    //     dialog already resolved on the React side), use it directly.
+    //   - Otherwise pop GetOpenFileNameW. The native dialog runs a
+    //     nested message loop; host pump pauses for the dialog's
+    //     lifetime, which is fine because the JS caller is awaiting.
     //
-    // GetOpenFileNameW runs a nested message loop, so the host's main
-    // pump pauses for the dialog's lifetime. That's fine for this
-    // Request because the JS caller is awaiting the response and the
-    // dialog is a user gesture.
+    // Both modes commit the path into m_currentFilePath, push to
+    // recents, fire recent/changed + engine/state/changed, and clear
+    // dirty. Actual ParticleSystem load is forward-deferred.
     if (kind == "file/open")
     {
+        std::wstring path;
+        if (auto pit = params.find("path"); pit != params.end() && pit->is_string())
+        {
+            path = Utf8ToWide(pit->get<std::string>());
+        }
+        if (path.empty())
+        {
+            wchar_t buf[MAX_PATH] = {};
+            OPENFILENAMEW ofn = {};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner   = m_hostHwnd;
+            ofn.lpstrFile   = buf;
+            ofn.nMaxFile    = MAX_PATH;
+            ofn.lpstrFilter =
+                L"Alo files\0*.alo\0All files\0*.*\0";
+            ofn.lpstrTitle  = L"Open particle system";
+            ofn.Flags       = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+
+            if (!GetOpenFileNameW(&ofn))
+            {
+                // User cancelled / dialog failure.
+                sendOk(json{{"ok", false}, {"error", "user-cancelled"}});
+                return res;
+            }
+            path = buf;
+        }
+
+        m_currentFilePath = path;
+        m_recentFiles = WriteRecentFile(path);
+        sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
+        SetDirty(false);
+        EmitRecentChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- file/save --------
+    //
+    // If `params.path` provided, use it. Else if m_currentFilePath is
+    // set (named document), save there. Else pop GetSaveFileNameW.
+    // Matches legacy `DoSaveFile(info, /*saveas=*/false)`.
+    if (kind == "file/save")
+    {
+        std::wstring path;
+        if (auto pit = params.find("path"); pit != params.end() && pit->is_string())
+        {
+            path = Utf8ToWide(pit->get<std::string>());
+        }
+        if (path.empty()) path = m_currentFilePath;
+        if (path.empty())
+        {
+            // No remembered path → pop save-as picker.
+            wchar_t buf[MAX_PATH] = {};
+            OPENFILENAMEW ofn = {};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner   = m_hostHwnd;
+            ofn.lpstrFile   = buf;
+            ofn.nMaxFile    = MAX_PATH;
+            ofn.lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0";
+            ofn.lpstrDefExt = L"alo";
+            ofn.lpstrTitle  = L"Save particle system";
+            ofn.Flags       = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+            if (!GetSaveFileNameW(&ofn))
+            {
+                sendOk(json{{"ok", false}, {"error", "user-cancelled"}});
+                return res;
+            }
+            path = buf;
+        }
+
+        // Actual PhysicalFile write is deferred — m_engine has no
+        // ParticleSystem*. Editor-level state still updates.
+        m_currentFilePath = path;
+        m_recentFiles = WriteRecentFile(path);
+        sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
+        SetDirty(false);
+        EmitRecentChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- file/save-as --------
+    //
+    // ALWAYS pops GetSaveFileNameW. Matches legacy
+    // `DoSaveFile(info, /*saveas=*/true)`. Same path-commit / recents /
+    // dirty side effects as file/save.
+    if (kind == "file/save-as")
+    {
         wchar_t buf[MAX_PATH] = {};
+        // Seed with the current filename so the dialog opens at the
+        // existing path's directory — matches legacy save-as ergonomics.
+        if (!m_currentFilePath.empty() &&
+            m_currentFilePath.size() < MAX_PATH)
+        {
+            wcscpy_s(buf, MAX_PATH, m_currentFilePath.c_str());
+        }
         OPENFILENAMEW ofn = {};
         ofn.lStructSize = sizeof(ofn);
         ofn.hwndOwner   = m_hostHwnd;
         ofn.lpstrFile   = buf;
         ofn.nMaxFile    = MAX_PATH;
-        ofn.lpstrFilter =
-            L"Skydome textures\0*.dds;*.png;*.jpg;*.tga\0All files\0*.*\0";
-        ofn.lpstrTitle  = L"Select skydome texture";
-        ofn.Flags       = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+        ofn.lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0";
+        ofn.lpstrDefExt = L"alo";
+        ofn.lpstrTitle  = L"Save particle system as";
+        ofn.Flags       = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
 
-        if (GetOpenFileNameW(&ofn))
+        if (!GetSaveFileNameW(&ofn))
         {
-            sendOk(json{{"ok", true}, {"path", WideToUtf8(buf)}});
-        }
-        else
-        {
-            // User cancelled — distinguishable from "no dialog could be
-            // shown" by CommDlgExtendedError() returning 0. Keep the
-            // message generic; React only branches on `ok`.
             sendOk(json{{"ok", false}, {"error", "user-cancelled"}});
+            return res;
         }
+
+        std::wstring path = buf;
+        m_currentFilePath = path;
+        m_recentFiles = WriteRecentFile(path);
+        sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
+        SetDirty(false);
+        EmitRecentChanged();
+        EmitEngineStateChanged();
         return res;
     }
 
-    // -------- everything else (emitters/* / file/save / file/recent / spawner/*) --------
+    // -------- file/recent/list --------
+    //
+    // Re-reads the registry on every call. Cheap (≤ 9 entries) and
+    // means the list stays in lockstep with legacy AppendHistory writes
+    // that happen in --legacy-ui sessions.
+    if (kind == "file/recent/list")
+    {
+        m_recentFiles = ReadRecentFiles();
+        json paths = json::array();
+        for (const auto& w : m_recentFiles) paths.push_back(WideToUtf8(w));
+        sendOk(json{{"paths", paths}});
+        return res;
+    }
+
+    // -------- everything else (emitters/* / spawner/*) ---------------
     sendErr("not implemented yet (Phase 3+)");
     return res;
 }
@@ -695,7 +1003,47 @@ void BridgeDispatcher::EmitEngineStateChanged()
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty)},
+    };
+    m_emit(env.dump());
+}
+
+void BridgeDispatcher::SetDirty(bool dirty)
+{
+    if (m_dirty == dirty) return;  // debounce — no-op if already in target state
+    m_dirty = dirty;
+    EmitDirtyChanged();
+    // Don't broadcast engine/state/changed here. Callers that
+    // SetDirty(true) at the END of an engine setter already emitted a
+    // state/changed for the parameter change; the dirty bit ride-alongs
+    // via the dedicated dirty/changed event channel + the next
+    // snapshot read. Callers that SetDirty(false) (file/new, file/open,
+    // file/save success) emit their own state/changed.
+}
+
+void BridgeDispatcher::EmitDirtyChanged()
+{
+    if (!m_emit) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "dirty/changed"},
+        {"payload", {{"dirty", m_dirty}}},
+    };
+    m_emit(env.dump());
+}
+
+void BridgeDispatcher::EmitRecentChanged()
+{
+    if (!m_emit) return;
+    json paths = json::array();
+    for (const auto& w : m_recentFiles)
+    {
+        paths.push_back(WideToUtf8(w));
+    }
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "recent/changed"},
+        {"payload", {{"paths", paths}}},
     };
     m_emit(env.dump());
 }

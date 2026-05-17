@@ -25,13 +25,42 @@ import type {
   EngineStateDto,
   LightDto,
 } from "@particle-editor/bridge-schema";
-import { useMockEngineState, snapshotEngineState } from "./mock-state";
+import {
+  makeDefaultEngineState,
+  useMockEngineState,
+  useMockRecentFiles,
+  snapshotEngineState,
+} from "./mock-state";
+
+/** Returns true for request kinds that should mark the in-memory file
+ *  state dirty. Every engine/set/* is mutating. Engine actions are
+ *  mutating except for the read-only-ish reload-shaders / reload-textures
+ *  / on-particle-system-changed / step-frames, which don't change
+ *  user-visible parameters. file/*, query/*, undo/perform, spawner/*,
+ *  layout, accelerators are not. The native host applies the same rule
+ *  via per-handler `SetDirty(true)` calls. */
+function isMutating(kind: Request["kind"]): boolean {
+  if (kind.startsWith("engine/set/")) return true;
+  // engine/action/clear is destructive — destroying particles in the
+  // world is a user-visible mutation worth a save-prompt gate.
+  if (kind === "engine/action/clear") return true;
+  // engine/action/rescale-system mutates emitter parameters.
+  if (kind === "engine/action/rescale-system") return true;
+  return false;
+}
 
 export class MockBridge implements Bridge {
   private listeners = new Map<EventKind, Set<(e: Event) => void>>();
 
   async request<R extends Request>(req: R): Promise<ResponseFor<R>> {
-    return this.handle(req) as ResponseFor<R>;
+    const result = this.handle(req);
+    // After the handler completes, mark dirty for any engine mutation.
+    // (file/* and engine/action/reload-* / clear are deliberately NOT
+    // marked dirty — see isMutating below.)
+    if (isMutating(req.kind)) {
+      this.markDirty();
+    }
+    return result as ResponseFor<R>;
   }
 
   on<K extends EventKind>(kind: K, handler: (e: EventOf<K>) => void): () => void {
@@ -54,6 +83,39 @@ export class MockBridge implements Bridge {
   /** Patch the store and broadcast engine/state/changed with the full snapshot. */
   private patchAndBroadcast(patch: Partial<EngineStateDto>): void {
     useMockEngineState.getState().applyPatch(patch);
+    this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+  }
+
+  /** Screen 8 Batch 3: every mutating setter/action sets dirty=true. The
+   *  debounce (don't re-emit if already dirty) avoids spamming
+   *  `dirty/changed` on every slider drag tick. The native host applies
+   *  the same rule. */
+  private markDirty(): void {
+    if (snapshotEngineState().dirty) return;
+    useMockEngineState.getState().applyPatch({ dirty: true });
+    this.emit({ kind: "dirty/changed", payload: { dirty: true } });
+    // Don't re-emit engine/state/changed here — the caller's
+    // patchAndBroadcast already fired one (or will fire one) with the
+    // updated dirty=true field. The dirty/changed event is the
+    // dedicated narrow-payload channel for components watching only
+    // the dirty bit (window title, save-prompt gates).
+  }
+
+  /** Clear dirty + emit. Used by file/new, file/open, file/save success. */
+  private markClean(): void {
+    const cur = snapshotEngineState();
+    if (!cur.dirty) return;
+    useMockEngineState.getState().applyPatch({ dirty: false });
+    this.emit({ kind: "dirty/changed", payload: { dirty: false } });
+  }
+
+  /** Update currentFilePath, push to recents (dedup, cap 9), emit
+   *  recent/changed + engine/state/changed. Used by file/open and
+   *  file/save success paths. */
+  private commitFilePath(path: string): void {
+    useMockEngineState.getState().applyPatch({ currentFilePath: path });
+    const recents = useMockRecentFiles.getState().push(path);
+    this.emit({ kind: "recent/changed", payload: { paths: recents } });
     this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
   }
 
@@ -227,24 +289,76 @@ export class MockBridge implements Bridge {
         // Mock: no native HWND to reposition.
         return {};
 
-      // ---------------- file/open: browser-mode stub ----------------
-      // The React handler in BackgroundPicker chains file/open → set
-      // skydome-custom-path → set skydome-slot. Throwing here would
-      // surface a raw rejection in dev. Resolve with the schema's
-      // cancellation shape instead so the chain aborts cleanly.
-      case "file/open":
-        // request() casts handle()'s unknown return back to ResponseFor<R>,
-        // so no inline cast is needed here. The schema's file/open response
-        // is { ok: true; path?: string } | { ok: false; error: string }.
-        return { ok: false, error: "browser-mode" };
+      // ---------------- file ops (Phase 3 Screen 8 Batch 3) ----------
+      //
+      // The mock implementations are deliberately UI-free: there's no
+      // real picker, no on-disk read/write. They simulate the host's
+      // observable side-effects (currentFilePath, dirty, recentFiles)
+      // so React handlers + Playwright specs can exercise the round
+      // trip in browser mode. The schema-level contract (return shapes,
+      // event ordering) matches the native host.
+      //
+      // Two historical callers also depend on this:
+      //   - BackgroundPicker chains file/open → set skydome-custom-path
+      //     → set skydome-slot. In browser mode (with no real picker)
+      //     the call still resolves with ok:false so the chain aborts
+      //     cleanly without surfacing a raw rejection. The signal that
+      //     "this is a fake/cancelled pick" is the lack of `path`.
 
-      // ---------------- emitters / file / undo / spawner: Phase 3+ ----------------
+      case "file/new":
+        // Reset engine state to defaults, clear currentFilePath, clear
+        // dirty. Emit dirty/changed (always — markClean dedupes on
+        // already-clean, but file/new from a clean state may still
+        // need to fire if anything else listens to "I just made a new
+        // file"). For consistency: only emit if there was a change.
+        useMockEngineState.getState().applyPatch({
+          ...makeDefaultEngineState(),
+        });
+        this.markClean();
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+
+      case "file/open": {
+        // If the caller passed a path explicitly (e.g. Recent Files), use it.
+        // Otherwise we simulate a cancelled native picker — the picker
+        // doesn't exist in browser mode. The contract callers branch on
+        // `ok` so this is the cleanest signal of "no path acquired".
+        const explicit = req.params?.path;
+        if (!explicit) {
+          return { ok: false, error: "browser-mode" };
+        }
+        this.commitFilePath(explicit);
+        this.markClean();
+        return { ok: true, path: explicit };
+      }
+
+      case "file/save": {
+        const explicit = req.params?.path;
+        const cur = snapshotEngineState().currentFilePath;
+        const target = explicit ?? cur ?? "/mock/untitled.alo";
+        this.commitFilePath(target);
+        this.markClean();
+        return { ok: true, path: target };
+      }
+
+      case "file/save-as": {
+        // Always "open the picker" — mock answers with a fixed path so
+        // tests can assert deterministic behaviour. The native host
+        // calls GetSaveFileNameW.
+        const target = "/mock/saved-as.alo";
+        this.commitFilePath(target);
+        this.markClean();
+        return { ok: true, path: target };
+      }
+
+      case "file/recent/list":
+        return { paths: useMockRecentFiles.getState().paths };
+
+      // ---------------- emitters / undo / spawner: Phase 3+ ----------------
       case "emitters/list":
       case "emitters/select":
       case "emitters/update":
       case "emitters/import-from-file":
-      case "file/save":
-      case "file/recent/list":
       case "undo/perform":
       case "spawner/start":
       case "spawner/stop":

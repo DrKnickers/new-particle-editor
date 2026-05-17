@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Check, ChevronRight } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
+import { promptSaveChanges, useFileState } from "@/lib/file-state";
 
 type Props = {
   bridge: Bridge;
@@ -42,6 +43,14 @@ function CheckSlot({ active }: { active: boolean }) {
 const todo = (label: string) => () =>
   console.log(`[Menu] ${label} — Phase 3 Screen 8`);
 
+/** Extract the basename from a full path for the Recent Files submenu
+ *  labels. Splits on the last `/` or `\\`; falls back to the whole
+ *  string. */
+function basename(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return idx >= 0 ? path.slice(idx + 1) : path;
+}
+
 export function MenuBar({
   bridge,
   onOpenBackgroundPanel,
@@ -74,11 +83,55 @@ export function MenuBar({
   const paused = state?.paused ?? false;
   const heatDebug = state?.heatDebug ?? false;
 
+  // Screen 8 Batch 3: File-menu wiring needs the recent-files list +
+  // the prompt-save-changes helper.
+  const { recentFiles } = useFileState();
+
   const send =
     (req: Parameters<Bridge["request"]>[0]) =>
     () => {
       void bridge.request(req);
     };
+
+  // ── File menu handlers ───────────────────────────────────────────
+  // All destructive ops (New / Open / Recent) route through
+  // promptSaveChanges() which gates on the current dirty flag and
+  // either runs the action immediately (clean) or pops the
+  // SaveChangesPrompt (dirty). Save / Save As don't need the gate —
+  // they ARE the save path.
+
+  const handleNew = () => {
+    promptSaveChanges(async () => {
+      await bridge.request({ kind: "file/new", params: {} });
+    });
+  };
+
+  const handleOpen = () => {
+    promptSaveChanges(async () => {
+      await bridge.request({ kind: "file/open", params: {} });
+    });
+  };
+
+  const handleSave = () => {
+    void bridge.request({ kind: "file/save", params: {} });
+  };
+
+  const handleSaveAs = () => {
+    void bridge.request({ kind: "file/save-as", params: {} });
+  };
+
+  const handleOpenRecent = (path: string) => {
+    promptSaveChanges(async () => {
+      await bridge.request({ kind: "file/open", params: { path } });
+    });
+  };
+
+  const handleExit = () => {
+    // TODO Batch N+1: wire app/quit. Closing the host window from
+    // React cleanly involves window-placement persistence + other
+    // concerns out of scope for Batch 3 (parking-lot decision).
+    console.log("[Menu] Exit — TODO Batch N+1");
+  };
 
   return (
     <Menubar.Root className="flex items-center gap-0.5">
@@ -91,16 +144,16 @@ export function MenuBar({
             align="start"
             sideOffset={4}
           >
-            <Menubar.Item className={ITEM} onSelect={todo("New")}>
+            <Menubar.Item className={ITEM} onSelect={handleNew}>
               New<Hint>Ctrl+N</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} onSelect={todo("Open")}>
+            <Menubar.Item className={ITEM} onSelect={handleOpen}>
               Open…<Hint>Ctrl+O</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} onSelect={todo("Save")}>
+            <Menubar.Item className={ITEM} onSelect={handleSave}>
               Save<Hint>Ctrl+S</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} onSelect={todo("Save As")}>
+            <Menubar.Item className={ITEM} onSelect={handleSaveAs}>
               Save As…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
@@ -119,14 +172,27 @@ export function MenuBar({
                   sideOffset={2}
                   alignOffset={-4}
                 >
-                  <Menubar.Item className={ITEM} disabled>
-                    (none)
-                  </Menubar.Item>
+                  {recentFiles.length === 0 ? (
+                    <Menubar.Item className={ITEM} disabled>
+                      (none)
+                    </Menubar.Item>
+                  ) : (
+                    recentFiles.map((path) => (
+                      <Menubar.Item
+                        key={path}
+                        className={ITEM}
+                        title={path}
+                        onSelect={() => handleOpenRecent(path)}
+                      >
+                        {basename(path)}
+                      </Menubar.Item>
+                    ))
+                  )}
                 </Menubar.SubContent>
               </Menubar.Portal>
             </Menubar.Sub>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} onSelect={todo("Exit")}>
+            <Menubar.Item className={ITEM} onSelect={handleExit}>
               Exit<Hint>Alt+F4</Hint>
             </Menubar.Item>
           </Menubar.Content>

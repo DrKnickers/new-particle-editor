@@ -650,7 +650,7 @@ verification pass. Each sub-dialog has its own checkbox above.
 - [ ] Spawner — 🟡 pending
 - [ ] Link Group Settings — 🟡 pending (waits on Screen 4 for trigger site)
 - [x] About — ✅ shipped Batch 1
-- [ ] File-ops backbone (New / Open / Save / Save As / recent-files) — 🟡 pending
+- [x] File-ops backbone (New / Open / Save / Save As / recent-files) — ✅ shipped Batch 3
 
 **Bridge surface used:** filled in at Task 3.8.1 (per sub-screen).
 
@@ -782,6 +782,173 @@ verification pass. Each sub-dialog has its own checkbox above.
   own checkbox added now since the inventory list didn't include
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
+
+### Batch 3 — File-ops backbone (locked 2026-05-17)
+
+Largest bridge surface addition so far. Covers the entire File menu
+(New / Open / Save / Save As / Recent Files / Exit), the dirty-state
+tracking that ripples through window title + save-changes prompt,
+and the C++ persistence handlers that wrap legacy `DoNewFile` /
+`DoOpenFile` / `DoSaveFile` at [src/main.cpp:1289+]. Legacy code stays
+for `--legacy-ui`.
+
+**Schema additions:**
+
+- **New Request kinds**:
+  - `file/new` → `Record<string, never>` response. Clears the
+    in-memory `ParticleSystem`, sets current file path to null, sets
+    dirty to false.
+  - `file/save-as` → same response shape as `file/save`
+    (`{ ok: true; path?: string } | { ok: false; error: string }`).
+    ALWAYS opens the native save picker. Distinct from `file/save`
+    which uses the current path when available.
+- **`EngineStateDto` extensions** (added at the top of the struct
+  alongside the existing fields):
+  - `currentFilePath: string | null` — null when untitled.
+  - `dirty: boolean` — true if any engine mutation has occurred since
+    the last file/new/open/save success.
+- **New Event**:
+  - `recent/changed` → `{ paths: string[] }` payload. Fires when the
+    recent-files list changes (after open/save). Mirrors the
+    existing `dirty/changed` event pattern.
+- **No changes to existing `file/open`, `file/save`,
+  `file/recent/list`** — schema stays; only the C++ handler
+  implementations are new (or extended).
+
+**MockBridge implementations:**
+
+- Extend `mock-state.ts`:
+  - `currentFilePath: string | null` (default null).
+  - `dirty: boolean` (default false).
+  - `recentFiles: string[]` (default `[]`).
+- Implement `file/new` — clear emitters tree, set dirty=false,
+  set currentFilePath=null. Emit `dirty/changed { dirty: false }`.
+- Implement `file/save` — if `path` provided, use it; else if
+  `currentFilePath` is set, use that; else simulate a picker by
+  returning `{ ok: true, path: "/mock/untitled.alo" }`. Update
+  `currentFilePath`, push to `recentFiles` (dedupe, cap at 9),
+  set dirty=false, emit `dirty/changed` + `recent/changed`.
+- Implement `file/save-as` — always simulate picker: return
+  `{ ok: true, path: "/mock/saved-as.alo" }`. Same side effects as
+  file/save.
+- Implement `file/recent/list` — return current `recentFiles`.
+- Implement `file/open` — if `path` provided use it; else simulate
+  picker (`/mock/opened.alo`). Update `currentFilePath`,
+  push to `recentFiles`, set dirty=false, emit `dirty/changed` +
+  `recent/changed`.
+- Engine setters / actions in mock-state — set dirty=true and emit
+  `dirty/changed`. Don't fire if already dirty (avoid spam).
+
+**C++ host implementations:**
+
+- **New file** `src/host/handlers/FileHandler.cpp` + `.h` (matches
+  the convention started in earlier batches if any; else inline in
+  `BridgeDispatcher.cpp`). Subagent decides based on existing
+  conventions — match what's there.
+- **Wrap legacy** `DoNewFile` / `DoOpenFile` / `DoSaveFile` at
+  [src/main.cpp:1289-1356] where possible. These are
+  `APPLICATION_INFO*`-coupled. Either:
+  1. Factor pure-IO helpers out of the legacy functions
+     (preferred — read/write to a path, no UI side effects), and
+     call them from both the legacy `WM_COMMAND` and the new bridge
+     handler.
+  2. Or call the legacy `Do*` directly from the bridge handler if
+     they don't pop up dialogs (some don't — `DoSaveFile` only
+     prompts when `saveas=true` or no current path).
+- **Native pickers** — `file/save` with no current path AND
+  `file/save-as` use `GetSaveFileNameW` (legacy `DoSaveFile`
+  already does this). `file/open` with no path uses
+  `GetOpenFileNameW` (already in legacy `DoOpenFile`). Don't
+  reinvent — match legacy behaviour.
+- **Recent-files persistence** — registry under
+  `HKEY_CURRENT_USER\Software\AloParticleEditor\History` (matches
+  legacy's `info->history` map; subagent should grep for `History`
+  / `GetHistory` to confirm the registry path and serialization
+  format).
+- **Dirty flag** — track at `HostWindow` level. New
+  `void SetDirty(bool)` + getter. Set true on any engine
+  setter/action call route (forward-compatible no-op style — the
+  exact set of mutating calls grows over time). Set false on
+  file/new, file/open, file/save success. Emit `dirty/changed`
+  event on every transition.
+- **Snapshot** — `BuildEngineStateDto` (or wherever the snapshot is
+  built) reads the current `dirty` + `currentFilePath` and includes
+  them.
+- **Capture-before-action** — for now, the file/save C++ handler
+  doesn't capture an undo (undo applies to in-memory edits, not
+  saves). Same for file/new — clearing is a destructive operation
+  and skipping undo is intentional (matches legacy behaviour).
+
+**React side:**
+
+- **MenuBar wiring** — replace every File-menu TODO at
+  [web/apps/editor/src/components/MenuBar.tsx:81-116] with real
+  handlers:
+  - `New` → if dirty, prompt → `file/new`.
+  - `Open` → if dirty, prompt → `file/open { }` (host picker).
+  - `Save` → `file/save { }` (host decides path).
+  - `Save As` → `file/save-as { }` (always prompts).
+  - `Import Emitters` — leave the existing wiring alone (already
+    works; Batch 1+).
+  - `Recent Files` submenu — dynamic. Subscribe to `recent/changed`
+    (and seed from initial snapshot's `file/recent/list` query on
+    mount). Each entry: basename click → if dirty, prompt →
+    `file/open { path }`. Cap at 9 entries (legacy convention).
+    Empty: show disabled "(none)" placeholder.
+  - `Exit` → if dirty, prompt → `window.close()` (or equivalent;
+    legacy `DestroyWindow(info->hMainWnd)` is the model). NOTE:
+    closing the host window from React requires a bridge call —
+    add `app/quit` Request? Or defer? **Subagent decision**: defer
+    Exit to a future batch (just log a TODO); closing the WebView2
+    window cleanly is a separate concern (involves saving window
+    placement, etc.).
+- **Save-changes prompt** at
+  `web/apps/editor/src/screens/SaveChangesPrompt.tsx`. Uses the
+  Modal primitive. Title "Save changes?", body "Do you want to save
+  changes to <basename or 'this particle system'>?". Footer: three
+  buttons: **Save** (returns `"save"`), **Don't Save** (returns
+  `"discard"`), **Cancel** (returns `"cancel"`). Modal returns a
+  Promise via a `usePrompt()` hook OR via a callback prop — match
+  whatever ergonomics work cleanly with the rest of the codebase.
+  Pattern hint: the BackgroundPicker holds its own open/close
+  state via Zustand atom; SaveChangesPrompt can do the same with
+  a `pendingAction: () => Promise<void>` slot that fires after
+  Save/Discard, or null on Cancel.
+- **Window title** — App.tsx subscribes to `currentFilePath` +
+  `dirty` from snapshot + events. `useEffect` updates
+  `document.title`. Format:
+  - Dirty, untitled: `* AloParticleEditor`
+  - Dirty, named: `* foo.alo — AloParticleEditor`
+  - Clean, untitled: `AloParticleEditor`
+  - Clean, named: `foo.alo — AloParticleEditor`
+- **New hook** `useFileState()` at
+  `web/apps/editor/src/lib/file-state.ts` — selectors for
+  `currentFilePath`, `dirty`, `recentFiles`. Subscribes to the
+  three relevant events on mount.
+
+**Test surface for Batch 3:**
+
+- **Vitest** (+8 specs, target 55 → 63+):
+  - `bridge-contract.test.ts` (+3): `file/new`, `file/save-as`,
+    `recent/changed` event all round-trip through MockBridge.
+  - `SaveChangesPrompt.test.tsx` (3): renders 3 buttons; each
+    button fires the right callback.
+  - `MenuBar.test.tsx` (or split — depends on existing structure)
+    (+2): File → New on dirty system shows the prompt; Recent
+    Files submenu renders entries from snapshot.
+- **Playwright** (+4 specs, target 34 → 38+):
+  - `file-ops.spec.ts`:
+    - `File → New on a clean system fires file/new without prompt`.
+    - `File → New on a dirty system shows the Save Changes prompt`.
+    - `File → Save fires file/save with the current path` (via
+      pre-seed: open a mock path then save).
+    - `Window title shows the basename when currentFilePath is set`.
+
+**Legacy delete:**
+
+NOT in this batch. `DoNewFile` / `DoOpenFile` / `DoSaveFile` /
+`OpenHistoryFile` and all the `ID_FILE_*` `WM_COMMAND` handlers stay
+for `--legacy-ui`. Phase 4.2 removes them.
 
 ### Batch 2 — Modeless tool windows: Lighting + Bloom + Ground Texture (locked 2026-05-17)
 

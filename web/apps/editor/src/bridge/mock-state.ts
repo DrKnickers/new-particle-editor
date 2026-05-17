@@ -30,6 +30,11 @@ const zeroLight: LightDto = {
  *  splat it into the store without sharing references. */
 export function makeDefaultEngineState(): EngineStateDto {
   return {
+    // Editor-level state (Screen 8 Batch 3): a freshly-launched mock
+    // session is untitled (no path) and clean (no edits since load).
+    currentFilePath: null,
+    dirty: false,
+
     ground: true,
     groundZ: 0,
     groundTexture: 0,
@@ -87,3 +92,37 @@ export function snapshotEngineState(): EngineStateDto {
   const { applyPatch: _a, reset: _r, ...rest } = useMockEngineState.getState();
   return rest;
 }
+
+// ─── Recent files registry (Screen 8 Batch 3) ───────────────────────
+//
+// Lives outside the EngineStateDto because it's host state, not engine
+// state — the native host backs this with the Windows registry under
+// `HKEY_CURRENT_USER\Software\AloParticleEditor` (matches legacy's
+// AddToHistory / GetHistory at [src/main.cpp:650-768]). The mock stores
+// the same list in-memory; the contract is the order (most-recent
+// first), the cap (9 entries — `NUM_HISTORY_ITEMS` in legacy main.cpp),
+// and the dedupe rule (a re-saved path moves to the front, not a
+// duplicate entry).
+
+export const MAX_RECENT_FILES = 9;
+
+type RecentFilesStore = {
+  paths: string[];
+  setPaths: (paths: string[]) => void;
+  /** Push to front; dedupes (case-insensitive) and caps at 9. */
+  push: (path: string) => string[];
+  reset: () => void;
+};
+
+export const useMockRecentFiles = create<RecentFilesStore>((set, get) => ({
+  paths: [],
+  setPaths: (paths) => set({ paths }),
+  push: (path) => {
+    const lower = path.toLowerCase();
+    const filtered = get().paths.filter((p) => p.toLowerCase() !== lower);
+    const next = [path, ...filtered].slice(0, MAX_RECENT_FILES);
+    set({ paths: next });
+    return next;
+  },
+  reset: () => set({ paths: [] }),
+}));
