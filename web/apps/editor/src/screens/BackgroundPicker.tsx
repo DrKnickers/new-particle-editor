@@ -102,7 +102,19 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
 
   const handleCustomClick = (slot: number, isEmpty: boolean) => {
     if (isEmpty) {
-      alert("File picker requires native host — coming in Task 2.4");
+      // Chain native picker → write the chosen path into the slot →
+      // activate the slot. Each step awaits the previous; abort on
+      // cancellation or failure (MockBridge returns ok:false in browser
+      // mode, native returns ok:false on user-cancel).
+      void (async () => {
+        const r = await bridge.request({ kind: "file/open", params: {} });
+        if (!r.ok || !r.path) return;
+        await bridge.request({
+          kind: "engine/set/skydome-custom-path",
+          params: { slot, path: r.path },
+        });
+        await bridge.request({ kind: "engine/set/skydome-slot", params: { slot } });
+      })();
       return;
     }
     void bridge.request({ kind: "engine/set/skydome-slot", params: { slot } });

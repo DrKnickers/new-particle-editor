@@ -204,12 +204,19 @@ export class MockBridge implements Bridge {
         // Mock: no native HWND to reposition.
         return {};
 
+      // ---------------- file/open: browser-mode stub ----------------
+      // The React handler in BackgroundPicker chains file/open → set
+      // skydome-custom-path → set skydome-slot. Throwing here would
+      // surface a raw rejection in dev. Resolve with the schema's
+      // cancellation shape instead so the chain aborts cleanly.
+      case "file/open":
+        return { ok: false, error: "browser-mode" } as ResponseFor<R>;
+
       // ---------------- emitters / file / undo / spawner: Phase 3+ ----------------
       case "emitters/list":
       case "emitters/select":
       case "emitters/update":
       case "emitters/import-from-file":
-      case "file/open":
       case "file/save":
       case "file/recent/list":
       case "undo/perform":

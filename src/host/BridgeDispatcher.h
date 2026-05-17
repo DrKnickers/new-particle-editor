@@ -29,9 +29,13 @@
 #include <functional>
 #include <string>
 
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 #include "third_party/nlohmann/json.hpp"
 
 class Engine;
+class UndoStack;
 
 namespace host {
 
@@ -49,6 +53,22 @@ public:
     // before or after the Engine is constructed; null is treated as
     // "engine not ready, snapshot requests return ok:false".
     void SetEngine(Engine* engine) { m_engine = engine; }
+
+    // Inject the UndoStack used to service `undo/perform` requests.
+    // Task 2.4: stack is constructed by HostWindow alongside the Engine.
+    // Null is treated as "no undo available, applied:false". Caveat:
+    // the new-UI bridge surface does not yet *capture* into this stack
+    // — engine setters (background/skydome/ground-z) are not wrapped in
+    // Capture() calls. Phase 3 emitter work will start populating the
+    // stack via per-mutation captures. Until then `undo/perform` is a
+    // schema-reachable no-op.
+    void SetUndoStack(UndoStack* undo) { m_undo = undo; }
+
+    // The HostWindow's top-level HWND. Required by file/open's
+    // GetOpenFileNameW to parent the modal dialog. Null means the
+    // picker will run unparented (works, but doesn't block input on the
+    // main window — set this in HostWindow once hMain exists).
+    void SetHostHwnd(HWND hwnd) { m_hostHwnd = hwnd; }
 
     // Called from the WebView2 WebMessageReceived handler. The string is
     // the raw JSON sent by `chrome.webview.postMessage` on the React side.
@@ -92,6 +112,8 @@ private:
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;
     EmitFn             m_emit;
+    UndoStack*         m_undo     = nullptr;
+    HWND               m_hostHwnd = nullptr;
 };
 
 } // namespace host

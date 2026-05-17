@@ -200,11 +200,25 @@ describe("MockBridge contract", () => {
       .rejects.toThrow(/not implemented/);
   });
 
-  it("rejects file/* requests as not implemented", async () => {
+  it("rejects file/save and file/recent as not implemented", async () => {
     const b = new MockBridge();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await expect(b.request({ kind: "file/open", params: {} } as any))
+    await expect(b.request({ kind: "file/save", params: {} } as any))
       .rejects.toThrow(/not implemented/);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(b.request({ kind: "file/recent/list", params: {} } as any))
+      .rejects.toThrow(/not implemented/);
+  });
+
+  // Task 2.4: file/open is no longer a hard reject. The native handler
+  // shows GetOpenFileNameW; the mock resolves with the schema's
+  // cancellation shape so the React handler's request chain aborts
+  // cleanly in browser mode without surfacing a raw rejection.
+  it("resolves file/open with ok:false in browser mode", async () => {
+    const b = new MockBridge();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const r = await b.request({ kind: "file/open", params: {} } as any);
+    expect(r).toEqual({ ok: false, error: "browser-mode" });
   });
 
   it("on() returns a working unsubscribe", async () => {

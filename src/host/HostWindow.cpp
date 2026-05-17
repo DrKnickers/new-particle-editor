@@ -45,6 +45,7 @@
 
 #include "../engine.h"
 #include "../managers.h"
+#include "../UndoStack.h"
 
 using namespace Microsoft::WRL;
 
@@ -231,6 +232,14 @@ struct HostWindowImpl
     IShaderManager&  shaderManager;
     IFileManager&    fileManager;
     std::unique_ptr<Engine> engine;
+
+    // Undo / redo stack. Task 2.4: constructed here so BridgeDispatcher
+    // can service `undo/perform` requests. Captures are not yet wired
+    // through the new-UI bridge surface (Phase 3 emitter work), so the
+    // stack stays empty for now and `undo/perform` resolves with
+    // `applied: false`. The plumbing exists so Phase 3 wraps the
+    // engine setter handlers in Capture() without re-touching this file.
+    UndoStack                          undoStack;
 
     LayoutBroker                       layout;
     AcceleratorBridge                  accelerator;
@@ -891,6 +900,8 @@ int HostWindowImpl::Run(int nCmdShow)
         webView->PostWebMessageAsJson(w.c_str());
     };
     dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, accelerator, emitFn);
+    dispatcher->SetUndoStack(&undoStack);
+    dispatcher->SetHostHwnd(hMain);
 
     // WM_CREATE fired during CreateWindowEx; viewport + engine now exist.
     // Wire the engine into the dispatcher (it was null when we constructed

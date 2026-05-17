@@ -32,6 +32,20 @@ export function App() {
 
     const off = bridge.on("accelerator/pressed", (e) => {
       console.log("[accel]", e.payload.combo);
+      // TODO Phase 3: real per-screen handlers. For now, route undo/redo
+      // through the bridge so the surface is reachable end-to-end. Until
+      // captures are wired in, `applied` will always come back false.
+      if (e.payload.combo === "Ctrl+Z") {
+        void bridge.request({
+          kind: "undo/perform",
+          params: { direction: "undo" },
+        });
+      } else if (e.payload.combo === "Ctrl+Shift+Z") {
+        void bridge.request({
+          kind: "undo/perform",
+          params: { direction: "redo" },
+        });
+      }
     });
     return off;
   }, [bridge]);

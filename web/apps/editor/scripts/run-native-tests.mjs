@@ -88,7 +88,11 @@ async function main() {
   const playwrightCli = join(editorDir, "node_modules", "@playwright", "test",
     "cli.js");
   const pwExit = await new Promise((resolve) => {
-    const pw = spawn(process.execPath, [playwrightCli, "test", "tests/bridge-native.spec.ts"], {
+    const pw = spawn(process.execPath, [
+      playwrightCli, "test",
+      "tests/bridge-native.spec.ts",
+      "tests/background-picker.spec.ts",
+    ], {
       cwd: editorDir,
       stdio: "inherit",
       shell: false,

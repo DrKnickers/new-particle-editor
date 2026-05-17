@@ -5,11 +5,13 @@
 #include "third_party/nlohmann/json.hpp"
 
 #include "../engine.h"
+#include "../UndoStack.h"
 
 #include <cstdio>
 #include <string>
 #include <vector>
 #include <windows.h>
+#include <commdlg.h>
 
 using nlohmann::json;
 
@@ -543,7 +545,81 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
-    // -------- everything else (emitters/* / file/* / undo/* / spawner/*) --------
+    // -------- undo/perform --------
+    //
+    // Task 2.4: the bridge surface for undo/redo is reachable, but the
+    // new-UI mutation handlers above don't yet *capture* into m_undo —
+    // Phase 3 emitter work will wrap each mutating Request with a
+    // Capture() call. Until then the stack will be empty and
+    // CanUndo/CanRedo return false, so `applied` is false. The handler
+    // still routes through the real UndoStack so a future capture
+    // surfaces immediately without touching this code.
+    if (kind == "undo/perform")
+    {
+        std::string dir = params.value("direction", std::string("undo"));
+        bool applied = false;
+        if (m_undo)
+        {
+            const std::vector<char>* snap = nullptr;
+            size_t selIdx = 0;
+            if (dir == "undo" && m_undo->CanUndo())
+            {
+                applied = m_undo->Undo(&snap, &selIdx);
+            }
+            else if (dir == "redo" && m_undo->CanRedo())
+            {
+                applied = m_undo->Redo(&snap, &selIdx);
+            }
+            // NOTE: when Phase 3 begins capturing into m_undo, the
+            // ParticleSystem swap-and-restore lives here — Deserialize
+            // the snapshot, hand it to the engine, fire
+            // EmitEngineStateChanged. Today's stack stays empty so
+            // there's nothing to apply.
+        }
+        sendOk(json{{"applied", applied}});
+        if (applied) EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- file/open --------
+    //
+    // Task 2.4: only the skydome-custom-path flow drives this. Future
+    // file/open consumers (alo open, texture import) will reuse the
+    // same handler — the `params.path` hint is currently ignored, but
+    // a future revision could use it as an initial directory.
+    //
+    // GetOpenFileNameW runs a nested message loop, so the host's main
+    // pump pauses for the dialog's lifetime. That's fine for this
+    // Request because the JS caller is awaiting the response and the
+    // dialog is a user gesture.
+    if (kind == "file/open")
+    {
+        wchar_t buf[MAX_PATH] = {};
+        OPENFILENAMEW ofn = {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner   = m_hostHwnd;
+        ofn.lpstrFile   = buf;
+        ofn.nMaxFile    = MAX_PATH;
+        ofn.lpstrFilter =
+            L"Skydome textures\0*.dds;*.png;*.jpg;*.tga\0All files\0*.*\0";
+        ofn.lpstrTitle  = L"Select skydome texture";
+        ofn.Flags       = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+
+        if (GetOpenFileNameW(&ofn))
+        {
+            sendOk(json{{"ok", true}, {"path", WideToUtf8(buf)}});
+        }
+        else
+        {
+            // User cancelled — distinguishable from "no dialog could be
+            // shown" by CommDlgExtendedError() returning 0. Keep the
+            // message generic; React only branches on `ok`.
+            sendOk(json{{"ok", false}, {"error", "user-cancelled"}});
+        }
+        return res;
+    }
+
+    // -------- everything else (emitters/* / file/save / file/recent / spawner/*) --------
     sendErr("not implemented yet (Phase 3+)");
     return res;
 }
