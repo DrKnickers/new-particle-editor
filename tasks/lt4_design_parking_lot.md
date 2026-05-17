@@ -3500,3 +3500,98 @@ already a dep from Screen 7). Tests 90 Vitest (78 → 90, +8 contract
 | **Link Group Settings** | **Screen 4 Batch B1** |
 
 Screen 8 is fully shipped pending the Phase 4.2 legacy delete.
+
+### 2026-05-17 · Screen 4 Batch B2 (Add Child + Move + Link-group membership + multi-select)
+
+Third of three structural Screen 4 batches. After this batch only
+B3 (drag/drop) and C (link-group brackets, inline rename, keyboard
+nav) remain on Screen 4.
+
+Commit: `aecfdab` (single feat — no new deps). Tests 105 Vitest
+(90 → 105, +15) + 57 Playwright (54 → 57, +3). MSBuild 0/0.
+
+**What changed:**
+
+- *4 new bridge call kinds.* `emitters/add-lifetime-child` /
+  `emitters/add-death-child` wrap `ParticleSystem::addLifetimeEmitter`
+  / `::addDeathEmitter` (return `{ newId }` or `newId: -1` when
+  parent's slot is filled — matches legacy refuse-on-full).
+  `emitters/move` wraps `ParticleSystem::moveEmitter` (public
+  method; root-only adjacent swap). `linkGroups/set-membership`
+  takes `ids: number[]` + `groupId: number | null` with three
+  sentinel forms: `> 0` joins existing, `null`/`0` leaves, `-1`
+  creates new (host picks smallest unused positive `uint32_t`).
+- *No legacy factor-out needed.* `ParticleSystem::moveEmitter`
+  is a public method on the class itself, not a legacy UI helper.
+  Same pattern as B1's MT-10 finding.
+- *Multi-select stays React-side.* New `web/apps/editor/src/lib/
+  emitter-selection.ts` Zustand atom with `{ ids: number[];
+  primary: number | null }` shape + `setSingle` / `toggle` /
+  `range` / `clear` actions. Server tracks only `primary` via
+  existing `emitters/select`/`selected`; batch operations route
+  React's `ids` list through the wire. Tree container exposes
+  `data-selected-count` + `data-primary-id` for Playwright.
+- *In-order flatten powers both render and shift-click range.*
+  EmitterTree flattens the tree into a single in-order list per
+  render; the same list drives `range(fromId, toId)` selection.
+  No "what does tree-order mean" ambiguity across nested
+  parent/child boundaries.
+- *6 new context-menu items* with disabled states derived from
+  the existing tree DTO: Add Lifetime/Death Child (disabled when
+  slot filled), Move Up/Down (disabled at edges of in-order
+  list), Set Link Group… (opens modal), Leave Link Group
+  (disabled when no selected emitter is linked).
+- *Right-click promotes to single-select first.* If the user
+  right-clicks a row not in the multi-selection, the row is
+  promoted to single-select before the menu opens. Matches
+  Explorer / Finder behaviour, avoids stale-multi-selection trap.
+- *`SetLinkGroupDialog` modal* — Radix radio group with "Create
+  new group" / "Join existing group" + `<select>` populated from
+  distinct `linkGroup > 0` values in the live tree. "Join
+  existing" disabled when no existing groups exist.
+
+**Locks worth surfacing for future batches:**
+
+- *Engine-layer public methods keep appearing.* B1's MT-10
+  finding (`getLinkExemptFlags` / `setLinkExemptFlags` on
+  `ParticleSystem`); B2's `moveEmitter` (public method).
+  Generalizable: when porting a legacy UI mutation, **first
+  grep `src/ParticleSystem.h` and `src/engine.h` for the verb**
+  before searching `src/UI/`. The engine API surface is
+  consistently more accessible than the legacy UI suggests.
+- *Multi-select belongs in React when no engine state depends
+  on it.* Selection drives UI behaviour (which rows highlight,
+  which ids batch operations target); nothing in the engine
+  reads it. Keeping it React-side means no schema growth, no
+  `EngineStateDto` extension, no sync races, no "selection
+  includes deleted id" edge cases.
+- *Right-click promotes to single-select.* Subtle UX detail
+  modern file managers all do. A right-clicker probably wants
+  the right-clicked row to be the target, even with a stale
+  multi-selection from earlier. Apply to any future
+  context-menu-on-list surface.
+- *In-order flatten is a clean structural choice for any
+  hierarchical UI with multi-select-range support.* The flat
+  list is the visual order, the shift-click target order, AND
+  the move-up/down semantic order — three concepts that would
+  otherwise require separate computations. One traversal, one
+  list, three uses.
+
+**Open follow-ups for Batches B3 + C** (explicitly NOT in B2):
+
+- **Batch B3**: drag/drop reordering + reparent-via-drag.
+- **Batch C**: link-group bracket visualisation (MT-9 port), F2 /
+  double-click inline rename (replaces B1's modal), keyboard nav
+  (arrows / Enter / Delete / Cut / Copy / Paste).
+
+### Screen 4 progress after Batch B2
+
+| Batch | Status |
+|---|---|
+| A — Foundation (read-only tree + click-to-select) | ✅ shipped |
+| B1 — Mutations + context menu + 3 Screen-8 sub-dialogs | ✅ shipped |
+| **B2 — Add Child + Move + Link-group membership + multi-select** | **✅ shipped** |
+| B3 — Drag/drop + reparent | ⏳ pending |
+| C — Link-group brackets + inline rename + keyboard nav | ⏳ pending |
+
+Screen 4 fully ✅ after B3 + C.
