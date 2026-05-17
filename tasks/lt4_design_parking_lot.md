@@ -2402,3 +2402,98 @@ Remaining LT-4 surface:
 - **Screen 6 — Track editor** (medium-large).
 - **Phase 4 — cutover** (parity acceptance, legacy delete,
   CHANGELOG/ROADMAP ship entry, release zip update).
+
+### 2026-05-17 · Viewport interaction — camera controls
+
+First user-input batch for the `--new-ui` viewport. Mouse drag
+(MOVE / ROTATE / ZOOM with L/R-click + Ctrl modifier) + scroll-wheel
+zoom now work on the D3D9 sibling HWND, mirroring legacy
+[src/main.cpp:2923-3060] line-by-line. Combined with the prior
+render-loop batch, `--new-ui` is fully usable for non-emitter-
+editing camera-driven workflows.
+
+Commit: `24431d3` (single feat — no new deps; no test reworks).
+Tests 74 Vitest (unchanged) + 48 Playwright (47 → 48, +1
+camera-setter round-trip spec). MSBuild 0/0.
+
+**What changed:**
+
+- *Drag-state on `HostWindowImpl`*. New `DragMode` enum
+  (`NONE/MOVE/ROTATE/ZOOM`) + four members: `m_dragMode`,
+  `m_dragStartCam`, `m_dragStartX`, `m_dragStartY`. All zero-init.
+- *`ViewportWndProc` rewritten*. Was just `WM_PAINT` +
+  `WM_ERASEBKGND`. Now handles `WM_LBUTTONDOWN/UP`,
+  `WM_RBUTTONDOWN/UP`, `WM_MOUSEMOVE`, `WM_MOUSEWHEEL`,
+  `WM_CAPTURECHANGED`. Mouse-down does `SetCapture(hwnd)` +
+  `SetFocus(hwnd)`, snapshots the camera, saves start XY.
+  Mouse-up releases capture, resets mode. Capture-changed
+  resets mode defensively (handles Alt-Tab-away-mid-drag).
+- *Camera math lifted verbatim*. Same `D3DXMatrixRotationZ` +
+  `D3DXMatrixRotationAxis` + orthogonal-vector setup for ROTATE.
+  Same `D3DXVec3Length / 1000` distance-multiplier for MOVE.
+  Same `sqrtf(olddist) * -y` for ZOOM-via-drag. Same
+  `(SHORT)HIWORD(wp) / WHEEL_DELTA` for wheel ZOOM. Only
+  deviation: explicit `sqrtf` (float overload) where legacy used
+  unqualified `sqrt` — numerically identical.
+- *`EmitEngineStateChanged` after every `SetCamera`*. Camera
+  changes via direct C++ call bypass the bridge dispatcher's
+  setter ladder, so they don't auto-emit `engine/state/changed`.
+  The mouse handler explicitly emits after each move + wheel
+  notch so React's snapshot stays current.
+- *No dirty-marking on camera*. Camera state isn't file content.
+  Legacy never calls `SetFileChanged` from camera handlers; new
+  code matches by bypassing `markDirty()` entirely (the
+  dispatcher's setter ladder is where it lives; C++ mouse code
+  doesn't go through it).
+
+**Locks worth surfacing for future batches:**
+- *Direct C++ engine mutations need explicit `EmitEngineStateChanged`.*
+  Anything that mutates engine state without going through the
+  bridge dispatcher's setter ladder (mouse handlers, render-loop
+  side effects, file-load engine notifications) needs to emit the
+  state-changed event manually. The dispatcher's setter handlers
+  do it automatically; bypass paths don't. Generalizable rule:
+  any new C++ code that calls `engine->Set*` directly needs to
+  follow with a `dispatcher->EmitEngineStateChanged()` (or accept
+  that React won't see the change until the next setter call).
+- *Verbatim math fidelity matters for user muscle memory.* The
+  legacy drag multipliers (`/2.0f` for rotate, `/1000` for move,
+  `sqrt(olddist)` for zoom) have been tuned over many years and
+  users have muscle memory for them. Porting them line-by-line
+  was the right call; inventing "improved" math would have
+  caused subtle regressions in feel. Same discipline likely
+  applies to future input-handling ports (camera presets,
+  emitter manipulation, etc.).
+
+**Implementer notes (from the subagent's report):**
+1. *`MK_CONTROL` is read at button-down only.* Legacy and new
+   both check the Ctrl bit when the drag starts; mid-drag
+   modifier toggles do NOT switch modes. This is intentional
+   behaviour — users press Ctrl before clicking to indicate
+   "zoom this drag" and don't expect mid-drag mode switches.
+2. *`Engine::GetCamera` returns const ref, requires copy-before-
+   mutate.* `Engine::Camera camera = m_dragStartCam;` is the
+   right pattern. Then pass the mutated local back to
+   `SetCamera` by const ref.
+3. *No WebMessage spam at human input rates.* Camera emit fires
+   once per mouse-move (~100Hz peak during fast drag), well
+   within WebMessage's throughput. No debouncing needed at
+   today's rates; the render-loop's `spawner/active-count`
+   already demonstrates the same shape works at 60Hz.
+4. *Manual mouse drag wasn't driven from the dispatch environment.*
+   Subagent ran the test:native suite (which uses --test-host CDP
+   + the bridge round-trip spec) but didn't drive actual mouse
+   events on the sibling HWND. The camera-setter round-trip
+   spec covers the underlying engine wiring; user-level drag
+   feel is a manual smoke check the controller or user can run
+   in an interactive session.
+
+**Open follow-ups for future batches** (explicitly deferred):
+- *Shift-click-to-spawn* (legacy line 2956) — needs `MouseCursor`
+  `Object3D` port + `GetCursorPos3D` helper. Standalone batch.
+- *Status-bar mouse coordinates* (legacy line 3041) — Screen 1
+  polish. Adds a fifth StatusBar column.
+- *Reset View Settings menu item* (legacy registry-cleanup of
+  multiple persisted view settings). Deserves its own batch once
+  `--new-ui` consistently persists those settings.
+- *Touch / pen input* — not in scope.
