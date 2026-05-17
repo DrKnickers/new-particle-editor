@@ -9,7 +9,9 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, "./src") },
   },
   test: {
-    include: ["src/**/__tests__/**/*.{test,spec}.ts"],
+    include: ["src/**/__tests__/**/*.{test,spec}.{ts,tsx}"],
     exclude: ["node_modules/**", "dist/**", "tests/**"],
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.ts"],
   },
 });

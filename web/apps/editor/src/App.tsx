@@ -7,8 +7,17 @@ import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
+import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
 
-export function App() {
+// ?demo=primitives → render the primitives gallery instead of the app shell.
+// Evaluated once at module load; a page navigation to ?demo=primitives
+// triggers a full reload so the const is re-evaluated correctly.
+const DEMO_PARAM = new URLSearchParams(window.location.search).get("demo");
+
+// AppShell — the full editor shell (MenuBar + Toolbar + Viewport + StatusBar).
+// Split from App so the hooks are always called unconditionally inside a single
+// component (no early-return-before-hook violations).
+function AppShell() {
   const bridge = useMemo(() => {
     const b = makeBridge();
     // Task 2.2: attach to window.bridge so Playwright (via CDP) and
@@ -104,4 +113,13 @@ export function App() {
       <StatusBar bridge={bridge} />
     </div>
   );
+}
+
+// App — root entry point. Routes to the primitives gallery when ?demo=primitives
+// is present; otherwise renders the full editor shell.
+export function App() {
+  if (DEMO_PARAM === "primitives") {
+    return <PrimitivesGallery />;
+  }
+  return <AppShell />;
 }
