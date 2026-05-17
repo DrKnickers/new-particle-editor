@@ -2651,3 +2651,122 @@ camera-setter round-trip spec). MSBuild 0/0.
   multiple persisted view settings). Deserves its own batch once
   `--new-ui` consistently persists those settings.
 - *Touch / pen input* — not in scope.
+
+### 2026-05-17 · Shift-click-to-spawn (cursor-bound spawn)
+
+Camera-controls follow-up. The user can now hold Shift in the
+`--new-ui` viewport to spawn a cursor-bound particle system that
+tracks the mouse's 3D position + velocity, releasing Shift to kill
+the instance. Matches `--legacy-ui` feel. The "fling particles by
+shaking the cursor" workflow works.
+
+Commit: `bee143c` (single feat — no new deps; no test reworks).
+Tests 74 Vitest (unchanged) + 48 Playwright (unchanged). MSBuild
+0/0. No new bridge surface, no React changes — pure C++ side
+effect in `ViewportWndProc` + `RenderD3D9`.
+
+**What changed:**
+
+- *`MouseCursor` factored into `src/MouseCursor.h`.* Was a static
+  class in `src/main.cpp:369-399`. New header is verbatim-port +
+  include-guarded; folds in `GetCursorPos3D` (was static at
+  `src/main.cpp:2877-2890`) since the two are conceptually paired.
+  `engine.h`'s transitive includes already bring in `<d3dx9.h>`
+  + `<windows.h>`, so no extra include juggling needed. Both
+  `--legacy-ui` (main.cpp) and `--new-ui` (host/HostWindow.cpp)
+  now include the same header — single source of truth.
+- *HostWindowImpl gains four new members*: `MouseCursor m_mouseCursor`,
+  `ParticleSystemInstance* m_attachedParticleSystem`,
+  `m_lastCursorX/Y` cache. The cursor cache fixes the legacy bug
+  (more below).
+- *`ViewportWndProc` extensions*: `WM_KEYDOWN VK_SHIFT` (initial
+  press only, via `(~lp & 0x40000000)` filter) calls
+  `GetCursorPos3D` + `m_mouseCursor.SetPosition` +
+  `engine->SpawnParticleSystem(**m_particleSystem, &m_mouseCursor)`.
+  `WM_KEYUP VK_SHIFT` calls `engine->KillParticleSystem` + clears
+  the pointer. `WM_MOUSEMOVE` always caches `(x, y)` + updates
+  `m_mouseCursor.SetPosition` (regardless of drag mode) so the
+  attached instance tracks the cursor. `WM_KILLFOCUS` + `WM_DESTROY`
+  kill cleanly on focus loss / shutdown.
+- *`RenderD3D9` calls `m_mouseCursor.UpdateVelocity()`* before
+  `engine->Update()`. Matches legacy `Render` at
+  `src/main.cpp:1904`. The velocity (computed from
+  `QueryPerformanceCounter`-based dt) is what makes particles
+  inherit cursor flick speed.
+- *`BridgeDispatcher::BindAttachedSystem(ParticleSystemInstance**)`*
+  added as a separate setter (kept `BindHostState`'s 3-arg shape
+  stable). `file/new` and `file/open` handlers kill the attached
+  instance before replacing `*m_pps` so the kill traverses
+  through valid state.
+
+**The legacy bug NOT reproduced:**
+
+Legacy `WM_KEYDOWN VK_SHIFT` at `src/main.cpp:2960` passes
+`(SHORT)LOWORD(lParam), (SHORT)HIWORD(lParam)` to
+`GetCursorPos3D`. But `WM_KEYDOWN`'s lParam is `[repeat-count]
+[scan-code][extended][context][prev-state][transition]` — NOT
+cursor coords. So legacy reads garbage on every Shift-press for
+its initial cursor pos, then immediately overwrites it on the
+next `WM_MOUSEMOVE` (which fires almost always within 16ms). The
+bug is invisible in legacy because of that follow-up move. The
+new-UI code uses the cached `m_lastCursorX/Y` from prior
+`WM_MOUSEMOVE` (or `GetCursorPos + ScreenToClient` as fallback
+when the cache is zero — user pressed Shift before ever moving
+the cursor over the viewport). Cleaner than legacy.
+
+**Locks worth surfacing for future batches:**
+- *Factor-out enables zero-duplication cross-mode features.* The
+  pattern from host-state-plumbing (`ParticleSystemIO.h`) now
+  applies to UI features too: `MouseCursor.h` lives in one place
+  and both `--legacy-ui` and `--new-ui` consume it. The cost is
+  one header file + a brief commit; the benefit is that any
+  future change to the class touches one site, not two. Same
+  pattern likely applies to future viewport features (shift-drag
+  variants, attached-system multi-spawn, cursor visualization).
+- *Separate setters beat extending a multi-arg one when scopes
+  differ.* `BindAttachedSystem` is UI-input state; `BindHostState`
+  is file-system + driver state. Keeping them as separate setters
+  avoids re-touching every BindHostState call site every time the
+  list grows. Generalizable rule: when adding state to
+  BridgeDispatcher, prefer a separate small setter over extending
+  an existing one — they're cheap and the call sites stay stable.
+- *Cached-from-prior-event values are a reusable pattern for
+  Win32 message handlers that need data not in their own params.*
+  `m_lastCursorX/Y` from `WM_MOUSEMOVE` consumed by `WM_KEYDOWN`
+  is the same shape as `m_dragStartCam` from `WM_*BUTTONDOWN`
+  consumed by `WM_MOUSEMOVE`. Any future handler that needs
+  context from an earlier event follows the same: cache on the
+  earlier handler, read on the later. The fallback path
+  (`GetCursorPos` + `ScreenToClient`) handles the cold-start
+  edge case.
+
+**Implementer notes (from the subagent's report):**
+1. *No include-order surprises.* `engine.h` transitively pulls
+   `<d3dx9.h>` and `<windows.h>` via `types.h`, so
+   `MouseCursor.h` compiles cleanly in both translation units
+   without extra fiddling.
+2. *Defensive cleanups are not symmetric.* `file/new` kills
+   *before* replacing `*m_pps` (the kill needs the old system
+   for its traversal). `file/open` kills *after* `LoadParticleSystem`
+   succeeds but *before* the `std::move` swap (the old system is
+   still valid until the move). The order matters because
+   `KillParticleSystem` traverses the instance's emitter
+   references — those become dangling the moment `*m_pps` is
+   replaced.
+3. *Single attached instance matches legacy.* Legacy's guard at
+   `info->attachedParticleSystem == NULL` prevents multi-spawn-
+   per-Shift-hold. The new code follows. If a user wants
+   multi-spawn, they'd hold Shift then click+release the mouse —
+   but the implementation isn't there. Documented as deferred.
+
+**Open follow-ups** (out of scope):
+- *Wireframe cursor visualization.* Legacy renders `MouseCursor`
+  as a small wireframe object via the engine. Subtle visual cue
+  for "where the spawn point is." Polish batch.
+- *Status-bar mouse coordinates.* Screen 1 polish (still
+  deferred from camera-controls batch).
+- *Reset View Settings.* Multi-setting registry cleanup;
+  needs `--new-ui` persistence maturity.
+- *Multi-spawn-per-Shift-hold.* Could be enabled by removing the
+  null-check and tracking a `std::vector<ParticleSystemInstance*>`.
+  Speculative; not requested.
