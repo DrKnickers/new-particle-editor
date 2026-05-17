@@ -642,12 +642,12 @@ verification pass. Each sub-dialog has its own checkbox above.
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge); refactored to ToolPanel shell in Batch 2
 - [x] Ground picker — ✅ shipped Batch 2 (View → Ground Texture…)
 - [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
-- [ ] Import Emitters — 🟡 pending (Batch 4 dispatch in flight)
+- [x] Import Emitters — ✅ shipped Batch 4 (component + bridge contract; real preview-from-file deferred to file-load batch)
 - [x] Rescale System — ✅ shipped Batch 1
 - [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
 - [ ] Increment Index — 🟡 pending (waits on Screen 4 for trigger site)
-- [ ] Mod Nickname — 🟡 pending (Batch 4 dispatch in flight — component-only; real trigger deferred to file-load batch)
-- [ ] Spawner — 🟡 pending (Batch 4 dispatch in flight)
+- [x] Mod Nickname — ✅ shipped Batch 4 (component + usePromptModNickname hook + ?demo=mod-nickname route; real auto-trigger deferred to file-load batch)
+- [x] Spawner — ✅ shipped Batch 4 (panel + schema; real SpawnerDriver wiring deferred to file-load batch)
 - [ ] Link Group Settings — 🟡 pending (waits on Screen 4 for trigger site)
 - [x] About — ✅ shipped Batch 1
 - [x] File-ops backbone (New / Open / Save / Save As / recent-files) — ✅ shipped Batch 3
@@ -1687,3 +1687,103 @@ LIBCMTD warning unchanged).
   follow-up either updates `isMutating()` or moves dirty-marking
   from the dispatcher case-ladder into engine setters themselves
   so it tracks intent more accurately.
+
+### 2026-05-17 · Screen 8 Batch 4 (Spawner + Import Emitters + Mod Nickname)
+
+Three Screen-8 sub-dialogs in one dispatch, plus meaningful schema
+work: `SpawnerParamsDto` (real struct mirroring `SpawnerConfig`
+from [src/SpawnerDriver.h:18]) and `EmitterTreeNode` (minimal:
+`{ id, name, children }`) replace the `Record<string, unknown>`
+placeholders. The third dispatch in a row using the
+forward-deferred-C++ pattern from Batches 1 and 3 — the bridge
+contract is wired end-to-end, MockBridge does the real work, the
+C++ side logs + emits state-changed and waits for `ParticleSystem*`
++ `SpawnerDriver*` + `FileManager*` to land on the new-UI host.
+
+Commit: `6845d37` (single feat — no new deps). Tests 72 Vitest
+(63 → 72) + 43 Playwright (38 → 43). MSBuild 0/0.
+
+**Locks worth surfacing for future batches:**
+- *Full-config commit on every input is the right shape for
+  Spawner.* `SpawnerDriver::SetConfig` already does full-replace
+  (resets the burst-state machine), so a partial-update bridge
+  call would just split one request into N and force the host to
+  compose them back. The `lastCommitted` ref pattern in
+  SpawnerPanel.tsx (snapshot → state/changed handler ignores its
+  own commits) breaks the echo loop without needing draft state.
+  This pattern is reusable for any future panel where the engine
+  config struct is replaced wholesale rather than patched.
+- *Real DTOs replacing placeholders unblock Screen 4.*
+  `EmitterTreeNode` is intentionally minimal (id + name +
+  children) so Screen 4 can add fields (texture path, link-group
+  id, blend mode, etc.) without churning the existing import-
+  preview surface. Same pattern any future screen extending a
+  shared DTO should follow: add fields, don't restructure.
+
+**Implementer surprises (from the subagent's report):**
+1. *Mod Nickname route navigation broke CDP-attached tests.*
+   Navigating the existing Playwright-driven page to
+   `?demo=mod-nickname` destroyed `window.bridge` and broke every
+   subsequent toolbar/tools spec in the run. Fix: expose
+   `window.__promptModNickname` (mirrors `window.bridge`'s
+   diagnostic-only pattern from earlier batches) so the dialog
+   can be opened from the existing page without a navigation.
+   The demo route still works for design checkpoints outside CDP.
+   **Generalizable lesson**: under the `--test-host` CDP-attached
+   Playwright pattern, prefer in-page programmatic triggers over
+   route navigation to keep the `window.bridge` reference alive.
+   Worth folding into `lessons.md` as L-006 if it bites again.
+2. *Custom radio over Radix Radio Group.* Radix's
+   `@radix-ui/react-radio-group` isn't a current dep. Two radios
+   (Manual / Auto) don't justify pnpm-lock churn. Native
+   `<input type="radio">` under `role="radiogroup"` covers
+   keyboard nav + accessibility for free and drives cleanly under
+   jsdom (no pointer-capture shim needed). Generalizable: reach
+   for Radix when the primitive is non-trivial (Menubar, Popover,
+   ContextMenu) but accept native HTML for trivial inputs
+   (radios, plain text inputs).
+3. *Forward-defer was unambiguous for preview-from-file.* Legacy
+   `DoImportEmittersFromFile` ([src/main.cpp:7525]) depends on
+   `info->fileManager` AND `info->hMainWnd`; the new-UI host
+   has neither. Factoring `ImportEmitters_LoadFile` out would
+   require lifting `FileManager` ownership out of
+   `APPLICATION_INFO` — that's the file-load batch's work, not
+   this batch's. Forward-defer + MockBridge providing the real
+   3-emitter tree keeps the UI flow exercisable end-to-end.
+
+**Open follow-ups for future batches:**
+- *Real `SpawnerDriver` instantiation* on the new-UI host. Once
+  the host owns a `SpawnerDriver*`, swap the forward-deferred
+  `m_spawnerConfig = params` for `m_spawnerDriver->SetConfig(
+  params)`. One-line change. Active-count event already plumbed.
+- *Real `emitters/preview-from-file`* — pending `FileManager*`
+  ownership on the new-UI host. Same batch as ParticleSystem
+  wiring.
+- *Mod Nickname auto-trigger* on file-load with unknown mod
+  path — pending the file-load batch.
+- *L-006 candidate*: under `--test-host`, prefer programmatic
+  in-page triggers (`window.__foo`) over route navigation to
+  preserve the `window.bridge` reference. Three batches in
+  before this bit; one more recurrence and it earns a lesson
+  entry.
+
+### Screen 8 progress summary (after Batches 1-4)
+
+| Sub-dialog | Status |
+|---|---|
+| About | ✅ Batch 1 |
+| Rescale System | ✅ Batch 1 |
+| Background picker | ✅ Phase 2 (refactored to ToolPanel in Batch 2) |
+| Lighting | ✅ Batch 2 |
+| Bloom settings | ✅ Batch 2 |
+| Ground Texture Picker | ✅ Batch 2 |
+| File-ops backbone | ✅ Batch 3 |
+| Spawner | ✅ Batch 4 |
+| Import Emitters | ✅ Batch 4 |
+| Mod Nickname | ✅ Batch 4 |
+| Rescale Emitter | ⏸ blocked on Screen 4 |
+| Increment Index | ⏸ blocked on Screen 4 |
+| Link Group Settings | ⏸ blocked on Screen 4 |
+
+10 of 13 Screen 8 sub-dialogs shipped. Remaining 3 all wait on
+Screen 4 (Emitter tree) for their trigger sites.
