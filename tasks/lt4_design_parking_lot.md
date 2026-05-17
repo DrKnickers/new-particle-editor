@@ -104,9 +104,9 @@ needs real edit operations to trigger it. No dirty state in this screen.
 switch in `main.cpp`. ~30 menu commands across File / Edit / View / Tools /
 Help.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅
 
-**Wire-up:** 🟡 pending
+**Wire-up:** ✅
 
 **Current behaviour (legacy):**
 
@@ -126,11 +126,73 @@ toggle; Help menu hosts About.
 > placement: top bar (classic) or app-header dropdown (modern)? Keep
 > Alt-key navigation as a hard requirement, or soft?_
 
-**Bridge surface used:** filled in at Task 3.2.1.
+**Bridge surface used.**
+
+Request kinds fired from menu items (no new schema additions — all
+existed before this screen):
+
+- `engine/state/snapshot` — initial DTO snapshot on mount.
+- `engine/set/ground { enabled }` — View › Ground toggle.
+- `engine/set/bloom { enabled }` — View › Bloom toggle.
+- `engine/set/paused { paused }` — View › Pause toggle.
+- `engine/set/heat-debug { enabled }` — View › Heat Debug toggle.
+- `engine/action/clear` — Edit › Clear All Particles.
+- `engine/action/reload-shaders` — View › Reload Shaders.
+- `engine/action/reload-textures` — View › Reload Textures.
+- `engine/action/step-frames { frames: 1 }` — View › Step Forward.
+- `undo/perform { direction: "undo" }` — Edit › Undo.
+- `undo/perform { direction: "redo" }` — Edit › Redo.
+- Event `engine/state/changed` — drives toggle check glyphs (Ground /
+  Bloom / Pause / Heat Debug) and the Step Forward disabled state.
 
 **Decisions locked once ✅:**
 
-> _(empty)_
+**Renderer.** React-rendered via `@radix-ui/react-menubar` (headless).
+No native `SetMenu` — the React layer owns the entire menu bar. Integrated
+into the existing 40 px top bar between the `AloParticleEditor` title and
+the Background pill. No Alt-key navigation — deferred to Phase 4 polish.
+
+**Trigger style.** `px-2 py-1 text-xs font-medium text-neutral-300
+hover:bg-neutral-900 rounded` quiet triggers; open state: `bg-neutral-900
+text-neutral-100` via Radix `data-[state=open]` attribute.
+
+**Content style.** `min-w-[200px] bg-neutral-900 border border-neutral-800
+rounded-md shadow-xl p-1 z-50`. Items: `text-xs text-neutral-200`,
+hover/focus `bg-neutral-800`. Disabled: `text-neutral-600
+cursor-not-allowed`. Accelerator hints: `ml-auto text-[10px]
+text-neutral-500`. Separators: `h-px bg-neutral-800`.
+
+**Toggle items.** `<Check />` (lucide-react 3.5) in a fixed-width
+`size-3.5` slot to the left. Slot is always rendered (preserves indent
+alignment); icon appears only when `active`. Bloom auto-disables (Radix
+`disabled` prop) when `!bloomAvailable`. Step Forward auto-disables when
+`!paused`.
+
+**Background…** item calls the `onOpenBackgroundPanel` callback prop
+(lifting to App.tsx's `setPanelOpen(true)`) rather than firing a bridge
+request — the panel is pure React state.
+
+**Per-menu item bucket list.**
+
+- *File* (New / Open / Save / Save As / Import Emitters / Recent Files → /
+  Exit) — all `console.log("[Menu] X — Phase 3 Screen 8")` placeholders.
+  Recent Files submenu contains a single disabled `(none)` item.
+- *Edit* (Undo / Redo wired; Cut / Copy / Paste / Delete disabled — Screen 4
+  territory; Rescale TODO; Clear All Particles wired).
+- *View* (Ground / Bloom / Pause / Step Forward / Reload Shaders / Reload
+  Textures / Heat Debug all wired; Background… via callback; Reset View
+  Settings TODO).
+- *Tools* (Lighting… TODO; Mods → submenu with disabled `(none)`; Spawner…
+  TODO).
+- *Help* (About TODO).
+
+**Out of scope (deferred).**
+
+- Alt-key / access-key navigation — Phase 4 polish.
+- File / Tools / Help real implementations — Phase 3 Screen 8.
+- Cut / Copy / Paste / Delete — Screen 4 (emitter tree selection context).
+- Recent Files runtime rebuild — Screen 8.
+- Mods submenu auto-populate — Screen 8.
 
 ---
 

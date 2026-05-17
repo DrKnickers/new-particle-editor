@@ -4,6 +4,7 @@ import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
+import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
 
@@ -67,9 +68,9 @@ export function App() {
   return (
     <div className="flex h-full w-full flex-col bg-neutral-950 text-neutral-100">
       {/* Top bar */}
-      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-neutral-800 px-4 text-sm">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>
-        <span className="text-neutral-500">— Phase 1 scaffold</span>
+        <MenuBar bridge={bridge} onOpenBackgroundPanel={() => setPanelOpen(true)} />
         <div className="ml-auto flex items-center gap-2">
           <BackgroundButton
             open={panelOpen}

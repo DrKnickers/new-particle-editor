@@ -94,6 +94,7 @@ async function main() {
       "tests/background-picker.spec.ts",
       "tests/app-shell.spec.ts",
       "tests/toolbar.spec.ts",
+      "tests/menu-bar.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
