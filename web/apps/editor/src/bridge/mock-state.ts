@@ -561,6 +561,101 @@ export function setLinkGroupMembership(
   return { root: walk(tree.root) };
 }
 
+// ─── Batch B3 helpers — drag/drop reorder + reparent ────────────────
+
+/** Find the parent of `id` in the tree (returns the synthetic root if
+ *  the id is a top-level root). Returns null when the id isn't found. */
+function findParentNode(
+  tree: EmitterTreeDto,
+  id: number,
+): EmitterTreeNode | null {
+  const visit = (n: EmitterTreeNode): EmitterTreeNode | null => {
+    for (const c of n.children) {
+      if (c.id === id) return n;
+      const hit = visit(c);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return visit(tree.root);
+}
+
+/** Reorder a root-level emitter to `rootIndex`. Mirrors
+ *  `ParticleSystem::moveEmitterToRootIndex(emitter, gap)`'s contract:
+ *  gap K means "land before position K in the new list". Returns the
+ *  mutated tree, or null when the source isn't a root or the no-op
+ *  case fires (gap K equals sourceIdx or sourceIdx+1). */
+export function reorderRootEmitter(
+  tree: EmitterTreeDto,
+  id: number,
+  rootIndex: number,
+): EmitterTreeDto | null {
+  const roots = tree.root.children;
+  const sourceIdx = roots.findIndex((c) => c.id === id);
+  if (sourceIdx === -1) return null;          // not a root
+  if (rootIndex < 0 || rootIndex > roots.length) return null;
+  // No-op detection: gap [sourceIdx, sourceIdx+1] is the source's
+  // own position. The C++ side returns false here too.
+  if (rootIndex === sourceIdx || rootIndex === sourceIdx + 1) return null;
+  const next = [...roots];
+  const [moved] = next.splice(sourceIdx, 1);
+  // After removal, indices above sourceIdx shift down by 1.
+  const insertAt = rootIndex > sourceIdx ? rootIndex - 1 : rootIndex;
+  next.splice(insertAt, 0, moved!);
+  return { root: { ...tree.root, children: next } };
+}
+
+/** Reparent `id` under `targetId` in the named slot. Refuses when:
+ *    - source or target missing,
+ *    - source === target,
+ *    - target is in source's subtree (cycle),
+ *    - target's chosen slot is already filled. */
+export function reparentEmitterInTree(
+  tree: EmitterTreeDto,
+  id: number,
+  targetId: number,
+  slot: "lifetime" | "death",
+): EmitterTreeDto | null {
+  if (id === targetId) return null;
+  const source = findEmitterNode(tree, id);
+  const target = findEmitterNode(tree, targetId);
+  if (source === null || target === null) return null;
+  // Cycle check: target must not be in source's subtree.
+  const inSubtree = (n: EmitterTreeNode): boolean => {
+    if (n.id === targetId) return true;
+    return n.children.some(inSubtree);
+  };
+  if (inSubtree(source)) return null;
+  // Slot occupancy check.
+  if (target.children.some((c) => c.role === slot)) return null;
+  // Already a direct child of target via *some* slot? Refuse — matches
+  // the engine's "slot-switching under the same parent is refused" rule.
+  const parent = findParentNode(tree, id);
+  if (parent !== null && parent.id === targetId) return null;
+  // Detach source from its current parent + attach as `slot` child of
+  // target. Walk the tree once, transforming each touched node.
+  const clonedSource: EmitterTreeNode = {
+    ...source,
+    role: slot,
+    // Keep source's own children; they ride along with the move.
+    children: source.children.map(cloneNode),
+  };
+  const walk = (n: EmitterTreeNode): EmitterTreeNode => {
+    // Detach: drop source from any children list it appears in.
+    let nextChildren = n.children.filter((c) => c.id !== id);
+    // Attach: when we're the target, splice source in. Lifetime
+    // renders before death; insert at the front for "lifetime", append
+    // for "death" — matches the legacy ordering convention.
+    if (n.id === targetId) {
+      nextChildren = slot === "lifetime"
+        ? [clonedSource, ...nextChildren]
+        : [...nextChildren, clonedSource];
+    }
+    return { ...n, children: nextChildren.map(walk) };
+  };
+  return { root: walk(tree.root) };
+}
+
 /** Walks the fixture and returns the node with the matching id, or null
  *  when the id isn't present in the tree. The synthetic id=-1 root
  *  matches too — callers that explicitly forbid the synthetic root must

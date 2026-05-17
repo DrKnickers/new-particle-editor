@@ -2052,6 +2052,89 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/drop (Screen 4 Batch B3) ----------------------
+    //
+    // Drag-and-drop reorder + reparent. Tagged-union on params.mode:
+    //   - "reorder":  wraps `ParticleSystem::moveEmitterToRootIndex`.
+    //                 `rootIndex` is the gap index in the rendered root
+    //                 list (gap K = "land before position K"). The
+    //                 engine refuses non-root sources, out-of-range
+    //                 gaps, and no-op gaps (sourceIdx and sourceIdx+1)
+    //                 by returning false; surface that as
+    //                 `{ ok: false, error: "reorder refused" }`.
+    //   - "reparent": wraps `ParticleSystem::reparentEmitter`. The
+    //                 engine itself checks cycle, same-parent, and
+    //                 slot-full — refusal returns false; surface as
+    //                 `{ ok: false, error: "reparent refused" }`.
+    //
+    // React side resolves slot before calling (auto-pick: both free →
+    // "lifetime"; only one free → that one; both filled → no bridge
+    // call). The wire shape never carries "auto".
+    if (kind == "emitters/drop")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"ok", false}, {"error", "particle system not bound"}});
+            return res;
+        }
+        std::string mode = params.value("mode", std::string{});
+        int id = params.value("id", -1);
+        ParticleSystem::Emitter* source = getEmitterById(id);
+        if (source == nullptr)
+        {
+            sendOk(json{{"ok", false}, {"error", "source emitter not found"}});
+            return res;
+        }
+        captureUndo();
+        if (mode == "reorder")
+        {
+            int rootIndex = params.value("rootIndex", -1);
+            if (rootIndex < 0)
+            {
+                sendOk(json{{"ok", false}, {"error", "invalid rootIndex"}});
+                return res;
+            }
+            const bool ok = (*m_pParticleSystem)->moveEmitterToRootIndex(
+                source, static_cast<size_t>(rootIndex));
+            if (!ok)
+            {
+                sendOk(json{{"ok", false}, {"error", "reorder refused"}});
+                return res;
+            }
+            sendOk(json{{"ok", true}});
+            markDirty();
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+            return res;
+        }
+        if (mode == "reparent")
+        {
+            int targetId = params.value("targetId", -1);
+            std::string slot = params.value("slot", std::string{"lifetime"});
+            ParticleSystem::Emitter* target = getEmitterById(targetId);
+            if (target == nullptr)
+            {
+                sendOk(json{{"ok", false}, {"error", "target emitter not found"}});
+                return res;
+            }
+            const bool useDuringLife = (slot != "death");
+            const bool ok = (*m_pParticleSystem)->reparentEmitter(
+                source, target, useDuringLife);
+            if (!ok)
+            {
+                sendOk(json{{"ok", false}, {"error", "reparent refused"}});
+                return res;
+            }
+            sendOk(json{{"ok", true}});
+            markDirty();
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+            return res;
+        }
+        sendOk(json{{"ok", false}, {"error", "unknown mode"}});
+        return res;
+    }
+
     // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
     return res;

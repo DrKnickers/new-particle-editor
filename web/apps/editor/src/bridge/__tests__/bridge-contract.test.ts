@@ -683,6 +683,50 @@ describe("MockBridge contract", () => {
     off();
   });
 
+  // ─── Screen 4 Batch B3 — drag/drop reorder + reparent ────────────
+
+  it("emitters/drop { mode: 'reorder' } reorders the fixture roots", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Fixture roots: Smoke(0), Sparks(3), Flash(5). Drop Smoke at
+    // gap 3 (after Flash) → expected post-order [Sparks, Flash, Smoke].
+    const r = await b.request({
+      kind: "emitters/drop",
+      params: { mode: "reorder", id: 0, rootIndex: 3 },
+    });
+    expect(r.ok).toBe(true);
+    expect(lastTree).not.toBeNull();
+    const namesAfter = lastTree!.root.children.map((c) => c.name);
+    expect(namesAfter).toEqual(["Sparks", "Flash", "Smoke"]);
+    off();
+  });
+
+  it("emitters/drop { mode: 'reparent' } reparents under the target in the named slot", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Fixture: Flash (id=5) is an unlinked leaf with NO children;
+    // Sparks (id=3) is a root with only a lifetime child. Reparent
+    // Flash under Sparks in the death slot — Sparks should gain Flash
+    // as a death child; the root list should shrink by one.
+    const r = await b.request({
+      kind: "emitters/drop",
+      params: { mode: "reparent", id: 5, targetId: 3, slot: "death" },
+    });
+    expect(r.ok).toBe(true);
+    expect(lastTree).not.toBeNull();
+    // Flash should no longer be a root.
+    const rootIds = lastTree!.root.children.map((c) => c.id);
+    expect(rootIds).not.toContain(5);
+    // Sparks should now have Flash as a death-role child.
+    const sparks = lastTree!.root.children.find((c) => c.id === 3)!;
+    const flashUnderSparks = sparks.children.find((c) => c.id === 5);
+    expect(flashUnderSparks).toBeDefined();
+    expect(flashUnderSparks!.role).toBe("death");
+    off();
+  });
+
   it("linkGroups/reset-exempt-fields drops the per-group entry back to defaults", async () => {
     const b = new MockBridge();
     await b.request({

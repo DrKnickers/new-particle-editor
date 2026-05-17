@@ -4,7 +4,7 @@
 // emitters/select with the row's id.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, createEvent } from "@testing-library/react";
 import type { Bridge, EmitterTreeDto } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
@@ -119,6 +119,115 @@ describe("EmitterTree", () => {
     const tree = screen.getByTestId("emitter-tree");
     expect(tree.getAttribute("data-selected-count")).toBe("2");
     expect(tree.getAttribute("data-primary-id")).toBe("3");
+  });
+
+  // ─── Batch B3 — drag/drop reorder + reparent ─────────────────────
+
+  /** Stub the row's getBoundingClientRect so the drop-zone math has a
+   *  predictable rectangle. The component reads clientY relative to
+   *  the rect; pass an explicit clientY in the event payload. */
+  function stubRect(el: HTMLElement, top: number, height: number) {
+    Object.defineProperty(el, "getBoundingClientRect", {
+      configurable: true,
+      writable: true,
+      value: () => ({
+        top,
+        bottom: top + height,
+        left: 0,
+        right: 200,
+        width: 200,
+        height,
+        x: 0,
+        y: top,
+        toJSON: () => "{}",
+      }),
+    });
+  }
+
+  /** Dispatch a DragEvent on `target` with clientY + a stub
+   *  dataTransfer. Uses `createEvent` so we can attach the
+   *  non-default dataTransfer and reliably set clientY (jsdom's
+   *  DragEvent constructor doesn't always copy MouseEvent props in
+   *  every Node version). */
+  function dispatchDrag(
+    type: "dragStart" | "dragOver" | "drop" | "dragEnd" | "dragLeave",
+    target: HTMLElement,
+    clientY: number,
+  ) {
+    const ev = createEvent[type](target, { clientY, bubbles: true });
+    // Force clientY in case the synthetic event omits it.
+    Object.defineProperty(ev, "clientY", {
+      value: clientY,
+      configurable: true,
+    });
+    const store = new Map<string, string>();
+    Object.defineProperty(ev, "dataTransfer", {
+      value: {
+        effectAllowed: "none",
+        dropEffect: "none",
+        setData: (t: string, v: string) => { store.set(t, v); },
+        getData: (t: string) => store.get(t) ?? "",
+        types: [] as readonly string[],
+      },
+      configurable: true,
+    });
+    fireEvent(target, ev);
+  }
+
+  it("dropping in the upper third of a root fires emitters/drop reorder above", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Sparks")).toBeInTheDocument();
+    });
+
+    // Drag Flash (id=5) onto Sparks (id=3) upper third → reorder ABOVE
+    // Sparks (gap index = Sparks' position in roots = 1).
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);  // y range [100, 130), thirds at 10
+
+    dispatchDrag("dragStart", flashBtn, 0);
+    dispatchDrag("dragOver",  sparksBtn, 103);  // y=3 within row → above
+    dispatchDrag("drop",      sparksBtn, 103);
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const dropCall = calls.find((c) => c.kind === "emitters/drop");
+    expect(dropCall).toBeDefined();
+    expect(dropCall.params).toEqual({
+      mode: "reorder",
+      id: 5,
+      rootIndex: 1,  // gap before Sparks (Sparks is at root idx 1)
+    });
+  });
+
+  it("dropping in the middle third of a root fires emitters/drop reparent with auto-picked slot", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Flash")).toBeInTheDocument();
+    });
+
+    // Drag Flash (id=5) onto Sparks (id=3) middle third → reparent
+    // under Sparks. Sparks has a lifetime child only, so the auto-pick
+    // resolves to "death".
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);  // middle third is [10, 20)
+
+    dispatchDrag("dragStart", flashBtn, 0);
+    dispatchDrag("dragOver",  sparksBtn, 115);  // y=15 within row → onto
+    dispatchDrag("drop",      sparksBtn, 115);
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const dropCall = calls.find((c) => c.kind === "emitters/drop");
+    expect(dropCall).toBeDefined();
+    expect(dropCall.params).toEqual({
+      mode: "reparent",
+      id: 5,
+      targetId: 3,
+      slot: "death",
+    });
   });
 
   it("Shift+click on a downstream row selects the range from primary to clicked", async () => {

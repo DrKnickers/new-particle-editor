@@ -359,6 +359,110 @@ batches, each independently shippable:
 Each batch ends with all gates green and a commit. The full
 Screen 4 ✅ flips after Batch C.
 
+### Batch B3 — Drag/drop reorder + reparent (locked 2026-05-17)
+
+Final structural Screen 4 batch. HTML5 drag-and-drop on tree rows
+with visual feedback for insert-between-rows (reorder among roots)
+vs drop-on-row (reparent under target). After this batch only
+Batch C (polish: link-group brackets, inline rename, keyboard nav)
+remains on Screen 4. ParticleSystem already exposes the needed
+public methods (`reparentEmitter`, `moveEmitterToRootIndex`) —
+zero legacy factor-out expected.
+
+**Schema additions (1 new bridge call kind):**
+
+`emitters/drop` — tagged-union to keep the two semantics cleanly
+separated:
+
+```ts
+| { kind: "emitters/drop"; params:
+    | { mode: "reorder";  id: number; rootIndex: number }
+    | { mode: "reparent"; id: number; targetId: number; slot: "lifetime" | "death" }
+}
+```
+
+Returns `Record<string, never>` on success; `{ ok: false; error:
+string }` on refusal (cycle, slot full, etc.) — actually use the
+union response shape:
+
+```ts
+R extends { kind: "emitters/drop" } ? { ok: true } | { ok: false; error: string }
+```
+
+**C++ host implementation:**
+
+- `mode: "reorder"`: `(*m_pps)->moveEmitterToRootIndex(emitter, rootIndex)`. The legacy uses `gap` semantics — verify the exact contract by reading the method's signature (probably "insert at gap N where gap 0 is before first root, gap 1 is between root 0 and root 1, etc."). React side computes `rootIndex` from the drop position.
+- `mode: "reparent"`: `(*m_pps)->reparentEmitter(source, target, useSpawnDuringLife)`. `useSpawnDuringLife: bool` = `slot === "lifetime"`. The method may return false on refusal (cycle detection, slot full) — surface as `{ ok: false; error: "..." }`.
+- Capture undo before either mutation. Emit `emitters/tree/changed` + `engine/state/changed` + `dirty/changed` after.
+
+**MockBridge implementation:**
+
+Mutate `mock-state`'s tree the same way:
+- Reorder: lift the emitter out, splice into roots at `rootIndex`.
+- Reparent: detach from current parent, attach as child of target in the named slot. Refuse if cycle (target is descendant of source) or if slot is already filled.
+
+Emit `emitters/tree/changed` after.
+
+**React DnD on EmitterTree rows:**
+
+Use HTML5 DnD API directly (no library dependency). Each row gets:
+- `draggable={true}` attribute.
+- `onDragStart`: store the dragged emitter id (in component state or a Zustand atom; subagent picks). Set `event.dataTransfer.effectAllowed = "move"`.
+- `onDragOver`: detect drop zone via y-position relative to row rect (`event.clientY - rect.top` vs `rect.height / 3`). Three zones:
+  1. Upper third → reorder above this row (insertion line at top).
+  2. Middle third → reparent under this row (tinted target).
+  3. Lower third → reorder below this row (insertion line at bottom).
+  Must call `event.preventDefault()` to allow drop. Update local "drop indicator" state for visual feedback.
+- `onDragLeave`: clear the drop indicator if the leave is to outside the row (DnD events bubble in weird ways; check `event.relatedTarget` or use a debounce).
+- `onDrop`: compute the final intent (mode + params), validate (no drops on self, no drops on descendant), call the bridge `emitters/drop` with the resolved params. Clear drop indicator.
+- `onDragEnd`: clear drop indicator on the source (covers cancellation cases).
+
+**Visual feedback styling:**
+
+- Insertion line: 2px `bg-sky-400` horizontal line at the top/bottom of the row during dragover.
+- Tinted target (reparent): `bg-sky-500/30 ring-1 ring-sky-400` on the row during dragover.
+- Refused drop (cycle, slot full): no visual indication during dragover. The drop just doesn't fire the bridge call. (Cursor stays as "no-drop" automatically when `event.preventDefault()` is NOT called during dragover.)
+
+**Slot auto-pick during reparent:**
+
+The React side resolves `slot` before calling:
+- Both slots free → `slot = "lifetime"` (matches legacy auto-pick).
+- Only lifetime free → `slot = "lifetime"`.
+- Only death free → `slot = "death"`.
+- Both filled → don't call bridge (refuse).
+
+Use the target's `children` array from the existing EmitterTreeDto to determine slot occupancy (each child has a `role` field per Batch A — `role === "lifetime"` means lifetime slot is filled).
+
+**Validation rules:**
+
+- Drop on self: no-op. Detect via `dragged.id === drop.id`.
+- Drop on descendant (would create cycle): refuse. Walk the dragged emitter's subtree before allowing drop on a candidate target.
+- Drop in reparent zone on a target with both slots filled: refuse.
+- Drop in reorder zones is always valid for roots (the gap index is clamped to the roots list bounds).
+
+The validation runs in `onDragOver` to suppress the drop indicator for invalid targets (and call `event.preventDefault()` only for valid ones — Windows shows the no-drop cursor when preventDefault is skipped).
+
+**Test surface for Batch B3:**
+
+- **Vitest** (+4 specs, target 105 → 109+):
+  - `bridge-contract.test.ts` (+2): `emitters/drop { mode: "reorder", id, rootIndex }` reorders the fixture roots; `emitters/drop { mode: "reparent", id, targetId, slot }` reparents in the fixture tree.
+  - `EmitterTree.test.tsx` (+2): dragover-then-drop on upper third fires `emitters/drop` with `mode: "reorder"` and the right rootIndex; dragover-then-drop on middle third fires `emitters/drop` with `mode: "reparent"` and auto-picked slot.
+- **Playwright** (+2 specs, target 57 → 59+):
+  - Drag a root row over another root, drop in the lower third → root order changes (observe via snapshot's tree).
+  - Drag a root row onto another root's middle third → reparent (observe new parent in tree).
+  - **Note**: Playwright's `dragTo` / `dragAndDrop` may need explicit `{ sourcePosition, targetPosition }` to land in the right third. If flakiness, use the underlying bridge call directly in the spec (skip the actual mouse drag) and assert only the C++ side works — the React drag handlers are then verified by Vitest only.
+
+**Legacy delete:**
+
+NOT in Batch B3. Legacy `EmitterList.cpp` drag/drop handlers stay
+for `--legacy-ui` until Phase 4.2.
+
+**Open follow-ups** (Batch C):
+- Link-group bracket visualisation (MT-9 port) → Batch C.
+- F2 / double-click inline rename → Batch C.
+- Keyboard nav (arrows / Enter / Delete / Cut / Copy / Paste) →
+  Batch C.
+
 ### Batch B2 — Add child + Move Up/Down + Link Group membership + multi-select (locked 2026-05-17)
 
 Third of the three-batch Screen 4 sequence (after B1). Smaller scope

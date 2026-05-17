@@ -289,6 +289,23 @@ export type Request =
   | { kind: "emitters/move";                params: { id: number; direction: "up" | "down" } }
   | { kind: "linkGroups/set-membership";    params: { ids: number[]; groupId: number | null } }
 
+  // Emitter drag/drop (Phase 3 Screen 4 Batch B3)
+  //
+  // Tagged-union to keep the two semantics cleanly separated. React side
+  // computes `slot` and `rootIndex` before calling — the bridge never
+  // carries "auto" or "any". Refusal paths (cycle, slot-full, source not
+  // a root for reorder) return `{ ok: false; error: string }`.
+  //
+  // `rootIndex` follows `ParticleSystem::moveEmitterToRootIndex`'s gap
+  // semantics: gap 0 = before first root, gap K = between roots K-1 and
+  // K, gap N = after the last root. The engine refuses no-op gaps
+  // (sourceRootIdx and sourceRootIdx+1) silently as `ok: false`.
+  | { kind: "emitters/drop";
+      params:
+        | { mode: "reorder";  id: number; rootIndex: number }
+        | { mode: "reparent"; id: number; targetId: number; slot: "lifetime" | "death" }
+    }
+
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1 — Screen-8 sub-dialog)
   | { kind: "engine/action/rescale-emitter";  params: { id: number; durationScalePercent: number; sizeScalePercent: number } }
 
@@ -372,6 +389,11 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/add-death-child" }    ? { newId: number } :
   R extends { kind: "emitters/move" }               ? Record<string, never> :
   R extends { kind: "linkGroups/set-membership" }   ? Record<string, never> :
+
+  // Emitter drag/drop (Phase 3 Screen 4 Batch B3)
+  R extends { kind: "emitters/drop" } ?
+    | { ok: true }
+    | { ok: false; error: string } :
 
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1)
   R extends { kind: "engine/action/rescale-emitter" } ? Record<string, never> :

@@ -35,6 +35,8 @@ import {
   makeDefaultEngineState,
   moveEmitterInTree,
   renameEmitter,
+  reorderRootEmitter,
+  reparentEmitterInTree,
   setLinkGroupMembership,
   useMockEmitterTree,
   useMockEngineState,
@@ -80,6 +82,9 @@ function isMutating(kind: Request["kind"]): boolean {
   if (kind === "emitters/add-death-child") return true;
   if (kind === "emitters/move") return true;
   if (kind === "linkGroups/set-membership") return true;
+  // Screen 4 Batch B3 — drag/drop reorder + reparent. Both modes
+  // mutate persisted tree state.
+  if (kind === "emitters/drop") return true;
   if (kind === "linkGroups/set-exempt-fields") return true;
   if (kind === "linkGroups/reset-exempt-fields") return true;
   return false;
@@ -591,6 +596,43 @@ export class MockBridge implements Bridge {
         this.emit({ kind: "emitters/tree/changed", payload: next });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         return {};
+      }
+
+      // ---------------- emitters/drop (Screen 4 Batch B3) ------------
+      //
+      // Tagged-union: { mode: "reorder", id, rootIndex } reorders a
+      // root via `reorderRootEmitter`; { mode: "reparent", id,
+      // targetId, slot } moves the source under target in the named
+      // slot via `reparentEmitterInTree`. Both helpers refuse cleanly
+      // (return null) on cycle / slot-full / non-root / no-op — the
+      // mock surfaces refusal as `{ ok: false, error: "..." }` to
+      // match the native dispatcher's contract.
+      case "emitters/drop": {
+        const cur = useMockEmitterTree.getState().tree;
+        if (req.params.mode === "reorder") {
+          const next = reorderRootEmitter(cur, req.params.id, req.params.rootIndex);
+          if (next === null) {
+            return { ok: false, error: "reorder refused" };
+          }
+          useMockEmitterTree.getState().setTree(next);
+          this.emit({ kind: "emitters/tree/changed", payload: next });
+          this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+          return { ok: true };
+        }
+        // mode === "reparent"
+        const next = reparentEmitterInTree(
+          cur,
+          req.params.id,
+          req.params.targetId,
+          req.params.slot,
+        );
+        if (next === null) {
+          return { ok: false, error: "reparent refused" };
+        }
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { ok: true };
       }
 
       case "linkGroups/set-membership": {

@@ -43,6 +43,13 @@ import {
   useEmitterSelectionPrimary,
   useEmitterSelectionStore,
 } from "@/lib/emitter-selection";
+import {
+  computeDropZone,
+  computeRootGapIndex,
+  isDescendant,
+  resolveReparentSlot,
+  type DropZone,
+} from "@/lib/drop-zone";
 
 type Props = {
   bridge: Bridge;
@@ -93,6 +100,12 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
   return rows;
 }
 
+// Drop indicator state. Owned at the EmitterTree level so only one row
+// at a time displays a visual indicator. `targetId` is the row currently
+// being hovered; `zone` is which third of the row's rect the cursor is
+// in. `null` means no active drag-over.
+type DropIndicator = { targetId: number; zone: DropZone } | null;
+
 type RowProps = {
   row: FlatRow;
   primaryId: number | null;
@@ -100,9 +113,21 @@ type RowProps = {
   orderedIds: number[];
   onRowClick: (id: number, mods: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => void;
   bridge: Bridge;
+  // Batch B3 — drag/drop wiring threaded from the parent.
+  draggingId: number | null;
+  draggingNode: EmitterTreeNode | null;
+  indicator: DropIndicator;
+  setDraggingId: (id: number | null) => void;
+  setIndicator: (i: DropIndicator) => void;
+  rootChildren: EmitterTreeNode[];
+  tree: EmitterTreeDto | null;
 };
 
-function EmitterRow({ row, primaryId, selectedIds, orderedIds, onRowClick, bridge }: RowProps) {
+function EmitterRow({
+  row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
+  draggingId, draggingNode, indicator, setDraggingId, setIndicator,
+  rootChildren, tree,
+}: RowProps) {
   const { node, depth, siblings, indexInSiblings } = row;
   const isPrimary = primaryId === node.id;
   const isSelected = selectedIds.includes(node.id);
@@ -245,6 +270,165 @@ function EmitterRow({ row, primaryId, selectedIds, orderedIds, onRowClick, bridg
   // tree-flatten output.
   void orderedIds;
 
+  // ── Batch B3 — drag/drop handlers ────────────────────────────────
+  //
+  // The row is both a drag source and a drop target. Drop semantics:
+  //   - drop on a root row, upper third  → reorder above target root
+  //   - drop on a root row, lower third  → reorder below target root
+  //   - drop on any row,  middle third  → reparent under target
+  // Validation runs in onDragOver: we only call preventDefault when the
+  // drop would be valid, so invalid targets get the browser's
+  // native no-drop cursor automatically.
+
+  const isThisRowIndicator = indicator?.targetId === node.id;
+  const indicatorZone = isThisRowIndicator ? indicator!.zone : null;
+
+  const handleDragStart = (e: React.DragEvent<HTMLButtonElement>) => {
+    // Use a stable id-only payload — the React side tracks the dragged
+    // node via component state. jsdom strips dataTransfer in some test
+    // environments, so guard the setData call.
+    setDraggingId(node.id);
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      try {
+        e.dataTransfer.setData("text/plain", String(node.id));
+      } catch {
+        // jsdom may throw on setData; silently ignore so handler logic
+        // remains testable.
+      }
+    }
+  };
+
+  /** Resolve drop intent + validate. Returns null when the drop is
+   *  invalid (caller should NOT call preventDefault — browser then
+   *  shows the no-drop cursor). */
+  const resolveDropIntent = (
+    e: React.DragEvent<HTMLButtonElement>,
+  ): { zone: DropZone; valid: boolean } | null => {
+    if (draggingNode === null) return null;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const zone = computeDropZone(y, rect.height);
+
+    // Self-drop is always invalid (drop on the source row).
+    if (draggingNode.id === node.id) {
+      return { zone, valid: false };
+    }
+    // Descendant-of-source target is always invalid (cycle).
+    if (isDescendant(draggingNode, node.id)) {
+      return { zone, valid: false };
+    }
+    if (zone === "onto") {
+      // Reparent: need a free slot on the target. Both filled → refuse.
+      const slot = resolveReparentSlot(node);
+      if (slot === null) return { zone, valid: false };
+      // Refuse same-parent reparent — matches engine's slot-switching
+      // refusal. We check by walking the tree for the source's current
+      // parent and comparing to the target.
+      if (tree !== null) {
+        const findParent = (
+          n: EmitterTreeNode,
+          id: number,
+        ): EmitterTreeNode | null => {
+          for (const c of n.children) {
+            if (c.id === id) return n;
+            const hit = findParent(c, id);
+            if (hit) return hit;
+          }
+          return null;
+        };
+        const parent = findParent(tree.root, draggingNode.id);
+        if (parent !== null && parent.id === node.id) {
+          return { zone, valid: false };
+        }
+      }
+      return { zone, valid: true };
+    }
+    // Reorder: only valid when both source AND target are roots (gap
+    // semantics apply to the root list).
+    const sourceIsRoot = rootChildren.some((c) => c.id === draggingNode.id);
+    const targetIsRoot = node.role === "root";
+    if (!sourceIsRoot || !targetIsRoot) {
+      return { zone, valid: false };
+    }
+    return { zone, valid: true };
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
+    const intent = resolveDropIntent(e);
+    if (intent === null || !intent.valid) {
+      // Clear any indicator we had on this row (invalid drop suppresses
+      // visual feedback).
+      if (isThisRowIndicator) setIndicator(null);
+      return;
+    }
+    // Valid drop — preventDefault to allow drop and announce the move
+    // effect via dataTransfer.
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (!isThisRowIndicator || indicator!.zone !== intent.zone) {
+      setIndicator({ targetId: node.id, zone: intent.zone });
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLButtonElement>) => {
+    // DnD events bubble in strange ways: dragleave fires when the
+    // cursor crosses ANY child element boundary, not just the row's
+    // outer edge. Check `relatedTarget` (the element the cursor moved
+    // to) — if it's still inside this row, ignore. The cast is safe
+    // because relatedTarget is always either an Element or null.
+    const next = e.relatedTarget as Node | null;
+    if (next && e.currentTarget.contains(next)) {
+      return;
+    }
+    if (isThisRowIndicator) setIndicator(null);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const intent = resolveDropIntent(e);
+    setIndicator(null);
+    setDraggingId(null);
+    if (intent === null || !intent.valid || draggingNode === null) return;
+    if (intent.zone === "onto") {
+      const slot = resolveReparentSlot(node);
+      if (slot === null) return;
+      void bridge.request({
+        kind: "emitters/drop",
+        params: {
+          mode: "reparent",
+          id: draggingNode.id,
+          targetId: node.id,
+          slot,
+        },
+      });
+      return;
+    }
+    // Reorder: compute the root-list gap index from the target's
+    // position in the rendered root list + the zone.
+    const targetRootIdx = rootChildren.findIndex((c) => c.id === node.id);
+    if (targetRootIdx === -1) return;
+    const rootIndex = computeRootGapIndex(targetRootIdx, intent.zone);
+    void bridge.request({
+      kind: "emitters/drop",
+      params: {
+        mode: "reorder",
+        id: draggingNode.id,
+        rootIndex,
+      },
+    });
+  };
+
+  const handleDragEnd = () => {
+    setDraggingId(null);
+    setIndicator(null);
+  };
+
+  // Reparent target visual: tint the row + ring.
+  const reparentTintClass = indicatorZone === "onto"
+    ? "bg-sky-500/30 ring-1 ring-sky-400"
+    : "";
+
   const menuItemClass =
     "flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800";
   const separatorClass =
@@ -265,11 +449,32 @@ function EmitterRow({ row, primaryId, selectedIds, orderedIds, onRowClick, bridg
   const fontClass = isPrimary ? "font-medium" : "";
 
   return (
-    <li role="treeitem" aria-selected={isSelected}>
+    <li role="treeitem" aria-selected={isSelected} className="relative">
+      {/* Insertion line: 2px sky-400 bar at the top or bottom of the row
+          during dragover for the reorder zones. Absolute-positioned so
+          it doesn't perturb the row's layout. */}
+      {indicatorZone === "above" && (
+        <div
+          data-testid={`drop-indicator-above-${node.id}`}
+          className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-0.5 bg-sky-400"
+        />
+      )}
+      {indicatorZone === "below" && (
+        <div
+          data-testid={`drop-indicator-below-${node.id}`}
+          className="pointer-events-none absolute left-0 right-0 bottom-0 z-10 h-0.5 bg-sky-400"
+        />
+      )}
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>
           <button
             type="button"
+            draggable
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onDragEnd={handleDragEnd}
             onClick={(e) =>
               onRowClick(node.id, {
                 ctrlKey: e.ctrlKey,
@@ -294,13 +499,17 @@ function EmitterRow({ row, primaryId, selectedIds, orderedIds, onRowClick, bridg
             data-link-group={node.linkGroup}
             data-selected={isSelected ? "true" : "false"}
             data-primary={isPrimary ? "true" : "false"}
+            data-drop-zone={indicatorZone ?? ""}
+            data-dragging={draggingId === node.id ? "true" : "false"}
             className={[
               "flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm transition-colors",
               "border-l-2",
               borderClass,
               rowBgClass,
+              reparentTintClass,
               fontClass,
               node.visible ? "" : "opacity-50",
+              draggingId === node.id ? "opacity-50" : "",
             ].join(" ")}
             style={{ paddingLeft: `${8 + indentPx}px` }}
           >
@@ -406,6 +615,13 @@ export function EmitterTree({ bridge }: Props) {
   const selectedIds = useEmitterSelectionIds();
   const primaryId = useEmitterSelectionPrimary();
 
+  // Batch B3 — drag/drop state. `draggingId` is the source row's id;
+  // `indicator` is the row + zone currently displaying a drop hint.
+  // Both lifted to the tree level so only one indicator can be active
+  // and so rows can read the dragged node's subtree for cycle checks.
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [indicator, setIndicator] = useState<DropIndicator>(null);
+
   // Fetch the full tree from the host. Pulled into a callback so the
   // tree-changed subscription can re-trigger it.
   const refreshTree = useCallback(() => {
@@ -506,11 +722,19 @@ export function EmitterTree({ bridge }: Props) {
 
   const rootChildren = tree?.root.children ?? [];
 
+  // Resolve the dragged node from id + flat row list (avoids a second
+  // tree walk per render). null when no drag is in progress.
+  const draggingNode = useMemo(() => {
+    if (draggingId === null) return null;
+    return flatRows.find((r) => r.node.id === draggingId)?.node ?? null;
+  }, [draggingId, flatRows]);
+
   return (
     <div
       data-testid="emitter-tree"
       data-selected-count={selectedIds.length}
       data-primary-id={primaryId ?? ""}
+      data-dragging-id={draggingId ?? ""}
       className="flex h-full flex-col"
     >
       <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">
@@ -531,6 +755,13 @@ export function EmitterTree({ bridge }: Props) {
               orderedIds={orderedIds}
               onRowClick={handleRowClick}
               bridge={bridge}
+              draggingId={draggingId}
+              draggingNode={draggingNode}
+              indicator={indicator}
+              setDraggingId={setDraggingId}
+              setIndicator={setIndicator}
+              rootChildren={rootChildren}
+              tree={tree}
             />
           ))}
         </ul>
