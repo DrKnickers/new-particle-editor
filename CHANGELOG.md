@@ -16,6 +16,21 @@ Conventions:
 
 ## Changelog
 
+### Playwright contract tests unblocked via WebView2 host-object IPC
+
+*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+The four Playwright contract specs guarding the bridge schema between the React UI and the C++ host (`engine/state/snapshot`, `engine/set/ground-z` round-trip, `engine/set/background` COLORREF, `engine/query/ground-slot-empty` typing) now run live and pass against `ParticleEditor.exe --new-ui --test-host`. Previously they were committed as `test.fixme` because WebView2 silently drops `chrome.webview.postMessage` calls from page → host while a CDP debugger is attached (Task 2.2 self-review, captured in [`tasks/lessons.md`](tasks/lessons.md) L-003). With this change `pnpm --filter @particle-editor/editor test:native` exercises 5 specs (1 smoke + 4 contract) covering the request/response and event surfaces against the real C++ handlers; the 25 Vitest MockBridge specs continue to pass.
+
+**How we tackled it.** New `HostBridgeProxy` ([`src/host/HostBridgeProxy.h`](src/host/HostBridgeProxy.h) / [`src/host/HostBridgeProxy.cpp`](src/host/HostBridgeProxy.cpp)) — a WRL `ClassicCom` `IDispatch` shim with a single `dispatchRequest(BSTR jsonReq) → BSTR jsonRes` method, registered under `chrome.webview.hostObjects.hostBridge` via `ICoreWebView2::AddHostObjectToScript`. Gated on `useTestHost` inside the controller-created callback in [`src/host/HostWindow.cpp`](src/host/HostWindow.cpp) so production launches never expose it. `BridgeDispatcher` refactored to extract the kind-string ladder into a private `DispatchInternal(json) → json` helper, with `Dispatch` (the existing async path that emits via `m_emit`) and the new `DispatchSync` (the host-object path that returns the response string directly) both routing through it. TypeScript side: `TestHostBridge` in [`web/apps/editor/src/bridge/test-host.ts`](web/apps/editor/src/bridge/test-host.ts) implements the `Bridge` interface using the host-object channel for requests; [`web/apps/editor/src/bridge/expose.ts`](web/apps/editor/src/bridge/expose.ts) prefers it whenever the host-object slot is populated. Events still flow over `chrome.webview.addEventListener("message", …)` — the CDP drop is page → host only.
+
+**Issues encountered and resolutions.** Two worth recording.
+
+1. **Events delivered as parsed JS values, not strings.** The host emits via `PostWebMessageAsJson`, so the `e.data` arriving at `chrome.webview.addEventListener("message", h)` is the already-parsed JS object — not a JSON-encoded string. The first cut of `TestHostBridge` typed the listener parameter as `{ data: string }` and unconditionally `JSON.parse`'d the payload, which silently failed (the `engine/state/changed` listener never fired even though the host had emitted the event). Fix: type `e.data` as `unknown` and accept either shape — `string` → parse, `object` → use as-is. Also applied to `NativeBridge.onMessage` for symmetry; the production event path was technically broken the same way but happened not to be exercised yet.
+2. **CDP drop is unidirectional.** L-003 originally framed the issue as "WebView2 drops `chrome.webview.postMessage` under CDP" with no direction specified. Verified during the contract-test pass that host → page postMessage (via `PostWebMessageAsJson`) reaches the page normally; only page → host (via `chrome.webview.postMessage`) is dropped. Practical implication: a host-object channel is only needed for the request direction; events can keep using postMessage. L-003 updated with this refinement.
+
+---
+
 ### Ground Height resets to 0 on every launch
 
 *2026-05-16 · [`380380a`](https://github.com/DrKnickers/new-particle-editor/commit/380380a) · [#79](https://github.com/DrKnickers/new-particle-editor/pull/79)*

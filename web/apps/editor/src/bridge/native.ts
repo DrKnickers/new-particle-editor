@@ -4,7 +4,23 @@ type Pending = { resolve: (data: unknown) => void; reject: (err: Error) => void 
 
 declare global {
   interface Window {
-    chrome?: { webview?: { postMessage: (s: string) => void; addEventListener: (ev: string, h: (e: { data: string }) => void) => void } };
+    // Optional fields throughout — the editor also runs in pure-browser
+    // dev (no WebView2) and in --test-host mode where postMessage is
+    // dropped under CDP; consumers must defensively check before use.
+    // The `hostObjects.hostBridge` slot is populated only under
+    // --test-host (HostWindow.cpp's AddHostObjectToScript path).
+    chrome?: {
+      webview?: {
+        postMessage?: (s: string) => void;
+        // `e.data` is the parsed JS value when the host posts via
+        // `PostWebMessageAsJson`, or the raw string when it posts via
+        // `PostWebMessageAsString`. Listeners must accept both.
+        addEventListener?: (ev: string, h: (e: { data: unknown }) => void) => void;
+        hostObjects?: {
+          hostBridge?: { dispatchRequest(jsonReq: string): Promise<string> };
+        };
+      };
+    };
   }
 }
 
@@ -18,7 +34,7 @@ export class NativeBridge implements Bridge {
     if (!wv) {
       throw new Error("NativeBridge: chrome.webview unavailable — running in browser? Use MockBridge.");
     }
-    wv.addEventListener("message", (e) => this.onMessage(e.data));
+    wv.addEventListener?.("message", (e) => this.onMessage(e.data));
   }
 
   private nextId(): RequestId {
@@ -31,7 +47,7 @@ export class NativeBridge implements Bridge {
     const envelope: WireMessage = { type: "req", id, kind: req.kind, params: req.params } as WireMessage;
     return new Promise<ResponseFor<R>>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (d: unknown) => void, reject });
-      window.chrome!.webview!.postMessage(JSON.stringify(envelope));
+      window.chrome!.webview!.postMessage!(JSON.stringify(envelope));
     });
   }
 
@@ -45,9 +61,18 @@ export class NativeBridge implements Bridge {
     return () => { bucket?.delete(handler as (e: Event) => void); };
   }
 
-  private onMessage(raw: string): void {
+  private onMessage(raw: unknown): void {
+    // `raw` is either the already-parsed JS value (host used
+    // PostWebMessageAsJson — current path) or a JSON-encoded string
+    // (PostWebMessageAsString). Accept both.
     let msg: WireMessage;
-    try { msg = JSON.parse(raw); } catch { return; }
+    if (typeof raw === "string") {
+      try { msg = JSON.parse(raw) as WireMessage; } catch { return; }
+    } else if (raw && typeof raw === "object") {
+      msg = raw as WireMessage;
+    } else {
+      return;
+    }
     if (msg.type === "res") {
       const p = this.pending.get(msg.id);
       if (!p) return;

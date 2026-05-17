@@ -40,6 +40,7 @@
 
 #include "AcceleratorBridge.h"
 #include "BridgeDispatcher.h"
+#include "HostBridgeProxy.h"
 #include "LayoutBroker.h"
 
 #include "../engine.h"
@@ -472,6 +473,49 @@ HRESULT HostWindowImpl::InitWebView2()
                                 {
                                     settings->put_AreDevToolsEnabled(TRUE);
                                     Log("[host] test-host: DevTools enabled (F12)\n");
+                                }
+                            }
+
+                            // Task 2.2.1: expose hostBridge via AddHostObjectToScript
+                            // (--test-host only). WebView2 drops postMessage under
+                            // CDP attachment (lessons.md L-003); the host-object
+                            // channel is on a separate marshalling path and works,
+                            // so Playwright drives request/response via this object
+                            // instead. Never exposed in production — gated on
+                            // useTestHost.
+                            if (useTestHost && webView)
+                            {
+                                ComPtr<HostBridgeProxy> proxy;
+                                HRESULT phr = Microsoft::WRL::MakeAndInitialize<HostBridgeProxy>(
+                                    &proxy,
+                                    [this](const std::string& req) -> std::string {
+                                        if (!dispatcher) {
+                                            return R"({"type":"res","ok":false,"error":"dispatcher not ready"})";
+                                        }
+                                        return dispatcher->DispatchSync(req);
+                                    });
+                                if (SUCCEEDED(phr) && proxy)
+                                {
+                                    VARIANT proxyVar;
+                                    VariantInit(&proxyVar);
+                                    proxyVar.vt = VT_DISPATCH;
+                                    proxyVar.pdispVal = proxy.Get();
+                                    proxyVar.pdispVal->AddRef();
+
+                                    HRESULT ahr = webView->AddHostObjectToScript(
+                                        L"hostBridge", &proxyVar);
+                                    Log("[host] test-host: AddHostObjectToScript(hostBridge) hr=0x%08lx\n",
+                                        ahr);
+
+                                    // VariantClear releases the AddRef above; the
+                                    // host-object map inside WebView2 keeps its
+                                    // own reference, so the proxy stays alive for
+                                    // the lifetime of the page.
+                                    VariantClear(&proxyVar);
+                                }
+                                else
+                                {
+                                    Log("[host] test-host: HostBridgeProxy init failed hr=0x%08lx\n", phr);
                                 }
                             }
 

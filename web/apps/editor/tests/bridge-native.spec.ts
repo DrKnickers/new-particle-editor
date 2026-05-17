@@ -1,31 +1,17 @@
-// Task 2.2 contract tests: drive the *real* native bridge inside
+// Task 2.2 / 2.2.1 contract tests: drive the *real* native bridge inside
 // ParticleEditor.exe --new-ui --test-host via CDP. These specs exist to
 // catch schema drift between the TypeScript MockBridge (covered by
 // Vitest in Task 2.1) and the C++ BridgeDispatcher — the failure mode
 // the LT-4 plan called out as Risk #2.
 //
-// CURRENTLY BLOCKED (Task 2.2 self-review):
-//   WebView2 silently drops chrome.webview.postMessage calls when a CDP
-//   debugger is attached. Verified empirically — no WebMessageReceived
-//   event fires on the host side, even when bridge.request() is invoked
-//   from a page-internal setInterval (not directly from CDP eval). The
-//   six WebMsg log lines on startup come from App.tsx's mount-time
-//   useEffects that fire before CDP attaches; nothing after that point
-//   delivers.
-//
-//   The unblock path is to expose a host object via
-//   ICoreWebView2::AddHostObjectToScript and route test traffic through
-//   that channel instead of chrome.webview.postMessage. That's tracked
-//   as a follow-up — the C++ host-side plumbing exists for it (an
-//   IDispatch object with a Dispatch(json) → promise<json> method), but
-//   wasn't built in Task 2.2 because the design was scoped to
-//   AdditionalBrowserArguments + Playwright connectOverCDP only.
-//
-//   The tests are kept as `.fixme` rather than removed so the contract
-//   they encode (shape of EngineStateDto, ground-z round-trip, COLORREF
-//   round-trip, query-typing) is preserved — once the host-object IPC
-//   lands, dropping .fixme should flip them green without rewriting the
-//   assertions.
+// Channel: in --test-host mode, App.tsx swaps `window.bridge` for a
+// TestHostBridge that routes requests through WebView2's host-object
+// IPC channel (`chrome.webview.hostObjects.hostBridge`) instead of
+// `chrome.webview.postMessage`. WebView2 silently drops postMessage
+// calls from page → host while a CDP debugger is attached
+// (tasks/lessons.md L-003); the host-object channel is on a separate
+// marshalling path and is unaffected. Events (host → page) still flow
+// over postMessage and are wired up by TestHostBridge.on().
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
@@ -73,7 +59,7 @@ test("CDP connect + window.bridge is attached (smoke)", async () => {
   expect(probe.hasWebview).toBe(true);
 });
 
-test.fixme("engine/state/snapshot returns a valid EngineStateDto shape", async () => {
+test("engine/state/snapshot returns a valid EngineStateDto shape", async () => {
   const dto = (await page.evaluate(async () => {
     const b = (window as { bridge?: { request(r: { kind: string; params: object }): Promise<unknown> } })
       .bridge;
@@ -94,7 +80,7 @@ test.fixme("engine/state/snapshot returns a valid EngineStateDto shape", async (
   expect(typeof dto.bloomAvailable).toBe("boolean");
 });
 
-test.fixme("engine/set/ground-z mutates state and fires engine/state/changed", async () => {
+test("engine/set/ground-z mutates state and fires engine/state/changed", async () => {
   const result = await page.evaluate(async () => {
     type AnyBridge = {
       request(r: { kind: string; params: object }): Promise<unknown>;
@@ -137,7 +123,7 @@ test.fixme("engine/set/ground-z mutates state and fires engine/state/changed", a
   expect(result.event!.groundZ).toBeCloseTo(17.5, 5);
 });
 
-test.fixme("engine/set/background round-trips a COLORREF", async () => {
+test("engine/set/background round-trips a COLORREF", async () => {
   const result = await page.evaluate(async () => {
     const b = (window as { bridge?: { request(r: { kind: string; params: object }): Promise<unknown> } })
       .bridge;
@@ -153,7 +139,7 @@ test.fixme("engine/set/background round-trips a COLORREF", async () => {
   expect(result).toBe(0x00808080);
 });
 
-test.fixme("engine/query/ground-slot-empty returns boolean", async () => {
+test("engine/query/ground-slot-empty returns boolean", async () => {
   const r = await page.evaluate(async () => {
     const b = (window as { bridge?: { request(r: { kind: string; params: object }): Promise<unknown> } })
       .bridge;

@@ -124,3 +124,22 @@ via the SDK's `CoreWebView2EnvironmentOptions`, DevTools toggle,
 landed and pass; the four schema-contract specs are committed as
 `test.fixme` so the assertions they encode survive into whatever
 IPC channel replaces postMessage for tests.
+
+**Followup (Task 2.2.1, 2026-05-16).** The host-object unblock landed.
+`HostBridgeProxy` (COM IDispatch) is registered under
+`chrome.webview.hostObjects.hostBridge` via `AddHostObjectToScript`
+when `--test-host` is active. `TestHostBridge` in TypeScript routes
+requests through that channel; the four schema-contract specs are
+now live and pass. One refinement worth recording: the CDP drop is
+**page → host only**. Host → page postMessage (events emitted via
+`ICoreWebView2::PostWebMessageAsJson`) still reaches the page
+normally under CDP attachment — verified by the
+`engine/set/ground-z mutates state and fires engine/state/changed`
+spec, which subscribes via `chrome.webview.addEventListener("message", …)`
+and observes the event delivered after the request completes.
+Practical implication: a host-object channel is only needed for the
+request direction; events can stay on postMessage. Also, the data
+delivered by `addEventListener("message", h)` is the *parsed* JS
+value when the host uses `PostWebMessageAsJson` (string only when
+the host uses `PostWebMessageAsString`); `TestHostBridge`
+defensively accepts both shapes.
