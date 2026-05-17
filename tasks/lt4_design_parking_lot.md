@@ -2167,3 +2167,125 @@ respectively); `spawner/start` / `spawner/trigger` / `spawner/stop`
   `engine/set/heat-debug` shouldn't mark dirty; small follow-up
   to `isMutating()` (MockBridge) + the `m_markDirty` lambda
   branches (C++).
+
+### 2026-05-17 · Render loop + per-frame tick (capstone foundation)
+
+Particles are visible in `--new-ui`. The host's main loop now drives
+`SpawnerDriver::Tick` → `Engine::Update` → `Engine::Render` on every
+idle tick. Combined with the prior host-state-plumbing batch, the
+new-UI binary has visual + behavioural parity with `--legacy-ui` for
+non-emitter-editing workflows.
+
+Commit: `a336d6d` (single feat — no new deps; no test reworks
+needed). Tests 74 Vitest (unchanged) + 47 Playwright (46 → 47, +1
+render-loop spec). MSBuild 0/0.
+
+**What changed:**
+
+- *Main loop conversion.* `HostWindowImpl::Run` switched from
+  blocking `GetMessage` to `PeekMessage` idle-render at
+  [src/host/HostWindow.cpp:~1019]. Drain queued messages, then
+  render-once on idle, loop until WM_QUIT. No `IsDialogMessage`
+  routing — the host has no modeless Win32 dialogs (tool panels
+  live in React). When `engine == nullptr` (transient startup
+  exception), `WaitMessage()` yields rather than spinning.
+- *RenderD3D9 body.* Replaced the placeholder clear-to-background
+  with the legacy three-line sequence. Added `m_lastRenderTime`
+  + `m_lastEmittedActiveCount` host members. Uses the existing
+  `GetTimeF()` helper from [src/engine.h:54] — already public,
+  no factor-out needed.
+- *Placeholder D3D9 device retired.* Host's `d3d`/`device`
+  members + `InitD3D9()` deleted entirely. Engine owns its own
+  device internally; two devices on one HWND was a structural
+  hazard. WM_PAINT reduced to BeginPaint/EndPaint validation
+  with no draw call — idle render owns the pipeline.
+- *Engine notifications on `*m_pps` replacement.* `file/new` and
+  `file/open` success paths now call `engine->Clear()` +
+  `engine->OnParticleSystemChanged(-1)` after replacing the
+  particle system. Without these the engine wouldn't pick up the
+  new system. Matches legacy at [src/main.cpp:1207] /
+  [src/main.cpp:1341] / [src/main.cpp:1522].
+- *`spawner/active-count` live source.* `BridgeDispatcher::
+  EmitSpawnerActiveCount(int)` helper added. Called from
+  `RenderD3D9` when `Engine::GetNumInstances()` differs from
+  `m_lastEmittedActiveCount`. Debounce avoids WebMessage spam.
+  React SpawnerPanel subscribes to the existing event; only the
+  source flipped from MockBridge timer to live engine state.
+- *Dirty-flag tightening (Batch 3 open item closed).*
+  `engine/set/paused` + `engine/set/heat-debug` no longer mark
+  dirty. One-line each in `web/apps/editor/src/bridge/mock.ts`
+  `isMutating()` + the C++ dispatcher cases. No existing test
+  asserted dirty=true through these setters — zero test reworks
+  needed.
+
+**Locks worth surfacing for future batches:**
+- *PeekMessage idle-render is the right loop shape for a hybrid
+  WebView2 + D3D9 host.* WebView2's message routing happens
+  inside `DispatchMessage`, so PeekMessage drains its messages
+  the same as any other window message. Idle render at the end
+  of the drain gives a clean 60-ish Hz cadence with no manual
+  timer required (no WM_TIMER spam). Worth knowing for any
+  future host that wants to drive D3D animation.
+- *Single live source-of-truth + cache fallback pattern repeats.*
+  The `spawner/active-count` event source-flip follows the same
+  shape as the prior batch's snapshot `spawner` field (driver-
+  first, cache-fallback). MockBridge keeps the cache for unit-
+  test paths; production reads live engine state. The schema
+  + React subscription doesn't change. Any future state that
+  has both a mock-friendly cache and a live engine-driven source
+  can follow this pattern.
+- *Dropping the placeholder device was safe.* The subagent's
+  intuition matched the structural hazard: two D3D9 devices on
+  one HWND would have caused weird flickering or driver lock-up
+  eventually. The host's `device` was scaffolding from
+  pre-engine-integration days. Now that Engine owns its device
+  unconditionally, the host's own device adds nothing.
+
+**Implementer notes (from the subagent's report):**
+1. *`GetTimeF()` was already public.* Declared at
+   [src/engine.h:54], no factor-out needed. HostWindow.cpp
+   already includes engine.h. Clean.
+2. *First render frame in `--new-ui` worked without shimming.*
+   Engine was already constructed in WM_CREATE by the prior
+   batch with `(hwnd, hViewport, ...)`. We just had to start
+   calling `engine->Render()`.
+3. *Zero test reworks required by dirty-flag tightening.* No
+   existing test asserted `dirty=true` via paused/heat-debug.
+   The `bridge-contract.test.ts` `it.each` for setters asserts
+   the snapshot's field value, not dirty state. The
+   `host-state-plumbing.spec.ts` `file/new` / `file/open` specs
+   passed unchanged after the new `engine->Clear()` +
+   `OnParticleSystemChanged(-1)` calls — confirming those are
+   safe (no crashes, no event regressions).
+
+**Open follow-ups for future work** (explicitly deferred):
+- *Camera controls* — middle/right mouse drag, scroll-zoom. Not
+  in this batch. Separate "viewport interaction" batch.
+- *Cursor-driven gravity test* — legacy has a mouse-cursor-as-
+  D3D-object thing for testing emitter forces. Same separate
+  batch.
+- *Visual regression smoke* — particle rendering is verified
+  indirectly via `spawner/active-count` event observation. A
+  proper screenshot-diff harness would catch render bugs the
+  count-observation can't. Not blocking; nice to have for a
+  Phase 4 acceptance run.
+
+### Foundation status after this batch
+
+Phase 3 foundations are complete. The new-UI binary:
+
+- Renders particles live (this batch).
+- Reads/writes `.alo` files (host state plumbing).
+- Owns the bridge surface for 10 of 13 Screen 8 sub-dialogs +
+  Screen 7 primitives + Screens 1/2/3 shell.
+- Has 121 automated tests gating regressions (74 Vitest + 47
+  Playwright).
+
+Remaining LT-4 surface:
+- **Screen 4 — Emitter tree** (★★★★). The big load-bearing
+  screen. Unblocks the three Screen-4-dependent sub-dialogs
+  (Rescale Emitter, Increment Index, Link Group Settings).
+- **Screen 5 — Curve editor** (★★★, large).
+- **Screen 6 — Track editor** (medium-large).
+- **Phase 4 — cutover** (parity acceptance, legacy delete,
+  CHANGELOG/ROADMAP ship entry, release zip update).
