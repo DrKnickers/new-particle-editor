@@ -2933,3 +2933,103 @@ the cursor over the viewport). Cleaner than legacy.
 - *Multi-spawn-per-Shift-hold.* Could be enabled by removing the
   null-check and tracking a `std::vector<ParticleSystemInstance*>`.
   Speculative; not requested.
+
+### 2026-05-17 · Screen 4 Batch A (read-only emitter tree + selection)
+
+First of three batches for the load-bearing screen. Replaces the
+sidebar `(placeholder — Phase 3 Screen 4)` with a real read-only
+emitter tree fed by the live particle system, plus click-to-select
+sync via `emitters/selected` event + `selectedEmitterId` on
+`EngineStateDto`. Batches B and C add mutations + drag/drop +
+context menu + link-group brackets + inline rename + keyboard nav.
+
+Commit: `0d1c46b` (single feat — no new deps). Tests 78 Vitest
+(74 → 78, +2 contract + 2 EmitterTree component specs) + 50
+Playwright (48 → 50, +2 specs). MSBuild 0/0.
+
+**What changed:**
+
+- *Real `EmitterTreeNode` shape*. Was `{ id, name, children }`
+  placeholder from Batch 4's import preview. Now `{ id, name,
+  role, linkGroup, visible, children }` with `role: "root" |
+  "lifetime" | "death"` derived from parent slot. Existing
+  `emitters/preview-from-file` populates the new fields (preview
+  trees show role / linkGroup from the source `.alo` and
+  visible always true).
+- *Real `emitters/list` C++ handler*. Walks `(*m_pps)->
+  getEmitters()`, identifies roots (parent == nullptr) as
+  children of a synthetic root (`id: -1`), recurses into
+  `spawnDuringLife` / `spawnOnDeath` (both `size_t` indices;
+  sentinel for "no child" is `(size_t)-1` per the grep of legacy
+  EmitterList.cpp lines 1349 / 1448 / 3420 / 4443).
+- *Selection lives in BridgeDispatcher* — `int m_selectedEmitterId
+  = -1` internal member (NOT plumbed through `BindHostState`
+  because selection is editor-local, not engine state). `emitters/
+  select` updates the field, emits `emitters/selected { id }`
+  event, AND emits `engine/state/changed` so React's snapshot
+  consumers see the new value. Snapshot serialises `-1` as JSON
+  `null` to match the `number | null` schema discriminator.
+- *React `EmitterTree`* — replaces the sidebar placeholder.
+  Fetches via `emitters/list` on mount, subscribes to
+  `emitters/tree/changed` (no-op until Batch B mutations emit
+  it) + `emitters/selected`. Rows are buttons with role glyph
+  (`●` root / `↻` lifetime / `✕` death), link-group dot when
+  `linkGroup !== 0`, indent via `paddingLeft: 8 + depth * 12 px`.
+  Selected row gets `bg-sky-500/15 border-l-2 border-sky-500`.
+  `data-emitter-id` attribute on each button so Playwright +
+  future Batch B tests can target rows without text-matching.
+
+**Locks worth surfacing for future batches:**
+
+- *Selection state belongs inside BridgeDispatcher, not the host.*
+  Editor-local state (selection, hover state, scroll position,
+  expand/collapse) that doesn't affect engine behaviour stays
+  in the dispatcher. Host plumbs in only what the engine
+  actually touches (`ParticleSystem` ownership, `SpawnerDriver`,
+  `IFileManager`, the attached cursor system from shift-spawn).
+  Cleaner separation; less for `BindHostState` to grow.
+- *Subscribe-to-events from React, derive everything from
+  snapshot.* No local React state mirroring the server's
+  selection. The server is the source of truth; React just
+  reads from snapshot. Same pattern as the Spawner panel's
+  `lastCommitted` ref breaking the echo loop. Generalizable:
+  any state that has a clear server source-of-truth should NOT
+  also have a React-side mirror. Pick one.
+- *Sentinel-by-grep is durable.* Legacy used `(size_t)-1` for
+  "no spawn child" in four separate places. The new code uses
+  `static_cast<size_t>(-1)` directly, matching. Any future C++
+  port that needs to walk emitter relationships uses the same
+  sentinel.
+
+**Implementer notes (from the subagent's report):**
+
+1. *Pre-existing "rejects emitters/* as not implemented" test
+   needed adjusting.* `bridge-contract.test.ts:236` asserted
+   `emitters/list` throws. Now it asserts on `emitters/update`
+   instead (still unimplemented in Batch A; lands in Batch B).
+   When Batch B implements `emitters/update`, this test will
+   need to flip again to assert on `emitters/move` or
+   `emitters/duplicate` (whichever remains the last
+   unimplemented kind). Generalizable: per-kind "not implemented"
+   assertions migrate forward as kinds get implemented.
+2. *Host's default ParticleSystem has 1 emitter only.* The
+   Playwright spec works fine on the single-row case. If Batch
+   B tests want a richer tree, the host's init at
+   [src/host/HostWindow.cpp:1274] could `addLifetimeEmitter` /
+   `addDeathEmitter` a couple of children. Cheap when needed.
+3. *No selector collisions in tests.* The EmitterTree uses
+   `data-testid="emitter-tree"` + `role="tree"` + `role="treeitem"`.
+   No conflict with the existing Radix `role="dialog"` /
+   `role="menu"` etc.
+
+**Open follow-ups for Batches B + C** (explicitly NOT in this
+batch):
+
+- **Batch B**: mutations (`emitters/duplicate`, `emitters/delete`,
+  `emitters/move`, `emitters/update`, `emitters/rename`), context
+  menu, drag/drop, multi-select. Wires the three Screen-4-blocked
+  Screen-8 sub-dialogs (Rescale Emitter, Increment Index, Link
+  Group Settings).
+- **Batch C**: link-group bracket visualisation (MT-9 port), F2 /
+  double-click inline rename, keyboard nav (arrows / Enter /
+  Delete / Cut / Copy / Paste).
