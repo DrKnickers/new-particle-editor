@@ -20,7 +20,7 @@ Conventions:
 
 ### Ground Height resets to 0 on every launch
 
-*2026-05-16 · [`380380a`](https://github.com/DrKnickers/new-particle-editor/commit/380380a) · [#79](https://github.com/DrKnickers/new-particle-editor/pull/79)*
+*2026-05-16 · [`d66db84`](https://github.com/DrKnickers/new-particle-editor/commit/d66db84) · [#79](https://github.com/DrKnickers/new-particle-editor/pull/79)*
 
 Ground Z is now session-only — every editor launch starts with the ground plane at z=0 regardless of what value was in effect when you last closed. Adjusting the *Ground Height* spinner during a session still works as before; it just doesn't write to the registry anymore. Rationale: an anchored vertical reference makes "did I just open the editor, or is this a continued workflow?" unambiguous, and Reset View Settings can't surprise you with a stale offset from a previous tuning pass.
 
@@ -30,7 +30,7 @@ Ground Z is now session-only — every editor launch starts with the ground plan
 
 ### Import emitters from another `.alo` file
 
-*2026-05-16 · [`7640798`](https://github.com/DrKnickers/new-particle-editor/commit/7640798) · [#77](https://github.com/DrKnickers/new-particle-editor/pull/77)*
+*2026-05-16 · [`031ccb8`](https://github.com/DrKnickers/new-particle-editor/commit/031ccb8) · [#77](https://github.com/DrKnickers/new-particle-editor/pull/77)*
 
 New **File → Import Emitters from File…** entry opens an `.alo` picker, then a modal dialog showing the source file's emitter tree as a `TVS_CHECKBOXES` TreeView. Tick whichever emitters you want — parent/child auto-include is on by default so ticking a parent picks up its descendants — hit OK, and the selected emitters land as new root emitters in the current particle system. The dialog has *Select all* / *Clear* / *Browse…* buttons; *Browse…* swaps the source file in place without cancelling. OK is disabled until at least one emitter is ticked. Imported emitters arrive with collision-free names (e.g. `smoke_1`), spawn-child cross-references re-mapped where both source and child were imported (dropped child → `-1`), and source link groups re-created as fresh destination groups when ≥2 members of the source group survived the import. The entire import is one undo step — Ctrl+Z atomically rolls back every newly-added emitter.
 
@@ -49,7 +49,7 @@ Generalises the existing single-emitter clipboard copy/paste (which still works 
 
 ### Skydome slots now load real base-game (and mod-overlay) textures
 
-*2026-05-16 · [`b4d2415`](https://github.com/DrKnickers/new-particle-editor/commit/b4d2415) · [#75](https://github.com/DrKnickers/new-particle-editor/pull/75)*
+*2026-05-16 · [`b2e80e0`](https://github.com/DrKnickers/new-particle-editor/commit/b2e80e0) · [#75](https://github.com/DrKnickers/new-particle-editor/pull/75)*
 
 Follow-up to MT-3. The eight bundled skydome slots are no longer procedural-gradient placeholders — they point at curated base-game textures from `DATA\ART\TEXTURES\` and route through the existing `FileManager` resolution chain, so the active mod's overlay is picked up automatically the same way emitter textures are. New slot labels match what the textures actually look like: Storm, Murky Clouds, Smog Clouds, Blue Horizon, Blue Sky, Orange Horizon, Orange Sky, Volcanic Storm. Switching mods via the Mods menu now also refreshes the active skydome live — no editor restart needed to see a mod's `W_SKY*.DDS` override take effect. When `FileManager` can't resolve a slot's path (no base game installed, mod doesn't ship the file), the slot gracefully falls back to the same procedural RCDATA placeholder it shipped with, so the slot still renders something rather than going Off.
 
@@ -67,7 +67,7 @@ The skydome sphere also got rotated to match the game's coordinate convention: i
 
 ### Selectable skydome backgrounds via the unified Background button
 
-*2026-05-16 · [`f83a26c`](https://github.com/DrKnickers/new-particle-editor/commit/f83a26c) · [#73](https://github.com/DrKnickers/new-particle-editor/pull/73)*
+*2026-05-16 · [`c2de2c5`](https://github.com/DrKnickers/new-particle-editor/commit/c2de2c5) · [#73](https://github.com/DrKnickers/new-particle-editor/pull/73)*
 
 The toolbar's existing **Background:** colour button is now the single entry point for everything background-related: click it once to open a modeless **Background** picker dialog — a 12-slot icon-mode `SysListView32` laid out as a 4×3 grid of 192×192 thumbnails. Slot 0 is **Solid colour**, slots 1–8 are bundled scenes (Space / Atmosphere / Sunset / Dawn / Night / Overcast / Studio / Indoor), and slots 9–11 are user-customisable. Clicking slot 0 opens the standard Win32 colour-picker dialog seeded with the current background colour and the editor's shared 16-slot custom palette; clicking any other slot loads the corresponding skydome.
 
@@ -103,7 +103,7 @@ The shipped build includes **procedural-gradient TGA placeholders** (~12 MB tota
 
 ### Adjustable environment lighting in the preview
 
-*2026-05-15 · [`d91857c`](https://github.com/DrKnickers/new-particle-editor/commit/d91857c) · [#71](https://github.com/DrKnickers/new-particle-editor/pull/71)*
+*2026-05-15 · [`84d3cf3`](https://github.com/DrKnickers/new-particle-editor/commit/84d3cf3) · [#71](https://github.com/DrKnickers/new-particle-editor/pull/71)*
 
 A new **View → Lighting…** modeless dialog exposes the engine's three directional lights (Sun + Fill 1 + Fill 2) and the scene-global ambient and shadow colours. Layout emulates the Petroglyph map editor's Sun / Fill panel: Sun gets Intensity, Z Angle, Tilt Angle, plus four ColorButtons (Ambient / Specular / Diffuse / Shadow); each Fill gets Intensity, Z Angle, Tilt Angle, and a single Diffuse ColorButton. **Force Fill Light Alignment** (Sun group, default on) drives `Fill1.Z = Sun.Z + 120°`, `Fill2.Z = Sun.Z + 210°`, both Tilts fixed at `−10°`, and greys out the fill-angle spinners + the Mirror Sun button. **Mirror Sun** (Fill group, disabled while alignment is enforced) copies the Sun's Diffuse colour to both Fills in one click. The bottom **Reset to defaults** button restores the canonical map-editor values after a confirmation prompt; View → Reset View Settings does the same, alongside its existing background / ground / bloom resets, and the confirm prompt's text was updated to mention lighting.
 
@@ -135,7 +135,7 @@ Same PR brings two supporting fixes. **`Spinner_SetReadOnly` API** ([`src/UI/Spi
 
 ### Frequently-used textures palette
 
-*2026-05-15 · [`4897eee`](https://github.com/DrKnickers/new-particle-editor/commit/4897eee) · [#69](https://github.com/DrKnickers/new-particle-editor/pull/69)*
+*2026-05-15 · [`a402cda`](https://github.com/DrKnickers/new-particle-editor/commit/a402cda) · [#69](https://github.com/DrKnickers/new-particle-editor/pull/69)*
 
 A new **palette popup** on the Appearance tab surfaces the textures the user has recently picked or pinned, per mod, as 140×160 thumbnail cells. The popup is opened by a small painter's-palette button in the Textures groupbox header — Win32 toggle behaviour, modeless and sticky, position remembered across sessions. Double-clicking a cell applies that texture to the Color or Bump slot (chosen by the filter toggle at the top of the popup) and closes the popup. Hovering a cell reveals a thumbtack badge in the top-right of the thumbnail; clicking it pins the entry into the Pinned section (Pinned and Recent each cap at 8; a transient status strip shows "Pins full (8). Unpin one to make room." when overflow is attempted, auto-clearing after 3 seconds). Recents auto-populate on every successful texture load — file-picker pick, palette double-click, and `EN_KILLFOCUS` on the existing Color / Bump edit fields (not per-keystroke, so typing a filename doesn't pollute Recent with the in-progress fragments). Mod switches swap the palette automatically; the in-memory thumbnail cache is invalidated so identically-named files from different mods don't share a stale preview.
 
@@ -165,7 +165,7 @@ The ground-picker port reuses the palette's pixel constants but keeps the existi
 
 ### Selectable ground texture
 
-*2026-05-14 · [`c545711`](https://github.com/DrKnickers/new-particle-editor/commit/c545711) · [#67](https://github.com/DrKnickers/new-particle-editor/pull/67)*
+*2026-05-14 · [`cb9d21e`](https://github.com/DrKnickers/new-particle-editor/commit/cb9d21e) · [#67](https://github.com/DrKnickers/new-particle-editor/pull/67)*
 
 The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground Texture:`** label + 24×24 owner-drawn preview button in the top toolbar (next to the existing Ground Height spinner and Background colour button) shows a thumbnail of the currently-selected ground texture. Clicking the preview opens a modal **Ground Texture** picker with a 4×2 grid of 64×64 slot thumbnails. Bundled slots are **Dirt** (preserved from pre-MT-2), **Grass**, **Sand**, **Snow** (vanilla EaW textures `W_TEMPGRND00.DDS`, `W_SAND00.DDS`, `W_SNOW_RGH.DDS` bundled via RCDATA), and a special **Solid Color** slot driven by a user-picked `COLORREF` (default flat grey RGB(128,128,128)). Three more slots — Custom 1, Custom 2, Custom 3 — start empty.
 
@@ -197,7 +197,7 @@ The picker dialog (`IDD_GROUND_TEXTURE_PICKER`) uses a `SysListView32` in icon m
 
 ### Configurable exempt set per link group
 
-*2026-05-14 · [`238c0a1`](https://github.com/DrKnickers/new-particle-editor/commit/238c0a1) · [#65](https://github.com/DrKnickers/new-particle-editor/pull/65)*
+*2026-05-14 · [`2e166b6`](https://github.com/DrKnickers/new-particle-editor/commit/2e166b6) · [#65](https://github.com/DrKnickers/new-particle-editor/pull/65)*
 
 The v1 hard-coded exempt set (textures + atlas-index curve + name) becomes the default for new and pre-existing groups, and is now overridable per group through a new **Group settings…** dialog reached from the right-click menu when a linked emitter is selected. The dialog lists ~50 emitter fields grouped by category (Textures / Curves / Lifetime / Physics / Appearance / Weather / Rotation / Misc). **Checked** rows are *shared* — the field propagates across all group members on edit. **Unchecked** rows are *per-emitter* — each member keeps its own value. A *Reset to defaults* button restores the v1 set (textures + atlas index unchecked = per-emitter; everything else checked = shared) without leaving the dialog.
 
@@ -233,7 +233,7 @@ Resource IDs in the 40160 / 1600 / 170 ranges; resource pairs `IDD_LINK_GROUP_SE
 
 ### Visual link-group bracket for linked emitters
 
-*2026-05-14 · [`075ccbe`](https://github.com/DrKnickers/new-particle-editor/commit/075ccbe) · [#63](https://github.com/DrKnickers/new-particle-editor/pull/63)*
+*2026-05-14 · [`b4079fc`](https://github.com/DrKnickers/new-particle-editor/commit/b4079fc) · [#63](https://github.com/DrKnickers/new-particle-editor/pull/63)*
 
 The emitter tree's right margin now carries a coloured bracket per link group, so group membership is legible at scroll-speed. Each group claims a lane (greedy interval scheduling sorted by topmost member's Y; non-overlapping groups share a lane). A 12-entry Tableau-derived palette (luminance-shifted to hit WCAG 2.1 non-text contrast against `COLOR_WINDOW`) is mapped via `groupId % 12`, with the first 6 entries ordered for maximum perceptual distance because realistic particle systems mostly use ≤ 6 simultaneous link groups. Dots mark each member row at `(laneX, rowCentreY)` with a 5 px horizontal stub pointing toward the row text; a vertical lane line connects topmost-to-bottommost dot. Lane width is DPI-aware (6 px at 96 DPI) and floors at 2 px when the system is packed with many overlapping groups.
 
@@ -269,7 +269,7 @@ A `#ifndef NDEBUG`-only palette contrast printer (`DebugVerifyBracketPalette`) f
 
 ### Multi-select for the emitter list
 
-*2026-05-12 · [`ff000c4`](https://github.com/DrKnickers/new-particle-editor/commit/ff000c4) · [#60](https://github.com/DrKnickers/new-particle-editor/pull/60)*
+*2026-05-12 · [`a8d4453`](https://github.com/DrKnickers/new-particle-editor/commit/a8d4453) · [#60](https://github.com/DrKnickers/new-particle-editor/pull/60)*
 
 The emitter tree now supports multi-emitter selection: **Ctrl-click** toggles individual emitters in and out of the selection, **Shift-click** selects a tree-order range from the anchor to the clicked row, and **click-and-drag from an empty area** draws a marquee that sweeps up every row whose stripe it crosses. Once two or more emitters are selected, the right-click menu surfaces **`Link selected (N emitters)`** (with the canonical-source `ConfirmLinkOverwrite` dialog from MT-7) and **`Add selected to link group →`** for fold-into-existing-group workflows; with a mixed selection (one group represented plus some unlinked rows) the menu offers **`Add unlinked to Group N`** so the joiners merge in one click without dissolving the existing group. The "canonical" emitter that governs a Link-selected operation is now whatever you most recently plain- or Ctrl-clicked, so the rule is *"the emitter you clicked last governs the group"* — not always the topmost.
 
@@ -300,7 +300,7 @@ The lock-out overlay is created once in `WM_CREATE` ([src/main.cpp:1908](src/mai
 
 ### Linked emitters (share parameters across a group)
 
-*2026-05-12 · [`6a9c7ab`](https://github.com/DrKnickers/new-particle-editor/commit/6a9c7ab) · [#58](https://github.com/DrKnickers/new-particle-editor/pull/58)*
+*2026-05-12 · [`ddf28b5`](https://github.com/DrKnickers/new-particle-editor/commit/ddf28b5) · [#58](https://github.com/DrKnickers/new-particle-editor/pull/58)*
 
 Two or more emitters in a particle system can now be linked into a **link group** whose non-textural parameters stay in lock-step: edit any field on a linked emitter and every sibling in its group instantly updates to match. The motivating workflow is the *"5 emitters, 5 textures, identical motion"* case — atlas variants, fire/smoke colour pairs, layered weather effects — where today each parameter change requires N parallel edits. With link groups, edit one, the rest follow.
 
@@ -338,7 +338,7 @@ Resource IDs 40119, 40120, and the 40130–40159 dynamic range were added to bot
 
 ### Duplicate with index increment
 
-*2026-05-12 · [`c60cb2e`](https://github.com/DrKnickers/new-particle-editor/commit/c60cb2e) · [#56](https://github.com/DrKnickers/new-particle-editor/pull/56)*
+*2026-05-12 · [`b671e38`](https://github.com/DrKnickers/new-particle-editor/commit/b671e38) · [#56](https://github.com/DrKnickers/new-particle-editor/pull/56)*
 
 Two new entries appear in the emitter right-click context menu directly below *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the atlas index track (`TRACK_INDEX`) by +1 in one click; **Duplicate (increment index...)** prompts for an integer increment N (1–999) first, making larger atlas jumps equally fast. The motivating workflow: build one base emitter aimed at atlas frame 0, right-click-duplicate 15 more times, and each copy automatically targets the next sprite-sheet cell — no track editor required.
 
@@ -350,7 +350,7 @@ Two new entries appear in the emitter right-click context menu directly below *D
 
 ### Pause / frame-step the preview
 
-*2026-05-11 · [`2899f5b`](https://github.com/DrKnickers/new-particle-editor/commit/2899f5b) · [#53](https://github.com/DrKnickers/new-particle-editor/pull/53)*
+*2026-05-11 · [`0bf1098`](https://github.com/DrKnickers/new-particle-editor/commit/0bf1098) · [#53](https://github.com/DrKnickers/new-particle-editor/pull/53)*
 
 Press **F8** to freeze the preview at the current simulation tick; press it again to resume from exactly where time left off (no time-warp pop, no synthetic catch-up burst). While paused, **F9** steps the simulation forward by one notional 60 Hz frame; **F10** steps ten frames (≈167 ms — enough to traverse a one-second particle lifetime in six presses). All three actions also live under *View → Pause Preview / Step 1 Frame / Step 10 Frames*, and as three new toolbar buttons next to the existing Bloom toggle: a pause check-button (cell 8, two-vertical-bars glyph), step-1 (cell 9, ▷|), step-10 (cell 10, ▷▷|). The two step buttons and the corresponding menu entries grey out when not paused. The FPS pane in the status bar suffixes ` · PAUSED` while frozen so the state is glanceable. The clock is process-local — pause always starts off on launch, by design.
 
@@ -372,7 +372,7 @@ UI follows the existing toggle pattern from Show Ground and Bloom: a `BTNS_CHECK
 
 ### Two-child emitter support: investigation, not extension
 
-*2026-05-11 · [`2e1b17a`](https://github.com/DrKnickers/new-particle-editor/commit/2e1b17a) · [#51](https://github.com/DrKnickers/new-particle-editor/pull/51)*
+*2026-05-11 · [`a0a2a2c`](https://github.com/DrKnickers/new-particle-editor/commit/a0a2a2c) · [#51](https://github.com/DrKnickers/new-particle-editor/pull/51)*
 
 MT-5 closes as an investigation, not a feature change. The question — whether the engine supports more than one on-lifetime child per emitter — is now answered authoritatively from the canonical game binaries: **it does not**. Every emitter holds exactly one death-child pointer and one life-child pointer in its runtime struct; the format-level "could we just stuff a second `0x39` mini-chunk in there?" question is moot because the runtime has nowhere to put a second pointer. The original MT-5 sub-question (can the existing two slots — one death, one life — be set on a single emitter simultaneously) was already supported end-to-end by our editor; no UI change was needed. Workarounds for the "I want a second life child" case live in [`tasks/multi_child_emitter_investigation.md`](tasks/multi_child_emitter_investigation.md): chain emitters (parent → life-child → life-child → …), duplicate the parent block, or rely on the standard death-channel-plus-life-channel pair.
 
@@ -390,7 +390,7 @@ MT-5 closes as an investigation, not a feature change. The question — whether 
 
 ### Bloom blur-iteration count proven canonical
 
-*2026-05-11 · [`d8f5794`](https://github.com/DrKnickers/new-particle-editor/commit/d8f5794) · [#49](https://github.com/DrKnickers/new-particle-editor/pull/49)*
+*2026-05-11 · [`64797fd`](https://github.com/DrKnickers/new-particle-editor/commit/64797fd) · [#49](https://github.com/DrKnickers/new-particle-editor/pull/49)*
 
 `BLOOM_BLUR_ITERATIONS = 4` in [`src/engine.cpp`](src/engine.cpp:551) is now provably the canonical engine value, not the educated guess it was when MT-6 shipped. Comment-only change next to the constant — no behavioural diff, no UI surface, no perf change. Visual A/B against the canonical Terrain Editor is no longer needed for *this* specific question (the value is proven from the binary), though it remains worth doing once as a sanity check on the broader bloom pipeline.
 
@@ -409,7 +409,7 @@ MT-5 closes as an investigation, not a feature change. The question — whether 
 ---
 
 ### Bloom in the preview renderer
-*2026-05-11 · [`0a172eb`](https://github.com/DrKnickers/new-particle-editor/commit/0a172eb) · [#47](https://github.com/DrKnickers/new-particle-editor/pull/47)*
+*2026-05-11 · [`1804cfe`](https://github.com/DrKnickers/new-particle-editor/commit/1804cfe) · [#47](https://github.com/DrKnickers/new-particle-editor/pull/47)*
 
 Particles that bloom in-game now bloom in the editor preview. A new **View → Bloom… / Ctrl+B** dialog exposes the three canonical knobs — *Strength*, *Cutoff*, *Size* — plus a master enable, mirroring the bloom panel from the EAW Terrain Editor that ships with the game. A new toolbar button (sunburst icon, right of Heat Debug) toggles bloom on/off in a single click and stays in sync with the dialog and the persisted state. All four values survive across sessions in the registry; **View → Reset View Settings** drops them back to the canonical new-map defaults (`Cutoff = 0.90`, `Strength = 0.00`, `Size = 0.10`). When the shader can't be loaded (no game path configured, file missing, parameter surface doesn't match), the toolbar button and dialog controls grey out — no crash and no garbage rendering.
 
@@ -431,7 +431,7 @@ UI follows the Spawner pattern in [`src/main.cpp`](src/main.cpp): modeless dialo
 ---
 
 ### Adjustable ground-plane height in the preview
-*2026-05-10 · [`b2b2533`](https://github.com/DrKnickers/new-particle-editor/commit/b2b2533) · [#45](https://github.com/DrKnickers/new-particle-editor/pull/45)*
+*2026-05-10 · [`4619733`](https://github.com/DrKnickers/new-particle-editor/commit/4619733) · [#45](https://github.com/DrKnickers/new-particle-editor/pull/45)*
 
 The preview ground plane is no longer locked to `Z = 0`. A "Ground Height:" spinner sits in the header strip just left of the Background color picker, with a working range of −100 to +100 units and a 0.1-unit step. Scroll-wheel adjusts (Shift = ×10, Ctrl = ×0.1) like every other Spinner in the editor. The value persists across sessions in `HKCU\Software\AloParticleEditor\GroundZ`. When the "Show Ground" toolbar toggle is off, the label and spinner grey out (still visible — disabled, not hidden — so the spatial layout doesn't shift); flipping ground back on re-enables them and the ground returns to the user's last Z, not 0. **View → Reset View Settings** drops the persisted Z back to 0 alongside the existing reset of background color, ground visibility, and the color-picker custom palette.
 
@@ -447,7 +447,7 @@ The UI side: a "Ground Z:" label (`STATIC`) and a `Spinner` are direct children 
 ---
 
 ### Autosave for in-progress particles (two-tier)
-*2026-05-10 · [`eb0a183`](https://github.com/DrKnickers/new-particle-editor/commit/eb0a183) · [#41](https://github.com/DrKnickers/new-particle-editor/pull/41)*
+*2026-05-10 · [`ce1ead1`](https://github.com/DrKnickers/new-particle-editor/commit/ce1ead1) · [#41](https://github.com/DrKnickers/new-particle-editor/pull/41)*
 
 The editor now writes a recovery snapshot of the current particle system to `%TEMP%\AloParticleEditor\` on a periodic schedule. **Two tiers** run side-by-side: a **recent** tier on a 30-second cadence (freshest state, frequent overwrite — for the "crashed 10 seconds ago" case) and a **stable** tier on a 5-minute cadence (older known-good state — for the "the recent file is corrupt" or "I made a bad edit two minutes ago" cases). Both write only when there's an in-memory particle system AND the dirty flag is set, so an idle editor doesn't generate disk churn.
 
@@ -473,7 +473,7 @@ Files are named `autosave-<pid>-recent.alo` / `autosave-<pid>-stable.alo` plus a
 ---
 
 ### Drag-and-drop reparenting in the emitter tree
-*2026-05-10 · [`03da959`](https://github.com/DrKnickers/new-particle-editor/commit/03da959) · [#37](https://github.com/DrKnickers/new-particle-editor/pull/37)*
+*2026-05-10 · [`dfb1def`](https://github.com/DrKnickers/new-particle-editor/commit/dfb1def) · [#37](https://github.com/DrKnickers/new-particle-editor/pull/37)*
 
 Drop emitter S onto emitter T (mid-row hover) to make S a child of T. The full subtree under S moves with it as a block — children stay attached, source's spawn-field references unchanged. If S was a root, S is no longer a root. If S was already a child of some other emitter P, S is detached from P (P's spawn slot that referenced S becomes -1) and reattached to T.
 
@@ -502,7 +502,7 @@ The UI-layer changes mostly extend PR #35's drag state machine in [`src/UI/Emitt
 ---
 
 ### Drag-and-drop reordering in the emitter tree
-*2026-05-10 · [`df725b3`](https://github.com/DrKnickers/new-particle-editor/commit/df725b3) · [#35](https://github.com/DrKnickers/new-particle-editor/pull/35)*
+*2026-05-10 · [`5281987`](https://github.com/DrKnickers/new-particle-editor/commit/5281987) · [#35](https://github.com/DrKnickers/new-particle-editor/pull/35)*
 
 Click-and-drag a root emitter in the tree to reorder it past one or more sibling roots. The whole subtree (children, grandchildren, anything reachable via spawn-field traversal) moves with the source as a block; spawn-field indices on every affected parent are rewritten in one shot via the new `ParticleSystem::moveEmitterToRootIndex`. Visual feedback while dragging combines a translucent drag-image ghost (`ImageList_BeginDrag` / `…DragMove`) under the cursor with an insertion-mark line (`TVM_SETINSERTMARK`) showing where the drop will land. `IDC_NO` cursor over invalid drop targets — children, the source's own current gap, and outside the tree's client area — so the user gets unambiguous feedback before committing. Esc cancels mid-drag with no change to the file. One Ctrl+Z reverts a successful drop; the existing undo capture treats `ELN_LISTCHANGED` as a structural op (coalesce-key 0, never coalesced into adjacent edits).
 
@@ -526,7 +526,7 @@ A new public accessor `EmitterList_IsDragging(HWND)` ([`src/UI/UI.h`](src/UI/UI.
 ---
 
 ### Bump-mapped particles inherit curve-editor color tracks
-*2026-05-10 · [`06c6452`](https://github.com/DrKnickers/new-particle-editor/commit/06c6452) · [#33](https://github.com/DrKnickers/new-particle-editor/pull/33)*
+*2026-05-10 · [`7dce35d`](https://github.com/DrKnickers/new-particle-editor/commit/7dce35d) · [#33](https://github.com/DrKnickers/new-particle-editor/pull/33)*
 
 The Red / Green / Blue tracks in the curve editor now tint bump-mapped particles (`BLEND_BUMP`, `BLEND_DECAL_BUMP`) the same way they tint every other blend mode. Previously, the editor silently dropped those tracks for bump particles — the alpha track flowed through but RGB was overwritten with a rotation-tangent encoding `(0.5+0.5·cos(angle), 0.5+0.5·sin(angle), 0)`, which produced an apparent green/yellow/red hue cycle that depended on each particle's spawn rotation and bore no relation to anything the user had authored. The override didn't match what the EaW engine actually writes in-game, so the editor's render diverged from the in-game appearance for any bump particle the user attempted to colorize.
 
@@ -540,7 +540,7 @@ The Red / Green / Blue tracks in the curve editor now tint bump-mapped particles
 ---
 
 ### Undo / redo for the particle editor (`Ctrl+Z` / `Ctrl+Y`)
-*2026-05-10 · [`a0be64a`](https://github.com/DrKnickers/new-particle-editor/commit/a0be64a) · [#31](https://github.com/DrKnickers/new-particle-editor/pull/31)*
+*2026-05-10 · [`ca092d1`](https://github.com/DrKnickers/new-particle-editor/commit/ca092d1) · [#31](https://github.com/DrKnickers/new-particle-editor/pull/31)*
 
 `Ctrl+Z` undoes and `Ctrl+Y` (or `Ctrl+Shift+Z`) redoes any edit that survives a `.alo` save/load: every property field on the three Emitter tabs, every track key, every random-parameter group, structural emitter ops (add / delete / duplicate / move / rename / paste), and the `Leave Particles` system toggle. Editor-only state is intentionally excluded — visibility toggles, selection, expand/collapse, viewport / camera / background / ground / Spawner config, and mod selection do not enter the stack.
 
@@ -616,7 +616,7 @@ The 50-cap counts only spawner-owned instances; Shift+click spawns aren't includ
 ---
 
 ### Shaders load from the mod folder
-*2026-05-09 · [`4942747`](https://github.com/DrKnickers/new-particle-editor/commit/4942747) · [#28](https://github.com/DrKnickers/new-particle-editor/pull/28)*
+*2026-05-09 · [`f7bac9c`](https://github.com/DrKnickers/new-particle-editor/commit/f7bac9c) · [#28](https://github.com/DrKnickers/new-particle-editor/pull/28)*
 
 When a mod is active, the editor resolves all 14 engine shaders through the mod folder before falling back to the base game. Concretely: if a mod ships `Data\Art\Shaders\Engine\PrimModulate.fx` (or any of the other shader files in `ShaderNames[]`), the editor renders with that shader instead of the base game's. The swap happens immediately when a mod is selected — `SelectMod` calls `ReloadShaders()`, which does an all-or-nothing flush and reload of all 14 slots, so any mod-local `.fx` files are picked up in that single call. If a mod shader fails to compile, the previous set is kept alive and a status-bar message reports the failure; a bad mod shader cannot brick a running session.
 
@@ -670,7 +670,7 @@ Foundation for the upcoming drag-and-drop reordering roadmap item — same backe
 ---
 
 ### Duplicate / paste auto-rename
-*2026-05-09 · [`33e0913`](https://github.com/DrKnickers/new-particle-editor/commit/33e0913) · [#23](https://github.com/DrKnickers/new-particle-editor/pull/23)*
+*2026-05-09 · [`9c53550`](https://github.com/DrKnickers/new-particle-editor/commit/9c53550) · [#23](https://github.com/DrKnickers/new-particle-editor/pull/23)*
 
 Duplicating an emitter or pasting one from the clipboard now appends a `_<n>` suffix where `<n>` is one greater than the highest numeric suffix already in use for that base name. So duplicating an emitter named `Fire Small` yields `Fire Small_1`; the next duplicate (whether of `Fire Small` or `Fire Small_1`) yields `Fire Small_2`, and so on. The same rule applies to `Ctrl+V` paste, *Paste as Lifetime Child*, and *Paste as Death Child*. Replaces the earlier `_ (copy)` suffix that PR [#19](https://github.com/DrKnickers/new-particle-editor/pull/19) shipped — `_<n>` is collision-free, monotonic, and reads cleanly when several duplicates exist side-by-side.
 
@@ -681,7 +681,7 @@ The increment scans every emitter currently in the system, including any whose n
 ---
 
 ### Tailed particles ignore rotation track (preview parity with game)
-*2026-05-09 · [`f5bbcd1`](https://github.com/DrKnickers/new-particle-editor/commit/f5bbcd1) · [#22](https://github.com/DrKnickers/new-particle-editor/pull/22)*
+*2026-05-09 · [`10d6b89`](https://github.com/DrKnickers/new-particle-editor/commit/10d6b89) · [#22](https://github.com/DrKnickers/new-particle-editor/pull/22)*
 
 The EaW runtime's tail render path orients the quad along velocity and **ignores** the rotation-speed track entirely — even when the emitter's rotation fields are set. The editor preview previously *added* the rotation-track contribution on top of the velocity-orientation term, so a tailed emitter with a non-trivial rotation track would spin in the preview but stand still in-game. Discovered while debugging `Mods/Chelmod/.../P_hp_imperial_damage.alo` "Fire Small": rotation values populated, preview rotated, in-game did not.
 
@@ -692,11 +692,11 @@ If a future user hits the inverse confusion ("I want my tailed particles to also
 ---
 
 ### Resource-file encoding: UTF-8 with BOM
-*2026-05-08 · [`0d6f6cc`](https://github.com/DrKnickers/new-particle-editor/commit/0d6f6cc) · [#20](https://github.com/DrKnickers/new-particle-editor/pull/20)*
+*2026-05-08 · [`f6bf3fc`](https://github.com/DrKnickers/new-particle-editor/commit/f6bf3fc) · [#20](https://github.com/DrKnickers/new-particle-editor/pull/20)*
 
 Both [`src/ParticleEditor.en.rc`](src/ParticleEditor.en.rc) and [`src/ParticleEditor.de.rc`](src/ParticleEditor.de.rc) are now stored as **UTF-8 with BOM** and declare `#pragma code_page(65001)`. Previously they declared cp1252 with no BOM, which any editor defaulting to UTF-8 would silently corrupt: high bytes (`°`, `±`, `²`, `ä`, `ö`, `ü`, `ß`) decoded as invalid UTF-8 → got substituted with `U+FFFD` → were saved back as the three-byte sequence `EF BF BD`. The RC compiler then read those three bytes per the `cp1252` pragma as `ï¿½`, which is what the user saw on dialog labels.
 
-A previous commit ([`ef30981`](https://github.com/DrKnickers/new-particle-editor/commit/ef30981) · [#13](https://github.com/DrKnickers/new-particle-editor/pull/13)) hand-fixed three specific positions on the Appearance tab but didn't address the underlying encoding mismatch — so the same class of mojibake remained in 3 other `units/s²` labels in `en.rc` and 70 sites in `de.rc` (every umlaut, plus the same `s²`). This change repairs all of them in one pass and prevents regressions: any modern editor will correctly round-trip the BOM-tagged UTF-8 file.
+A previous commit ([`f79cd9e`](https://github.com/DrKnickers/new-particle-editor/commit/f79cd9e) · [#13](https://github.com/DrKnickers/new-particle-editor/pull/13)) hand-fixed three specific positions on the Appearance tab but didn't address the underlying encoding mismatch — so the same class of mojibake remained in 3 other `units/s²` labels in `en.rc` and 70 sites in `de.rc` (every umlaut, plus the same `s²`). This change repairs all of them in one pass and prevents regressions: any modern editor will correctly round-trip the BOM-tagged UTF-8 file.
 
 **How we tackled it.** A one-shot PowerShell script ([`tasks/fix_rc_encoding.ps1`](tasks/fix_rc_encoding.ps1)) reads each file as cp1252 (so legitimate `0xB0`/`0xB1`/`0xB2` decode correctly while `EF BF BD` becomes the 3-char string `"ï¿½"`), applies an ordered list of word-level substitutions (longest / most-specific first, e.g. `Größenänderung` before `Größe`), swaps the pragma, and writes UTF-8 with BOM via `Encoding.UTF8` constructor with `encoderShouldEmitUTF8Identifier = true`. Replacement table is a list of `(pattern, replacement)` pairs rather than a hashtable — see issues below.
 
@@ -711,7 +711,7 @@ If a future edit ever re-introduces `EF BF BD` triplets, run `tasks/fix_rc_encod
 ---
 
 ### Right-click → Duplicate Emitter
-*2026-05-08 · [`81e63c9`](https://github.com/DrKnickers/new-particle-editor/commit/81e63c9) · [#19](https://github.com/DrKnickers/new-particle-editor/pull/19)*
+*2026-05-08 · [`29ca305`](https://github.com/DrKnickers/new-particle-editor/commit/29ca305) · [#19](https://github.com/DrKnickers/new-particle-editor/pull/19)*
 
 **What ships.** Right-clicking an emitter in the tree now offers a *Duplicate* item between Copy and Paste. Selecting it creates a copy of the emitter directly below the original in the tree (and at `original.index + 1` in the underlying `m_emitters` vector), suffixes the name with ` (copy)`, and selects the new emitter. Faster than Copy → Paste because it skips the clipboard round-trip and the duplicate ends up positioned next to its source rather than at the end of the list.
 
@@ -725,7 +725,7 @@ If a future edit ever re-introduces `EF BF BD` triplets, run `tasks/fix_rc_encod
 ---
 
 ### Spinner mouse-wheel input
-*2026-05-08 · [`23b20f9`](https://github.com/DrKnickers/new-particle-editor/commit/23b20f9) · [#16](https://github.com/DrKnickers/new-particle-editor/pull/16)*
+*2026-05-08 · [`6cfb954`](https://github.com/DrKnickers/new-particle-editor/commit/6cfb954) · [#16](https://github.com/DrKnickers/new-particle-editor/pull/16)*
 
 `Spinner` controls accept `WM_MOUSEWHEEL` to nudge the value by their already-defined `Increment`. Modifiers: `Shift` ⇒ 10× step, `Ctrl` ⇒ 0.1× step on float spinners (integer spinners keep 1× to avoid rounding the step to a no-op).
 
@@ -736,7 +736,7 @@ If you ever add another scroll-wheel-aware native control with child windows, re
 ---
 
 ### Tolerating malformed `.alo` data
-*2026-05-07 · [`dc97123`](https://github.com/DrKnickers/new-particle-editor/commit/dc97123) · [#11](https://github.com/DrKnickers/new-particle-editor/pull/11)*
+*2026-05-07 · [`775e0d7`](https://github.com/DrKnickers/new-particle-editor/commit/775e0d7) · [#11](https://github.com/DrKnickers/new-particle-editor/pull/11)*
 
 Some `.alo` files in the wild store a `spawnOnDeath` or `spawnDuringLife` index that points past the end of the emitter list — usually the residue of a delete operation in an external tool / older editor build that didn't update cross-references. Pre-fix, the `!= -1` guard in `ParticleSystem::ParticleSystem`'s post-process loop didn't catch this, and `m_emitters[badIndex]` tripped *vector subscript out of range* before the file finished loading.
 
@@ -749,7 +749,7 @@ If you ever add another place that indexes into `m_emitters` from a value that c
 ---
 
 ### Object lifetime: Emitter ↔ EmitterInstance
-*2026-05-07 · [`4073880`](https://github.com/DrKnickers/new-particle-editor/commit/4073880) · [#9](https://github.com/DrKnickers/new-particle-editor/pull/9)*
+*2026-05-07 · [`b063d2e`](https://github.com/DrKnickers/new-particle-editor/commit/b063d2e) · [#9](https://github.com/DrKnickers/new-particle-editor/pull/9)*
 
 `EmitterInstance` objects are owned by `std::unique_ptr` inside `ParticleSystemInstance::m_emitters`. Each `EmitterInstance` registers a raw `this` pointer with its template `ParticleSystem::Emitter::m_instances` for back-reference.
 
@@ -762,7 +762,7 @@ If you find yourself wanting to call `delete` on a raw `EmitterInstance*` anywhe
 ---
 
 ### Debugging methodology that worked
-*2026-05-07 · [`f2030b7`](https://github.com/DrKnickers/new-particle-editor/commit/f2030b7) · [#10](https://github.com/DrKnickers/new-particle-editor/pull/10)*
+*2026-05-07 · [`6bf6159`](https://github.com/DrKnickers/new-particle-editor/commit/6bf6159) · [#10](https://github.com/DrKnickers/new-particle-editor/pull/10)*
 
 For data-dependent crashes (load-X, delete-Y) we used three tools in sequence and they paid off cleanly:
 
@@ -775,7 +775,7 @@ The Python parser lives at `.claude/dump_alo.py` and is worth keeping for any fu
 ---
 
 ### Hot-reload (View menu)
-*2026-05-07 · [`e083cfd`](https://github.com/DrKnickers/new-particle-editor/commit/e083cfd) · [#8](https://github.com/DrKnickers/new-particle-editor/pull/8)*
+*2026-05-07 · [`5d6ae43`](https://github.com/DrKnickers/new-particle-editor/commit/5d6ae43) · [#8](https://github.com/DrKnickers/new-particle-editor/pull/8)*
 
 Two manual reload commands plus mod-aware automatic reload on selection change.
 
@@ -791,7 +791,7 @@ Both menu items grayed when `info->engine == NULL`. The `texture_filename` annot
 ---
 
 ### Mods menu (right-click for nickname)
-*2026-05-07 · [`0342219`](https://github.com/DrKnickers/new-particle-editor/commit/0342219) · [#6](https://github.com/DrKnickers/new-particle-editor/pull/6)*
+*2026-05-07 · [`0beb6a0`](https://github.com/DrKnickers/new-particle-editor/commit/0beb6a0) · [#6](https://github.com/DrKnickers/new-particle-editor/pull/6)*
 
 `WM_MENURBUTTONUP` is **not** delivered for menubar dropdowns by default — Windows treats right-click as "cancel" and dismisses the menu silently. Three things made this work:
 
@@ -810,7 +810,7 @@ Both fonts are cached on `APPLICATION_INFO` (`hMenuFont`, `hMenuItalicFont`), la
 ---
 
 ### Mods menu
-*2026-05-07 · [`84ba36a`](https://github.com/DrKnickers/new-particle-editor/commit/84ba36a) · [#5](https://github.com/DrKnickers/new-particle-editor/pull/5)*
+*2026-05-07 · [`8ac8a7d`](https://github.com/DrKnickers/new-particle-editor/commit/8ac8a7d) · [#5](https://github.com/DrKnickers/new-particle-editor/pull/5)*
 
 Top-level **Mods** menu inserted between **View** and **Help**, built dynamically at runtime (no `.rc` edits for the menu itself). Lists every subdirectory of `<game>\corruption\Mods\` and `<game>\GameData\Mods\`, alphabetical by folder name within FoC and base-game submenus.
 
@@ -823,7 +823,7 @@ Top-level **Mods** menu inserted between **View** and **Help**, built dynamicall
 ---
 
 ### CI / GitHub Actions
-*2026-05-07 · [`02aa6e8`](https://github.com/DrKnickers/new-particle-editor/commit/02aa6e8) · [#4](https://github.com/DrKnickers/new-particle-editor/pull/4)*
+*2026-05-07 · [`4a6a557`](https://github.com/DrKnickers/new-particle-editor/commit/4a6a557) · [#4](https://github.com/DrKnickers/new-particle-editor/pull/4)*
 
 Workflow at `.github/workflows/build.yml`. Builds `Debug` and `Release` × `Win32` and `x64` on `windows-latest`.
 
@@ -835,14 +835,14 @@ Workflow at `.github/workflows/build.yml`. Builds `Debug` and `Release` × `Win3
 ---
 
 ### Platform Toolset locked to v143
-*2026-05-07 · [`8f66d0c`](https://github.com/DrKnickers/new-particle-editor/commit/8f66d0c) · [#3](https://github.com/DrKnickers/new-particle-editor/pull/3)*
+*2026-05-07 · [`b2ee61d`](https://github.com/DrKnickers/new-particle-editor/commit/b2ee61d) · [#3](https://github.com/DrKnickers/new-particle-editor/pull/3)*
 
 Reverted an auto-bump from `v145` back to `v143` in both `src/ParticleEditor.vcxproj` and `libs/expat-2.2.0/expatw_static.vcxproj`, so the project builds on stock VS2022 / CI. See the CI section above for the full context.
 
 ---
 
 ### Z-write disabled for particle render order (preview parity with game)
-*2026-05-07 · [`b19ea95`](https://github.com/DrKnickers/new-particle-editor/commit/b19ea95) · [#2](https://github.com/DrKnickers/new-particle-editor/pull/2)*
+*2026-05-07 · [`ffaa3ca`](https://github.com/DrKnickers/new-particle-editor/commit/ffaa3ca) · [#2](https://github.com/DrKnickers/new-particle-editor/pull/2)*
 
 **Symptom:** Editor preview rendered overlapping emitters in the opposite order from the actual game. Top-of-list emitter appeared on top of the stack instead of behind.
 
@@ -853,7 +853,7 @@ Reverted an auto-bump from `v145` back to `v143` in both `src/ParticleEditor.vcx
 ---
 
 ### x64 port + game-data-path lookup
-*2026-05-07 · [`954d069`](https://github.com/DrKnickers/new-particle-editor/commit/954d069) · [#1](https://github.com/DrKnickers/new-particle-editor/pull/1)*
+*2026-05-07 · [`798d6cb`](https://github.com/DrKnickers/new-particle-editor/commit/798d6cb) · [#1](https://github.com/DrKnickers/new-particle-editor/pull/1)*
 
 Bring-up of the codebase as a working VS2022 / x64 build, plus the registry-backed game-data path management. Five distinct issues bundled into one big port commit; recorded individually below for searchability.
 
@@ -931,7 +931,7 @@ Selected path is persisted to `HKEY_CURRENT_USER\Software\AloParticleEditor\Game
 ---
 
 ### VS2022 port (initial bring-up — `afxres.h`, DXSDK, C4005, MFC IDs)
-*2024-11-05 · [`f8d6991`](https://github.com/DrKnickers/new-particle-editor/commit/f8d6991)*
+*2024-11-05 · [`cb34c43`](https://github.com/DrKnickers/new-particle-editor/commit/cb34c43)*
 
 Pre-PR, before the GitHub Actions workflow existed. Four resource-compiler / build-config issues that surfaced moving the project to Visual Studio 2022:
 
