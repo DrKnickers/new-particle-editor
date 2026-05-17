@@ -143,3 +143,48 @@ delivered by `addEventListener("message", h)` is the *parsed* JS
 value when the host uses `PostWebMessageAsJson` (string only when
 the host uses `PostWebMessageAsString`); `TestHostBridge`
 defensively accepts both shapes.
+
+---
+
+## L-004 — `pnpm test` ≠ `pnpm build`; `tsc --noEmit` ≠ `tsc -b`
+
+**Rule.** Vitest does NOT type-check. A passing `pnpm test` says nothing
+about TypeScript correctness. And `tsc --noEmit` (single-project mode)
+is NOT the same as `tsc -b` (build mode with project references) — they
+catch different errors. **The authoritative verification of a React/TS
+change is `pnpm build`**, which runs `tsc -b && vite build`. If
+`pnpm build` is green, the change is type-safe and the dist is
+regenerated. If you only run `pnpm test`, you may ship a type error.
+
+**Trigger.** Any time a subagent implementer reports "tsc --noEmit
+clean, Vitest passing" without having run `pnpm build`. Their report
+sounds rigorous; it is not. The first cross-cycle symptom is
+`pnpm test:native` failing because the production `dist/` wasn't
+rebuilt (the harness launches `ParticleEditor.exe --new-ui` which
+loads `web/apps/editor/dist/`, not the dev server).
+
+**How to apply.**
+- **Bake into every implementer dispatch prompt:** the verification
+  sequence is *exactly* `pnpm build → pnpm test → pnpm test:native`
+  (and `MSBuild` for C++ changes). Do not let the implementer
+  substitute `tsc --noEmit` for `pnpm build`.
+- After the implementer commits, the controller still runs
+  `pnpm test:native` once. The implementer might skip it claiming the
+  spec "requires the native host" — it does, but the harness
+  (`scripts/run-native-tests.mjs`) orchestrates the launch. Always run
+  it from the controller.
+- If `pnpm test:native` fails on a spec that used to pass, the most
+  likely cause is a stale `dist/`. Run `pnpm build` and retry before
+  diagnosing.
+
+**Source incident (2026-05-16, Phase 3 Screen 1).** The Screen 1
+implementer reported "tsc --noEmit clean" and never ran `pnpm build`.
+`pnpm test:native` then failed because the bundled `dist/` was stale
+(the StatusBar component existed only in source). Diagnosing took
+10 minutes. Recurred mildly in Screen 3 (a pre-existing `mock.ts` cast
+referenced an unbound generic — Vitest didn't catch it because it
+doesn't type-check; `tsc -b` did). Phase 3 Screen 2 dispatch prompts
+codified the "you MUST run `pnpm build`" rule and the issue stopped
+recurring inside the implementer dispatch — but the controller still
+needs to run `pnpm test:native` after every native-affecting change
+because some implementers still skip it ("requires the native host").
