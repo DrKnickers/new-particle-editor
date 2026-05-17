@@ -174,6 +174,18 @@ export class MockBridge implements Bridge {
       case "engine/action/step-frames":
         return {};
 
+      // Rescale the whole particle system by a duration / size percentage.
+      // MockBridge has no ParticleSystem to mutate; the handler logs the
+      // call (so Vitest can assert on it via a spy) and emits the standard
+      // post-action state/changed cue. Returns {} per schema.
+      case "engine/action/rescale-system":
+        console.log(
+          "[MockBridge] engine/action/rescale-system",
+          req.params,
+        );
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+
       // ---------------- engine queries ----------------
       case "engine/query/ground-slot-empty": {
         const { slot } = req.params;

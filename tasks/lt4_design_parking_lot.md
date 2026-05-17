@@ -597,9 +597,12 @@ modal templates in `.rc` files. Specifically:
   link group; Reset All button.
 - **About** (`AboutProc`) — version / build date / license credits.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** 🟡 iterating — sub-dialogs land in batches
+(About + Rescale System locked 2026-05-17; others pending).
 
-**Wire-up:** 🟡 pending
+**Wire-up:** 🟡 iterating — per-sub-dialog. Legacy chrome stays in
+`src/main.cpp` until Phase 4.2 cutover; Phase 3 dispatches add the
+React surface without removing the legacy launcher.
 
 **Current behaviour (legacy):**
 
@@ -608,6 +611,23 @@ Lighting). Consistent OK / Cancel button placement. Some use
 owner-drawn controls (Lighting's RGB swatches, Spawner's curve
 preview). All have keyboard navigation (Tab cycle, Esc to cancel,
 Enter to OK).
+
+**Sub-dialog batching strategy:**
+
+Screen 8 contains 9 unshipped sub-dialogs + the file-ops backbone.
+The Phase 3 "one comprehensive dispatch per screen" cadence doesn't
+fit; we ship in batches, each batch being a coherent unit of work
+that's small enough for one subagent dispatch and one controller
+verification pass. Each sub-dialog has its own checkbox above.
+
+- **Batch 1** (2026-05-17): Shared `Modal` foundation + **About** +
+  **Rescale System**. Smallest sub-dialogs with React menu triggers
+  already in place and no dependency on other screens.
+- **Batch 2+** (TBD): Lighting / Bloom-settings / Ground Texture
+  Picker / file-ops backbone / Spawner / Import Emitters / Increment
+  Index / Mod Nickname / Rescale Emitter / Link Group Settings.
+  Several of these depend on Screen 4 (Emitter tree) for their
+  trigger sites and should batch after Screen 4 lands.
 
 **Design notes / sketches:**
 
@@ -621,17 +641,147 @@ Enter to OK).
 - [ ] Lighting dialog — 🟡 pending
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge)
 - [ ] Ground picker — 🟡 pending
+- [ ] Bloom settings — 🟡 pending
 - [ ] Import Emitters — 🟡 pending
-- [ ] Rescale — 🟡 pending
-- [ ] Increment Index — 🟡 pending
+- [x] Rescale System — ✅ shipped Batch 1
+- [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
+- [ ] Increment Index — 🟡 pending (waits on Screen 4 for trigger site)
 - [ ] Mod Nickname — 🟡 pending
 - [ ] Spawner — 🟡 pending
-- [ ] Link Group Settings — 🟡 pending
-- [ ] About — 🟡 pending
+- [ ] Link Group Settings — 🟡 pending (waits on Screen 4 for trigger site)
+- [x] About — ✅ shipped Batch 1
+- [ ] File-ops backbone (New / Open / Save / Save As / recent-files) — 🟡 pending
 
 **Bridge surface used:** filled in at Task 3.8.1 (per sub-screen).
 
 **Decisions locked once ✅:**
+
+### Batch 1 — Modal foundation + About + Rescale System (locked 2026-05-17)
+
+**Modal foundation (shared across all Screen 8 sub-dialogs):**
+
+- **Library**: `@radix-ui/react-dialog` (matches the Radix pattern
+  established by Menubar / Popover / Select / ContextMenu in earlier
+  screens). No headless-ui, no shadcn.
+- **Location**: `web/apps/editor/src/components/Modal.tsx`. Lives
+  under `components/` (app-shell-style) rather than `primitives/`
+  (form-field-style) because it's a container, not a form field.
+- **Component shape**:
+  ```tsx
+  <Modal open onOpenChange title="…" size="sm|md|lg">
+    <Modal.Body>…</Modal.Body>
+    <Modal.Footer>
+      <Modal.CancelButton>Cancel</Modal.CancelButton>
+      <Modal.OkButton onClick disabled>OK</Modal.OkButton>
+    </Modal.Footer>
+  </Modal>
+  ```
+  Compound-component pattern matches the Radix idiom and gives
+  callers explicit control over which buttons render (info modals
+  drop `CancelButton`).
+- **Sizes**: `sm` = 320 px wide, `md` = 480 px, `lg` = 640 px. Height
+  is `auto`, clamped to `max-h-[80vh]` with body scroll.
+- **Styling**: dark surface (`bg-neutral-900`, `border border-neutral-800`,
+  `rounded-lg`, `shadow-2xl`). Header 48 px tall, title left
+  (`font-semibold text-sm`), `×` close glyph right. Body 16 px
+  padding. Footer 56 px tall, right-aligned button row, top border.
+- **Dismissal**: Esc + overlay click + close glyph all fire
+  `onOpenChange(false)`. Caller decides whether that maps to
+  "Cancel" or "OK" semantics (typically Cancel for dismissable
+  modals).
+- **Keyboard**: Tab cycles interactive elements (Radix handles).
+  Enter on a focused button activates. No "Enter commits on input"
+  shortcut at the Modal level — leave that to consumers like
+  Rescale that want a specific commit behaviour.
+
+**About sub-dialog:**
+
+- **Affordance**: triggered by `Help → About` menu item (currently
+  `todo("About")` at [web/apps/editor/src/components/MenuBar.tsx:324]).
+  Replace the no-op with `setAboutOpen(true)`.
+- **Layout**: `size="sm"`, title "About AloParticleEditor", info-only
+  modal. Body contents (in order):
+  1. App name (`AloParticleEditor`) — large heading.
+  2. Version line (e.g. `Version 1.5`) — pulled from build-time
+     constants via Vite `define` (`import.meta.env.VITE_APP_VERSION`).
+  3. Build date — pulled from `import.meta.env.VITE_BUILD_DATE`
+     (Vite plugin or `define` injects `new Date().toISOString().slice(0,10)`
+     at build time).
+  4. Short license / credits paragraph (legacy uses `IDS_DISCLAIMER`
+     + `IDS_EXPAT_COPYRIGHT` resource strings — bring those over as
+     literal strings in the React component; no need for i18n here).
+  5. Link to the GitHub repo (DrKnickers/new-particle-editor) as an
+     `<a target="_blank">` styled with `text-sky-400 underline`.
+- **Footer**: single `<Modal.OkButton>Close</Modal.OkButton>` (no
+  Cancel — info modal).
+- **Bridge call**: **none**. Version + build date are baked at build
+  time; nothing round-trips through the bridge.
+- **Legacy delete**: NOT done in Batch 1. `AboutProc` at
+  [src/main.cpp:400] stays for the `--legacy-ui` path. Phase 4.2
+  removes it during cutover.
+
+**Rescale System sub-dialog:**
+
+- **Affordance**: triggered by `Edit → Rescale…` menu item (currently
+  `todo("Rescale")` at [web/apps/editor/src/components/MenuBar.tsx:164]).
+  Replace the no-op with `setRescaleOpen(true)`.
+- **Layout**: `size="sm"`, title "Rescale Particle System". Body has
+  two Spinner rows stacked vertically, each with a label-on-left
+  layout:
+  - Row 1: label "Duration scale", Spinner (`value={100}`,
+    `min={1}`, `max={1000}`, `step={1}`, `unit="%"`).
+  - Row 2: label "Size scale", Spinner (`value={100}`, `min={1}`,
+    `max={1000}`, `step={1}`, `unit="%"`).
+  - Below the spinners: small grey hint text — "Applies to the
+    entire particle system. Use *Rescale Emitter…* to rescale a
+    single emitter." (cross-references the deferred Rescale Emitter
+    sub-dialog so users know it exists.)
+- **Footer**: `<Modal.CancelButton>Cancel</Modal.CancelButton>` and
+  `<Modal.OkButton>OK</Modal.OkButton>`. OK enabled when both values
+  are valid (Spinner clamps to range; valid = inside range).
+- **Bridge call**: new `engine/action/rescale-system` Request with
+  params `{ durationScalePercent: number; sizeScalePercent: number }`,
+  returns `Record<string, never>`. MockBridge implements as a no-op
+  (no DTO state to mutate; just logs the call so Vitest can assert
+  on it). C++ host implements as a wrapper that calls the existing
+  rescale helpers in `src/Rescale.cpp` against `info->particleSystem`.
+  Capture-before-call via existing `UndoStack` so the action is
+  undoable.
+- **Commit flow**: click OK → fire bridge call → on success, close
+  modal. On bridge failure (shouldn't happen for this Request),
+  show an inline error in the modal body and keep it open.
+- **Legacy delete**: NOT done in Batch 1. `RescaleParticleSystem`
+  launcher at [src/main.cpp:1524-1525] stays for the `--legacy-ui`
+  path. The underlying transform function in `src/Rescale.cpp` is
+  shared by both paths — the new C++ bridge handler calls it
+  alongside the legacy `WM_COMMAND` handler.
+
+**Test surface for Batch 1:**
+
+- **Vitest** (+5 specs, target 40 → 45+):
+  - `Modal.test.tsx`: opens/closes on `open` prop change; clicking
+    overlay fires `onOpenChange(false)`; pressing Esc fires
+    `onOpenChange(false)`.
+  - `AboutDialog.test.tsx`: renders the version + build date from
+    `import.meta.env`.
+  - `RescaleDialog.test.tsx`: renders 2 Spinners; clicking OK fires
+    `bridge.request({ kind: "engine/action/rescale-system", … })`
+    with the current spinner values.
+- **Playwright** (+2 specs, target 26 → 28+):
+  - `Help → About opens the modal and shows version`.
+  - `Edit → Rescale… → set durationScale=200 → OK → bridge call
+    arrives with durationScalePercent=200`.
+- **Bridge contract** (+1 spec in `bridge-contract.test.ts`):
+  - `engine/action/rescale-system` round-trips through MockBridge
+    and returns `{}`.
+
+**Sub-dialog checkbox updates after Batch 1 ships:**
+
+- About sub-dialog: `[x] About — ✅ shipped Batch 1 (#NN)`
+- (no other Screen 8 sub-dialog changes — Rescale System gets its
+  own checkbox added now since the inventory list didn't include
+  it; "Rescale" in the existing list refers to the not-yet-built
+  Rescale Emitter dialog — both will land before Phase 4)
 
 ### Background picker (sub-screen) — locked Task 2.3
 

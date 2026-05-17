@@ -96,6 +96,7 @@ async function main() {
       "tests/toolbar.spec.ts",
       "tests/menu-bar.spec.ts",
       "tests/primitives.spec.ts",
+      "tests/dialogs.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

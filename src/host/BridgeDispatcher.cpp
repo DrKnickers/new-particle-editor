@@ -551,6 +551,33 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         sendOk(json::object());
         return res;
     }
+    // Rescale the active particle system by a duration / size percentage.
+    // Phase 3 Screen 8 Batch 1: the schema surface is reachable here so
+    // the React Rescale System dialog can dispatch the request without a
+    // "not implemented" error. The host does not yet own a ParticleSystem*
+    // (emitter / file-load wiring is later-batch work in Phase 3+); when
+    // it does, this handler will (a) capture into the UndoStack and
+    // (b) iterate over the system's emitters calling DoRescaleEmitter
+    // from src/Rescale.cpp. Mirrors the forward-compatible no-op pattern
+    // already established by step-frames above.
+    if (kind == "engine/action/rescale-system")
+    {
+        float durPct  = params.value("durationScalePercent", 100.0f);
+        float sizePct = params.value("sizeScalePercent",     100.0f);
+        fprintf(stderr,
+                "[host] engine/action/rescale-system requested "
+                "(durationScalePercent=%.2f, sizeScalePercent=%.2f) — "
+                "ParticleSystem not yet wired into host (Phase 3+); "
+                "no-op for now.\n",
+                durPct, sizePct);
+        sendOk(json::object());
+        // Emit state/changed for parity with MockBridge so Playwright
+        // specs can observe that the action completed via the standard
+        // event channel (TestHostBridge subscribes to events normally
+        // even under CDP — only request/response is affected by L-003).
+        EmitEngineStateChanged();
+        return res;
+    }
 
     // -------- engine/query/* --------
     if (kind == "engine/query/ground-slot-empty")

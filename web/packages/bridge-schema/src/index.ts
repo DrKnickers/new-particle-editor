@@ -146,6 +146,7 @@ export type Request =
   | { kind: "engine/action/reload-textures";  params: Record<string, never> }
   | { kind: "engine/action/on-particle-system-changed"; params: { track: number } }
   | { kind: "engine/action/step-frames";      params: { frames: number } }
+  | { kind: "engine/action/rescale-system";   params: { durationScalePercent: number; sizeScalePercent: number } }
 
   // Engine queries
   | { kind: "engine/query/ground-slot-empty";  params: { slot: number } }
@@ -201,6 +202,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/action/reload-textures" }             ? Record<string, never> :
   R extends { kind: "engine/action/on-particle-system-changed" }  ? Record<string, never> :
   R extends { kind: "engine/action/step-frames" }                 ? Record<string, never> :
+  R extends { kind: "engine/action/rescale-system" }              ? Record<string, never> :
 
   // Engine queries
   R extends { kind: "engine/query/ground-slot-empty" }   ? boolean :

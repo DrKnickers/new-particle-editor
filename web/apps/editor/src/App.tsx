@@ -8,6 +8,8 @@ import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
+import { AboutDialog } from "@/screens/AboutDialog";
+import { RescaleDialog } from "@/screens/RescaleDialog";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -28,6 +30,8 @@ function AppShell() {
   }, []);
 
   const [panelOpen, setPanelOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [rescaleOpen, setRescaleOpen] = useState(false);
 
   // TODO Phase 3: remove this debug block once real per-screen shortcut
   // handlers are wired in. Until then it proves the round-trip works:
@@ -79,7 +83,12 @@ function AppShell() {
       {/* Top bar */}
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>
-        <MenuBar bridge={bridge} onOpenBackgroundPanel={() => setPanelOpen(true)} />
+        <MenuBar
+          bridge={bridge}
+          onOpenBackgroundPanel={() => setPanelOpen(true)}
+          onOpenAboutDialog={() => setAboutOpen(true)}
+          onOpenRescaleDialog={() => setRescaleOpen(true)}
+        />
         <div className="ml-auto flex items-center gap-2">
           <BackgroundButton
             open={panelOpen}
@@ -111,6 +120,16 @@ function AppShell() {
 
       {/* Status bar */}
       <StatusBar bridge={bridge} />
+
+      {/* Sub-dialogs (Screen 8 batch 1). Mounted at app level so menu
+          triggers from anywhere can drive them and Radix portals don't
+          fight clipping from intermediate scrollable parents. */}
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <RescaleDialog
+        bridge={bridge}
+        open={rescaleOpen}
+        onOpenChange={setRescaleOpen}
+      />
     </div>
   );
 }

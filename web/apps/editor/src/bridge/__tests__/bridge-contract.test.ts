@@ -195,6 +195,19 @@ describe("MockBridge contract", () => {
     expect(r).toEqual({});
   });
 
+  it("engine/action/rescale-system round-trips with empty body and fires state/changed", async () => {
+    const b = new MockBridge();
+    let count = 0;
+    const off = b.on("engine/state/changed", () => { count++; });
+    const r = await b.request({
+      kind: "engine/action/rescale-system",
+      params: { durationScalePercent: 150, sizeScalePercent: 200 },
+    });
+    expect(r).toEqual({});
+    expect(count).toBe(1);
+    off();
+  });
+
   it("engine/action/clear fires state/changed without mutating fields", async () => {
     const b = new MockBridge();
     let count = 0;

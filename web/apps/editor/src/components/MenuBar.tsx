@@ -10,6 +10,8 @@ import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 type Props = {
   bridge: Bridge;
   onOpenBackgroundPanel: () => void;
+  onOpenAboutDialog: () => void;
+  onOpenRescaleDialog: () => void;
 };
 
 // Style constants — shared across triggers and items so the Tailwind
@@ -37,7 +39,12 @@ function CheckSlot({ active }: { active: boolean }) {
 const todo = (label: string) => () =>
   console.log(`[Menu] ${label} — Phase 3 Screen 8`);
 
-export function MenuBar({ bridge, onOpenBackgroundPanel }: Props) {
+export function MenuBar({
+  bridge,
+  onOpenBackgroundPanel,
+  onOpenAboutDialog,
+  onOpenRescaleDialog,
+}: Props) {
   const [state, setState] = useState<EngineStateDto | null>(null);
 
   useEffect(() => {
@@ -161,7 +168,7 @@ export function MenuBar({ bridge, onOpenBackgroundPanel }: Props) {
               Delete<Hint>Del</Hint>
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} onSelect={todo("Rescale")}>
+            <Menubar.Item className={ITEM} onSelect={() => onOpenRescaleDialog()}>
               Rescale…
             </Menubar.Item>
             <Menubar.Item
@@ -321,7 +328,7 @@ export function MenuBar({ bridge, onOpenBackgroundPanel }: Props) {
             align="start"
             sideOffset={4}
           >
-            <Menubar.Item className={ITEM} onSelect={todo("About")}>
+            <Menubar.Item className={ITEM} onSelect={() => onOpenAboutDialog()}>
               About
             </Menubar.Item>
           </Menubar.Content>
