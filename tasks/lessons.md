@@ -188,3 +188,55 @@ codified the "you MUST run `pnpm build`" rule and the issue stopped
 recurring inside the implementer dispatch — but the controller still
 needs to run `pnpm test:native` after every native-affecting change
 because some implementers still skip it ("requires the native host").
+
+---
+
+## L-005 — pnpm v11's `allowBuilds:` block wants a boolean, not the literal placeholder string
+
+**Rule.** When pnpm v11 (since the v11 build-script approval flow) gates
+a dependency's post-install, it injects an `allowBuilds:` block into
+`pnpm-workspace.yaml` with the literal placeholder string `set this
+to true or false`. Do NOT strip the block — pnpm re-injects it on the
+next `pnpm install`. Instead, **replace the placeholder string with
+`true` (or `false`) per package**:
+
+```yaml
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild
+```
+
+This is durable: pnpm sees the boolean, accepts it as the user decision,
+and leaves the block alone on subsequent installs.
+
+**Trigger.** Any time `pnpm install` produces
+`[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: <pkg>@<ver>` and the
+`pnpm-workspace.yaml` contains an `allowBuilds: <pkg>: set this to true
+or false` line. Also any time `pnpm approve-builds` is suggested — the
+interactive TUI is fine for an actual human, but it does not work
+through piped stdin (the readline prompt rejects the buffered input),
+so don't try to script around it. Edit the yaml directly.
+
+**How to apply.**
+- Open `web/pnpm-workspace.yaml`.
+- For each `<pkg>: set this to true or false` line under `allowBuilds:`,
+  replace the right-hand side with `true` (or `false` if you genuinely
+  want to keep the script blocked).
+- Re-run `pnpm install` — the install should now complete cleanly and
+  the affected package's post-install script (e.g., esbuild downloading
+  its platform binary) should run.
+- Commit the yaml as part of the same change that introduced the new
+  dependency.
+
+**Source incident (2026-05-17, LT-4 mid-flight resume).** Resuming
+LT-4 from a fresh worktree, `pnpm install` succeeded but
+`pnpm --filter @particle-editor/editor build` failed with the
+`ERR_PNPM_IGNORED_BUILDS` error — the install itself bailed before
+running the build script. The prior session's handoff text suggested
+"strip the malformed `allowBuilds:` block before committing," which
+worked transiently but pnpm re-injected the block on the next install
+(making subsequent installs fail again). The durable fix is to set the
+per-package value to `true`; pnpm then leaves the field alone. The
+sharpened rule supersedes the strip-it guidance in the prior handoff's
+"Pattern-level things worth knowing" section.
