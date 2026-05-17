@@ -366,37 +366,11 @@ public:
 	}
 };
 
-class MouseCursor : public Object3D
-{
-    D3DXVECTOR3   m_oldPosition;
-    LARGE_INTEGER m_updated;
-    LARGE_INTEGER m_frequency;
-
-public:
-	void SetPosition(const D3DXVECTOR3& position)
-	{
-	    m_position = position;
-    }
-
-  	void UpdateVelocity()
-    {
-        LARGE_INTEGER time;
-        QueryPerformanceCounter(&time);
-
-        D3DXVECTOR3 dx = m_position - m_oldPosition;
-        float       dt = (float)(time.QuadPart - m_updated.QuadPart) / (float)m_frequency.QuadPart;
-        m_velocity = dx / dt;
-
-        m_oldPosition = m_position;
-        m_updated     = time;
-    }
-
-    MouseCursor() : Object3D(NULL, D3DXVECTOR3(0,0,0))
-	{
-        QueryPerformanceFrequency(&m_frequency);
-        m_oldPosition = D3DXVECTOR3(0,0,0);
-	}
-};
+// MouseCursor + GetCursorPos3D were factored out to src/MouseCursor.h so
+// the --new-ui host can reuse them. The header is included alongside
+// ParticleSystemInstance.h above (line 23 brings in engine.h transitively;
+// MouseCursor.h re-includes engine.h with its own guard).
+#include "MouseCursor.h"
 
 static INT_PTR CALLBACK AboutProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -2873,21 +2847,9 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 	return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-// Calculates the 3D position of the intersection of the cursor with Z = 0
-static void GetCursorPos3D(Engine* engine, short x, short y, D3DXVECTOR3& position)
-{
-	D3DXVECTOR3  front, back;
-	D3DVIEWPORT9 viewport;
-	D3DXMATRIX   world;
-	D3DXMatrixIdentity(&world);
-	engine->GetViewPort(&viewport);
-
-	D3DXVec3Unproject(&front, &D3DXVECTOR3(x, y, 0.0f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
-	D3DXVec3Unproject(&back,  &D3DXVECTOR3(x, y, 0.9f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
-
-	D3DXPLANE plane(0,0,1,0);
-	D3DXPlaneIntersectLine(&position, &plane, &front, &back);
-}
+// GetCursorPos3D moved to src/MouseCursor.h (included near top of file).
+// Legacy callers below (WM_KEYDOWN VK_SHIFT, WM_MOUSEMOVE) resolve to the
+// header'd inline.
 
 static LRESULT CALLBACK RenderWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {

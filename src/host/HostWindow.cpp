@@ -45,7 +45,9 @@
 
 #include "../engine.h"
 #include "../managers.h"
+#include "../MouseCursor.h"
 #include "../ParticleSystem.h"
+#include "../ParticleSystemInstance.h"
 #include "../SpawnerDriver.h"
 #include "../UndoStack.h"
 
@@ -332,6 +334,29 @@ struct HostWindowImpl
     int             m_dragStartX    = 0;
     int             m_dragStartY    = 0;
 
+    // LT-4 shift-click-to-spawn. Mirror of legacy
+    // `info->mouseCursor` + `info->attachedParticleSystem` at
+    // src/main.cpp:369-399 / 2945-2966.
+    //
+    // m_mouseCursor: Object3D whose position is set from screen-space
+    // mouse moves (WM_MOUSEMOVE → GetCursorPos3D unproject) and whose
+    // velocity is derived from QueryPerformanceCounter deltas in
+    // UpdateVelocity() (called once per RenderD3D9).
+    //
+    // m_attachedParticleSystem: non-null between Shift-press (spawn) and
+    // Shift-release (kill). Engine returns a pointer we keep until we
+    // KillParticleSystem it.
+    //
+    // m_lastCursorX/Y: cache of the most recent (x,y) seen by
+    // WM_MOUSEMOVE. Used as the spawn coords on WM_KEYDOWN VK_SHIFT
+    // because WM_KEYDOWN's lParam is NOT cursor coords (legacy bug at
+    // src/main.cpp:2960 passes garbage). Fallback if the cache is
+    // stale: GetCursorPos + ScreenToClient.
+    MouseCursor             m_mouseCursor;
+    ParticleSystemInstance* m_attachedParticleSystem = nullptr;
+    int                     m_lastCursorX = 0;
+    int                     m_lastCursorY = 0;
+
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
@@ -435,6 +460,14 @@ void HostWindowImpl::RenderD3D9()
 
     if (spawnerDriver && particleSystem)
         spawnerDriver->Tick(dt, particleSystem.get(), engine.get());
+
+    // LT-4 shift-click-to-spawn: refresh cursor velocity from
+    // QueryPerformanceCounter deltas before the engine sees it. The
+    // attached ParticleSystemInstance reads MouseCursor::GetVelocity
+    // through its Object3D parent chain during Update. Mirrors legacy
+    // src/main.cpp:1904 — the legacy render loop calls UpdateVelocity
+    // unconditionally each frame whether or not a system is attached.
+    m_mouseCursor.UpdateVelocity();
 
     engine->Update();
     engine->Render();
@@ -900,10 +933,29 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
     case WM_MOUSEMOVE:
     {
-        if (m_dragMode == DragMode::NONE || !engine) return 0;
+        if (!engine) return 0;
 
-        long x = (short)LOWORD(lp) - m_dragStartX;
-        long y = (short)HIWORD(lp) - m_dragStartY;
+        // LT-4 shift-click-to-spawn: always-update cursor block, regardless
+        // of drag mode. Mirrors legacy src/main.cpp:2982-2987 — without
+        // this, the attached ParticleSystemInstance (parented to
+        // m_mouseCursor via Object3D) wouldn't track the mouse during
+        // Shift-hold. Cache the (x,y) so WM_KEYDOWN can use it for the
+        // spawn coords (WM_KEYDOWN's lParam is NOT mouse coords; legacy
+        // bug at src/main.cpp:2960).
+        int mx = (short)LOWORD(lp);
+        int my = (short)HIWORD(lp);
+        m_lastCursorX = mx;
+        m_lastCursorY = my;
+        {
+            D3DXVECTOR3 cursorWorld;
+            GetCursorPos3D(engine.get(), (short)mx, (short)my, cursorWorld);
+            m_mouseCursor.SetPosition(cursorWorld);
+        }
+
+        if (m_dragMode == DragMode::NONE) return 0;
+
+        long x = mx - m_dragStartX;
+        long y = my - m_dragStartY;
 
         Engine::Camera camera = m_dragStartCam;
         D3DXVECTOR3    orthVec;
@@ -956,6 +1008,94 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (dispatcher) dispatcher->EmitEngineStateChanged();
         return 0;
     }
+    // -----------------------------------------------------------------
+    // LT-4 shift-click-to-spawn — cursor-bound particle system.
+    //
+    // Hold Shift over the viewport to spawn an instance of the active
+    // ParticleSystem parented to m_mouseCursor. Drag the mouse to fling
+    // it around; release Shift to kill it. Matches legacy
+    // src/main.cpp:2945-2966.
+    //
+    // Cursor-coords-on-KEYDOWN: WM_KEYDOWN's lParam is repeat-count +
+    // scan-code + flags — NOT mouse coords. Legacy reads `LOWORD(lParam),
+    // HIWORD(lParam)` and gets garbage; instead we use m_lastCursorX/Y
+    // cached from WM_MOUSEMOVE. Fallback (cache stale or zero at boot):
+    // GetCursorPos + ScreenToClient.
+    // -----------------------------------------------------------------
+    case WM_KEYDOWN:
+    {
+        if (wp != VK_SHIFT || !engine) break;
+        // Filter auto-repeats. WM_KEYDOWN sets bit 30 of lParam on
+        // repeat presses; clear bit 30 means initial press. Legacy
+        // `(~lParam & 0x40000000)` test.
+        if (lp & 0x40000000) return 0;
+        // Spawn precondition: a non-empty ParticleSystem and no
+        // attached instance already. Empty-system guard goes beyond
+        // legacy's `particleSystem != NULL` to also require >= 1
+        // root emitter — SpawnParticleSystem on an emitter-less system
+        // misbehaves.
+        if (m_attachedParticleSystem != nullptr) return 0;
+        if (!particleSystem || particleSystem->getEmitters().empty()) return 0;
+
+        // Resolve cursor coords. Prefer the cached MOUSEMOVE position;
+        // fall back to GetCursorPos+ScreenToClient if the cache hasn't
+        // been seeded (e.g. user pressed Shift before moving the mouse
+        // over the viewport at all).
+        int cx = m_lastCursorX;
+        int cy = m_lastCursorY;
+        if (cx == 0 && cy == 0)
+        {
+            POINT pt = {};
+            if (GetCursorPos(&pt))
+            {
+                ScreenToClient(hwnd, &pt);
+                cx = pt.x;
+                cy = pt.y;
+            }
+        }
+
+        D3DXVECTOR3 pos;
+        GetCursorPos3D(engine.get(), (short)cx, (short)cy, pos);
+        m_mouseCursor.SetPosition(pos);
+        m_attachedParticleSystem =
+            engine->SpawnParticleSystem(*particleSystem, &m_mouseCursor);
+        return 0;
+    }
+    case WM_KEYUP:
+    {
+        if (wp != VK_SHIFT) break;
+        if (m_attachedParticleSystem && engine)
+        {
+            engine->KillParticleSystem(m_attachedParticleSystem);
+            m_attachedParticleSystem = nullptr;
+        }
+        return 0;
+    }
+    case WM_KILLFOCUS:
+    {
+        // Defensive: if the viewport loses focus while Shift is held
+        // (Alt-Tab away, foreign focus steal), WM_KEYUP may never arrive
+        // and the attached instance leaks. Drop it here.
+        if (m_attachedParticleSystem && engine)
+        {
+            engine->KillParticleSystem(m_attachedParticleSystem);
+            m_attachedParticleSystem = nullptr;
+        }
+        return 0;
+    }
+    case WM_DESTROY:
+    {
+        // Viewport HWND is going away. Defensively drop any attached
+        // instance before the Engine tears down (Engine reset happens
+        // on the main window's WM_DESTROY which fires after this).
+        if (m_attachedParticleSystem && engine)
+        {
+            engine->KillParticleSystem(m_attachedParticleSystem);
+            m_attachedParticleSystem = nullptr;
+        }
+        return 0;
+    }
+
     case WM_MOUSEWHEEL:
     {
         // Wheel-zoom only when no drag is in progress (legacy line 3046).
@@ -1135,6 +1275,10 @@ int HostWindowImpl::Run(int nCmdShow)
     particleSystem->addRootEmitter();
     spawnerDriver  = std::make_unique<SpawnerDriver>();
     dispatcher->BindHostState(&particleSystem, spawnerDriver.get(), &fileManager);
+    // LT-4 shift-click-to-spawn: expose the attached-system slot so
+    // file/new + file/open can kill any in-flight cursor-bound instance
+    // before swapping the ParticleSystem under it.
+    dispatcher->BindAttachedSystem(&m_attachedParticleSystem);
     Log("[host] LT-4 host state bound (particleSystem + spawnerDriver)\n");
 
     HRESULT hr = InitWebView2();

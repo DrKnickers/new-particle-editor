@@ -39,6 +39,7 @@
 class Engine;
 class UndoStack;
 class ParticleSystem;
+class ParticleSystemInstance;
 class SpawnerDriver;
 class IFileManager;
 
@@ -106,6 +107,17 @@ public:
         m_pParticleSystem = ppSystem;
         m_spawnerDriver   = spawner;
         m_fileManager     = fileManager;
+    }
+
+    // LT-4 shift-click-to-spawn: the host owns a single attached
+    // cursor-bound ParticleSystemInstance pointer (nulled when no Shift
+    // is held). file/new + file/open need to kill any in-flight attached
+    // instance before swapping `*m_pParticleSystem` — the old instance
+    // can't outlive the system it was spawned from. Wired alongside
+    // `BindHostState`.
+    void BindAttachedSystem(ParticleSystemInstance** ppAttached)
+    {
+        m_ppAttachedParticleSystem = ppAttached;
     }
 
     // Called from the WebView2 WebMessageReceived handler. The string is
@@ -192,6 +204,12 @@ private:
     std::unique_ptr<ParticleSystem>* m_pParticleSystem = nullptr;
     SpawnerDriver*                   m_spawnerDriver   = nullptr;
     IFileManager*                    m_fileManager     = nullptr;
+
+    // LT-4 shift-click-to-spawn: pointer-to-pointer borrow of
+    // HostWindowImpl::m_attachedParticleSystem so file/new + file/open
+    // can drop the cursor-bound instance before its parent system goes
+    // away. Engine pointer is already cached in m_engine.
+    ParticleSystemInstance**         m_ppAttachedParticleSystem = nullptr;
 
     // Phase 3 Screen 8 Batch 3 — editor-level file state. Owned here
     // rather than on Engine because they're editor concerns (not

@@ -175,6 +175,7 @@
     <ClInclude Include="LinkGroup.h" />
     <ClInclude Include="managers.h" />
     <ClInclude Include="MegaFiles.h" />
+    <ClInclude Include="MouseCursor.h" />
     <ClInclude Include="ParticleSystem.h" />
     <ClInclude Include="ParticleSystemInstance.h" />
     <ClInclude Include="Rescale.h" />

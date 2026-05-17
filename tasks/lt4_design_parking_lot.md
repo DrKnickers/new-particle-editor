@@ -783,6 +783,160 @@ verification pass. Each sub-dialog has its own checkbox above.
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
 
+### Shift-click-to-spawn — cursor-bound particle system (locked 2026-05-17)
+
+The viewport-interaction follow-up. Legacy lets the user hold Shift
+to spawn a cursor-bound particle system instance that tracks the
+mouse's 3D position + velocity until Shift is released. This is the
+"feel" feature that makes the editor enjoyable — the user can shake
+the cursor to fling particles around, then release for them to
+settle. Without it, the user has to manually configure + trigger
+the spawner to see anything moving.
+
+**Legacy flow** (from [src/main.cpp:2945-2966] and [src/main.cpp:2968-3043]
+WM_MOUSEMOVE + [src/main.cpp:1894-1904]):
+
+1. **WM_KEYDOWN VK_SHIFT (initial press only)**:
+   - Check `(~lParam & 0x40000000)` to filter auto-repeats.
+   - `GetCursorPos3D(engine, x, y, pos)` — unprojects screen XY to
+     world space via engine view/projection, intersects with the
+     z=0 plane.
+   - `mouseCursor.SetPosition(pos)` — seeds the cursor object.
+   - `info->attachedParticleSystem = engine->SpawnParticleSystem(
+     *particleSystem, &mouseCursor)` — spawns a new
+     ParticleSystemInstance parented to the cursor. The instance
+     inherits cursor position + velocity each frame.
+2. **WM_MOUSEMOVE (always, whether dragging or not)**:
+   - `GetCursorPos3D(engine, x, y, cursor)`.
+   - `mouseCursor.SetPosition(cursor)`.
+   - Updates the cursor's position so the spawning system tracks
+     it.
+3. **Render loop**:
+   - `mouseCursor.UpdateVelocity()` computes `dx/dt` from
+     `QueryPerformanceCounter` so the cursor object has both
+     position + velocity (which the particle system reads).
+4. **WM_KEYUP VK_SHIFT**:
+   - `engine->KillParticleSystem(attachedParticleSystem)`.
+   - Clear the pointer.
+
+**`Object3D` and `MouseCursor` structure** (from [src/engine.h:11]
+and [src/main.cpp:369-399]):
+
+- `Object3D` is the base — owns `m_position`, `m_velocity`,
+  `m_parent`. `GetPosition()` walks the parent chain. Already
+  public + already in `src/engine.h`.
+- `MouseCursor : Object3D` adds `m_oldPosition` + `m_updated`
+  + `m_frequency` + `UpdateVelocity()` + `SetPosition`. Currently
+  static in main.cpp.
+
+**`GetCursorPos3D` helper** (from [src/main.cpp:2877-2890]):
+
+Uses `D3DXVec3Unproject` to convert screen-space (x, y, depth) to
+world-space front + back rays, then `D3DXPlaneIntersectLine` to find
+the intersection with the z=0 plane. Engine API used:
+`GetViewPort`, `GetProjectionMatrix`, `GetViewMatrix` — all public.
+
+**Implementation plan:**
+
+1. **Factor `MouseCursor` into `src/MouseCursor.h`** — a single
+   header (no .cpp needed; class is small + entirely inline).
+   Include guards, `#include "engine.h"` for `Object3D`. Verbatim
+   copy from main.cpp:369-399. Remove the static class from
+   main.cpp (replace with `#include "MouseCursor.h"`).
+2. **Factor `GetCursorPos3D` into a header** — `src/CursorPicking.h`
+   (or fold into `MouseCursor.h` since they're paired). Single
+   inline function. Remove the static from main.cpp.
+3. **Both headers also referenced by legacy** — main.cpp uses
+   `info->mouseCursor` (member of `APPLICATION_INFO`) and
+   `GetCursorPos3D` directly. After factor-out, those references
+   resolve to the header'd versions. Verify legacy still builds.
+4. **HostWindowImpl additions** ([src/host/HostWindow.cpp:257]):
+   ```cpp
+   #include "MouseCursor.h"
+   ...
+   MouseCursor m_mouseCursor;
+   ParticleSystemInstance* m_attachedParticleSystem = nullptr;
+   ```
+5. **`ViewportWndProc` extensions** ([src/host/HostWindow.cpp:811]):
+   - **WM_KEYDOWN**: if `wp == VK_SHIFT` and `(~lp & 0x40000000)`
+     (initial press) and `*m_particleSystem` is not empty (has at
+     least one root emitter — `getEmitters().size() > 0` or
+     similar) and `m_attachedParticleSystem == nullptr`:
+     - `GetCursorPos3D(engine.get(), LOWORD(lp), HIWORD(lp), pos)`
+       *— but `lParam` for `WM_KEYDOWN` is repeat count + scan
+       code, NOT cursor coords. Need to get cursor pos via
+       `GetCursorPos(POINT*)` + `ScreenToClient(hwnd, &pt)`
+       instead, OR via the last-known position cached from
+       WM_MOUSEMOVE. Easier: cache the last cursor XY from
+       MOUSEMOVE (`m_lastCursorX`, `m_lastCursorY`) and use those.*
+     - `m_mouseCursor.SetPosition(pos)`.
+     - `m_attachedParticleSystem = engine->SpawnParticleSystem(
+       **m_particleSystem, &m_mouseCursor)`.
+   - **WM_KEYUP**: if `wp == VK_SHIFT` and
+     `m_attachedParticleSystem != nullptr`:
+     - `engine->KillParticleSystem(m_attachedParticleSystem)`.
+     - `m_attachedParticleSystem = nullptr`.
+   - **WM_MOUSEMOVE** (extension to existing handler from prior
+     batch): always call `GetCursorPos3D` + cache `(x, y)` as
+     `m_lastCursorX/Y` + `m_mouseCursor.SetPosition(pos)` —
+     regardless of drag mode. This keeps the cursor object's
+     position current so the attached particle system tracks it.
+6. **RenderD3D9 extension** ([src/host/HostWindow.cpp:410]):
+   - Add `m_mouseCursor.UpdateVelocity()` before `engine->Update()`.
+   - Matches legacy [src/main.cpp:1904].
+
+**Why `WM_KEYDOWN` cursor-pos via `GetCursorPos`**:
+
+Legacy reads cursor coords from `WM_KEYDOWN`'s `lParam` — but
+`WM_KEYDOWN`'s lParam is `repeat-count | scan-code | …` NOT mouse
+coords. Looking again at [src/main.cpp:2960]: it passes
+`(SHORT)LOWORD(lParam), (SHORT)HIWORD(lParam)` to `GetCursorPos3D`.
+That's a legacy bug? Or the cursor coords happen to be in some
+other path? Investigate via the actual legacy behaviour — the
+subagent should verify by reading WM_KEYDOWN docs.
+
+**Best practice**: use the cached `m_lastCursorX/Y` from
+WM_MOUSEMOVE. The mouse will have moved into the viewport before
+Shift was pressed (the user typically hovers over the viewport
+before pressing Shift), so the cache is fresh. Fallback:
+`GetCursorPos(POINT*)` + `ScreenToClient`.
+
+**Test surface:**
+
+Same constraint as the camera batch — keyboard + mouse on a
+sibling HWND can't be Playwright-driven through WebView2's
+surface. The C++ build must succeed. Manual smoke verifies feel.
+
+- **All 74 Vitest + 48 Playwright still pass.** No regression
+  expected — the new code is purely additive in
+  `ViewportWndProc` (handles new messages); existing handlers
+  unchanged.
+- **No new tests.** No bridge contract changes. No React changes.
+- **Manual smoke**: subagent (or controller) runs
+  `ParticleEditor.exe --new-ui --dev-ui`, hovers cursor over
+  viewport, holds Shift, drags cursor, releases Shift. Confirms:
+  (a) particle system spawns on Shift-press, (b) cursor drag
+  carries the spawn along, (c) Shift-release kills it cleanly.
+  Not a strict gate.
+
+**Defensive cleanups:**
+
+- If `m_attachedParticleSystem != nullptr` when the host shuts
+  down or the particle system is replaced (file/new, file/open),
+  kill it cleanly. Add to the relevant teardown paths.
+- If the user releases Shift outside the viewport HWND (focus
+  changed mid-press), the attached instance can leak. Same
+  defensive: kill on WM_KILLFOCUS or similar.
+
+**Open follow-ups** (out of scope):
+- *Wireframe cursor visualization* — legacy renders the cursor
+  as a small wireframe object via `mouseCursor` being passed to
+  the engine's render. Subtle; defer to a polish batch.
+- *Multi-spawn* — currently one attached instance at a time.
+  Holding Shift + clicking multiple times in legacy spawns more.
+  Verify legacy actually supports this or if it's single-spawn-
+  per-Shift-hold.
+
 ### Viewport interaction — camera controls (locked 2026-05-17)
 
 First user-input batch for the new-UI viewport. Adds mouse + wheel

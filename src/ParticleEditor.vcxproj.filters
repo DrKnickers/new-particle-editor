@@ -57,6 +57,9 @@
     <ClInclude Include="MegaFiles.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="MouseCursor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ParticleSystem.h">
       <Filter>Header Files</Filter>
     </ClInclude>

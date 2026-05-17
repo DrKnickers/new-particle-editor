@@ -955,6 +955,16 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // src/main.cpp:1289). Clear editor path / dirty.
     if (kind == "file/new")
     {
+        // LT-4 shift-click-to-spawn: if the user is mid-Shift-hold when
+        // they hit file/new, kill the cursor-bound instance before
+        // dropping the ParticleSystem it was spawned from. Mirrors the
+        // legacy DoNewFile teardown sequence for `attachedParticleSystem`
+        // at src/main.cpp:1289-1305.
+        if (m_ppAttachedParticleSystem && *m_ppAttachedParticleSystem && m_engine)
+        {
+            m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
+            *m_ppAttachedParticleSystem = nullptr;
+        }
         if (m_pParticleSystem)
         {
             *m_pParticleSystem = std::make_unique<ParticleSystem>();
@@ -1027,6 +1037,14 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             // happens after a successful parse).
             sendOk(json{{"ok", false}, {"error", err.empty() ? std::string("load failed") : err}});
             return res;
+        }
+        // LT-4 shift-click-to-spawn: kill any cursor-bound instance
+        // attached to the about-to-be-replaced ParticleSystem before
+        // swapping. Same reasoning as the file/new branch above.
+        if (m_ppAttachedParticleSystem && *m_ppAttachedParticleSystem && m_engine)
+        {
+            m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
+            *m_ppAttachedParticleSystem = nullptr;
         }
         if (m_pParticleSystem)
         {
