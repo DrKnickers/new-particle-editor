@@ -24,11 +24,11 @@ test("All 5 menu triggers render in the menubar", async () => {
   const triggers = await page.evaluate(() => {
     const bar = document.querySelector('[role="menubar"]');
     if (!bar) return [];
-    // Radix renders each <Menubar.Menu> as a direct child <div> wrapping
-    // a <button role="menuitem">. Collect the text of those buttons.
-    return Array.from(
-      bar.querySelectorAll(':scope > div > button')
-    ).map((b) => b.textContent?.trim());
+    // Radix puts each Menubar.Trigger as a direct child <button> of the
+    // menubar root (no intermediate div). Just collect direct-child buttons.
+    return Array.from(bar.querySelectorAll(':scope > button')).map(
+      (b) => b.textContent?.trim()
+    );
   });
   expect(triggers).toEqual(
     expect.arrayContaining(["File", "Edit", "View", "Tools", "Help"])

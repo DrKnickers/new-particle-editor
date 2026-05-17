@@ -39,20 +39,19 @@ test.afterAll(async () => {
 });
 
 test("Background picker DOM renders after the toolbar button is clicked", async () => {
-  // The BackgroundButton lives in the top bar with aria-label semantics
-  // we don't lean on here — click via querySelector to keep the spec
-  // resilient to copy changes. After the click, BackgroundPicker mounts
-  // with role="dialog" + aria-label="Background picker".
+  // The BackgroundButton has aria-label="Background"; that's the stable
+  // selector now that the top bar also contains the MenuBar (Screen 2)
+  // whose "File" trigger would otherwise be the first <button> in the
+  // header.
   const probe = await page.evaluate(async () => {
-    // Click the BackgroundButton (it's the only button in the header).
-    // The picker toggles open on click.
-    const header = document.querySelector("header");
-    const btn = header?.querySelector<HTMLButtonElement>("button");
+    const btn = document.querySelector<HTMLButtonElement>('button[aria-label="Background"]');
     if (!btn) return { clicked: false, panel: false, slots: 0 };
     btn.click();
-    // The picker mounts synchronously on state update; one microtask is
-    // enough for React to flush.
-    await new Promise((r) => setTimeout(r, 50));
+    // The picker mounts on the next React commit. 50ms used to be enough,
+    // but Screen 2 added a MenuBar with its own snapshot useEffect that
+    // commits in the same tick. Bump to 250ms (matches the bloom-flip
+    // wait in the toolbar spec) to ride out any racing commits.
+    await new Promise((r) => setTimeout(r, 250));
     const panel = document.querySelector('[role="dialog"][aria-label="Background picker"]');
     // Solid colour + 8 bundled + 3 custom = 12 slot buttons inside the panel.
     const slots = panel?.querySelectorAll("button[aria-pressed]").length ?? 0;
