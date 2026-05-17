@@ -903,11 +903,11 @@ verification pass. Each sub-dialog has its own checkbox above.
 - [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
 - [x] Import Emitters — ✅ shipped Batch 4 (component + bridge contract; real preview-from-file deferred to file-load batch)
 - [x] Rescale System — ✅ shipped Batch 1
-- [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
-- [ ] Increment Index — 🟡 pending (waits on Screen 4 for trigger site)
+- [x] Rescale Emitter — ✅ shipped Screen 4 Batch B1 (right-click context menu → Rescale Emitter…)
+- [x] Increment Index — ✅ shipped Screen 4 Batch B1 (right-click context menu → Increment Index…)
 - [x] Mod Nickname — ✅ shipped Batch 4 (component + usePromptModNickname hook + ?demo=mod-nickname route; real auto-trigger deferred to file-load batch)
 - [x] Spawner — ✅ shipped Batch 4 (panel + schema; real SpawnerDriver wiring deferred to file-load batch)
-- [ ] Link Group Settings — 🟡 pending (waits on Screen 4 for trigger site)
+- [x] Link Group Settings — ✅ shipped Screen 4 Batch B1 (right-click context menu → Link Group Settings…, disabled when emitter unlinked)
 - [x] About — ✅ shipped Batch 1
 - [x] File-ops backbone (New / Open / Save / Save As / recent-files) — ✅ shipped Batch 3
 
@@ -3129,3 +3129,148 @@ batch):
 - **Batch C**: link-group bracket visualisation (MT-9 port), F2 /
   double-click inline rename, keyboard nav (arrows / Enter /
   Delete / Cut / Copy / Paste).
+
+### 2026-05-17 · Screen 4 Batch B1 (mutations + context menu + 3 Screen-8 sub-dialogs)
+
+Second of three batches for the load-bearing screen. Right-click
+context menu on every emitter row now offers Rename / Duplicate /
+Delete / Increment Index… / Rescale Emitter… / Link Group
+Settings…. The last three were the final Screen 8 sub-dialogs
+blocked on Screen 4 — **all 13 of 13 Screen 8 sub-dialogs now
+shipped.** Drag/drop, multi-select, Add Lifetime/Death Child,
+Set/Leave Link Group, Move Up/Down stay deferred to Batches B2 +
+C.
+
+Commit: `8e460a4` (single feat — no new deps; `@radix-ui/react-context-menu`
+already a dep from Screen 7). Tests 90 Vitest (78 → 90, +8 contract
++ 4 dialog) + 54 Playwright (50 → 54, +4 mutation specs). MSBuild
+0/0.
+
+**What changed:**
+
+- *8 new bridge call kinds.* `emitters/duplicate`,
+  `emitters/delete`, `emitters/rename`,
+  `emitters/duplicate-with-index-increment`,
+  `engine/action/rescale-emitter`, `linkGroups/list-exempt-fields`,
+  `linkGroups/set-exempt-fields`,
+  `linkGroups/reset-exempt-fields`. All round-trip through
+  MockBridge + real C++ host implementations — zero
+  forward-defers needed.
+- *MT-10 access turned out clean.* The exempt-set storage is
+  already public on `ParticleSystem` via
+  `getLinkExemptFlags(uint32_t groupId)` /
+  `setLinkExemptFlags(...)` (see `src/ParticleSystem.h:372`).
+  No header factor-out required; no `src/LinkGroups.h` created;
+  legacy `EmitterList.cpp` untouched.
+- *Legacy `GenerateDuplicateName` was extern-linkable.* The
+  name-suffix algorithm (`<base>_<N+1>` over the highest
+  matching base) ships verbatim from the legacy via a single
+  `extern std::string` declaration in the dispatcher. No
+  duplication, no risk of drift.
+- *`emitters/duplicate-with-index-increment`* mirrors legacy
+  `ShiftIndexTrack` at `src/UI/EmitterList.cpp:2307`: shifts the
+  TRACK_INDEX track values by `delta`. The actual mutation
+  rebuilds the `std::multiset` keymap (multiset iterators are
+  const-qualified so in-place value mutation isn't possible).
+- *Radix ContextMenu on tree rows.* Each row's `<button>` wrapped
+  in `<ContextMenu.Root>` + `<ContextMenu.Trigger asChild>`.
+  Items in the locked order with two separators. "Link Group
+  Settings…" disables (`disabled={!isLinked}`) when
+  `emitter.linkGroup === 0`, rendered with `data-disabled` for
+  styling.
+- *`emitters/tree/changed` now actually emits.* Batch A wired
+  the React subscription as a no-op; this batch makes the C++
+  host emit the event after every mutation. New
+  `BridgeDispatcher::EmitEmittersTreeChanged()` helper.
+- *Four new modals* under `screens/`: `RenameEmitterDialog`,
+  `IncrementIndexDialog`, `RescaleEmitterDialog`,
+  `LinkGroupSettingsDialog`. State driven by a new
+  `lib/tree-context.ts` Zustand atom (same pattern as
+  `lib/tool-panel.ts` for the right-side panels).
+
+**Locks worth surfacing for future batches:**
+
+- *Legacy `extern`-linkable helpers are free reuse.* The
+  `GenerateDuplicateName` find was a meaningful save —
+  duplicating a 30-line name-suffix algorithm in a new
+  translation unit would have introduced a drift risk. Same
+  pattern likely applies to any future port: grep for
+  non-`static` legacy helpers BEFORE writing new copies. The
+  legacy is a goldmine when its functions happen to be at file
+  scope.
+- *`extern` declarations beat factor-out-into-new-header when
+  the function is already file-scope-callable.* This batch had
+  the cleaner option to factor `GenerateDuplicateName` into
+  `src/EmitterNames.h` for symmetry with prior batches'
+  `MouseCursor.h` / `ParticleSystemIO.h`. The choice not to
+  factor it was deliberate — the legacy function is small,
+  doesn't have other consumers yet, and adding a header for one
+  function is over-engineering. Generalizable: factor-into-header
+  is the right call when you have ≥2 consumers OR when the
+  function's signature is at a meaningful API boundary; an
+  `extern` declaration in one consumer is fine otherwise.
+- *Modal-flow Zustand atom pattern repeats.* Three different
+  Zustand atoms now drive modal/panel open state:
+  `lib/tool-panel.ts` (right-side tool panels),
+  `lib/file-state.ts` (save-changes prompt + recent files),
+  `lib/tree-context.ts` (emitter-context-menu modals). Each
+  has a `{ open: <kind> | null; target: <id> | null }` shape.
+  Generalizable: when adding a new family of related modals,
+  reach for a small Zustand atom over individual `useState`s
+  threaded through props.
+
+**Implementer notes (from the subagent's report):**
+
+1. *Radix ContextMenu in jsdom needed no workaround.* Vitest
+   dialog tests bypass the Radix-open path entirely (they call
+   `openDialog()` on the Zustand atom directly), and Playwright
+   exercises the real Radix path via CDP. The
+   `pointerDownOutside` / `pointer-capture` workarounds from
+   prior batches (Modal, Select) didn't apply.
+2. *`kLinkFieldTable` is dispatcher-local on purpose.* Legacy
+   has a `kLinkSettingsFields` table mapping display labels to
+   `bool LinkExemptFlags::*` member pointers. Sharing the legacy
+   table would have required either a label↔name lookup table
+   or coupling the wire surface to display strings. The
+   dispatcher's local table maps stable camelCase wire names
+   directly. 50 entries duplicated cheaply; coupling avoided.
+3. *Mock duplicate name annotation.* MockBridge's
+   `duplicateWithIndexIncrement` appends ` (+N)` to the
+   duplicate's name so the contract test can assert `delta`
+   arrived. Native handler doesn't do this — the delta lands on
+   the TRACK_INDEX track values, not the name. The contract
+   spec only verifies the wire round-trip; the actual track
+   shift is asserted indirectly by the Playwright `tree/changed`
+   count.
+
+**Open follow-ups for Batches B2 + C** (explicitly NOT in B1):
+
+- **Batch B2**: Add Lifetime/Death Child operations, Set/Leave
+  Link Group (group membership — distinct from B1's exempt-set
+  editing), Move Up/Down, multi-select state.
+- **Batch B3**: Drag/drop reordering + reparent-via-drag.
+- **Batch C**: Link-group bracket visualisation (MT-9 port), F2
+  / double-click inline rename (replaces B1's modal), keyboard
+  nav (arrows / Enter / Delete / Cut / Copy / Paste).
+
+### Screen 8 status after Batch B1 — fully closed
+
+13 of 13 Screen 8 sub-dialogs shipped:
+
+| Sub-dialog | Where it shipped |
+|---|---|
+| About | Batch 1 |
+| Rescale System | Batch 1 |
+| Background picker | Phase 2 (refactored Batch 2) |
+| Lighting | Batch 2 |
+| Bloom settings | Batch 2 |
+| Ground Texture Picker | Batch 2 |
+| File-ops backbone | Batch 3 |
+| Spawner | Batch 4 |
+| Import Emitters | Batch 4 |
+| Mod Nickname | Batch 4 |
+| **Rescale Emitter** | **Screen 4 Batch B1** |
+| **Increment Index** | **Screen 4 Batch B1** |
+| **Link Group Settings** | **Screen 4 Batch B1** |
+
+Screen 8 is fully shipped pending the Phase 4.2 legacy delete.
