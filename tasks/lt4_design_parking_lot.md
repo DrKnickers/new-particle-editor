@@ -638,10 +638,10 @@ verification pass. Each sub-dialog has its own checkbox above.
 
 **Sub-screens to check off individually:**
 
-- [ ] Lighting dialog — 🟡 pending (Batch 2 dispatch in flight)
-- [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge)
-- [ ] Ground picker — 🟡 pending (Batch 2 dispatch in flight)
-- [ ] Bloom settings — 🟡 pending (Batch 2 dispatch in flight)
+- [x] Lighting dialog — ✅ shipped Batch 2
+- [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge); refactored to ToolPanel shell in Batch 2
+- [x] Ground picker — ✅ shipped Batch 2 (View → Ground Texture…)
+- [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
 - [ ] Import Emitters — 🟡 pending
 - [x] Rescale System — ✅ shipped Batch 1
 - [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
@@ -1154,3 +1154,75 @@ Commits: `0121890` (feat) + `8304c41` (deps sync for
   Settings* all depend on Screen 4 (emitter tree) for their trigger
   sites. Bring them up in the same batch that lands Screen 4's
   context menus.
+
+### 2026-05-17 · Screen 8 Batch 2 (ToolPanel + Lighting + Bloom + Ground Texture)
+
+Three modeless tool windows + a shared sliding-panel shell, all in
+one opus dispatch. The architectural call was **mutual-exclusion
+sliding panels** via a single `openToolPanel` Zustand atom — opening
+any panel closes the previously-open one. This refactored the
+existing BackgroundPicker into the new `ToolPanel` shell while keeping
+all existing Background Playwright specs green without modification.
+
+Commit: `060cae7` (single feat — no new deps required, so no chore
+sync). Tests 55 Vitest (46 → 55) + 34 Playwright (28 → 34). MSBuild
+incremental no-op (zero C++ changes).
+
+**Locks worth surfacing for future batches:**
+- *Mutual-exclusion is the right starting point for tool panels.*
+  Multi-panel tabbed sidebar / stacked panels are bigger
+  architectural changes that should wait for user feedback that
+  one-at-a-time is too restrictive. The Zustand atom + selector
+  pattern leaves room to evolve without rewriting any panel
+  component — only `App.tsx`'s routing logic changes.
+- *ToolPanel as shared shell is durable beyond Screen 8.* Any future
+  surface that wants the slide-in-from-right chrome (e.g., emitter
+  inspector for Screen 4, curve editor toolbar) uses this same
+  shell. Body content stays per-screen; chrome is one place.
+- *Lighting `intensity` vs `LightDto.diffuse/specular` mapping
+  preserves user intent.* Legacy stores intensity and per-channel
+  colour separately and folds at push time (see `MakeLight` at
+  [src/main.cpp:6196]). The engine snapshot only carries the
+  post-multiplied Vec4, so a naive snapshot → form sync would
+  clobber the user's intensity vs colour split. The lock: React
+  holds intensity + diffuse RGB + specular RGB as local form
+  state, seeds once at mount from the snapshot (with intensity =
+  1.0 so the displayed colour matches the snapshot Vec4 verbatim),
+  then multiplies on the way out of every `engine/set/light` call.
+  No re-seed on `engine/state/changed` — that would clobber the
+  split. Same pattern will apply to any future panel that exposes
+  a "compressed" engine field as multiple user-facing controls.
+
+**Implementer surprises (from the subagent's report):**
+1. *No Force Align bridge call exists.* Legacy `Lighting_RealignFills`
+   ([src/main.cpp:6619]) cascades sun-Z → fill angles via the
+   resource dialog's internal state, but there's no schema entry
+   for it. Per design lock 4 ("omit if no bridge call exists"), the
+   checkbox is deferred with a JSX TODO. Adding it later is either
+   (a) a new `engine/set/lighting-force-align` bridge call + C++
+   handler, or (b) client-side cascade of three sequential
+   `engine/set/light` calls per sun-Z change. Both are scope
+   expansions beyond Batch 2.
+2. *BackgroundPicker refactor was invisible externally.* The new
+   `ToolPanel` sets `aria-label={title}`, and passing
+   `title="Background picker"` preserved the existing Playwright
+   selector `[role="dialog"][aria-label="Background picker"]`.
+   Toolbar spec's "Close background picker" filter still matches
+   because the new close-glyph label is just `"Close"` and the
+   filter uses a prefix match.
+3. *Ground custom-slot file picker is a no-op (matches BackgroundPicker
+   precedent).* Empty custom slots show "+ Browse" but click is a
+   no-op until `file/open` reaches both bridges uniformly. Defer
+   matches existing BackgroundPicker behaviour from Task 2.3.
+
+**Open follow-ups for later Screen 8 batches:**
+- *Force Align checkbox for the Lighting panel* (see surprise 1).
+- *Toolbar pill for Ground Texture* — the parking-lot design call
+  suggested either a menu item OR a toolbar pill; menu item was
+  the smaller call this batch. Toolbar pill is a future option if
+  ground-texture switching is a frequent enough workflow.
+- *Ground custom-slot file picker* — see surprise 3. Resolves once
+  the file-ops backbone (Batch 3+ candidate) lands.
+- *Tab strip / multi-panel tabbed sidebar* — defer until user
+  feedback says one-at-a-time mutual exclusion is too restrictive.
+  The atom-based routing makes this a non-breaking change later.
