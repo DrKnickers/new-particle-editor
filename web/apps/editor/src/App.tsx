@@ -10,6 +10,9 @@ import { BackgroundPicker } from "@/screens/BackgroundPicker";
 import { LightingPanel } from "@/screens/LightingPanel";
 import { BloomPanel } from "@/screens/BloomPanel";
 import { GroundTexturePanel } from "@/screens/GroundTexturePanel";
+import { SpawnerPanel } from "@/screens/SpawnerPanel";
+import { ImportEmittersDialog } from "@/screens/ImportEmittersDialog";
+import { ModNicknameDialog } from "@/screens/ModNicknameDialog";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
 import { AboutDialog } from "@/screens/AboutDialog";
 import { RescaleDialog } from "@/screens/RescaleDialog";
@@ -19,6 +22,7 @@ import {
   useOpenToolPanel,
 } from "@/lib/tool-panel";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
+import { promptModNickname } from "@/lib/mod-nickname";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -44,6 +48,7 @@ function AppShell() {
   const openPanel = useOpenToolPanel();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
+  const [importEmittersOpen, setImportEmittersOpen] = useState(false);
 
   // Screen 8 Batch 3: subscribe to file-state events (dirty/changed,
   // recent/changed, engine/state/changed) and seed from snapshot +
@@ -132,6 +137,8 @@ function AppShell() {
           onOpenLightingPanel={() => setOpenToolPanel("lighting")}
           onOpenBloomPanel={() => setOpenToolPanel("bloom")}
           onOpenGroundTexturePanel={() => setOpenToolPanel("ground")}
+          onOpenSpawnerPanel={() => setOpenToolPanel("spawner")}
+          onOpenImportEmittersDialog={() => setImportEmittersOpen(true)}
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}
         />
@@ -174,6 +181,9 @@ function AppShell() {
         {openPanel === "ground" && (
           <GroundTexturePanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
         )}
+        {openPanel === "spawner" && (
+          <SpawnerPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+        )}
       </div>
 
       {/* Status bar */}
@@ -188,6 +198,15 @@ function AppShell() {
         open={rescaleOpen}
         onOpenChange={setRescaleOpen}
       />
+      <ImportEmittersDialog
+        bridge={bridge}
+        open={importEmittersOpen}
+        onOpenChange={setImportEmittersOpen}
+      />
+      {/* ModNicknameDialog is mounted unconditionally; it observes its
+          own Zustand atom for open state. Driven by `promptModNickname`
+          (programmatic) or the `?demo=mod-nickname` route in App below. */}
+      <ModNicknameDialog />
       {/* Save-changes prompt (Screen 8 Batch 3). Open state lives in
           the file-state atom; this mount is invisible while the
           pendingAction slot is null. Driven from any destructive op
@@ -197,11 +216,31 @@ function AppShell() {
   );
 }
 
+// ?demo=mod-nickname — design-checkpoint gate for the Mod Nickname
+// dialog. Mounts the dialog and fires `promptModNickname()` once on
+// load so the dialog is immediately visible. Phase 3 Screen 8 Batch 4.
+function ModNicknameDemo() {
+  useEffect(() => {
+    void promptModNickname().then((result) => {
+      console.log("[demo:mod-nickname] resolved with:", result);
+    });
+  }, []);
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-neutral-950 text-sm text-neutral-400">
+      <span>Mod Nickname dialog demo — dismiss to log the result.</span>
+      <ModNicknameDialog />
+    </div>
+  );
+}
+
 // App — root entry point. Routes to the primitives gallery when ?demo=primitives
 // is present; otherwise renders the full editor shell.
 export function App() {
   if (DEMO_PARAM === "primitives") {
     return <PrimitivesGallery />;
+  }
+  if (DEMO_PARAM === "mod-nickname") {
+    return <ModNicknameDemo />;
   }
   return <AppShell />;
 }

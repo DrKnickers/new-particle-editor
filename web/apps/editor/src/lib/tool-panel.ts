@@ -25,6 +25,7 @@ export type ToolPanelId =
   | "lighting"
   | "bloom"
   | "ground"
+  | "spawner"
   | null;
 
 type ToolPanelStore = {

@@ -310,6 +310,70 @@ describe("MockBridge contract", () => {
     expect(r).toEqual({ ok: false, error: "browser-mode" });
   });
 
+  // ─── Phase 3 Screen 8 Batch 4: spawner + emitters/preview-from-file
+  it("spawner/start round-trips through MockBridge; snapshot reflects new config", async () => {
+    const b = new MockBridge();
+    let lastSnap: { spawner?: { burstSize: number; mode: string } } | null = null;
+    const off = b.on("engine/state/changed", (e) => {
+      lastSnap = e.payload;
+    });
+
+    await b.request({
+      kind: "spawner/start",
+      params: {
+        mode: "manual",
+        enabled: false,
+        burstSize: 7,
+        spacingSec: 0.5,
+        intervalSec: 3,
+        position: [1, 2, 3],
+        velocity: [0, 0, 0],
+        maxLifetimeSec: 12,
+        jitterPosition: [0, 0, 0],
+        jitterVelocity: [0, 0, 0],
+      },
+    });
+
+    expect(lastSnap).not.toBeNull();
+    expect(lastSnap!.spawner!.burstSize).toBe(7);
+    expect(lastSnap!.spawner!.mode).toBe("manual");
+
+    const snap = await b.request({ kind: "engine/state/snapshot", params: {} });
+    expect(snap.spawner.burstSize).toBe(7);
+    expect(snap.spawner.mode).toBe("manual");
+    off();
+  });
+
+  it("spawner/trigger returns {} and emits spawner/active-count", async () => {
+    const b = new MockBridge();
+    let count: number | null = null;
+    const off = b.on("spawner/active-count", (e) => {
+      count = e.payload.count;
+    });
+
+    const r = await b.request({ kind: "spawner/trigger", params: {} });
+    expect(r).toEqual({});
+    // Mock starts the count at 0 and bumps by burstSize (1 by default).
+    expect(count).toBe(1);
+    off();
+  });
+
+  it("emitters/preview-from-file returns a mock tree for any path", async () => {
+    const b = new MockBridge();
+    const r = await b.request({
+      kind: "emitters/preview-from-file",
+      params: { path: "/anywhere/foo.alo" },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.tree).toBeDefined();
+      expect(r.tree.children.length).toBeGreaterThanOrEqual(3);
+      // Names from the mock tree.
+      const names = r.tree.children.map((c) => c.name);
+      expect(names).toEqual(expect.arrayContaining(["Smoke", "Sparks", "Flash"]));
+    }
+  });
+
   it("on() returns a working unsubscribe", async () => {
     const b = new MockBridge();
     const seen: Event[] = [];

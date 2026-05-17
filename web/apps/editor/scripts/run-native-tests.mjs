@@ -99,6 +99,7 @@ async function main() {
       "tests/dialogs.spec.ts",
       "tests/tools.spec.ts",
       "tests/file-ops.spec.ts",
+      "tests/spawner-import-mod.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

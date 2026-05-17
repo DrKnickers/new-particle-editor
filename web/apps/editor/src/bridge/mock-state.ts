@@ -11,7 +11,25 @@
 //   RGB(0x14,0x08,0x34) = 0x00340814  → dark-purple background
 
 import { create } from "zustand";
-import type { EngineStateDto, LightDto } from "@particle-editor/bridge-schema";
+import type { EngineStateDto, LightDto, SpawnerParamsDto } from "@particle-editor/bridge-schema";
+
+/** Defaults mirror `SpawnerConfig()` at [src/SpawnerDriver.h:18]:
+ *  Auto mode + disabled + burst 1 + 0 s spacing + 10 s interval + origin
+ *  + 5 s lifetime + zero jitter. */
+export function makeDefaultSpawnerParams(): SpawnerParamsDto {
+  return {
+    mode: "auto",
+    enabled: false,
+    burstSize: 1,
+    spacingSec: 0,
+    intervalSec: 10,
+    position: [0, 0, 0],
+    velocity: [0, 0, 0],
+    maxLifetimeSec: 5,
+    jitterPosition: [0, 0, 0],
+    jitterVelocity: [0, 0, 0],
+  };
+}
 
 export const GROUND_SLOT_COUNT = 8;       // matches Engine::kGroundTextureCount
 export const SKYDOME_SLOT_COUNT = 12;     // matches Engine::kSkydomeSlotCount
@@ -72,6 +90,8 @@ export function makeDefaultEngineState(): EngineStateDto {
 
     wind:    [0, 0, 0],
     gravity: [0, 0, -1],
+
+    spawner: makeDefaultSpawnerParams(),
   };
 }
 

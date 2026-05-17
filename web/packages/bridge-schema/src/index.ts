@@ -47,6 +47,53 @@ export type LightDto = {
  *  so JSON readers don't have to memorise an enum. */
 export type LightWhich = "sun" | "fill1" | "fill2";
 
+// ─── Spawner DTO (Phase 3 Screen 8 Batch 4) ──────────────────────────
+//
+// Mirrors `SpawnerConfig` at [src/SpawnerDriver.h:18]. Defaults match
+// `SpawnerConfig()` (Auto mode, disabled, burst 1, no spacing, 10 s
+// interval, origin, 5 s lifetime, no jitter). `enabled` is meaningful
+// only in Auto mode (toggle the recurring schedule); Manual mode bursts
+// only on explicit `spawner/trigger`.
+
+export type SpawnerMode = "manual" | "auto";
+
+export type SpawnerParamsDto = {
+  mode: SpawnerMode;
+  enabled: boolean;
+  /** 1..MAX_BURST_SIZE (=10) instances per burst. */
+  burstSize: number;
+  /** 0..MAX_SPACING_SEC (=10) seconds between instances inside a burst. */
+  spacingSec: number;
+  /** Auto-mode only: 0..MAX_INTERVAL_SEC (=60) seconds between burst
+   *  starts. Ignored in Manual mode but always carried through the DTO
+   *  so the panel keeps its setting when the user toggles modes. */
+  intervalSec: number;
+  /** World-space spawn point. */
+  position: Vec3;
+  /** Initial velocity, units/sec. */
+  velocity: Vec3;
+  /** Hard cap on each spawned instance's lifetime, 0..MAX_LIFETIME_SEC
+   *  (=600). 0 means "no cap — instance lives until particles die
+   *  naturally". */
+  maxLifetimeSec: number;
+  /** Per-axis ± jitter on the spawn position, world units. */
+  jitterPosition: Vec3;
+  /** Per-axis ± jitter on the spawn velocity, units/sec. */
+  jitterVelocity: Vec3;
+};
+
+// ─── Emitter tree DTO (Phase 3 Screen 8 Batch 4) ─────────────────────
+//
+// Minimal-but-extensible shape used by `emitters/preview-from-file` so
+// the Import Emitters modal can render the checkbox tree. Screen 4 will
+// add fields (texture path, link-group id, etc.) when it lands.
+
+export type EmitterTreeNode = {
+  id: number;
+  name: string;
+  children: EmitterTreeNode[];
+};
+
 export type EngineStateDto = {
   // ─── File / editor-level state ─────────────────────────────────────
   // Phase 3 Screen 8 Batch 3: dirty + current file path live at the top
@@ -100,6 +147,14 @@ export type EngineStateDto = {
   // bridge command yet.
   wind: Vec3;                       // GetWind()
   gravity: Vec3;                    // GetGravity()
+
+  // Spawner (Phase 3 Screen 8 Batch 4). Defaults mirror SpawnerConfig()'s
+  // initialiser at [src/SpawnerDriver.h:18] — Auto mode + disabled +
+  // burst 1 + 0 s spacing + 10 s interval + origin + 5 s lifetime + no
+  // jitter. The native host owns this config (m_spawnerConfig on
+  // BridgeDispatcher) for snapshot parity; mutations route through
+  // spawner/start.
+  spawner: SpawnerParamsDto;
 };
 
 // ============================================================================
@@ -107,8 +162,11 @@ export type EngineStateDto = {
 // ============================================================================
 
 export type EmitterPatchDto = Record<string, unknown>;  // expanded later
-export type EmitterTreeDto = Record<string, unknown>;   // expanded later
-export type SpawnerParamsDto = Record<string, unknown>; // expanded later
+
+// `EmitterTreeDto` is the wire shape returned by `emitters/list`. Until
+// Screen 4 fleshes out the per-emitter field set, it's a thin wrapper
+// over the minimal `EmitterTreeNode` (one root node + descendants).
+export type EmitterTreeDto = { root: EmitterTreeNode };
 
 // ============================================================================
 // Requests: JS → host
@@ -171,11 +229,13 @@ export type Request =
   | { kind: "emitters/select";            params: { id: number | null } }
   | { kind: "emitters/update";            params: { id: number; patch: EmitterPatchDto } }
   | { kind: "emitters/import-from-file";  params: { path: string; selected: number[] } }
+  | { kind: "emitters/preview-from-file"; params: { path: string } }
 
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
   | { kind: "spawner/start";              params: SpawnerParamsDto }
+  | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }
   | { kind: "register-accelerators";      params: { combos: string[] } };
 
@@ -229,11 +289,15 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/select" }           ? Record<string, never> :
   R extends { kind: "emitters/update" }           ? Record<string, never> :
   R extends { kind: "emitters/import-from-file" } ? { imported: number } :
+  R extends { kind: "emitters/preview-from-file" } ?
+    | { ok: true; tree: EmitterTreeNode }
+    | { ok: false; error: string } :
 
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
   R extends { kind: "spawner/start" }             ? Record<string, never> :
+  R extends { kind: "spawner/trigger" }           ? Record<string, never> :
   R extends { kind: "spawner/stop" }              ? Record<string, never> :
   R extends { kind: "register-accelerators" }     ? Record<string, never> :
   never;

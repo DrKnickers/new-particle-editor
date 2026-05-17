@@ -146,6 +146,14 @@ private:
     std::wstring              m_currentFilePath;
     bool                      m_dirty = false;
     std::vector<std::wstring> m_recentFiles;
+
+    // Phase 3 Screen 8 Batch 4 — spawner config cache for snapshot
+    // parity. The host doesn't yet own a SpawnerDriver* (matches Batch 3
+    // for ParticleSystem*); spawner/start handlers cache the incoming
+    // params here so a subsequent engine/state/snapshot returns the
+    // user's last-committed config. JSON-shaped to avoid pulling
+    // SpawnerDriver.h into the dispatcher header.
+    nlohmann::json m_spawnerConfig;
 };
 
 } // namespace host

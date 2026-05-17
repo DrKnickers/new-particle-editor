@@ -42,6 +42,8 @@ function renderMenuBar(bridge: Bridge) {
       onOpenLightingPanel={() => {}}
       onOpenBloomPanel={() => {}}
       onOpenGroundTexturePanel={() => {}}
+      onOpenSpawnerPanel={() => {}}
+      onOpenImportEmittersDialog={() => {}}
       onOpenAboutDialog={() => {}}
       onOpenRescaleDialog={() => {}}
     />,

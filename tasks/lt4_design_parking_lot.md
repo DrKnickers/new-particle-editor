@@ -642,12 +642,12 @@ verification pass. Each sub-dialog has its own checkbox above.
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge); refactored to ToolPanel shell in Batch 2
 - [x] Ground picker — ✅ shipped Batch 2 (View → Ground Texture…)
 - [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
-- [ ] Import Emitters — 🟡 pending
+- [ ] Import Emitters — 🟡 pending (Batch 4 dispatch in flight)
 - [x] Rescale System — ✅ shipped Batch 1
 - [ ] Rescale Emitter — 🟡 pending (waits on Screen 4 for trigger site)
 - [ ] Increment Index — 🟡 pending (waits on Screen 4 for trigger site)
-- [ ] Mod Nickname — 🟡 pending
-- [ ] Spawner — 🟡 pending
+- [ ] Mod Nickname — 🟡 pending (Batch 4 dispatch in flight — component-only; real trigger deferred to file-load batch)
+- [ ] Spawner — 🟡 pending (Batch 4 dispatch in flight)
 - [ ] Link Group Settings — 🟡 pending (waits on Screen 4 for trigger site)
 - [x] About — ✅ shipped Batch 1
 - [x] File-ops backbone (New / Open / Save / Save As / recent-files) — ✅ shipped Batch 3
@@ -782,6 +782,216 @@ verification pass. Each sub-dialog has its own checkbox above.
   own checkbox added now since the inventory list didn't include
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
+
+### Batch 4 — Spawner + Import Emitters + Mod Nickname (locked 2026-05-17)
+
+**Schema additions:**
+
+- **Real `SpawnerParamsDto`** mirroring `SpawnerConfig` from
+  [src/SpawnerDriver.h:18]:
+  ```ts
+  type SpawnerMode = "manual" | "auto";
+  type SpawnerParamsDto = {
+    mode: SpawnerMode;
+    enabled: boolean;
+    burstSize: number;          // 1..10 (MAX_BURST_SIZE)
+    spacingSec: number;         // 0..10 (MAX_SPACING_SEC)
+    intervalSec: number;        // 0..60 (auto only)
+    position: Vec3;
+    velocity: Vec3;
+    maxLifetimeSec: number;     // 0..600 (MAX_LIFETIME_SEC)
+    jitterPosition: Vec3;
+    jitterVelocity: Vec3;
+  };
+  ```
+  Replaces the `Record<string, unknown>` placeholder.
+- **New Request**: `spawner/trigger` → `Record<string, never>`.
+  Fires the Manual-mode "Spawn now" button. Auto-mode behaviour:
+  C++ host treats it as a no-op + logs.
+- **Extend `EngineStateDto`** with `spawner: SpawnerParamsDto`
+  (defaults to `SpawnerConfig()`'s default values per the legacy
+  struct).
+- **New Request**: `emitters/preview-from-file` → `{ ok: true;
+  tree: EmitterTreeNode } | { ok: false; error: string }`.
+- **Define minimal `EmitterTreeNode`** (and drop the
+  `EmitterTreeDto = Record<string, unknown>` placeholder, or keep
+  it as `EmitterTreeDto = { root: EmitterTreeNode }` if that's
+  cleaner):
+  ```ts
+  type EmitterTreeNode = {
+    id: number;
+    name: string;
+    children: EmitterTreeNode[];
+  };
+  ```
+  Minimal-but-extensible: Screen 4 will add fields (texture path,
+  link-group id, etc.) when it lands. Importing only needs id +
+  name + children to render the checkbox tree.
+
+**Spawner panel** (largest deliverable; ToolPanel-style slide-in):
+
+- **Location**: `web/apps/editor/src/screens/SpawnerPanel.tsx`.
+- **Trigger**: Tools → Spawner menu item (currently `todo("Spawner")`
+  at [web/apps/editor/src/components/MenuBar.tsx:401]). Replace
+  with `setOpenToolPanel("spawner")`.
+- **Atom value**: `"spawner"` is a new value for the existing
+  `openToolPanel` atom from `lib/tool-panel.ts`. Mutual exclusion
+  with background / lighting / bloom / ground.
+- **Panel body layout** (top to bottom):
+  1. **Mode** — Radix radio group (`"manual"` / `"auto"`). Width-full.
+  2. **Enabled** (auto-only, hidden in manual) — checkbox row.
+  3. **Burst size** — Spinner (1..10, step 1).
+  4. **Spacing** — Spinner (0..10, step 0.05, unit `s`).
+  5. **Interval** (auto-only) — Spinner (0..60, step 0.5, unit `s`).
+  6. **Position (x, y, z)** — 3 Spinners side-by-side. Range
+     unbounded but step 0.1.
+  7. **Velocity (x, y, z)** — 3 Spinners, step 0.1.
+  8. **Max lifetime** — Spinner (0..600, step 0.5, unit `s`).
+  9. **Jitter position** — 3 Spinners, step 0.05.
+  10. **Jitter velocity** — 3 Spinners, step 0.05.
+  11. **Spawn now** button (manual-only, hidden in auto).
+- **State sync**: on mount, read `engine/state/snapshot.spawner`.
+  Subscribe to `engine/state/changed` so external mutations
+  (legacy, devtools) are picked up. Local edits commit immediately
+  via `spawner/start { params: <full config> }`. The handler
+  treats `spawner/start` as "set config" (matches legacy's
+  `SpawnerDriver::SetConfig` semantics).
+- **Header badge** — show current `spawner/active-count` event
+  value as a small pill in the ToolPanel header (right of title).
+  Subscribes to the event on mount.
+- **Stop button** — small `Stop` icon button in header, fires
+  `spawner/stop`. Disabled when count == 0.
+
+**Import Emitters modal** (medium-sized; Modal-primitive):
+
+- **Location**: `web/apps/editor/src/screens/ImportEmittersDialog.tsx`.
+- **Trigger**: File → Import Emitters menu item (currently
+  `todo("Import Emitters")` at
+  [web/apps/editor/src/components/MenuBar.tsx:160]). Replace with
+  the open-modal call.
+- **Modal layout** (`size="lg"`):
+  1. Top row: "Source file:" label + path display (read-only) +
+     "Browse…" button. Path display shows basename + tooltip with
+     full path; empty state = "(not selected)".
+  2. Below: tree-view widget (only renders when path is set and
+     preview has arrived). Each node has a checkbox + indent per
+     depth. Leaf nodes have no expand-arrow; non-leaf nodes do
+     (Radix Collapsible).
+  3. Below the tree: "Auto-include children" checkbox (default
+     on, matches LT-3 legacy). When on, ticking a parent
+     auto-ticks descendants.
+  4. Footer: "Select All" button (left) + Cancel (middle-right)
+     + OK (right). OK label is dynamic: "Import N selected"
+     (N = count of ticked emitters); disabled when N=0.
+- **Flow**:
+  1. Modal opens; "Browse…" is the only enabled control.
+  2. Browse click → `bridge.request({ kind: "file/open", params: {} })`.
+     If `ok: false`, modal stays open, user can retry.
+  3. On `ok: true; path`, fire
+     `bridge.request({ kind: "emitters/preview-from-file", params: { path } })`.
+     Loading state visible during the call (spinner glyph or
+     subtle pulse on the panel area).
+  4. On preview success, render tree. User picks. OK click →
+     `bridge.request({ kind: "emitters/import-from-file", params:
+     { path, selected: <ids> } })` → close modal on success.
+  5. Cancel any time → close modal, discard state.
+- **C++ preview handler**: legacy `DoImportEmittersFromFile` at
+  [src/main.cpp:7525] reads the .alo into a temporary `ParticleSystem`
+  for the legacy tree-view; the bridge handler can mirror that
+  pattern (read into a temporary, walk emitters, build
+  `EmitterTreeNode`, return). Or forward-defer like rescale —
+  return a stub tree until the host has file-load primitives
+  available. **Subagent decision: factor the read-into-temporary
+  helper out of `DoImportEmittersFromFile` if it's clean, else
+  forward-defer with a "not yet implemented" error response that
+  the React modal handles gracefully ("Preview not available in
+  --new-ui yet; this is on the file-load batch's TODO list").
+
+**Mod Nickname modal** (smallest deliverable; deferred real
+trigger):
+
+- **Location**:
+  `web/apps/editor/src/screens/ModNicknameDialog.tsx`.
+- **Layout** (`size="sm"`):
+  1. Title: "Set mod nickname".
+  2. Body: text input + label "Nickname:" + a brief explanation
+     ("Give this mod's data directory a human-readable name.").
+  3. Footer: Cancel / OK. OK disabled when input is empty.
+- **Trigger**: NO menu item. Real trigger (auto-fire when
+  file-load encounters an unknown mod-data path) is deferred to
+  the file-load batch. For this batch, expose a
+  `usePromptModNickname()` hook from `lib/file-state.ts` (or a
+  new `lib/mod-nickname.ts` — subagent decides) returning
+  `Promise<string | null>`. Add a small `?demo=mod-nickname` route
+  branch in App.tsx so the design checkpoint can render it. Vitest
+  + Playwright cover the component-only path.
+
+**MockBridge implementations:**
+
+- `spawner/start` — update `mock-state.spawner`, emit
+  `engine/state/changed`. Debounce repeated calls.
+- `spawner/trigger` — bump a mock "active count" counter
+  (starts at 0, increments by `burstSize`), emit
+  `spawner/active-count`. Mock doesn't simulate physics; the count
+  decays after a fixed timeout.
+- `spawner/stop` — set active count to 0, emit `spawner/active-count`.
+- `emitters/preview-from-file` — return a fixed mock tree (3
+  emitters with children) regardless of path. Lets the React tree
+  widget be exercised in browser mode.
+- `emitters/import-from-file` — already exists; no change.
+
+**C++ host work:**
+
+- New cases in `src/host/BridgeDispatcher.cpp` for:
+  - `spawner/start` — forward-deferred no-op (host has no
+    `SpawnerDriver*` yet); log + emit `engine/state/changed`.
+    Update `m_spawnerConfig` for snapshot parity.
+  - `spawner/trigger` — forward-deferred no-op + log.
+  - `spawner/stop` — forward-deferred no-op + log.
+  - `emitters/preview-from-file` — subagent decision: factor read-
+    into-temporary out of `DoImportEmittersFromFile`, or
+    forward-defer with `{ ok: false; error: "Preview not available
+    in --new-ui yet" }`. The latter is safer if the factoring would
+    require non-trivial refactor.
+- Snapshot builder: include `spawner: <default config>` (or whatever
+  the host's cached `m_spawnerConfig` is).
+- `engine/state/snapshot` event payload mirrors.
+
+**React side wiring:**
+
+- `MenuBar.tsx` — wire Tools → Spawner and File → Import Emitters
+  (Mod Nickname has no menu entry).
+- `App.tsx` — mount SpawnerPanel + ImportEmittersDialog +
+  ModNicknameDialog (the last one as a demo-route gate).
+- `lib/tool-panel.ts` — extend the union to include `"spawner"`.
+- `?demo=mod-nickname` branch in App.tsx — single-purpose demo
+  for the ModNicknameDialog component.
+
+**Test surface for Batch 4:**
+
+- **Vitest** (+9 specs, target 63 → 72+):
+  - `bridge-contract.test.ts` (+3): `spawner/start` round-trips
+    with the new DTO; `spawner/trigger` returns `{}`;
+    `emitters/preview-from-file` returns the mock tree.
+  - `SpawnerPanel.test.tsx` (3): renders all sections; mode switch
+    Manual→Auto shows/hides Interval + Enabled + Spawn now;
+    changing burstSize fires `spawner/start` with the new value.
+  - `ImportEmittersDialog.test.tsx` (2): Browse button fires
+    `file/open`; OK is disabled when 0 selected.
+  - `ModNicknameDialog.test.tsx` (1): renders text input + OK
+    disabled when empty.
+- **Playwright** (+4 specs, target 38 → 42+):
+  - Tools → Spawner opens panel; mutual exclusion with Background.
+  - Spawner: changing burst-size value triggers
+    `engine/state/changed` with the new value.
+  - File → Import Emitters opens modal.
+  - `?demo=mod-nickname` renders the Mod Nickname dialog.
+
+**Legacy delete:**
+
+NOT in this batch. `SpawnerDlgProc` at [src/main.cpp:5824],
+`ImportEmittersDialogProc` at [src/main.cpp:7378], `NicknameDialogProc`
+at [src/main.cpp:7069] all stay for `--legacy-ui`. Phase 4.2.
 
 ### Batch 3 — File-ops backbone (locked 2026-05-17)
 

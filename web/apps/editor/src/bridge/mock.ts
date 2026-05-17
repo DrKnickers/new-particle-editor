@@ -52,6 +52,12 @@ function isMutating(kind: Request["kind"]): boolean {
 export class MockBridge implements Bridge {
   private listeners = new Map<EventKind, Set<(e: Event) => void>>();
 
+  /** Screen 8 Batch 4: in-mock "active spawner instance count". Bumped
+   *  by spawner/trigger (by burstSize), zeroed by spawner/stop. The
+   *  native SpawnerDriver tracks real ParticleSystemInstance lifecycles;
+   *  the mock counter is just a hook for UI badge testing. */
+  private spawnerActiveCount = 0;
+
   async request<R extends Request>(req: R): Promise<ResponseFor<R>> {
     const result = this.handle(req);
     // After the handler completes, mark dirty for any engine mutation.
@@ -354,14 +360,72 @@ export class MockBridge implements Bridge {
       case "file/recent/list":
         return { paths: useMockRecentFiles.getState().paths };
 
-      // ---------------- emitters / undo / spawner: Phase 3+ ----------------
+      // ---------------- spawner (Phase 3 Screen 8 Batch 4) ----------------
+      //
+      // The native host treats spawner/start as a full-config replace
+      // (mirrors `SpawnerDriver::SetConfig`). The mock matches: every
+      // incoming params overwrites the cached spawner block in
+      // EngineStateDto, then emits engine/state/changed so any panel
+      // subscribed to snapshots picks up the new config.
+      //
+      // spawner/trigger + spawner/stop are no-ops aside from the
+      // active-count event. The mock doesn't simulate physics: trigger
+      // bumps the count by burstSize, stop zeroes it. Real instance
+      // tracking lives in the native SpawnerDriver.
+
+      case "spawner/start":
+        this.patchAndBroadcast({ spawner: { ...req.params } });
+        return {};
+
+      case "spawner/trigger": {
+        const params = snapshotEngineState().spawner;
+        const next = this.spawnerActiveCount + params.burstSize;
+        this.spawnerActiveCount = next;
+        this.emit({
+          kind: "spawner/active-count",
+          payload: { count: next },
+        });
+        return {};
+      }
+
+      case "spawner/stop":
+        this.spawnerActiveCount = 0;
+        this.emit({
+          kind: "spawner/active-count",
+          payload: { count: 0 },
+        });
+        return {};
+
+      // ---------------- emitters/preview-from-file (Phase 3 Screen 8 Batch 4)
+      //
+      // Returns a fixed 3-emitter mock tree regardless of path. Lets the
+      // Import Emitters modal exercise the checkbox tree in browser
+      // mode + Vitest. The native host forward-defers with a friendly
+      // error (the legacy ImportEmitters_LoadFile path requires
+      // FileManager + ParticleSystem which the new-UI host doesn't yet
+      // own).
+      case "emitters/preview-from-file":
+        return {
+          ok: true,
+          tree: {
+            id: 0,
+            name: "root",
+            children: [
+              { id: 1, name: "Smoke",  children: [
+                { id: 4, name: "Smoke embers", children: [] },
+              ] },
+              { id: 2, name: "Sparks", children: [] },
+              { id: 3, name: "Flash",  children: [] },
+            ],
+          },
+        };
+
+      // ---------------- emitters / undo: Phase 3+ ----------------
       case "emitters/list":
       case "emitters/select":
       case "emitters/update":
       case "emitters/import-from-file":
       case "undo/perform":
-      case "spawner/start":
-      case "spawner/stop":
         throw new Error(`MockBridge: '${req.kind}' not implemented (Phase 3+)`);
 
       default: {

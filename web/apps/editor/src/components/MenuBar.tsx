@@ -14,6 +14,8 @@ type Props = {
   onOpenLightingPanel: () => void;
   onOpenBloomPanel: () => void;
   onOpenGroundTexturePanel: () => void;
+  onOpenSpawnerPanel: () => void;
+  onOpenImportEmittersDialog: () => void;
   onOpenAboutDialog: () => void;
   onOpenRescaleDialog: () => void;
 };
@@ -57,6 +59,8 @@ export function MenuBar({
   onOpenLightingPanel,
   onOpenBloomPanel,
   onOpenGroundTexturePanel,
+  onOpenSpawnerPanel,
+  onOpenImportEmittersDialog,
   onOpenAboutDialog,
   onOpenRescaleDialog,
 }: Props) {
@@ -157,7 +161,10 @@ export function MenuBar({
               Save As…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} onSelect={todo("Import Emitters")}>
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => onOpenImportEmittersDialog()}
+            >
               Import Emitters…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
@@ -398,7 +405,7 @@ export function MenuBar({
                 </Menubar.SubContent>
               </Menubar.Portal>
             </Menubar.Sub>
-            <Menubar.Item className={ITEM} onSelect={todo("Spawner")}>
+            <Menubar.Item className={ITEM} onSelect={() => onOpenSpawnerPanel()}>
               Spawner…
             </Menubar.Item>
           </Menubar.Content>

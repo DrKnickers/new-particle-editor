@@ -235,6 +235,27 @@ std::vector<std::wstring> WriteRecentFile(const std::wstring& path)
     return list;
 }
 
+// Phase 3 Screen 8 Batch 4 — default spawner-config JSON. Mirrors the
+// `SpawnerConfig()` initialiser at [src/SpawnerDriver.h:18]. Used to
+// seed the dispatcher's cached config on construction so the first
+// snapshot returns a populated `spawner` field even before any
+// `spawner/start` has been dispatched.
+json DefaultSpawnerConfigJson()
+{
+    return json{
+        {"mode",            "auto"},
+        {"enabled",         false},
+        {"burstSize",       1},
+        {"spacingSec",      0.0},
+        {"intervalSec",     10.0},
+        {"position",        json::array({0.0, 0.0, 0.0})},
+        {"velocity",        json::array({0.0, 0.0, 0.0})},
+        {"maxLifetimeSec",  5.0},
+        {"jitterPosition",  json::array({0.0, 0.0, 0.0})},
+        {"jitterVelocity",  json::array({0.0, 0.0, 0.0})},
+    };
+}
+
 // Forward declaration so BuildEngineStateSnapshot can read editor-level
 // state from the dispatcher when serialising the snapshot.
 
@@ -245,7 +266,8 @@ std::vector<std::wstring> WriteRecentFile(const std::wstring& path)
 // added here, otherwise the React UI will read `undefined` for it.
 json BuildEngineStateSnapshot(Engine* engine,
                               const std::wstring& currentFilePath,
-                              bool dirty)
+                              bool dirty,
+                              const json& spawnerConfig)
 {
     if (!engine) return json::object();
 
@@ -317,6 +339,15 @@ json BuildEngineStateSnapshot(Engine* engine,
         // Wind / gravity — read-only via DTO for now (no setter binding).
         {"wind",                  Vec3ToJson(engine->GetWind())},
         {"gravity",               Vec3ToJson(engine->GetGravity())},
+
+        // Spawner (Phase 3 Screen 8 Batch 4) — cached on the dispatcher.
+        // Host doesn't yet own a SpawnerDriver*; the cache is what
+        // spawner/start writes into and what subsequent snapshots read
+        // back. Empty object when never set (shouldn't happen because
+        // the constructor seeds it from DefaultSpawnerConfigJson()).
+        {"spawner",               spawnerConfig.is_null() || spawnerConfig.empty()
+                                      ? DefaultSpawnerConfigJson()
+                                      : spawnerConfig},
     };
 }
 
@@ -331,6 +362,12 @@ BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
     // (avoids the React menu rendering "(none)" momentarily on first
     // mount even when the user has prior history).
     m_recentFiles = ReadRecentFiles();
+
+    // Phase 3 Screen 8 Batch 4: seed the spawner-config cache from the
+    // shared default JSON so the first snapshot returns the same struct
+    // a freshly-constructed `SpawnerConfig()` would. Subsequent
+    // spawner/start requests overwrite this in DispatchInternal.
+    m_spawnerConfig = DefaultSpawnerConfigJson();
 }
 
 void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
@@ -480,7 +517,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     if (kind == "engine/state/snapshot")
     {
         if (!requireEngine("snapshot")) return res;
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty));
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, m_spawnerConfig));
         return res;
     }
 
@@ -981,7 +1018,77 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
-    // -------- everything else (emitters/* / spawner/*) ---------------
+    // -------- spawner/* (Phase 3 Screen 8 Batch 4) -------------------
+    //
+    // The new-UI host doesn't yet own a SpawnerDriver* (matches Batch 3
+    // for ParticleSystem*). The handlers do the *editor-level* side of
+    // the work: cache the incoming config in m_spawnerConfig so a
+    // subsequent engine/state/snapshot returns it, log the request for
+    // diagnostics, and broadcast engine/state/changed so React sees the
+    // updated config land. When SpawnerDriver wiring happens in a later
+    // batch, the cached config can be passed directly into
+    // `m_spawnerDriver->SetConfig(...)` from these same handlers.
+    //
+    // Note: spawner config is session state (matches legacy: "never
+    // written into the .alo" per SpawnerDriver.h:16). It deliberately
+    // does NOT set dirty=true.
+    if (kind == "spawner/start")
+    {
+        // Stash the full params object verbatim; the schema's
+        // SpawnerParamsDto is JSON-compatible top-to-bottom so passing
+        // the params straight into the cache is correct.
+        m_spawnerConfig = params;
+        fprintf(stderr,
+                "[host] spawner/start cached config "
+                "(mode=%s, burstSize=%d) — SpawnerDriver not yet wired; "
+                "stored for snapshot parity only.\n",
+                m_spawnerConfig.value("mode", std::string("?")).c_str(),
+                m_spawnerConfig.value("burstSize", 0));
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        return res;
+    }
+    if (kind == "spawner/trigger")
+    {
+        fprintf(stderr,
+                "[host] spawner/trigger — SpawnerDriver not yet wired; "
+                "no-op.\n");
+        sendOk(json::object());
+        return res;
+    }
+    if (kind == "spawner/stop")
+    {
+        fprintf(stderr,
+                "[host] spawner/stop — SpawnerDriver not yet wired; "
+                "no-op.\n");
+        sendOk(json::object());
+        return res;
+    }
+
+    // -------- emitters/preview-from-file (Phase 3 Screen 8 Batch 4) --
+    //
+    // The legacy `DoImportEmittersFromFile` at [src/main.cpp:7525]
+    // reads the .alo into a temporary `ParticleSystem` via
+    // `ImportEmitters_LoadFile`, which depends on `info->fileManager` +
+    // `info->hMainWnd`. The new-UI host doesn't yet construct either, so
+    // factoring the loader out cleanly would require lifting FileManager
+    // ownership out of APPLICATION_INFO — a non-trivial refactor that
+    // belongs in the file-load batch alongside ParticleSystem ownership.
+    //
+    // Forward-defer here with a friendly ok:false; the React modal
+    // surfaces the message inline and the user can dismiss / retry once
+    // file-load lands. MockBridge returns a fixed 3-emitter tree so the
+    // UI flow stays exercisable in browser mode + Vitest.
+    if (kind == "emitters/preview-from-file")
+    {
+        sendOk(json{
+            {"ok",    false},
+            {"error", "Preview not available in --new-ui yet (Phase 3+)."},
+        });
+        return res;
+    }
+
+    // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
     return res;
 }
@@ -1003,7 +1110,7 @@ void BridgeDispatcher::EmitEngineStateChanged()
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, m_spawnerConfig)},
     };
     m_emit(env.dump());
 }
