@@ -783,6 +783,136 @@ verification pass. Each sub-dialog has its own checkbox above.
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
 
+### Host state plumbing (locked 2026-05-17)
+
+Activates the forward-deferred handlers from Batches 1/3/4 by giving
+the new-UI host actual ownership of `ParticleSystem` +
+`SpawnerDriver`. After this batch:
+
+- `engine/action/rescale-system` rescales the real particle system
+  (was a logging no-op).
+- `file/new` / `file/open` / `file/save` / `file/save-as` actually
+  read/write `.alo` files (were no-ops with bookkeeping).
+- `spawner/start` / `spawner/trigger` / `spawner/stop` actually
+  configure / fire / stop the `SpawnerDriver` (were no-ops).
+- `emitters/preview-from-file` actually parses the source `.alo`
+  and returns a real `EmitterTreeNode` tree.
+
+**What this batch is NOT:**
+- Not wiring engine rendering in `--new-ui`. The render loop at
+  [src/host/HostWindow.cpp:410] stays as-is (clear to the engine's
+  background colour). The particle system is OWNED but not
+  RENDERED. Visible particles in `--new-ui` is a separate batch.
+- Not ticking the spawner per-frame. `SpawnerDriver::Tick` needs
+  the render-loop wiring. Spawner-config commits work; manual
+  Trigger schedules a burst but the burst-state machine doesn't
+  advance without ticks. Mock active-count event will be the
+  source of truth for Spawner panel until this lands.
+- Not touching legacy `--legacy-ui` paths. Same forward-defer
+  discipline as prior batches.
+
+**Ownership additions to `HostWindowImpl`:**
+
+```cpp
+std::unique_ptr<ParticleSystem> m_particleSystem;  // current; replaced on file/new/open
+std::unique_ptr<SpawnerDriver>  m_spawnerDriver;   // constructed once
+```
+
+Construct fresh `m_particleSystem = std::make_unique<ParticleSystem>()`
+and `m_spawnerDriver = std::make_unique<SpawnerDriver>()` at init.
+
+**`BridgeDispatcher` accessor:**
+
+Single setter `void BindHostState(ParticleSystem** ppSystem,
+SpawnerDriver* spawner, IFileManager* fileManager)`. `**` for
+particle system because handlers access the *current* system,
+which file/new and file/open replace. (Mirrors legacy
+`info->particleSystem`.) Called once at HostWindow init, after
+`HostWindowImpl` constructs its `ParticleSystem` / `SpawnerDriver`.
+
+**Pure-IO factor-outs in `src/main.cpp`** (touched once, callable
+from both legacy + new-UI):
+
+- `std::unique_ptr<ParticleSystem> LoadParticleSystem(IFileManager*,
+  const std::wstring& path)` returning `nullptr` on failure.
+  Factored out of `DoOpenFile` at [src/main.cpp:1302] +
+  `ImportEmitters_LoadFile` (used by `DoImportEmittersFromFile` at
+  [src/main.cpp:7525]).
+- `bool SaveParticleSystem(ParticleSystem*, const std::wstring&
+  path)` returning false on write failure. Factored out of
+  `DoSaveFile` at [src/main.cpp:1329].
+- Legacy `Do*` functions get rewritten in terms of these helpers
+  + their UI side-effects (dialog launch, menu rebuild, autosave
+  flush). Legacy callers (the `WM_COMMAND` cases) keep their
+  current signatures.
+
+If a factor isn't clean (e.g. the pure-IO part is tangled with
+`APPLICATION_INFO*` access that can't be lifted out), the subagent
+forward-defers that specific operation with a "still not wired"
+log + bug ticket comment in the host handler. Same pattern as
+prior batches' partial-defer escape hatch.
+
+**Handler activations** (in `src/host/BridgeDispatcher.cpp`):
+
+| Handler | Activation |
+|---|---|
+| `engine/action/rescale-system` | Iterate `(*m_pps)->getEmitters()`, call `DoRescaleEmitter(emitter, dScale/100, sScale/100)` from [src/Rescale.cpp:68]. Capture-before-batch via existing `UndoStack`. Mark dirty. Emit `engine/state/changed` + `emitters/tree/changed`. Expose `DoRescaleEmitter` in `src/Rescale.h` if not already. |
+| `file/new` | Replace `*m_pps` with `new ParticleSystem()`. Clear path / dirty. Emit `dirty/changed` + `engine/state/changed`. |
+| `file/open` (with path) | `LoadParticleSystem(fileManager, path)` → on success, replace `*m_pps`, update path / dirty / recents. Emit `recent/changed` + `engine/state/changed` + `dirty/changed`. |
+| `file/open` (no path) | `GetOpenFileNameW`, then same as with-path branch. |
+| `file/save` (no path, no current) → opens picker; `file/save` (current set) → uses current; `file/save-as` → always picker. | All routes call `SaveParticleSystem(*m_pps, chosenPath)`. Update path / dirty / recents. Emit `recent/changed` + `dirty/changed`. |
+| `spawner/start { params }` | `m_spawnerDriver->SetConfig(<dto-to-config>)`. Cache config for snapshot. Emit `engine/state/changed`. |
+| `spawner/trigger` | `m_spawnerDriver->Trigger(*m_pps, m_engine.get())`. No event emit needed (active-count event still requires per-frame tick which isn't wired). |
+| `spawner/stop` | `SpawnerConfig cfg = m_spawnerDriver->GetConfig(); cfg.enabled = false; m_spawnerDriver->SetConfig(cfg);` Emit `engine/state/changed`. |
+| `emitters/preview-from-file` | `LoadParticleSystem(fileManager, path)` → walk root emitters → build `EmitterTreeNode` tree → return `{ ok: true, tree }`. Temporary system drops at scope exit. |
+
+**Snapshot extension** (`engine/state/snapshot`):
+
+- `currentFilePath`: from host state (already exists per Batch 3).
+- `dirty`: from host state (already exists per Batch 3).
+- `spawner`: from `m_spawnerDriver->GetConfig()` (replaces the
+  cached-config approach Batch 4 used as a stand-in).
+- `emitters` tree: still placeholder until Screen 4 lands.
+
+**Test surface for this batch:**
+
+The hardest part is testing real file IO end-to-end. Pragmatic mix:
+
+- **Existing tests still pass.** 72 Vitest + 43 Playwright must stay
+  green. The forward-deferred handlers are gone, so any test that
+  asserted "logs but doesn't mutate" needs reworking — generally
+  these were observation tests via `engine/state/changed` and they
+  should still pass because the real handlers also emit the event.
+- **+3 Playwright specs**:
+  - **Save round-trip**: pre-seed an `engine/set/skydome-slot`
+    mutation, click File → Save (with current path via test-host
+    set), assert the file exists on disk + size > 0 + dirty
+    becomes false.
+  - **Open round-trip**: after the save above, click File → New
+    (mark dirty=false), then File → Open with the saved path,
+    assert `engine/state/snapshot.currentFilePath` matches.
+  - **Rescale actually mutates**: pre-seed a particle system with
+    a known emitter lifetime, fire `engine/action/rescale-system
+    { durationScalePercent: 200, sizeScalePercent: 100 }`, assert
+    the emitter's lifetime in the next snapshot doubled. Requires
+    `engine/state/snapshot` to surface enough emitter detail to
+    assert — if it doesn't yet, this spec is dropped and noted.
+- **+2 Vitest specs** in `bridge-contract.test.ts`: existing kinds
+  still round-trip with the new MockBridge handlers (no schema
+  change). One new spec: `file/new` + state-changed sequence.
+
+**Open follow-ups** (explicitly out of scope for this batch):
+- *Render loop wiring* — actually rendering the particle system in
+  `--new-ui` viewport. Separate batch; needs Engine::Update +
+  Engine::Render integration.
+- *Per-frame spawner tick* — needs render loop. Same separate
+  batch.
+- *Active-count event from real spawner state* — same.
+- *Engine state side-effects of file load* — when a particle
+  system loads, the engine may need notification
+  (`Engine::SetParticleSystem` or similar). Out of scope; the
+  render-loop batch handles it.
+
 ### Batch 4 — Spawner + Import Emitters + Mod Nickname (locked 2026-05-17)
 
 **Schema additions:**

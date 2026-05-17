@@ -45,6 +45,8 @@
 
 #include "../engine.h"
 #include "../managers.h"
+#include "../ParticleSystem.h"
+#include "../SpawnerDriver.h"
 #include "../UndoStack.h"
 
 using namespace Microsoft::WRL;
@@ -270,6 +272,19 @@ struct HostWindowImpl
     IShaderManager&  shaderManager;
     IFileManager&    fileManager;
     std::unique_ptr<Engine> engine;
+
+    // LT-4 host-state plumbing — the new-UI host now owns the live
+    // ParticleSystem (replaced on file/new and file/open) and a single
+    // SpawnerDriver (config mutated via SetConfig). The BridgeDispatcher
+    // gets pointer-to-pointer access via BindHostState so its handlers
+    // can read/write through the host's owned slots.
+    //
+    // Neither is yet rendered: the render loop at RenderD3D9 stays as-is
+    // (clear-to-background), and SpawnerDriver::Tick is not driven
+    // per-frame. Engine integration (Engine::SetParticleSystem-ish
+    // notification + per-frame tick) is deferred to a separate batch.
+    std::unique_ptr<ParticleSystem> particleSystem;
+    std::unique_ptr<SpawnerDriver>  spawnerDriver;
 
     // Undo / redo stack. Task 2.4: constructed here so BridgeDispatcher
     // can service `undo/perform` requests. Captures are not yet wired
@@ -967,6 +982,20 @@ int HostWindowImpl::Run(int nCmdShow)
     // Wire the engine into the dispatcher (it was null when we constructed
     // the dispatcher because hMain hadn't been created yet).
     if (engine) dispatcher->SetEngine(engine.get());
+
+    // LT-4 host-state plumbing: construct the live ParticleSystem +
+    // SpawnerDriver and hand pointer-to-pointer access to the
+    // dispatcher. file/new and file/open below will swap the
+    // particleSystem unique_ptr; the dispatcher reads through
+    // `*m_pParticleSystem` to always see the current instance.
+    // Mirrors legacy seed: DoNewFile() at src/main.cpp:1289 starts
+    // with an empty ParticleSystem + one root emitter, so do the
+    // same here for parity with the React UI's "fresh untitled" state.
+    particleSystem = std::make_unique<ParticleSystem>();
+    particleSystem->addRootEmitter();
+    spawnerDriver  = std::make_unique<SpawnerDriver>();
+    dispatcher->BindHostState(&particleSystem, spawnerDriver.get(), &fileManager);
+    Log("[host] LT-4 host state bound (particleSystem + spawnerDriver)\n");
 
     HRESULT hr = InitWebView2();
     if (FAILED(hr))

@@ -5,6 +5,10 @@
 #include "third_party/nlohmann/json.hpp"
 
 #include "../engine.h"
+#include "../ParticleSystem.h"
+#include "../ParticleSystemIO.h"
+#include "../Rescale.h"
+#include "../SpawnerDriver.h"
 #include "../UndoStack.h"
 
 #include <algorithm>
@@ -233,6 +237,72 @@ std::vector<std::wstring> WriteRecentFile(const std::wstring& path)
         list.resize(kMaxRecentFiles);
     }
     return list;
+}
+
+// LT-4 host-state plumbing — JSON ↔ SpawnerConfig converters. The
+// schema's SpawnerParamsDto (web/packages/bridge-schema/src/index.ts:60)
+// is value-for-value compatible with the native SpawnerConfig (lines in
+// src/SpawnerDriver.h:18) except for the `mode` field which is a
+// string in JSON but an enum on the native side.
+
+SpawnerConfig JsonToSpawnerConfig(const json& j)
+{
+    SpawnerConfig cfg;
+    if (!j.is_object()) return cfg;
+
+    std::string mode = j.value("mode", std::string("auto"));
+    cfg.mode = (mode == "manual")
+        ? SpawnerConfig::Mode::Manual
+        : SpawnerConfig::Mode::Auto;
+
+    cfg.enabled        = j.value("enabled", false);
+    cfg.burstSize      = j.value("burstSize", 1);
+    cfg.spacingSec     = j.value("spacingSec", 0.0f);
+    cfg.intervalSec    = j.value("intervalSec", 10.0f);
+    cfg.position       = JsonToVec3(j.value("position", json::array()));
+    cfg.velocity       = JsonToVec3(j.value("velocity", json::array()));
+    cfg.maxLifetimeSec = j.value("maxLifetimeSec", 5.0f);
+    cfg.jitterPosition = JsonToVec3(j.value("jitterPosition", json::array()));
+    cfg.jitterVelocity = JsonToVec3(j.value("jitterVelocity", json::array()));
+    return cfg;
+}
+
+json SpawnerConfigToJson(const SpawnerConfig& cfg)
+{
+    return json{
+        {"mode",           cfg.mode == SpawnerConfig::Mode::Manual ? "manual" : "auto"},
+        {"enabled",        cfg.enabled},
+        {"burstSize",      cfg.burstSize},
+        {"spacingSec",     cfg.spacingSec},
+        {"intervalSec",    cfg.intervalSec},
+        {"position",       Vec3ToJson(cfg.position)},
+        {"velocity",       Vec3ToJson(cfg.velocity)},
+        {"maxLifetimeSec", cfg.maxLifetimeSec},
+        {"jitterPosition", Vec3ToJson(cfg.jitterPosition)},
+        {"jitterVelocity", Vec3ToJson(cfg.jitterVelocity)},
+    };
+}
+
+// LT-4: walk a ParticleSystem and build an EmitterTreeNode-shaped JSON
+// tree. Mirrors the schema definition at
+// web/packages/bridge-schema/src/index.ts:91. Children are computed
+// from each emitter's `spawnDuringLife` / `spawnOnDeath` indices in
+// the same order as legacy `ImportEmitters_AddTreeItem` (during-life
+// before on-death) so the import dialog tree matches.
+json BuildEmitterTreeNode(const ParticleSystem* sys, size_t idx)
+{
+    if (sys == nullptr || idx >= sys->getEmitters().size()) return json::object();
+    const ParticleSystem::Emitter& emit = sys->getEmitter(idx);
+    json children = json::array();
+    if (emit.spawnDuringLife != static_cast<size_t>(-1))
+        children.push_back(BuildEmitterTreeNode(sys, emit.spawnDuringLife));
+    if (emit.spawnOnDeath != static_cast<size_t>(-1))
+        children.push_back(BuildEmitterTreeNode(sys, emit.spawnOnDeath));
+    return json{
+        {"id",       static_cast<int>(idx)},
+        {"name",     emit.name},
+        {"children", children},
+    };
 }
 
 // Phase 3 Screen 8 Batch 4 — default spawner-config JSON. Mirrors the
@@ -517,7 +587,14 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     if (kind == "engine/state/snapshot")
     {
         if (!requireEngine("snapshot")) return res;
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, m_spawnerConfig));
+        // Spawner field: prefer the live driver config (LT-4
+        // host-state plumbing), fall back to the JSON cache from
+        // Batch 4 when no driver is bound (e.g. unit tests, partial
+        // wiring during construction).
+        json spawnerJson = m_spawnerDriver
+            ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
+            : m_spawnerConfig;
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson));
         return res;
     }
 
@@ -753,32 +830,52 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
     // Rescale the active particle system by a duration / size percentage.
-    // Phase 3 Screen 8 Batch 1: the schema surface is reachable here so
-    // the React Rescale System dialog can dispatch the request without a
-    // "not implemented" error. The host does not yet own a ParticleSystem*
-    // (emitter / file-load wiring is later-batch work in Phase 3+); when
-    // it does, this handler will (a) capture into the UndoStack and
-    // (b) iterate over the system's emitters calling DoRescaleEmitter
-    // from src/Rescale.cpp. Mirrors the forward-compatible no-op pattern
-    // already established by step-frames above.
+    // LT-4 host-state plumbing: real implementation. Iterates over every
+    // emitter in the live ParticleSystem and applies the helper from
+    // src/Rescale.cpp. UndoStack capture is best-effort — Phase 3 emitter
+    // work hasn't seeded the stack baseline yet (see undo/perform notes
+    // below), so a Capture here lands in an empty stack with no
+    // pre-existing redo to clear; that's correct, it just means undo
+    // remains a no-op until the broader capture wiring lands.
     if (kind == "engine/action/rescale-system")
     {
         float durPct  = params.value("durationScalePercent", 100.0f);
         float sizePct = params.value("sizeScalePercent",     100.0f);
-        fprintf(stderr,
-                "[host] engine/action/rescale-system requested "
-                "(durationScalePercent=%.2f, sizeScalePercent=%.2f) — "
-                "ParticleSystem not yet wired into host (Phase 3+); "
-                "no-op for now.\n",
-                durPct, sizePct);
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        ParticleSystem* sys = m_pParticleSystem->get();
+        const float timeScale = durPct  / 100.0f;
+        const float sizeScale = sizePct / 100.0f;
+        // Walk every emitter, not just roots — DoRescaleEmitter only
+        // touches per-emitter scalar fields and doesn't recurse, so we
+        // need to iterate the flat list. Mirrors the loop at
+        // src/Rescale.cpp:181 used by RescaleParticleSystem.
+        auto& emitters = sys->getEmitters();
+        for (size_t i = 0; i < emitters.size(); ++i)
+        {
+            if (emitters[i] != nullptr)
+                DoRescaleEmitter(emitters[i], timeScale, sizeScale);
+        }
         sendOk(json::object());
-        // Rescale mutates emitter parameters → dirty.
         markDirty();
-        // Emit state/changed for parity with MockBridge so Playwright
-        // specs can observe that the action completed via the standard
-        // event channel (TestHostBridge subscribes to events normally
-        // even under CDP — only request/response is affected by L-003).
         EmitEngineStateChanged();
+        // Emitter parameters changed → notify the React tree (Phase 3
+        // emitter UI subscribes to this event). Payload is intentionally
+        // an empty tree for now; the full emitter-tree DTO lands when
+        // Screen 4 ships the list panel. Sending the event with an
+        // empty payload still lets Playwright assert the event fires.
+        if (m_emit)
+        {
+            json env = {
+                {"type",    "evt"},
+                {"kind",    "emitters/tree/changed"},
+                {"payload", json{{"root", json{{"id", 0}, {"name", "root"}, {"children", json::array()}}}}},
+            };
+            m_emit(env.dump());
+        }
         return res;
     }
 
@@ -853,15 +950,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // calling them directly from here isn't possible.
 
     // -------- file/new --------
-    // Clears editor state. ParticleSystem-clear is deferred.
+    // LT-4: replace the host-owned ParticleSystem with a fresh empty
+    // one + one root emitter (mirrors legacy DoNewFile at
+    // src/main.cpp:1289). Clear editor path / dirty.
     if (kind == "file/new")
     {
+        if (m_pParticleSystem)
+        {
+            *m_pParticleSystem = std::make_unique<ParticleSystem>();
+            (*m_pParticleSystem)->addRootEmitter();
+        }
         m_currentFilePath.clear();
-        // Send the response BEFORE EmitEngineStateChanged so the
-        // request resolves promptly. File/new always reports success.
         sendOk(json::object());
-        // Clear dirty AND broadcast state so the React side sees the
-        // new path (null) + dirty (false) in the next snapshot.
         SetDirty(false);
         EmitEngineStateChanged();
         return res;
@@ -908,6 +1008,21 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             path = buf;
         }
 
+        // LT-4: actually load the .alo into the host-owned slot.
+        std::string err;
+        std::unique_ptr<ParticleSystem> loaded = LoadParticleSystem(path, &err);
+        if (!loaded)
+        {
+            // Don't touch m_currentFilePath / recents on failure —
+            // matches legacy LoadFile behaviour (history append only
+            // happens after a successful parse).
+            sendOk(json{{"ok", false}, {"error", err.empty() ? std::string("load failed") : err}});
+            return res;
+        }
+        if (m_pParticleSystem)
+        {
+            *m_pParticleSystem = std::move(loaded);
+        }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
@@ -952,8 +1067,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             path = buf;
         }
 
-        // Actual PhysicalFile write is deferred — m_engine has no
-        // ParticleSystem*. Editor-level state still updates.
+        // LT-4: actually write the host-owned ParticleSystem to disk.
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"ok", false}, {"error", "particle system not bound"}});
+            return res;
+        }
+        std::string err;
+        if (!SaveParticleSystem(m_pParticleSystem->get(), path, &err))
+        {
+            sendOk(json{{"ok", false}, {"error", err.empty() ? std::string("save failed") : err}});
+            return res;
+        }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
@@ -995,6 +1120,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
 
         std::wstring path = buf;
+        // LT-4: actually write to disk.
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"ok", false}, {"error", "particle system not bound"}});
+            return res;
+        }
+        std::string err;
+        if (!SaveParticleSystem(m_pParticleSystem->get(), path, &err))
+        {
+            sendOk(json{{"ok", false}, {"error", err.empty() ? std::string("save failed") : err}});
+            return res;
+        }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
@@ -1034,57 +1171,101 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // does NOT set dirty=true.
     if (kind == "spawner/start")
     {
-        // Stash the full params object verbatim; the schema's
-        // SpawnerParamsDto is JSON-compatible top-to-bottom so passing
-        // the params straight into the cache is correct.
+        // LT-4: cache + commit to the real driver. The cache is kept
+        // updated so snapshot reads still work when no driver is bound
+        // (Vitest / partial-wiring paths).
         m_spawnerConfig = params;
-        fprintf(stderr,
-                "[host] spawner/start cached config "
-                "(mode=%s, burstSize=%d) — SpawnerDriver not yet wired; "
-                "stored for snapshot parity only.\n",
-                m_spawnerConfig.value("mode", std::string("?")).c_str(),
-                m_spawnerConfig.value("burstSize", 0));
+        if (m_spawnerDriver)
+        {
+            SpawnerConfig cfg = JsonToSpawnerConfig(params);
+            ClampSpawnerConfig(cfg);
+            m_spawnerDriver->SetConfig(cfg);
+        }
         sendOk(json::object());
         EmitEngineStateChanged();
         return res;
     }
     if (kind == "spawner/trigger")
     {
-        fprintf(stderr,
-                "[host] spawner/trigger — SpawnerDriver not yet wired; "
-                "no-op.\n");
+        // LT-4: real trigger. Note that without per-frame Tick wiring
+        // the burst-state machine doesn't advance — Trigger schedules
+        // a burst that won't actually fire instances until a later
+        // batch wires SpawnerDriver::Tick into the render loop. That's
+        // the documented out-of-scope item for this batch.
+        if (m_spawnerDriver
+            && m_pParticleSystem
+            && *m_pParticleSystem
+            && m_engine)
+        {
+            m_spawnerDriver->Trigger(m_pParticleSystem->get(), m_engine);
+        }
         sendOk(json::object());
         return res;
     }
     if (kind == "spawner/stop")
     {
-        fprintf(stderr,
-                "[host] spawner/stop — SpawnerDriver not yet wired; "
-                "no-op.\n");
+        // LT-4: flip enabled=false on the live driver. Auto-mode
+        // bursts stop scheduling; manual triggers still work.
+        if (m_spawnerDriver)
+        {
+            SpawnerConfig cfg = m_spawnerDriver->GetConfig();
+            cfg.enabled = false;
+            m_spawnerDriver->SetConfig(cfg);
+        }
+        // Keep the JSON cache in sync so snapshots without a bound
+        // driver also reflect the stop.
+        if (m_spawnerConfig.is_object())
+        {
+            m_spawnerConfig["enabled"] = false;
+        }
         sendOk(json::object());
+        EmitEngineStateChanged();
         return res;
     }
 
-    // -------- emitters/preview-from-file (Phase 3 Screen 8 Batch 4) --
+    // -------- emitters/preview-from-file ----------------------------
     //
-    // The legacy `DoImportEmittersFromFile` at [src/main.cpp:7525]
-    // reads the .alo into a temporary `ParticleSystem` via
-    // `ImportEmitters_LoadFile`, which depends on `info->fileManager` +
-    // `info->hMainWnd`. The new-UI host doesn't yet construct either, so
-    // factoring the loader out cleanly would require lifting FileManager
-    // ownership out of APPLICATION_INFO — a non-trivial refactor that
-    // belongs in the file-load batch alongside ParticleSystem ownership.
-    //
-    // Forward-defer here with a friendly ok:false; the React modal
-    // surfaces the message inline and the user can dismiss / retry once
-    // file-load lands. MockBridge returns a fixed 3-emitter tree so the
-    // UI flow stays exercisable in browser mode + Vitest.
+    // LT-4: actually load the .alo into a temporary ParticleSystem and
+    // build the EmitterTreeNode tree. The temporary system drops at
+    // scope exit. Note we wrap the real roots under a synthetic
+    // `id: 0, name: "root"` node to match the MockBridge response
+    // shape — the schema's EmitterTreeNode is single-rooted but a
+    // ParticleSystem can have multiple root emitters.
     if (kind == "emitters/preview-from-file")
     {
-        sendOk(json{
-            {"ok",    false},
-            {"error", "Preview not available in --new-ui yet (Phase 3+)."},
-        });
+        std::string path8 = params.value("path", std::string{});
+        if (path8.empty())
+        {
+            sendOk(json{{"ok", false}, {"error", "missing path"}});
+            return res;
+        }
+        std::wstring path = Utf8ToWide(path8);
+        std::string err;
+        std::unique_ptr<ParticleSystem> tmp = LoadParticleSystem(path, &err);
+        if (!tmp)
+        {
+            sendOk(json{
+                {"ok",    false},
+                {"error", err.empty() ? std::string("could not load file") : err},
+            });
+            return res;
+        }
+        // Build the synthetic root + per-actual-root children.
+        json children = json::array();
+        const auto& emitters = tmp->getEmitters();
+        for (size_t i = 0; i < emitters.size(); ++i)
+        {
+            if (emitters[i] != nullptr && emitters[i]->parent == nullptr)
+            {
+                children.push_back(BuildEmitterTreeNode(tmp.get(), i));
+            }
+        }
+        json tree = {
+            {"id",       0},
+            {"name",     "root"},
+            {"children", children},
+        };
+        sendOk(json{{"ok", true}, {"tree", tree}});
         return res;
     }
 
@@ -1107,10 +1288,13 @@ void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
 void BridgeDispatcher::EmitEngineStateChanged()
 {
     if (!m_emit || !m_engine) return;
+    json spawnerJson = m_spawnerDriver
+        ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
+        : m_spawnerConfig;
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, m_spawnerConfig)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson)},
     };
     m_emit(env.dump());
 }

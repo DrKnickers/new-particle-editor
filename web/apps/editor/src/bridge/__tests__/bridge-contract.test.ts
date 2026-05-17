@@ -358,6 +358,46 @@ describe("MockBridge contract", () => {
     off();
   });
 
+  // ─── LT-4 host-state plumbing: round-trips for the handlers whose
+  // C++ side moved from forward-deferred no-ops to real implementations.
+  // The MockBridge handlers are unchanged; these specs are belt-and-
+  // braces coverage so a future MockBridge regression that breaks the
+  // schema-level round-trip surfaces here rather than in Playwright.
+  it("spawner/stop round-trips and resets the active-count to 0", async () => {
+    const b = new MockBridge();
+    // Pre-fire a trigger to bump the active count above 0.
+    let lastCount: number | null = null;
+    const off = b.on("spawner/active-count", (e) => { lastCount = e.payload.count; });
+    await b.request({ kind: "spawner/trigger", params: {} });
+    expect(lastCount).toBeGreaterThan(0);
+
+    const r = await b.request({ kind: "spawner/stop", params: {} });
+    expect(r).toEqual({});
+    // MockBridge emits a spawner/active-count event with 0 on stop;
+    // the native handler emits engine/state/changed with
+    // spawner.enabled=false. Both shapes are valid stop signals; the
+    // mock spec asserts the mock-specific behaviour.
+    expect(lastCount).toBe(0);
+    off();
+  });
+
+  it("engine/action/rescale-system round-trips and emits state/changed", async () => {
+    const b = new MockBridge();
+    let stateChanges = 0;
+    const off = b.on("engine/state/changed", () => { stateChanges += 1; });
+
+    const r = await b.request({
+      kind: "engine/action/rescale-system",
+      params: { durationScalePercent: 200, sizeScalePercent: 100 },
+    });
+    expect(r).toEqual({});
+    // MockBridge fires engine/state/changed after the rescale (parity
+    // with the C++ host); the test just observes that at least one
+    // arrived during the dispatch window.
+    expect(stateChanges).toBeGreaterThanOrEqual(1);
+    off();
+  });
+
   it("emitters/preview-from-file returns a mock tree for any path", async () => {
     const b = new MockBridge();
     const r = await b.request({

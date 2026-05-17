@@ -22,6 +22,7 @@
 #include "engine.h"
 #include "ParticleSystemInstance.h"
 #include "Rescale.h"
+#include "ParticleSystemIO.h"
 #include "resource.h"
 
 // LT-4 Task 1.3: --new-ui flag dispatches to the WebView2 + D3D9 host
@@ -1239,6 +1240,101 @@ static void DoImportEmittersFromFile(APPLICATION_INFO* info);
 // LT-3 reuses the name-collision helper from EmitterList.cpp.
 extern std::string GenerateDuplicateName(const ParticleSystem* system, const std::string& sourceName);
 
+// ── Pure-IO ParticleSystem helpers (LT-4 host-state plumbing) ─────────
+//
+// These free functions are declared in `src/ParticleSystemIO.h` and
+// implemented here so the new-UI BridgeDispatcher (which knows nothing
+// about `APPLICATION_INFO*`) can read/write .alo files without
+// duplicating the PhysicalFile + ParticleSystem(IFile*) ctor dance.
+// Legacy `LoadFile` / `DoSaveFile` / `ImportEmitters_LoadFile` below
+// are rewritten to delegate to these helpers and retain their UI
+// side-effects (dialogs, autosave flush, history append, etc.) so the
+// `--legacy-ui` codepaths keep working unchanged from the caller's
+// perspective.
+
+std::unique_ptr<ParticleSystem> LoadParticleSystem(const std::wstring& path,
+                                                   std::string* errorOut)
+{
+    if (errorOut) errorOut->clear();
+    PhysicalFile* file = NULL;
+    try
+    {
+        file = new PhysicalFile(path);
+    }
+    catch (wexception& e)
+    {
+        if (errorOut) *errorOut = WideToAnsi(e.what());
+        return nullptr;
+    }
+    catch (...)
+    {
+        if (errorOut) *errorOut = "could not open file";
+        return nullptr;
+    }
+
+    std::unique_ptr<ParticleSystem> system;
+    try
+    {
+        system.reset(new ParticleSystem(file));
+    }
+    catch (wexception& e)
+    {
+        if (errorOut) *errorOut = WideToAnsi(e.what());
+        system.reset();
+    }
+    catch (...)
+    {
+        if (errorOut) *errorOut = "not a valid particle system";
+        system.reset();
+    }
+    file->Release();
+    return system;
+}
+
+bool SaveParticleSystem(ParticleSystem* system, const std::wstring& path,
+                        std::string* errorOut)
+{
+    if (errorOut) errorOut->clear();
+    if (system == NULL)
+    {
+        if (errorOut) *errorOut = "null particle system";
+        return false;
+    }
+    PhysicalFile* file = NULL;
+    try
+    {
+        file = new PhysicalFile(path, PhysicalFile::WRITE);
+    }
+    catch (wexception& e)
+    {
+        if (errorOut) *errorOut = WideToAnsi(e.what());
+        return false;
+    }
+    catch (...)
+    {
+        if (errorOut) *errorOut = "could not open file for writing";
+        return false;
+    }
+
+    bool ok = true;
+    try
+    {
+        system->write(file);
+    }
+    catch (wexception& e)
+    {
+        if (errorOut) *errorOut = WideToAnsi(e.what());
+        ok = false;
+    }
+    catch (...)
+    {
+        if (errorOut) *errorOut = "write failed";
+        ok = false;
+    }
+    file->Release();
+    return ok;
+}
+
 static bool LoadFile(APPLICATION_INFO* info, const wstring& filename)
 {
 	// Delete old particle system
@@ -1249,20 +1345,24 @@ static bool LoadFile(APPLICATION_INFO* info, const wstring& filename)
 	delete info->particleSystem;
 	info->particleSystem = NULL;
 
-	PhysicalFile* file = new PhysicalFile(filename);
-    ParticleSystem* system = NULL;
-	try
-	{
-		system = new ParticleSystem(file);
-		info->filename = filename;
-		file->Release();
-	}
-	catch (wexception& e)
-	{
-        system = NULL;
-		file->Release();
-		MessageBox(info->hMainWnd, LoadString(IDS_ERROR_FILE_OPEN, e.what()).c_str(), NULL, MB_OK | MB_ICONERROR );
-	}
+    // LT-4: delegate the actual PhysicalFile + ParticleSystem(IFile*)
+    // round-trip to the pure-IO helper so the new-UI host can reuse it.
+    // The helper swallows wexception internally and reports the message
+    // via errorOut; the legacy UI side-effect (MessageBox + history
+    // append + OnFileChange) stays here.
+    std::string err;
+    std::unique_ptr<ParticleSystem> owned = LoadParticleSystem(filename, &err);
+    ParticleSystem* system = owned.release();
+    if (system != NULL)
+    {
+        info->filename = filename;
+    }
+    else
+    {
+        MessageBox(info->hMainWnd,
+                   LoadString(IDS_ERROR_FILE_OPEN, AnsiToWide(err).c_str()).c_str(),
+                   NULL, MB_OK | MB_ICONERROR);
+    }
 
     if (system != NULL)
     {
@@ -1360,27 +1460,29 @@ static bool DoSaveFile(APPLICATION_INFO* info, bool saveas = false)
 		info->filename = filename;
 	}
 
-	PhysicalFile* file = new PhysicalFile(info->filename, PhysicalFile::WRITE);
-	try
-	{
-		// Create particleSystem name from filename
-		wstring name = info->filename;
+    // Create particleSystem name from filename (lowercase basename
+    // without extension). Match the previous behaviour exactly so the
+    // on-disk shape doesn't shift.
+    {
+        wstring name = info->filename;
+        size_t pos = name.find_last_of('\\');
+        if (pos != wstring::npos) name = name.substr(pos + 1);
+        pos = name.find_last_of('.');
+        if (pos != wstring::npos) name = name.substr(0, pos);
+        transform(name.begin(), name.end(), name.begin(), tolower);
+        info->particleSystem->setName(WideToAnsi(name,"_"));
+    }
 
-		size_t pos = name.find_last_of('\\');
-		if (pos != wstring::npos) name = name.substr(pos + 1);
-		pos = name.find_last_of('.');
-		if (pos != wstring::npos) name = name.substr(0, pos);
-		transform(name.begin(), name.end(), name.begin(), tolower);
-
-		info->particleSystem->setName(WideToAnsi(name,"_"));
-		info->particleSystem->write(file);
-		file->Release();
-	}
-	catch (wexception& e)
-	{
-		file->Release();
-		MessageBox(info->hMainWnd, LoadString(IDS_ERROR_FILE_SAVE, e.what()).c_str(), NULL, MB_OK | MB_ICONERROR );
-	}
+    // LT-4: delegate the actual write to the pure-IO helper. The
+    // legacy UI side-effect (MessageBox on failure + undo-stack
+    // bookkeeping + autosave flush) stays here.
+    std::string err;
+    if (!SaveParticleSystem(info->particleSystem, info->filename, &err))
+    {
+        MessageBox(info->hMainWnd,
+                   LoadString(IDS_ERROR_FILE_SAVE, AnsiToWide(err).c_str()).c_str(),
+                   NULL, MB_OK | MB_ICONERROR);
+    }
     SetFileChanged(info, false);
     info->undoStack.MarkSaved();
     UpdateUndoRedoUI(info);
@@ -7162,33 +7264,30 @@ struct ImportEmittersDialogState
 
 static ParticleSystem* ImportEmitters_LoadFile(HWND hParent, const wstring& path)
 {
-    PhysicalFile* file = NULL;
-    try { file = new PhysicalFile(path); }
-    catch (...)
+    // LT-4: delegate the load to the pure-IO helper; the legacy UI
+    // (MessageBox surfacing) stays here. Pre-LT-4 this function
+    // distinguished three failure modes (file-open / wexception /
+    // generic catch-all); the helper merges them into one — the
+    // single user-visible MessageBox is fine because the user only
+    // cares "open failed" + a message.
+    std::string err;
+    std::unique_ptr<ParticleSystem> owned = LoadParticleSystem(path, &err);
+    if (!owned)
     {
-        MessageBox(hParent, L"Could not open the selected file.",
-                   L"Import Emitters from File", MB_OK | MB_ICONERROR);
+        if (err.empty())
+        {
+            MessageBox(hParent, L"Could not open the selected file.",
+                       L"Import Emitters from File", MB_OK | MB_ICONERROR);
+        }
+        else
+        {
+            MessageBox(hParent,
+                       LoadString(IDS_ERROR_FILE_OPEN, AnsiToWide(err).c_str()).c_str(),
+                       L"Import Emitters from File", MB_OK | MB_ICONERROR);
+        }
         return NULL;
     }
-    ParticleSystem* sys = NULL;
-    try
-    {
-        sys = new ParticleSystem(file);
-    }
-    catch (wexception& e)
-    {
-        MessageBox(hParent, LoadString(IDS_ERROR_FILE_OPEN, e.what()).c_str(),
-                   L"Import Emitters from File", MB_OK | MB_ICONERROR);
-        sys = NULL;
-    }
-    catch (...)
-    {
-        MessageBox(hParent, L"The selected file is not a valid particle system.",
-                   L"Import Emitters from File", MB_OK | MB_ICONERROR);
-        sys = NULL;
-    }
-    file->Release();
-    return sys;
+    return owned.release();
 }
 
 static HTREEITEM ImportEmitters_AddTreeItem(HWND hTree, HTREEITEM hParent,

@@ -27,6 +27,7 @@
 #define HOST_BRIDGE_DISPATCHER_H
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,9 @@
 
 class Engine;
 class UndoStack;
+class ParticleSystem;
+class SpawnerDriver;
+class IFileManager;
 
 namespace host {
 
@@ -70,6 +74,39 @@ public:
     // picker will run unparented (works, but doesn't block input on the
     // main window — set this in HostWindow once hMain exists).
     void SetHostHwnd(HWND hwnd) { m_hostHwnd = hwnd; }
+
+    // Bind the editor's host-owned state pointers used by the
+    // forward-deferred handlers activated in LT-4 host-state plumbing
+    // (file/new, file/open, file/save, file/save-as,
+    // engine/action/rescale-system, spawner/start /trigger /stop,
+    // emitters/preview-from-file).
+    //
+    // `ppSystem` is a pointer-to-pointer because file/new and file/open
+    // replace the *current* unique_ptr<ParticleSystem> instance — the
+    // dispatcher must always read through the host's slot, never cache
+    // its own copy. Mirrors legacy `info->particleSystem`.
+    //
+    // `spawner` is a single owned instance whose config is mutated via
+    // `SetConfig` and inspected via `GetConfig`. The host constructs
+    // and tears it down; the dispatcher holds a borrow.
+    //
+    // `fileManager` is the same file manager that legacy main.cpp uses
+    // (FileManager from createFileManager); passed in so future host-
+    // routed loaders that need it (the EaW VFS lookup) can reuse it,
+    // even though `LoadParticleSystem` / `SaveParticleSystem` go
+    // through `PhysicalFile` directly today.
+    //
+    // Null pointers are tolerated — the affected handlers fall back to
+    // a friendly ok:false envelope. Wired exactly once by HostWindow
+    // after constructing the unique_ptrs in WM_CREATE.
+    void BindHostState(std::unique_ptr<ParticleSystem>* ppSystem,
+                       SpawnerDriver*                   spawner,
+                       IFileManager*                    fileManager)
+    {
+        m_pParticleSystem = ppSystem;
+        m_spawnerDriver   = spawner;
+        m_fileManager     = fileManager;
+    }
 
     // Called from the WebView2 WebMessageReceived handler. The string is
     // the raw JSON sent by `chrome.webview.postMessage` on the React side.
@@ -139,6 +176,16 @@ private:
     EmitFn             m_emit;
     UndoStack*         m_undo     = nullptr;
     HWND               m_hostHwnd = nullptr;
+
+    // LT-4 host-state plumbing — pointers borrowed from HostWindow.
+    // `m_pParticleSystem` is a pointer-to-unique_ptr so file/new and
+    // file/open can swap the owned instance under the host's feet
+    // (mirrors legacy `info->particleSystem`). The other two are
+    // single-instance borrows. All three are nullable; handlers check
+    // before dereferencing and fall back to ok:false on absence.
+    std::unique_ptr<ParticleSystem>* m_pParticleSystem = nullptr;
+    SpawnerDriver*                   m_spawnerDriver   = nullptr;
+    IFileManager*                    m_fileManager     = nullptr;
 
     // Phase 3 Screen 8 Batch 3 — editor-level file state. Owned here
     // rather than on Engine because they're editor concerns (not
