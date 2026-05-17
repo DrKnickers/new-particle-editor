@@ -718,7 +718,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (!requireEngine(kind.c_str())) return res;
         m_engine->SetHeatDebug(params.value("enabled", false));
         sendOk(json::object());
-        markDirty();
+        // LT-4: heat-debug is a view-only debug overlay. Don't mark dirty.
         EmitEngineStateChanged();
         return res;
     }
@@ -776,7 +776,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     {
         SetPreviewPaused(params.value("paused", false));
         sendOk(json::object());
-        markDirty();
+        // LT-4: paused is a view-only toggle (preview clock). Don't mark dirty.
         EmitEngineStateChanged();
         return res;
     }
@@ -960,6 +960,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             *m_pParticleSystem = std::make_unique<ParticleSystem>();
             (*m_pParticleSystem)->addRootEmitter();
         }
+        // LT-4 render loop: notify Engine that the ParticleSystem pointer
+        // it knows about is now stale. Mirrors legacy DoNewFile at
+        // src/main.cpp:1207 (Clear() then OnParticleSystemChanged(-1))
+        // so the engine drops cached instances + per-emitter state.
+        if (m_engine)
+        {
+            m_engine->Clear();
+            m_engine->OnParticleSystemChanged(-1);
+        }
         m_currentFilePath.clear();
         sendOk(json::object());
         SetDirty(false);
@@ -1022,6 +1031,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (m_pParticleSystem)
         {
             *m_pParticleSystem = std::move(loaded);
+        }
+        // LT-4 render loop: same notification sequence as file/new —
+        // the engine's cached per-instance / per-emitter state is now
+        // stale and must be cleared. Matches legacy DoOpenFile path
+        // at src/main.cpp:1341.
+        if (m_engine)
+        {
+            m_engine->Clear();
+            m_engine->OnParticleSystemChanged(-1);
         }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
@@ -1352,6 +1370,17 @@ void BridgeDispatcher::EmitStatsTick(float fps, int emitters,
             {"particles", particles},
             {"instances", instances},
         }},
+    };
+    m_emit(env.dump());
+}
+
+void BridgeDispatcher::EmitSpawnerActiveCount(int count)
+{
+    if (!m_emit) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "spawner/active-count"},
+        {"payload", {{"count", count}}},
     };
     m_emit(env.dump());
 }

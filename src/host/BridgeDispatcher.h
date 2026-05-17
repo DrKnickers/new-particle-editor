@@ -127,6 +127,12 @@ public:
     void EmitEngineStateChanged();
     void EmitStatsTick(float fps, int emitters, int particles, int instances);
 
+    // LT-4 render loop: real spawner/active-count source. Called from
+    // HostWindow::RenderD3D9 once per frame when Engine::GetNumInstances()
+    // changes. Replaces the MockBridge-driven mock-only timer source —
+    // SpawnerPanel's badge subscription is unchanged.
+    void EmitSpawnerActiveCount(int count);
+
     // Phase 3 Screen 8 Batch 3 — editor-level file state.
     //
     // The dispatcher owns three pieces of state that don't belong on

@@ -40,6 +40,13 @@ import {
  *  layout, accelerators are not. The native host applies the same rule
  *  via per-handler `SetDirty(true)` calls. */
 function isMutating(kind: Request["kind"]): boolean {
+  // LT-4: engine/set/paused (view-only preview clock toggle) and
+  // engine/set/heat-debug (view-only debug overlay) are excluded —
+  // both leave the document state untouched and shouldn't trigger
+  // save-prompt gates. Native host applies the same rule in
+  // BridgeDispatcher.cpp.
+  if (kind === "engine/set/paused") return false;
+  if (kind === "engine/set/heat-debug") return false;
   if (kind.startsWith("engine/set/")) return true;
   // engine/action/clear is destructive — destroying particles in the
   // world is a user-visible mutation worth a save-prompt gate.

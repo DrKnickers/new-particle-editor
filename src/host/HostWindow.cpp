@@ -261,8 +261,13 @@ struct HostWindowImpl
     HINSTANCE        hInstance;
     HWND             hMain         = nullptr;
     HWND             hViewport     = nullptr;
-    IDirect3D9*      d3d           = nullptr;
-    IDirect3DDevice9* device       = nullptr;
+
+    // LT-4 render loop: the host no longer maintains its own placeholder
+    // D3D9 device. The Engine constructs the live device internally (via
+    // its `(hFocus, hDevice)` ctor) and we render through `engine->Render()`.
+    // Running two D3D9 devices targeting the same HWND was a structural
+    // hazard; dropping the placeholder is the cleanest option since Engine
+    // is constructed unconditionally in WM_CREATE.
 
     ComPtr<ICoreWebView2Controller> webController;
     ComPtr<ICoreWebView2>           webView;
@@ -273,16 +278,17 @@ struct HostWindowImpl
     IFileManager&    fileManager;
     std::unique_ptr<Engine> engine;
 
-    // LT-4 host-state plumbing — the new-UI host now owns the live
+    // LT-4 host-state plumbing — the new-UI host owns the live
     // ParticleSystem (replaced on file/new and file/open) and a single
     // SpawnerDriver (config mutated via SetConfig). The BridgeDispatcher
     // gets pointer-to-pointer access via BindHostState so its handlers
     // can read/write through the host's owned slots.
     //
-    // Neither is yet rendered: the render loop at RenderD3D9 stays as-is
-    // (clear-to-background), and SpawnerDriver::Tick is not driven
-    // per-frame. Engine integration (Engine::SetParticleSystem-ish
-    // notification + per-frame tick) is deferred to a separate batch.
+    // Render loop wiring: RenderD3D9 drives SpawnerDriver::Tick and
+    // engine->Update / engine->Render per frame; file/new and file/open
+    // call engine->Clear + engine->OnParticleSystemChanged(-1) after
+    // swapping the unique_ptr so the engine drops cached per-instance
+    // state for the old system.
     std::unique_ptr<ParticleSystem> particleSystem;
     std::unique_ptr<SpawnerDriver>  spawnerDriver;
 
@@ -298,6 +304,20 @@ struct HostWindowImpl
     AcceleratorBridge                  accelerator;
     std::unique_ptr<BridgeDispatcher>  dispatcher;
     FPSMeasurer                        fpsMeasurer;
+
+    // LT-4 render loop bookkeeping. m_lastRenderTime drives dt for the
+    // per-frame SpawnerDriver::Tick — matches the legacy
+    // `g_spawnerLastFrameTime` flow in src/main.cpp:1572. First frame
+    // sees dt == 0 (sentinel value 0.0f means "not yet rendered"), same
+    // as the legacy first-frame initialisation.
+    //
+    // m_lastEmittedActiveCount debounces the spawner/active-count event:
+    // we only emit when Engine::GetNumInstances() actually changes,
+    // since the source is polled every render frame and we don't want
+    // to flood WebMessage. -1 forces an initial emit on first non-zero
+    // change.
+    float                              m_lastRenderTime        = 0.0f;
+    int                                m_lastEmittedActiveCount = -1;
 
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
@@ -325,7 +345,8 @@ struct HostWindowImpl
     void OpenLog();
     void CloseLog();
 
-    bool InitD3D9();
+    // LT-4: InitD3D9 dropped; the Engine owns the live D3D9 device. The
+    // viewport HWND is handed to Engine's ctor in WM_CREATE.
     void RenderD3D9();
 
     HRESULT InitWebView2();
@@ -377,77 +398,48 @@ void HostWindowImpl::Log(const char* fmt, ...)
 
 // ---------- D3D9 ----------
 
-bool HostWindowImpl::InitD3D9()
-{
-    d3d = Direct3DCreate9(D3D_SDK_VERSION);
-    if (!d3d)
-    {
-        Log("[host] Direct3DCreate9 failed\n");
-        return false;
-    }
-
-    D3DPRESENT_PARAMETERS pp = {};
-    pp.Windowed              = TRUE;
-    pp.SwapEffect            = D3DSWAPEFFECT_DISCARD;
-    pp.BackBufferFormat      = D3DFMT_UNKNOWN;
-    pp.hDeviceWindow         = hViewport;
-    pp.PresentationInterval  = D3DPRESENT_INTERVAL_IMMEDIATE;
-    pp.EnableAutoDepthStencil = FALSE;
-
-    HRESULT hr = d3d->CreateDevice(
-        D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
-        D3DCREATE_HARDWARE_VERTEXPROCESSING, &pp, &device);
-    if (FAILED(hr))
-    {
-        Log("[host] CreateDevice HWVP failed 0x%08lx, trying MIXED\n", hr);
-        hr = d3d->CreateDevice(
-            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
-            D3DCREATE_MIXED_VERTEXPROCESSING, &pp, &device);
-    }
-    if (FAILED(hr))
-    {
-        Log("[host] CreateDevice MIXED failed 0x%08lx, trying SOFTWARE\n", hr);
-        hr = d3d->CreateDevice(
-            D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hViewport,
-            D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &device);
-    }
-    if (FAILED(hr))
-    {
-        Log("[host] CreateDevice all paths failed 0x%08lx\n", hr);
-        d3d->Release();
-        d3d = nullptr;
-        return false;
-    }
-    Log("[host] D3D9 device created OK\n");
-    return true;
-}
-
+// LT-4 render loop + per-frame spawner tick. Replaces the prior
+// placeholder clear-to-background path. The per-frame sequence here
+// mirrors the legacy `Render` in src/main.cpp:1882 verbatim:
+//
+//   - Compute dt from the previous frame's timestamp (GetTimeF).
+//   - Tick the SpawnerDriver — emits any due burst instances into the
+//     Engine.
+//   - Engine::Update() advances per-instance state.
+//   - Engine::Render() does the actual D3D9 draw + Present.
+//   - fpsMeasurer.measure() ticks the FPS ring buffer.
+//
+// After rendering, compare Engine::GetNumInstances() against the
+// last-emitted active-count and broadcast spawner/active-count when it
+// changes. The SpawnerPanel badge subscribes to that event unchanged.
 void HostWindowImpl::RenderD3D9()
 {
-    if (!device) return;
+    if (!engine) return;
 
-    // Record this frame for FPS measurement. Called every WM_PAINT so the
-    // ring buffer fills at the actual repaint rate — same pattern as the
-    // legacy FPSMeasurer in src/main.cpp.
+    float now = GetTimeF();
+    float dt  = (m_lastRenderTime > 0.0f) ? (now - m_lastRenderTime) : 0.0f;
+    m_lastRenderTime = now;
+
+    if (spawnerDriver && particleSystem)
+        spawnerDriver->Tick(dt, particleSystem.get(), engine.get());
+
+    engine->Update();
+    engine->Render();
     fpsMeasurer.measure();
 
-    // For Task 1.3 we don't run the engine's render loop yet (Phase 3
-    // wiring). Clear to the engine's current background colour so the
-    // viewport visibly carries Engine state — a quick eyeball check that
-    // the snapshot path is reading the right data.
-    DWORD clear = 0xFF101820u; // dark slate fallback
-    if (engine)
+    // spawner/active-count: emit when GetNumInstances() differs from the
+    // last emitted value. Polled per-frame, debounced to avoid WebMessage
+    // spam. The SpawnerPanel badge subscription doesn't change — only
+    // the source flips from MockBridge timer to real engine state.
+    if (dispatcher)
     {
-        COLORREF bg = engine->GetBackground();      // 0x00BBGGRR
-        BYTE r = GetRValue(bg);
-        BYTE g = GetGValue(bg);
-        BYTE b = GetBValue(bg);
-        clear = D3DCOLOR_XRGB(r, g, b);
+        int instances = engine->GetNumInstances();
+        if (instances != m_lastEmittedActiveCount)
+        {
+            m_lastEmittedActiveCount = instances;
+            dispatcher->EmitSpawnerActiveCount(instances);
+        }
     }
-    device->Clear(0, nullptr, D3DCLEAR_TARGET, clear, 1.0f, 0);
-    device->BeginScene();
-    device->EndScene();
-    device->Present(nullptr, nullptr, nullptr, nullptr);
 }
 
 // ---------- WebView2 ----------
@@ -739,12 +731,8 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         layout.SetViewport(hViewport);
 
-        if (!InitD3D9())
-        {
-            MessageBoxW(hwnd, L"Direct3D 9 initialisation failed.",
-                        L"AloParticleEditor", MB_ICONERROR);
-            return -1;
-        }
+        // LT-4: no host-owned D3D9 device. The Engine constructs the
+        // live device internally below, targeting this viewport HWND.
 
         SetWindowPos(hViewport, HWND_TOP, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -811,8 +799,8 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             webController.Reset();
         }
         webView.Reset();
-        if (device)  { device->Release();  device = nullptr; }
-        if (d3d)     { d3d->Release();     d3d    = nullptr; }
+        // LT-4: engine owns its D3D9 device; just drop the engine and it
+        // tears the device down in its destructor.
         engine.reset();
         PostQuitMessage(0);
         return 0;
@@ -826,9 +814,13 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     {
     case WM_PAINT:
     {
+        // LT-4: rendering happens on the main-loop idle path
+        // (PeekMessage-drain → render). WM_PAINT just validates the
+        // invalid region so Windows doesn't keep firing it. Same pattern
+        // as legacy src/main.cpp's main loop, where WM_PAINT also does
+        // nothing visible and the idle render owns the pipeline.
         PAINTSTRUCT ps;
         BeginPaint(hwnd, &ps);
-        RenderD3D9();
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -1015,11 +1007,44 @@ int HostWindowImpl::Run(int nCmdShow)
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
 
-    MSG m;
-    while (GetMessage(&m, nullptr, 0, 0))
+    // LT-4 main loop: switched from blocking GetMessage to PeekMessage
+    // idle-render. The blocking variant produces no continuous WM_PAINT
+    // events, so the per-frame spawner tick + engine render had no driver.
+    // Now: drain queued messages, then render once on idle, loop until
+    // WM_QUIT. Mirrors legacy src/main.cpp:8023.
+    //
+    // No IsDialogMessage routing — the host has no modeless Win32
+    // dialogs; tool panels live in React under WebView2 (which has its
+    // own input routing and doesn't need TranslateAccelerator either).
+    MSG m = {};
+    bool quit = false;
+    while (!quit)
     {
-        TranslateMessage(&m);
-        DispatchMessage(&m);
+        while (PeekMessage(&m, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&m);
+            DispatchMessage(&m);
+            if (m.message == WM_QUIT)
+            {
+                quit = true;
+            }
+        }
+        if (quit) break;
+
+        // Idle: render one frame. Cheap enough to always run (Engine has
+        // its own paused / IsPreviewPaused gates that skip the simulation
+        // step when set; render still presents to keep the surface valid).
+        if (engine)
+        {
+            RenderD3D9();
+        }
+        else
+        {
+            // No engine yet — yield rather than spin so WebView2 / WM_TIMER
+            // get pump cycles. WM_TIMER will arrive in the PeekMessage
+            // drain above (stats timer is 250ms).
+            WaitMessage();
+        }
     }
 
     g_self = nullptr;

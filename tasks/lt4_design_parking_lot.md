@@ -783,6 +783,167 @@ verification pass. Each sub-dialog has its own checkbox above.
   it; "Rescale" in the existing list refers to the not-yet-built
   Rescale Emitter dialog — both will land before Phase 4)
 
+### Render loop + per-frame tick (locked 2026-05-17)
+
+The capstone foundation batch: makes particles visible in `--new-ui`
+by activating the engine render loop and the per-frame spawner tick.
+After this lands, the new-UI binary has visual + behavioural parity
+with `--legacy-ui` for non-emitter-editing workflows. Combined with
+the prior host-state-plumbing batch, the new-UI host can fully
+exercise a particle system end-to-end (load, save, rescale, spawn,
+preview, render) without going through legacy chrome.
+
+**The legacy per-frame sequence to replicate** (from
+[src/main.cpp:1882-1900] `static void Render(APPLICATION_INFO*)`):
+
+```cpp
+float dt = GetTimeF() - g_spawnerLastFrameTime;
+spawner->Tick(dt, particleSystem, engine);
+engine->Update();
+engine->Render();
+fpsMeasurer.measure();
+```
+
+**Main-loop change** (the unblocker):
+
+Legacy uses `PeekMessage` idle-render at [src/main.cpp:8026]. The
+host currently uses blocking `GetMessage` at
+[src/host/HostWindow.cpp:1019], which is why nothing animates —
+there are no continuous WM_PAINT events. Switch the host's loop to
+the PeekMessage pattern: drain queued messages, then render-once on
+idle, loop. Keep IsDialogMessage routing simple (the host doesn't
+have modeless legacy dialogs to route to).
+
+**Host's placeholder device gets retired (or sidelined):**
+
+`HostWindowImpl::InitD3D9` at [src/host/HostWindow.cpp:380] creates
+its own `IDirect3DDevice9*` for the placeholder clear-to-background
+behaviour. The engine creates its own device internally (via the
+`(HWND hFocus, HWND hDevice)` constructor) and exposes it via
+`Engine::GetDevice()`. Running two D3D9 devices targeting the same
+viewport HWND is asking for trouble.
+
+**Subagent decision**: drop the host's `d3d`/`device` entirely
+(cleanest) OR keep them for the null-engine fallback path (safest).
+Default to drop — the engine is constructed unconditionally in
+HostWindow's init path, so the null-engine case shouldn't occur.
+If the build breaks or rendering glitches, fall back to keep + skip
+the device->Clear/BeginScene/EndScene/Present in RenderD3D9 (let
+`engine->Render` own the full device cycle).
+
+**Per-frame body for `HostWindowImpl::RenderD3D9`:**
+
+```cpp
+void HostWindowImpl::RenderD3D9()
+{
+    if (!engine) return;
+
+    float now = GetTimeF();
+    float dt  = (m_lastRenderTime > 0.0f) ? (now - m_lastRenderTime) : 0.0f;
+    m_lastRenderTime = now;
+
+    if (spawnerDriver && particleSystem)
+        spawnerDriver->Tick(dt, particleSystem.get(), engine.get());
+
+    engine->Update();
+    engine->Render();
+    fpsMeasurer.measure();
+
+    // spawner/active-count: emit when GetNumInstances() differs from
+    // the last emitted value. Debounce to avoid spamming WebMessage.
+    int instances = engine->GetNumInstances();
+    if (instances != m_lastEmittedActiveCount) {
+        m_lastEmittedActiveCount = instances;
+        dispatcher->EmitSpawnerActiveCount(instances);
+    }
+}
+```
+
+`m_lastRenderTime` and `m_lastEmittedActiveCount` are new members
+on `HostWindowImpl`. `GetTimeF()` is the legacy helper at
+[src/main.cpp:~] (subagent locates and reuses). Source preference:
+use the same function legacy uses so dt semantics match exactly.
+
+**Engine notifications when `*m_pps` is replaced:**
+
+Legacy calls `engine->Clear()` then `engine->OnParticleSystemChanged(-1)`
+when the particle system is replaced (see [src/main.cpp:1207]
+`DoNewFile`, [src/main.cpp:1341] file-load path, [src/main.cpp:1522]
+file-close path). The new-UI `file/new` and `file/open` handlers
+need the same notification sequence right after replacing
+`*m_pps`. **Two additions to those handlers (already wired by host
+state plumbing batch):**
+
+```cpp
+// After: *m_pps = std::move(newSystem);
+if (m_engine) {
+    m_engine->Clear();
+    m_engine->OnParticleSystemChanged(-1);
+}
+```
+
+**`spawner/active-count` live source via `Engine::GetNumInstances()`:**
+
+The simplest source-of-truth: the engine's instance count.
+Includes both spawner-driven and user-Shift-Click-spawned instances
+(matching what the legacy SpawnerDialog shows). The SpawnerPanel's
+existing badge subscription works unchanged — only the source flips
+from MockBridge timer to real engine state.
+
+Add `BridgeDispatcher::EmitSpawnerActiveCount(int count)` —
+emits a WebMessage event with the new schema-defined payload.
+Called from `RenderD3D9` when count changes.
+
+**Dirty-flag tightening** (open follow-up from Batch 3):
+
+`engine/set/paused` and `engine/set/heat-debug` shouldn't mark the
+particle system dirty — both are view-only toggles. Two one-line
+changes:
+
+- `web/apps/editor/src/bridge/mock.ts`: in `isMutating(kind)`,
+  exclude `"engine/set/paused"` and `"engine/set/heat-debug"`.
+- `src/host/BridgeDispatcher.cpp`: the dispatch cases for these
+  two kinds skip the `markDirty()` lambda. Inline the early-return
+  or move the call out of the shared path.
+
+**Test surface for this batch:**
+
+The hardest part of this batch is testing actual rendering — visual
+output is hard to assert in automated tests without screenshot
+diffs or a pixel-level smoke. Pragmatic mix:
+
+- **Existing tests still pass.** 74 Vitest + 46 Playwright must
+  stay green. The bridge contract doesn't change; the activated
+  handlers continue to emit the same events. Some specs may need
+  minor tweaks if the events arrive on a different cadence
+  (per-frame instead of mock-timer).
+- **+1 Playwright spec** (only):
+  - `spawner/active-count event fires from real engine state` —
+    pre-seed `spawner/trigger` (which schedules a burst), advance
+    enough frames for the burst to fire (poll the event for up to
+    ~1 second), assert `payload.count > 0` from at least one
+    event. May need a `setTimeout(1000)` style wait — that's
+    acceptable for a render-loop spec.
+- **Dropping +2 Vitest from the brief.** MockBridge already
+  handles the spawner/active-count source; the new C++-driven
+  source doesn't go through MockBridge. The Vitest contract
+  remains unchanged.
+- **Manual smoke**: subagent reports whether `--new-ui` actually
+  shows particles when an emitter is loaded. This is informally
+  verified by the subagent observing the screenshot/logs OR by
+  the controller running a smoke afterwards. Not a strict gate.
+
+**Open follow-ups** (explicitly out of scope for this batch):
+
+- *Hot-reload textures / shaders triggers re-render automatically.*
+  Already wired via `engine/state/changed` event; should "just
+  work" once render loop is live. Verify in the smoke pass.
+- *Camera control* — middle/right mouse drag, scroll-zoom. Not in
+  this batch. Separate "Screen 1 polish" or "viewport interaction"
+  batch.
+- *Cursor-driven gravity test* — legacy has a mouse-cursor-as-D3D-
+  object thing for testing emitter forces. Not in this batch.
+
 ### Host state plumbing (locked 2026-05-17)
 
 Activates the forward-deferred handlers from Batches 1/3/4 by giving
