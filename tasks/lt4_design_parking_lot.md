@@ -412,9 +412,15 @@ optional preview overlay. 7 tracks total (`N_TRACKS` in `main.cpp`).
 LOC). The form-field building blocks used by emitter property panels
 and dialogs.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅ shipped 2026-05-17 — commits `58b3b46`
+(feat) + `4650c50` (deps sync). Vitest 28 → 40 (+12 specs across
+4 primitive test files); Playwright 21 → 26 (+5 specs in
+`tests/primitives.spec.ts`). Demo route reachable at
+`?demo=primitives`.
 
-**Wire-up:** 🟡 pending
+**Wire-up:** N/A (primitives have no native side — they're consumer
+components. Native wire-up happens per-screen when Screens 4/5/6/8
+mount them.)
 
 **Current behaviour (legacy):**
 
@@ -442,11 +448,124 @@ and dialogs.
 > (current 64×64)? Persistent custom color palette: same 16-slot
 > shape, or expanded?_
 
-**Bridge surface used:** filled in at Task 3.7.1.
+**Bridge surface used:**
 
-**Decisions locked once ✅:**
+**None in Phase 3.7.** Primitives are pure consumer components — they
+accept `value` + `onChange` props (plus item arrays for grid-style
+primitives) and do not own bridge calls. Their callers (Screens 4/5/6/8
+dialogs) wrap the `onChange` callback with the appropriate
+`bridge.request(...)` and pass in the data needed for grids.
 
-> _(empty)_
+This keeps Phase 3.7 surgical: zero new bridge Requests, zero new
+MockBridge handlers, zero new C++ handlers. The bridge shape for
+texture thumbnails / color palette persistence is paid in Phase 3.4
+(emitter tree) and Phase 3.8 (Lighting dialog) respectively, when the
+real consumer pattern is known. Premature schema additions in 3.7 would
+likely need rework once a real consumer exercises them.
+
+The demo route built in Phase 3.7 supplies its own static fixture data
+(inline data URIs for TexturePalette thumbnails, in-memory custom
+palette for ColorButton). No bridge round-trip from primitives in the
+demo.
+
+**Decisions locked (2026-05-17):**
+
+1. **Primitive library** — Headless Radix where applicable
+   (`@radix-ui/react-popover`, `@radix-ui/react-context-menu`,
+   `@radix-ui/react-select`); custom-from-scratch where Radix has no
+   analogue (Spinner numeric+drag handle, ColorButton swatch grid,
+   TexturePalette thumbnail grid). **No shadcn/ui** — stays consistent
+   with the Radix Menubar choice from Screen 2. Tailwind classes +
+   `design-tokens` for styling.
+2. **Module location** — New directory `web/apps/editor/src/primitives/`
+   (sibling to `components/` and `screens/`). Primitives are reusable
+   across screens; the existing `components/` is for app-shell parts
+   (MenuBar, Toolbar, StatusBar, ViewportSlot) and `screens/` is for
+   feature surfaces (BackgroundButton, BackgroundPicker). The
+   distinction matters for Screens 4/5/6/8 wanting to import these
+   without crossing screen boundaries.
+3. **Density** — `26px` default row height (matches
+   `tokens.density.rowHeight.default`); each primitive accepts a
+   `density?: "tight" | "default" | "loose"` prop for the per-call
+   override the legacy doesn't have. Default avoids retro-fitting
+   density-aware layouts onto Screens 4-6 later.
+4. **Spinner behaviors** — port the entire legacy behavior set so
+   Screens 4/5/6 don't regress muscle memory:
+   - Up/down arrow buttons (on hover; hidden otherwise to reduce
+     visual noise — matches modern numeric-input patterns).
+   - Scroll-wheel adjust (NT-1 feature; preserve magnitude on
+     `Shift` modifier per legacy convention).
+   - Drag-to-adjust (vertical mouse-Y drag from the input rect,
+     `Shift` for fine-step, `Ctrl` for coarse-step).
+   - Scientific notation parse (`1e-3`, `2.5E4` etc.).
+   - Range clamp (`min`, `max` props; clamp on blur, not on every
+     keystroke).
+   - Unit suffix display (greyed-out, after the number, e.g.
+     `12.5 deg/s`).
+   - `onChange` fires on commit (Enter / blur / arrow / wheel / drag
+     release), NOT on every keystroke — matches legacy and avoids
+     bridge spam.
+5. **ColorButton flow** — clicking the swatch opens a Radix Popover
+   containing:
+   - 16-slot custom-color grid (in-memory Zustand slice, persisted
+     to localStorage in browser mode; persistence to host registry
+     deferred to Screen 8 wiring).
+   - 32-slot "basic colors" preset row (matches Win32 `ChooseColor`'s
+     left side).
+   - Hex input + RGB sliders for custom entry.
+   - "Add to custom" button stores the current color in the next
+     empty custom slot.
+   - Clicking a custom slot fires `onChange(rgb)` immediately;
+     popover stays open until the user commits (matches BackgroundPicker
+     sticky-on-commit pattern from Screen 2).
+   - **NOT** routed through native `ChooseColor` — keeps everything
+     in React, avoids a CDP-blocking native dialog under test mode.
+6. **TexturePalette flow** —
+   - Grid of `64×64` thumbnails (matches legacy default; configurable
+     via `cellSize?: number` prop for future zoom support).
+   - **Items provided by caller** as a typed array:
+     `{ path: string; label?: string; thumbnailSrc: string | null }[]`.
+     Primitive doesn't fetch anything. `thumbnailSrc === null` renders
+     a "missing" placeholder cell. Demo supplies inline data URIs.
+   - Selected cell (`value === item.path`) gets `accent.primary`
+     border.
+   - Right-click → Radix ContextMenu with three slots:
+     **Browse for file…**, **Clear**, **Open texture folder**.
+     Each fires a typed callback (`onBrowse?`, `onClear?`, `onReveal?`).
+     Caller decides what to do with each (typically a bridge call);
+     primitive doesn't know about the bridge. Items with no callback
+     wired render the menu entry as disabled.
+   - Empty palette state: greyed "(no textures)" placeholder.
+7. **RandomParam** — wrapper that renders:
+   - `Mode` select (`@radix-ui/react-select`) with options
+     `Constant` / `UniformRange` / `Normal`.
+   - Below the select, mode-conditional spinner row(s):
+     - `Constant`: 1 Spinner (value).
+     - `UniformRange`: 2 Spinners (min, max) side-by-side with a
+       small `–` separator.
+     - `Normal`: 2 Spinners (mean, σ) side-by-side with `µ` and `σ`
+       letter labels.
+   - Single `onChange({ mode, ...values })` callback; consumer
+     decides bridge shape.
+8. **Custom color palette persistence** — 16 slots (matches Win32
+   `ChooseColor` + every existing legacy use site). Expanding the
+   palette is a one-line change later if Screens 4/8 want it; not
+   worth diverging from legacy now.
+9. **Demo / design checkpoint route** — Add a `?demo=primitives`
+   query-param branch in `App.tsx` that renders a single
+   `PrimitivesGallery` component (one section per primitive, with
+   2-3 live instances each at varying configs). Reachable in browser
+   mode at `http://localhost:5174/?demo=primitives` and in native dev
+   mode at `https://app.local/?demo=primitives`. Removed once Screens
+   4/5/6/8 ship and we have real consumption sites.
+10. **Test surface** —
+    - **Vitest** (`src/primitives/__tests__/*.test.tsx`): one spec
+      per primitive covering keyboard + mouse + commit semantics.
+      Target +12 specs (current baseline 28 → 40+).
+    - **Playwright** (`tests/primitives.spec.ts`): minimal smoke
+      against the demo route. Each primitive: render + one
+      happy-path interaction + one edge case (clamp / paste / etc).
+      Target +5 specs (current baseline 21 → 26+).
 
 ---
 
@@ -599,4 +718,48 @@ the same DTO, so external mutations (DevTools, Playwright,
 Optional running log of design-iteration sessions, references shared,
 mockups attached. Append-only.
 
-> _(empty)_
+### 2026-05-17 · Screen 7 (Form-field primitives)
+
+Design-and-implement single-session, no live iteration with the user —
+all 10 decisions locked up front by the controller per the "delegating
+design" pattern, then dispatched to a Sonnet subagent that built all
+four primitives, the demo route, and the test suite in one pass.
+
+**Locks worth surfacing for future screens:**
+- Primitives are pure consumer components (zero bridge ownership) —
+  the eventual screen mounts the primitive and wraps the `onChange`
+  with `bridge.request(...)`. Keeps primitives reusable across
+  screens that need different bridge shapes.
+- No native `ChooseColor` for ColorButton — all picking happens in a
+  React Radix Popover. The reason isn't just CDP-safety (lessons doc
+  has receipts on native dialogs being problematic under CDP) — it's
+  that native dialogs force the React app to lose focus on every
+  color pick, which breaks drag-state, hover-state, and keyboard nav
+  patterns in any primitive sitting near the ColorButton.
+
+**Implementer surprises (from the subagent's report):**
+1. *Radix Select doesn't open in jsdom* — uses pointer-capture +
+   `scrollIntoView` which jsdom doesn't implement. The RandomParam
+   "mode switch" Vitest spec was recast as a `rerender()` test (same
+   invariant: 2 spinners after mode change to UniformRange). Full
+   click interaction covered by the Playwright spec.
+2. *App.tsx conditional hook violation* — early `return
+   <PrimitivesGallery />` before `useMemo`/`useState`/`useEffect`
+   was a rules-of-hooks violation. Split into `AppShell` (all hooks)
+   + `App` (pure routing between gallery and AppShell).
+3. *No `allowBuilds:` re-injection needed* — the three new Radix deps
+   + four test deps have no post-install build scripts. L-005 didn't
+   fire on this dispatch.
+
+**Open follow-ups for Screens 4/5/6/8:**
+- `palette-store.ts` is localStorage-only in browser mode; host-side
+  registry persistence is wired in Screen 8 (Lighting dialog).
+- `TexturePalette`'s `onBrowse` / `onClear` / `onReveal` callbacks
+  are no-ops in the demo. Screen 4 (emitter tree → Appearance tab)
+  is the first real consumer; Screen 8 also consumes for the
+  per-dialog texture picks.
+- `ColorButton` popover holds draft state and does NOT sync on
+  external `value` changes. Screen 4 should close the popover on
+  external value changes if that pattern is needed.
+- Demo route `?demo=primitives` should be removed once Screen 4 or 5
+  ships a real consumption site — track here.
