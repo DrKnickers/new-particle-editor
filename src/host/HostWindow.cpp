@@ -59,6 +59,44 @@ constexpr int     kInitialWidth              = 1280;
 constexpr int     kInitialHeight             = 800;
 constexpr wchar_t kVirtualHostName[]         = L"app.local";
 constexpr INTERNET_PORT kDevServerPort       = 5174;
+constexpr UINT_PTR    kStatsTimerId          = 0x100;  // 4 Hz stats broadcast
+
+// FPSMeasurer — ring-buffer of the last 32 frame timestamps. Ported from
+// the legacy src/main.cpp `FPSMeasurer` (lines 56-99) so the host emits
+// the same measurement window as the legacy status bar.
+class FPSMeasurer
+{
+    static const int MAX_FRAMES = 32;
+    float  m_frames[MAX_FRAMES];
+    size_t m_iFrame;
+    size_t m_nFrames;
+    size_t m_lastFrame;
+    size_t m_firstFrame;
+public:
+    float getFPS()
+    {
+        if (m_nFrames > 0)
+        {
+            float diff = m_frames[m_lastFrame] - m_frames[m_firstFrame];
+            if (diff > 0.0f)
+                return static_cast<float>(m_nFrames) / diff;
+        }
+        return 0.0f;
+    }
+    void measure()
+    {
+        m_lastFrame      = m_iFrame;
+        m_frames[m_iFrame] = GetTickCount() / 1000.0f;
+        m_nFrames        = m_nFrames < MAX_FRAMES ? m_nFrames + 1 : MAX_FRAMES;
+        m_iFrame         = (m_iFrame + 1) % MAX_FRAMES;
+        if (m_iFrame == m_firstFrame)
+            m_firstFrame = (m_firstFrame + 1) % MAX_FRAMES;
+    }
+    FPSMeasurer() : m_iFrame(0), m_nFrames(0), m_lastFrame(0), m_firstFrame(0)
+    {
+        memset(m_frames, 0, sizeof(m_frames));
+    }
+};
 
 // Probe the installed WebView2 Evergreen runtime. Returns true if
 // GetAvailableCoreWebView2BrowserVersionString succeeds and returns a
@@ -244,6 +282,7 @@ struct HostWindowImpl
     LayoutBroker                       layout;
     AcceleratorBridge                  accelerator;
     std::unique_ptr<BridgeDispatcher>  dispatcher;
+    FPSMeasurer                        fpsMeasurer;
 
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
@@ -371,6 +410,11 @@ bool HostWindowImpl::InitD3D9()
 void HostWindowImpl::RenderD3D9()
 {
     if (!device) return;
+
+    // Record this frame for FPS measurement. Called every WM_PAINT so the
+    // ring buffer fills at the actual repaint rate — same pattern as the
+    // legacy FPSMeasurer in src/main.cpp.
+    fpsMeasurer.measure();
 
     // For Task 1.3 we don't run the engine's render loop yet (Phase 3
     // wiring). Clear to the engine's current background colour so the
@@ -714,14 +758,30 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Seed the first paint (suppresses white-flash on startup; see
         // PoC visual gate notes in the task brief).
         InvalidateRect(hViewport, nullptr, FALSE);
+
+        // Start the 4 Hz stats timer. Fires every 250 ms and emits a
+        // stats/tick event to React so the status bar stays live.
+        SetTimer(hwnd, kStatsTimerId, 250, nullptr);
         return 0;
     }
+
+    case WM_TIMER:
+        if (wp == kStatsTimerId && dispatcher)
+        {
+            float fps      = fpsMeasurer.getFPS();
+            int emitters   = engine ? engine->GetNumEmitters()  : 0;
+            int particles  = engine ? engine->GetNumParticles() : 0;
+            int instances  = engine ? engine->GetNumInstances() : 0;
+            dispatcher->EmitStatsTick(fps, emitters, particles, instances);
+        }
+        return 0;
 
     case WM_SIZE:
         ResizeWebViewToClient();
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, kStatsTimerId);
         if (webController)
         {
             // Unregister the accelerator hook before closing the controller

@@ -45,9 +45,9 @@ locking).
 **Replaces:** `WinMain`, top-level window class, status-bar code in
 `main.cpp`. Owns the frame around everything else.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅
 
-**Wire-up:** 🟡 pending
+**Wire-up:** ✅
 
 **Current behaviour (legacy):**
 
@@ -65,11 +65,36 @@ emitter tree (left) + property panel (right) + D3D9 viewport
 > bar redesign (do we even keep it? combined into a header?), where the
 > viewport sits relative to side panels._
 
-**Bridge surface used:** filled in at Task 3.1.1.
+**Bridge surface used:** `stats/tick` event (subscribed). No requests
+fired by this screen.
 
 **Decisions locked once ✅:**
 
-> _(empty)_
+**Status bar layout.** 4-column readout `FPS · Emitters · Particles ·
+Instances`. Dot separators between columns. Mono font (`font-mono
+tabular-nums`) for the number, regular weight for the label. Height
+28px (`h-7`) — matches the existing placeholder footer.
+
+**Update cadence.** 4 Hz (250 ms `SetTimer` in `HostWindow`), matching
+the legacy `FPSMeasurer` in `src/main.cpp`. FPS measured via a 32-frame
+ring buffer of `GetTickCount`-based timestamps (same window as legacy).
+
+**Separator style.** Unicode middle dot `·` (`text-neutral-700`), not a
+pipe or slash. Renders as a low-contrast divider that doesn't compete
+with the numbers.
+
+**Placeholder state.** Until the first `stats/tick` arrives (browser
+mode or pre-connection), each value shows `—` (em dash) in
+`text-neutral-700`. Live values render in `text-neutral-300`. The colour
+shift is the visual signal that the host is connected.
+
+**Title bar.** Native Windows title bar — no custom chrome.
+
+**Min window size.** 860×750 (legacy `MIN_WINDOW_WIDTH` /
+`MIN_WINDOW_HEIGHT` constants in `src/main.cpp`).
+
+**Dirty indicator.** Deferred to Phase 3 Screen 4 (emitter tree) —
+needs real edit operations to trigger it. No dirty state in this screen.
 
 ---
 

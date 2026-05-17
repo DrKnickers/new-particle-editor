@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
+import { StatusBar } from "@/components/StatusBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
 
@@ -95,10 +96,7 @@ export function App() {
       </div>
 
       {/* Status bar */}
-      <footer className="flex h-7 shrink-0 items-center justify-between border-t border-neutral-800 px-4 text-xs text-neutral-500">
-        <span>FPS: --</span>
-        <span>placeholder status</span>
-      </footer>
+      <StatusBar bridge={bridge} />
     </div>
   );
 }

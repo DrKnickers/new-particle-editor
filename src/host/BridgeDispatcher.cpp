@@ -646,10 +646,21 @@ void BridgeDispatcher::EmitEngineStateChanged()
     m_emit(env.dump());
 }
 
-void BridgeDispatcher::EmitStatsTick(int /*fps*/, int /*emitters*/,
-                                     int /*particles*/, int /*instances*/)
+void BridgeDispatcher::EmitStatsTick(float fps, int emitters,
+                                     int particles, int instances)
 {
-    // Stub — Task 2.4 will hook this to the host render loop's 4 Hz tick.
+    if (!m_emit) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "stats/tick"},
+        {"payload", {
+            {"fps",       fps},
+            {"emitters",  emitters},
+            {"particles", particles},
+            {"instances", instances},
+        }},
+    };
+    m_emit(env.dump());
 }
 
 } // namespace host

@@ -85,11 +85,9 @@ public:
     std::string DispatchSync(const std::string& jsonRequest);
 
     // Convenience emitters (host-driven). EmitStatsTick is the 4 Hz status
-    // bar push; EmitEngineStateChanged is the post-setter broadcast. Both
-    // are no-ops in Task 1.3 — listed here so the next slice can wire them
-    // without re-touching the public surface.
+    // bar push; EmitEngineStateChanged is the post-setter broadcast.
     void EmitEngineStateChanged();
-    void EmitStatsTick(int fps, int emitters, int particles, int instances);
+    void EmitStatsTick(float fps, int emitters, int particles, int instances);
 
     // Emits an `accelerator/pressed` event to React with the matched combo
     // string (e.g. "Ctrl+S"). Called by HostWindow's AcceleratorKeyPressed
