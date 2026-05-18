@@ -18,7 +18,7 @@ import type {
   Bridge,
   EmitterPropertiesDto,
 } from "@particle-editor/bridge-schema";
-import { EmitterPropertyTabs, AppearanceTab } from "../EmitterPropertyTabs";
+import { EmitterPropertyTabs, AppearanceTab, PhysicsTab } from "../EmitterPropertyTabs";
 import { makeDefaultEngineState, makeFixtureProperties } from "@/bridge/mock-state";
 
 type SelectionListener = (e: { payload: { id: number | null } }) => void;
@@ -194,6 +194,159 @@ describe("EmitterPropertyTabs", () => {
     const worldOriented = screen.getByLabelText("World Oriented");
     expect(worldOriented.getAttribute("data-state")).toBe("unchecked");
     expect(worldOriented.getAttribute("data-disabled")).not.toBeNull();
+  });
+
+  // ─── Physics tab specs (Fix dispatch 3) ────────────────────────
+  // PhysicsTab is exported and mounted directly for the same reason
+  // AppearanceTab is: Radix Tabs in jsdom doesn't reliably switch on
+  // fireEvent.click.
+
+  it("PhysicsTab renders all 13 regular field labels", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // Acceleration is a single grouped row (label "Acceleration") with
+    // 3 spinners; check both the section label and the per-axis
+    // aria-label spinners.
+    expect(screen.getByText("Acceleration")).toBeInTheDocument();
+    expect(screen.getByLabelText("Acceleration X")).toBeInTheDocument();
+    expect(screen.getByLabelText("Acceleration Y")).toBeInTheDocument();
+    expect(screen.getByLabelText("Acceleration Z")).toBeInTheDocument();
+    const expectedLabels = [
+      "Gravity",
+      "Inward Speed",
+      "Inward Acceleration",
+      "Object Space Acceleration",
+      "Bounciness",
+      "Ground Behavior",
+      "Emit From Mesh",
+      "Emit From Mesh Offset",
+      "Weather Particle",
+      "Weather Cube Size",
+      "Weather Cube Distance",
+      "Weather Fadeout Distance",
+    ];
+    for (const label of expectedLabels) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("PhysicsTab: Acceleration renders 3 spinners side-by-side", () => {
+    const props = {
+      ...makeFixtureProperties(0),
+      acceleration: [1, 2, 3] as unknown as [number, number, number],
+    };
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    const x = screen.getByLabelText("Acceleration X") as HTMLInputElement;
+    const y = screen.getByLabelText("Acceleration Y") as HTMLInputElement;
+    const z = screen.getByLabelText("Acceleration Z") as HTMLInputElement;
+    expect(Number(x.value)).toBeCloseTo(1, 5);
+    expect(Number(y.value)).toBeCloseTo(2, 5);
+    expect(Number(z.value)).toBeCloseTo(3, 5);
+  });
+
+  it("PhysicsTab: Ground Behavior dropdown lists Bounce and Stick options", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // The trigger renders the currently-selected label.
+    const trigger = screen.getByTestId("physics-ground-behavior-trigger");
+    expect(trigger).toBeInTheDocument();
+    // The aria-label on the Select.Trigger surfaces the field name.
+    expect(trigger.getAttribute("aria-label")).toBe("Ground Behavior");
+    // The default value is groundBehavior=0 → "None".
+    expect(trigger.textContent ?? "").toContain("None");
+    // Opening the listbox in jsdom isn't reliable, but the option set
+    // is statically defined — assert via the source-of-truth constant
+    // list by inspecting the underlying select primitive once opened.
+    // Fallback: render with each value and assert the trigger label.
+    for (const [value, label] of [[2, "Bounce"], [3, "Stick"]] as const) {
+      const altProps = { ...props, groundBehavior: value };
+      const { unmount } = render(<PhysicsTab properties={altProps} onCommit={() => {}} />);
+      const altTriggers = screen.getAllByTestId("physics-ground-behavior-trigger");
+      // Multiple PhysicsTab instances are mounted; the new one is the
+      // last in the list.
+      const altTrigger = altTriggers[altTriggers.length - 1]!;
+      expect(altTrigger.textContent ?? "").toContain(label);
+      unmount();
+    }
+  });
+
+  it("PhysicsTab: Emit From Mesh dropdown lists Random Vertex and Every Vertex", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // Same approach as Ground Behavior — render each value and assert
+    // the trigger label reflects the option set.
+    for (const [value, label] of [[1, "Random Vertex"], [3, "Every Vertex"]] as const) {
+      const altProps = { ...props, emitFromMesh: value };
+      const { unmount } = render(<PhysicsTab properties={altProps} onCommit={() => {}} />);
+      const altTriggers = screen.getAllByTestId("physics-emit-from-mesh-trigger");
+      const altTrigger = altTriggers[altTriggers.length - 1]!;
+      expect(altTrigger.textContent ?? "").toContain(label);
+      unmount();
+    }
+  });
+
+  it("PhysicsTab: Emit From Mesh Offset disabled when emitFromMesh === 0, enabled when !== 0", () => {
+    const disabledProps = {
+      ...makeFixtureProperties(0),
+      isWeatherParticle: false,
+      emitFromMesh: 0,
+    };
+    const { rerender } = render(
+      <PhysicsTab properties={disabledProps} onCommit={() => {}} />,
+    );
+    const offsetDisabled = screen.getByLabelText("Emit From Mesh Offset") as HTMLInputElement;
+    expect(offsetDisabled.disabled).toBe(true);
+
+    const enabledProps = { ...disabledProps, emitFromMesh: 1 };
+    rerender(<PhysicsTab properties={enabledProps} onCommit={() => {}} />);
+    const offsetEnabled = screen.getByLabelText("Emit From Mesh Offset") as HTMLInputElement;
+    expect(offsetEnabled.disabled).toBe(false);
+  });
+
+  it("PhysicsTab: Weather fields disabled when isWeatherParticle === false", () => {
+    const props = { ...makeFixtureProperties(0), isWeatherParticle: false };
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    expect((screen.getByLabelText("Weather Cube Size") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Weather Cube Distance") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("Weather Fadeout Distance") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("PhysicsTab: group type Select trigger renders for each of the 3 groups", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    for (let i = 0; i < 3; i++) {
+      expect(screen.getByTestId(`physics-group-${i}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`physics-group-${i}-type-trigger`)).toBeInTheDocument();
+    }
+  });
+
+  it("PhysicsTab: group with type === GT_SPHERE renders sphereRadius + sphereEdge fields (no cylinder fields)", () => {
+    const base = makeFixtureProperties(0);
+    const groups = base.groups.map((g, i) =>
+      i === 0
+        ? { ...g, type: 3, sphereRadius: 1.5, sphereEdge: 8 }
+        : g,
+    );
+    render(<PhysicsTab properties={{ ...base, groups }} onCommit={() => {}} />);
+    // Sphere fields present.
+    expect(screen.getByLabelText("Sphere Radius")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sphere Edge")).toBeInTheDocument();
+    // Cylinder fields absent (no other group is GT_CYLINDER).
+    expect(screen.queryByLabelText("Cylinder Radius")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder Edge")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder Height")).toBeNull();
+  });
+
+  it("Tabs.Content outer elements carry overflow-y-auto for panel scroll", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<EmitterPropertyTabs bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
+    });
+    for (const id of ["tab-basic-content", "tab-appearance-content", "tab-physics-content"]) {
+      const el = screen.getByTestId(id);
+      expect(el.className).toContain("overflow-y-auto");
+    }
   });
 
   it("editing Lifetime fires emitters/set-properties with patch.lifetime", async () => {

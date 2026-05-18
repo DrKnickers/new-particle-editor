@@ -112,6 +112,106 @@ test("editing the Lifetime spinner in the Basic tab fires emitters/set-propertie
   expect(result.properties.lifetime).toBeCloseTo(7.5, 5);
 });
 
+test("switching to Physics tab and changing gravity round-trips via get-properties (Fix dispatch 3)", async () => {
+  // Re-select to ensure the panel is mounted.
+  const firstId = await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+    const list = await bridge.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { id: number }[] };
+    };
+    const id = list.root.children[0]?.id;
+    if (id === undefined) throw new Error("no emitters in tree");
+    await bridge.request({ kind: "emitters/select", params: { id } });
+    return id;
+  });
+
+  await expect(page.locator('[data-testid="emitter-property-tabs"]')).toBeVisible({ timeout: 5_000 });
+  await page.locator('[data-testid="tab-trigger-physics"]').click();
+
+  // The gravity spinner renders inside the Physics tab content.
+  const gravity = page.getByLabel("Gravity", { exact: true });
+  await expect(gravity).toBeVisible({ timeout: 5_000 });
+
+  // Same pattern as the Appearance Fix dispatch 2 test — drive via the
+  // bridge directly to assert round-trip; per-keystroke spinner
+  // semantics are covered by Vitest.
+  await page.evaluate(async (id: number) => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    await bridge!.request({
+      kind: "emitters/set-properties",
+      params: { id, patch: { gravity: -9.81 } },
+    });
+  }, firstId);
+
+  const result = await page.evaluate(async (id: number) => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    return await bridge!.request({
+      kind: "emitters/get-properties",
+      params: { id },
+    });
+  }, firstId) as { properties: { gravity: number } };
+
+  expect(result.properties.gravity).toBeCloseTo(-9.81, 5);
+});
+
+test("Physics group type change round-trips via get-properties (Fix dispatch 3)", async () => {
+  const firstId = await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+    const list = await bridge.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { id: number }[] };
+    };
+    const id = list.root.children[0]?.id;
+    if (id === undefined) throw new Error("no emitters in tree");
+    await bridge.request({ kind: "emitters/select", params: { id } });
+    return id;
+  });
+
+  await expect(page.locator('[data-testid="emitter-property-tabs"]')).toBeVisible({ timeout: 5_000 });
+  await page.locator('[data-testid="tab-trigger-physics"]').click();
+
+  // Group 0's type-select trigger lives inside the Physics tab.
+  const groupTypeTrigger = page.locator('[data-testid="physics-group-0-type-trigger"]');
+  await expect(groupTypeTrigger).toBeVisible({ timeout: 5_000 });
+
+  // Drive the change via the bridge — flip group[0] to GT_SPHERE (3)
+  // and assert the round-trip includes the new type. Radix listbox
+  // automation under CDP is flaky enough that we mirror the spinner /
+  // blend-mode pattern from the Appearance + Lifetime tests.
+  const patchedGroups = await page.evaluate(async (id: number) => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    const before = await bridge!.request({
+      kind: "emitters/get-properties",
+      params: { id },
+    }) as { properties: { groups: { type: number }[] } };
+    const next = before.properties.groups.map((g, i) =>
+      i === 0 ? { ...g, type: 3 } : g,
+    );
+    await bridge!.request({
+      kind: "emitters/set-properties",
+      params: { id, patch: { groups: next } },
+    });
+    const after = await bridge!.request({
+      kind: "emitters/get-properties",
+      params: { id },
+    }) as { properties: { groups: { type: number }[] } };
+    return after.properties.groups;
+  }, firstId);
+
+  expect(patchedGroups[0].type).toBe(3);
+});
+
 test("switching to Appearance tab and changing blendMode emits engine/state/changed with the patched value (Fix dispatch 2)", async () => {
   // Re-select to ensure the panel is mounted.
   const firstId = await page.evaluate(async () => {

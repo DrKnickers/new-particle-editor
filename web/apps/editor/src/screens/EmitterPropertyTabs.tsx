@@ -39,6 +39,8 @@ import { Check, ChevronDown } from "lucide-react";
 import type {
   Bridge,
   EmitterPropertiesDto,
+  GroupDto,
+  Vec3,
   Vec4,
 } from "@particle-editor/bridge-schema";
 import { Spinner } from "@/primitives/Spinner";
@@ -65,6 +67,62 @@ const BLEND_MODE_OPTIONS: { value: number; label: string }[] = [
 // at [src/UI/Emitter.cpp:167] — only the BLEND_BUMP value triggers
 // the cascade, not BLEND_DECAL_BUMPMAP.
 const BLEND_BUMP = 11;
+
+// Ground-interaction dropdown options — mirrors the legacy
+// `GroundBehaviors[]` table at [src/UI/Emitter.cpp:35-40]. Values are
+// the engine enum index (0..3); the `IDS_GROUND_BEHAVIOR_BOUNCE`
+// string-id is the 3rd entry (value 2), and legacy cascades enable
+// `bounciness` only when this value is picked
+// (see [src/UI/Emitter.cpp:190]).
+const GROUND_BEHAVIOR_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "None" },
+  { value: 1, label: "Disappear" },
+  { value: 2, label: "Bounce" },
+  { value: 3, label: "Stick" },
+];
+const GROUND_BEHAVIOR_BOUNCE = 2;
+
+// Emit-from-mesh dropdown options — mirrors the legacy
+// `EmitModes[]` table at [src/UI/Emitter.cpp:44-49]. Values match
+// `ParticleSystem::EMIT_*` constants at [src/ParticleSystem.h:66-69]:
+// EMIT_DISABLE=0, EMIT_RANDOM_VERTEX=1, EMIT_RANDOM_MESH=2,
+// EMIT_EVERY_VERTEX=3.
+const EMIT_FROM_MESH_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Disable" },
+  { value: 1, label: "Random Vertex" },
+  { value: 2, label: "Random Mesh" },
+  { value: 3, label: "Every Vertex" },
+];
+const EMIT_FROM_MESH_DISABLE = 0;
+
+// Random-Param group type dropdown options — mirrors the engine
+// `GT_*` constants at [src/ParticleSystem.h:20-24]: GT_EXACT=0,
+// GT_BOX=1, GT_CUBE=2, GT_SPHERE=3, GT_CYLINDER=4.
+const GROUP_TYPE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Exact" },
+  { value: 1, label: "Box" },
+  { value: 2, label: "Cube" },
+  { value: 3, label: "Sphere" },
+  { value: 4, label: "Cylinder" },
+];
+const GT_EXACT = 0;
+const GT_BOX = 1;
+const GT_CUBE = 2;
+const GT_SPHERE = 3;
+const GT_CYLINDER = 4;
+
+// Group semantic labels — `EmitterPropertiesDto.groups` is the on-wire
+// projection of `ParticleSystem::Emitter::groups[NUM_GROUPS]`. Engine
+// constants at [src/ParticleSystem.h:28-30]:
+//   GROUP_SPEED    = 0  → "Initial Speed"
+//   GROUP_LIFETIME = 1  → "Lifetime"
+//   GROUP_POSITION = 2  → "Initial Position"
+// Legacy's Physics dialog only renders 2 of the 3 (POSITION + SPEED;
+// see [src/UI/Emitter.cpp:849-852]); LIFETIME is unused by that
+// dialog. We surface all 3 so the panel is complete.
+// TODO(MT-2): confirm the lifetime group's intended label/UX placement
+// — legacy hides it but the engine carries it on the wire.
+const GROUP_LABELS = ["Initial Speed", "Lifetime", "Initial Position"];
 
 type Props = {
   bridge: Bridge;
@@ -205,10 +263,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         className="flex-1 min-h-0 overflow-y-auto p-3 outline-none"
         data-testid="tab-physics-content"
       >
-        <ComingSoon
-          dispatch={3}
-          fields="acceleration, gravity, inward speed, bounciness, ground behaviour, weather particle, random param groups."
-        />
+        <PhysicsTab properties={properties} onCommit={commit} />
       </Tabs.Content>
     </Tabs.Root>
   );
@@ -223,26 +278,6 @@ function TabTrigger({ value, label }: { value: string; label: string }) {
     >
       {label}
     </Tabs.Trigger>
-  );
-}
-
-function ComingSoon({
-  dispatch,
-  fields,
-}: {
-  dispatch: number;
-  fields: string;
-}) {
-  return (
-    <div
-      data-testid={`tab-coming-soon-${dispatch}`}
-      className="space-y-2 text-xs text-neutral-500"
-    >
-      <p className="text-neutral-300">
-        Coming in Fix dispatch {dispatch}.
-      </p>
-      <p>{fields}</p>
-    </div>
   );
 }
 
@@ -753,6 +788,352 @@ export function AppearanceTab({
         checked={properties.affectedByWind}
         onCheckedChange={(v) => onCommit({ affectedByWind: v })}
       />
+    </div>
+  );
+}
+
+// ─── Physics tab ────────────────────────────────────────────────────
+
+// Exported for direct testing — matches the AppearanceTab pattern.
+// Radix Tabs in jsdom doesn't reliably switch via fireEvent (known
+// pointer-event flake from Fix dispatch 1), so vitest mounts
+// PhysicsTab directly.
+//
+// Cascade rules (cross-referenced against
+// [src/UI/Emitter.cpp:175-190]):
+//   - `isWeatherParticle === true` disables the entire
+//     position/speed/acceleration/ground-interaction block
+//     (acceleration X/Y/Z, gravity, inwardSpeed, inwardAcceleration,
+//     objectSpaceAcceleration, bounciness, groundBehavior,
+//     emitFromMesh, emitFromMeshOffset, and the position/speed
+//     random-param groups). Conversely, `isWeatherParticle === false`
+//     disables the 3 weather fields.
+//   - `emitFromMesh === EMIT_DISABLE` (==0) disables
+//     `emitFromMeshOffset`.
+//   - `groundBehavior !== Bounce` (!= 2) disables `bounciness`
+//     ([src/UI/Emitter.cpp:190]).
+export function PhysicsTab({
+  properties,
+  onCommit,
+}: {
+  properties: EmitterPropertiesDto;
+  onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
+}) {
+  const isWeather = properties.isWeatherParticle;
+  const nonWeather = !isWeather;
+  const offsetEnabled = nonWeather && properties.emitFromMesh !== EMIT_FROM_MESH_DISABLE;
+  const bouncinessEnabled = nonWeather && properties.groundBehavior === GROUND_BEHAVIOR_BOUNCE;
+
+  const updateAcceleration = (idx: 0 | 1 | 2, v: number) => {
+    const next: [number, number, number] = [
+      properties.acceleration[0],
+      properties.acceleration[1],
+      properties.acceleration[2],
+    ];
+    next[idx] = v;
+    onCommit({ acceleration: next as unknown as Vec3 });
+  };
+
+  const updateGroup = (idx: number, patch: Partial<GroupDto>) => {
+    const next = properties.groups.map((g, i) => (i === idx ? { ...g, ...patch } : g));
+    onCommit({ groups: next });
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Acceleration X/Y/Z — 3 spinners side-by-side */}
+      <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
+        <label className="pt-1 text-xs text-neutral-400">Acceleration</label>
+        <div className="grid grid-cols-3 gap-1">
+          <Spinner
+            value={properties.acceleration[0]}
+            step={0.1}
+            disabled={!nonWeather}
+            onChange={(v) => updateAcceleration(0, v)}
+            aria-label="Acceleration X"
+          />
+          <Spinner
+            value={properties.acceleration[1]}
+            step={0.1}
+            disabled={!nonWeather}
+            onChange={(v) => updateAcceleration(1, v)}
+            aria-label="Acceleration Y"
+          />
+          <Spinner
+            value={properties.acceleration[2]}
+            step={0.1}
+            disabled={!nonWeather}
+            onChange={(v) => updateAcceleration(2, v)}
+            aria-label="Acceleration Z"
+          />
+        </div>
+      </div>
+      <FieldSpinner
+        label="Gravity"
+        value={properties.gravity}
+        step={0.1}
+        disabled={!nonWeather}
+        onCommit={(v) => onCommit({ gravity: v })}
+      />
+      <FieldSpinner
+        label="Inward Speed"
+        value={properties.inwardSpeed}
+        step={0.1}
+        disabled={!nonWeather}
+        onCommit={(v) => onCommit({ inwardSpeed: v })}
+      />
+      <FieldSpinner
+        label="Inward Acceleration"
+        value={properties.inwardAcceleration}
+        step={0.1}
+        disabled={!nonWeather}
+        onCommit={(v) => onCommit({ inwardAcceleration: v })}
+      />
+      <FieldCheckbox
+        label="Object Space Acceleration"
+        checked={properties.objectSpaceAcceleration}
+        disabled={!nonWeather}
+        onCheckedChange={(v) => onCommit({ objectSpaceAcceleration: v })}
+      />
+      <FieldSpinner
+        label="Bounciness"
+        value={properties.bounciness}
+        min={0}
+        max={1}
+        step={0.05}
+        disabled={!bouncinessEnabled}
+        onCommit={(v) => onCommit({ bounciness: v })}
+      />
+      <FieldSelect
+        label="Ground Behavior"
+        value={properties.groundBehavior}
+        options={GROUND_BEHAVIOR_OPTIONS}
+        disabled={!nonWeather}
+        onCommit={(v) => onCommit({ groundBehavior: v })}
+        testId="physics-ground-behavior-trigger"
+      />
+      <FieldSelect
+        label="Emit From Mesh"
+        value={properties.emitFromMesh}
+        options={EMIT_FROM_MESH_OPTIONS}
+        disabled={!nonWeather}
+        onCommit={(v) => onCommit({ emitFromMesh: v })}
+        testId="physics-emit-from-mesh-trigger"
+      />
+      <FieldSpinner
+        label="Emit From Mesh Offset"
+        value={properties.emitFromMeshOffset}
+        step={0.1}
+        disabled={!offsetEnabled}
+        onCommit={(v) => onCommit({ emitFromMeshOffset: v })}
+      />
+      <FieldCheckbox
+        label="Weather Particle"
+        checked={properties.isWeatherParticle}
+        onCheckedChange={(v) => onCommit({ isWeatherParticle: v })}
+      />
+      <FieldSpinner
+        label="Weather Cube Size"
+        value={properties.weatherCubeSize}
+        min={0}
+        step={0.1}
+        disabled={!isWeather}
+        onCommit={(v) => onCommit({ weatherCubeSize: v })}
+      />
+      <FieldSpinner
+        label="Weather Cube Distance"
+        value={properties.weatherCubeDistance}
+        min={0}
+        step={0.1}
+        disabled={!isWeather}
+        onCommit={(v) => onCommit({ weatherCubeDistance: v })}
+      />
+      <FieldSpinner
+        label="Weather Fadeout Distance"
+        value={properties.weatherFadeoutDistance}
+        min={0}
+        step={0.1}
+        disabled={!isWeather}
+        onCommit={(v) => onCommit({ weatherFadeoutDistance: v })}
+      />
+
+      {/* Random Param groups — inline at the bottom of the Physics tab.
+          Legacy ([src/UI/Emitter.cpp:849-852]) renders only POSITION
+          (groups[2]) + SPEED (groups[0]); we surface all three since
+          they're on the wire. The `RandomParam` Win32 primitive from
+          [src/UI/RandomParam.cpp] doesn't map 1:1 to this layout (it
+          drives a single value with min/max/mode), so the per-type
+          conditional fields are inlined here rather than wrapped in a
+          shared primitive. */}
+      {properties.groups.map((g, i) => (
+        <GroupSection
+          key={i}
+          index={i}
+          group={g}
+          onChange={(patch) => updateGroup(i, patch)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function GroupSection({
+  index,
+  group,
+  onChange,
+}: {
+  index: number;
+  group: GroupDto;
+  onChange: (patch: Partial<GroupDto>) => void;
+}) {
+  const label = GROUP_LABELS[index] ?? `Group ${index + 1}`;
+  const updateVec3 = (
+    key: "min" | "max" | "val",
+    axis: 0 | 1 | 2,
+    v: number,
+  ) => {
+    const cur = group[key];
+    const next: [number, number, number] = [cur[0], cur[1], cur[2]];
+    next[axis] = v;
+    onChange({ [key]: next as unknown as Vec3 } as Partial<GroupDto>);
+  };
+
+  return (
+    <fieldset
+      data-testid={`physics-group-${index}`}
+      className="space-y-2 rounded border border-neutral-800 bg-neutral-900/40 p-2"
+    >
+      <legend className="px-1 text-xs font-medium text-neutral-300">
+        {label}
+      </legend>
+      <FieldSelect
+        label="Type"
+        value={group.type}
+        options={GROUP_TYPE_OPTIONS}
+        onCommit={(v) => onChange({ type: v })}
+        testId={`physics-group-${index}-type-trigger`}
+      />
+      {group.type === GT_EXACT && (
+        <Vec3Row
+          label="Value"
+          value={group.val}
+          step={0.1}
+          ariaPrefix={`Group ${index + 1} Value`}
+          onChange={(axis, v) => updateVec3("val", axis, v)}
+        />
+      )}
+      {group.type === GT_BOX && (
+        <>
+          <Vec3Row
+            label="Min"
+            value={group.min}
+            step={0.1}
+            ariaPrefix={`Group ${index + 1} Min`}
+            onChange={(axis, v) => updateVec3("min", axis, v)}
+          />
+          <Vec3Row
+            label="Max"
+            value={group.max}
+            step={0.1}
+            ariaPrefix={`Group ${index + 1} Max`}
+            onChange={(axis, v) => updateVec3("max", axis, v)}
+          />
+        </>
+      )}
+      {group.type === GT_CUBE && (
+        <FieldSpinner
+          label="Side Length"
+          value={group.sideLength}
+          min={0}
+          step={0.1}
+          onCommit={(v) => onChange({ sideLength: v })}
+        />
+      )}
+      {group.type === GT_SPHERE && (
+        <>
+          <FieldSpinner
+            label="Sphere Radius"
+            value={group.sphereRadius}
+            min={0}
+            step={0.1}
+            onCommit={(v) => onChange({ sphereRadius: v })}
+          />
+          <FieldSpinner
+            label="Sphere Edge"
+            value={group.sphereEdge}
+            min={0}
+            step={1}
+            decimals={0}
+            onCommit={(v) => onChange({ sphereEdge: Math.max(0, Math.round(v)) })}
+          />
+        </>
+      )}
+      {group.type === GT_CYLINDER && (
+        <>
+          <FieldSpinner
+            label="Cylinder Radius"
+            value={group.cylinderRadius}
+            min={0}
+            step={0.1}
+            onCommit={(v) => onChange({ cylinderRadius: v })}
+          />
+          <FieldSpinner
+            label="Cylinder Edge"
+            value={group.cylinderEdge}
+            min={0}
+            step={1}
+            decimals={0}
+            onCommit={(v) => onChange({ cylinderEdge: Math.max(0, Math.round(v)) })}
+          />
+          <FieldSpinner
+            label="Cylinder Height"
+            value={group.cylinderHeight}
+            min={0}
+            step={0.1}
+            onCommit={(v) => onChange({ cylinderHeight: v })}
+          />
+        </>
+      )}
+    </fieldset>
+  );
+}
+
+function Vec3Row({
+  label,
+  value,
+  step,
+  ariaPrefix,
+  onChange,
+}: {
+  label: string;
+  value: Vec3;
+  step: number;
+  ariaPrefix: string;
+  onChange: (axis: 0 | 1 | 2, v: number) => void;
+}) {
+  return (
+    <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
+      <label className="pt-1 text-xs text-neutral-400">{label}</label>
+      <div className="grid grid-cols-3 gap-1">
+        <Spinner
+          value={value[0]}
+          step={step}
+          onChange={(v) => onChange(0, v)}
+          aria-label={`${ariaPrefix} X`}
+        />
+        <Spinner
+          value={value[1]}
+          step={step}
+          onChange={(v) => onChange(1, v)}
+          aria-label={`${ariaPrefix} Y`}
+        />
+        <Spinner
+          value={value[2]}
+          step={step}
+          onChange={(v) => onChange(2, v)}
+          aria-label={`${ariaPrefix} Z`}
+        />
+      </div>
     </div>
   );
 }

@@ -5371,4 +5371,107 @@ Commit: `f833e14` (single fix — no new deps). Tests 159 Vitest
 
 Phase 4.2 still BLOCKED until Fix dispatches 3-5 land.
 
+### Fix dispatch 3 — Physics tab UI + Random Param groups + panel scroll (locked 2026-05-18)
+
+Wraps up the property panel content. Adds the Physics tab fields,
+the 3 Random Param groups (per-type conditional rendering), and
+introduces scrollable content areas so tabs with many fields are
+fully accessible (the lower-left panel's `h-72` = 288px is too
+short for the full Appearance/Physics field lists; computer-use
+verification of Fix dispatch 2 surfaced this).
+
+**Panel scroll change** (small but cross-cutting):
+
+In `EmitterPropertyTabs.tsx`, each `Tabs.Content` element gets
+`overflow-y-auto` on its outer container. Tab triggers stay
+fixed at top via flex column layout. Affects all three tabs.
+
+**Physics tab fields** (13 regular fields):
+
+| Field | UI | Notes |
+|---|---|---|
+| `acceleration.x/y/z` | 3 Spinners | World-space acceleration, step 0.1 |
+| `gravity` | Spinner | step 0.1 |
+| `inwardSpeed` | Spinner | step 0.1 |
+| `inwardAcceleration` | Spinner | step 0.1 |
+| `objectSpaceAcceleration` | Checkbox | toggles acceleration interpretation |
+| `bounciness` | Spinner | `[0, 1]`, step 0.05 |
+| `groundBehavior` | Radix Select | 4 options: None / Disappear / Bounce / Stick (matches `GroundBehaviors[]` at [src/UI/Emitter.cpp:35-40]) |
+| `emitFromMesh` | Radix Select | 4 options: Disable / Random Vertex / Random Mesh / Every Vertex (matches `EmitModes[]` at [src/UI/Emitter.cpp:44-49], values 0..3 = ParticleSystem::EMIT_* constants) |
+| `emitFromMeshOffset` | Spinner | disabled when `emitFromMesh === 0` (EMIT_DISABLE) |
+| `isWeatherParticle` | Checkbox | toggles weather-particle mode |
+| `weatherCubeSize` | Spinner | disabled when `!isWeatherParticle` |
+| `weatherCubeDistance` | Spinner | disabled when `!isWeatherParticle` |
+| `weatherFadeoutDistance` | Spinner | disabled when `!isWeatherParticle` |
+
+Legacy cascade rules (verify against [src/UI/Emitter.cpp:146-189]
+when implementing):
+- `isWeatherParticle === true` enables the 3 weather fields,
+  may also disable some non-weather fields.
+- `emitFromMesh !== EMIT_DISABLE` enables `emitFromMeshOffset`.
+
+**Random Param groups** — 3 of them, each with conditional fields:
+
+The legacy ParticleSystem::Emitter struct has `Group groups[3]`
+where each group has a `type` enum (5 values) + per-type
+parameters. Per-type field display:
+
+| `type` | Constant | Visible fields |
+|---|---|---|
+| 0 | `GT_EXACT` | `val.x/y/z` (3 spinners) |
+| 1 | `GT_BOX` | `min.x/y/z` + `max.x/y/z` (6 spinners) |
+| 2 | `GT_CUBE` | `sideLength` (1 spinner) |
+| 3 | `GT_SPHERE` | `sphereRadius` (spinner) + `sphereEdge` (integer spinner) |
+| 4 | `GT_CYLINDER` | `cylinderRadius` + `cylinderEdge` (integer) + `cylinderHeight` (3 spinners) |
+
+Per-group layout: each of the 3 groups renders as a labeled
+section ("Group 1", "Group 2", "Group 3" — actual semantic
+labels TBD; legacy probably has them but cross-referencing
+takes more digging, so use placeholders + TODO comment). Type
+select at top of each section; conditional sub-fields below.
+
+Use the **`RandomParam` primitive from Screen 7** if its API
+fits — but it was originally scoped for a different shape.
+Subagent check: if `RandomParam` doesn't fit, build the group
+rendering directly in the Physics tab component. The 3 groups
+are inline in Physics tab content, not a separate component.
+
+**Schema additions**: **none**. `EmitterPropertiesDto.groups`
+was added in Fix dispatch 1 and is on the wire already.
+
+**MockBridge change**: `makeFixtureProperties` should return
+plausible default `groups` per emitter (e.g. group 0 = GT_EXACT
+with `val: [0,0,0]`, groups 1 + 2 = unused defaults).
+
+**Test surface for Fix dispatch 3:**
+
+- **Vitest** (+6-8 specs, target 159 → 165+):
+  - `EmitterPropertyTabs.test.tsx`:
+    - Physics tab renders 13 regular field labels.
+    - Acceleration is 3 Spinners.
+    - Ground Behavior dropdown has 4 options.
+    - Emit From Mesh dropdown has 4 options.
+    - Emit From Mesh Offset disabled when emitFromMesh === 0.
+    - Weather fields disabled when !isWeatherParticle.
+    - Group type select shows 5 options.
+    - Group with type === GT_SPHERE renders sphereRadius + sphereEdge fields.
+    - Scrolling works (overflow-y-auto on tab content; assert via CSS class or computed style).
+- **Playwright** (+1-2 specs, target 72 → 74+):
+  - Physics tab edit fires set-properties (e.g. gravity spinner).
+  - Group type change cascades to different field set.
+
+**Open follow-ups** (post Fix dispatch 3):
+
+- **Fix dispatch 4**: Finding #1 — D3D viewport z-order +
+  DPI scaling.
+- **Fix dispatch 5**: Finding #4 (marquee select) + finding
+  #5 (Mods + Emitters top-level menus).
+- *Group semantic labels* — find legacy's labels for the 3
+  groups (likely Position / Velocity / Something) and replace
+  the placeholder labels.
+- *TexturePalette popup* for Appearance tab texture fields.
+
+Phase 4.2 still BLOCKED until Fix dispatches 3-5 land.
+
+
 
