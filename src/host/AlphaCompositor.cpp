@@ -62,7 +62,60 @@ AlphaCompositor::~AlphaCompositor()
     if (m_impl->memDC)     DeleteDC(m_impl->memDC);
 }
 
-void AlphaCompositor::Resize(int /*w*/, int /*h*/) {}
+void AlphaCompositor::Resize(int w, int h)
+{
+    if (w == m_impl->width && h == m_impl->height) return;
+    if (w <= 0 || h <= 0) return;
+
+    // Drop old resources first. ComPtr::Reset releases the COM ref;
+    // GDI handles need explicit cleanup.
+    m_impl->offscreenRT.Reset();
+    m_impl->sysMemSurface.Reset();
+    if (m_impl->dibBitmap) { DeleteObject(m_impl->dibBitmap); m_impl->dibBitmap = nullptr; }
+    if (m_impl->memDC)     { DeleteDC(m_impl->memDC);         m_impl->memDC     = nullptr; }
+    m_impl->dibPixels = nullptr;
+
+    // D3DFMT_A8R8G8B8 because UpdateLayeredWindow needs an alpha
+    // channel. D3DMULTISAMPLE_NONE because GetRenderTargetData rejects
+    // multisampled source surfaces — the viewport accepts the
+    // aliasing here (scene content has its own AA via texturing).
+    HRESULT hr = m_impl->device->CreateRenderTarget(
+        static_cast<UINT>(w), static_cast<UINT>(h),
+        D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0,
+        FALSE /*lockable*/, &m_impl->offscreenRT, nullptr);
+    ThrowIfFailed(hr, "CreateRenderTarget");
+
+    // Readback target. SYSTEMMEM is the only pool that
+    // GetRenderTargetData can write to.
+    hr = m_impl->device->CreateOffscreenPlainSurface(
+        static_cast<UINT>(w), static_cast<UINT>(h),
+        D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
+        &m_impl->sysMemSurface, nullptr);
+    ThrowIfFailed(hr, "CreateOffscreenPlainSurface");
+
+    // Top-down DIB (negative biHeight) so row 0 matches D3D9's row 0.
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth       = w;
+    bi.bmiHeader.biHeight      = -h;
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    HDC screenDC = GetDC(nullptr);
+    m_impl->dibBitmap = CreateDIBSection(screenDC, &bi, DIB_RGB_COLORS,
+                                         &m_impl->dibPixels, nullptr, 0);
+    ReleaseDC(nullptr, screenDC);
+    if (!m_impl->dibBitmap || !m_impl->dibPixels)
+        throw std::runtime_error("AlphaCompositor: CreateDIBSection failed");
+
+    m_impl->memDC = CreateCompatibleDC(nullptr);
+    if (!m_impl->memDC) throw std::runtime_error("AlphaCompositor: CreateCompatibleDC failed");
+    SelectObject(m_impl->memDC, m_impl->dibBitmap);
+
+    m_impl->width  = w;
+    m_impl->height = h;
+}
 IDirect3DSurface9* AlphaCompositor::GetRenderTarget() const { return m_impl->offscreenRT.Get(); }
 void AlphaCompositor::SetOcclusion(std::string /*id*/, RECT /*rectClient*/, int /*feather*/) {}
 void AlphaCompositor::RemoveOcclusion(const std::string& /*id*/) {}
