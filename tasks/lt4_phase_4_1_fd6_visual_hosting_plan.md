@@ -499,3 +499,116 @@ here. To resurrect:
   AdditionalDependencies and a per-file `AdditionalIncludeDirectories`
   override on `host\Compositor.cpp` that omits `$(DXSDK_DIR)Include`
   so Windows 10 SDK's d3d11.h wins for that TU.
+
+---
+
+## 9. Postmortem of attempt #3 (FD6 v3) — also reverted
+
+**Hypothesis 4 confirmed**: built MicrosoftEdge/WebView2Samples'
+`WebView2APISample.exe` on this machine, ran it with
+`creationmode=visualdcomp`, and the visual-hosting React-style
+chrome rendered beautifully. WebView2 runtime + GPU + Windows
+configuration all support visual hosting fine. **The bug must be
+in my port.**
+
+### v3 changes applied (in order)
+
+All cross-referenced against
+`WebView2Samples/SampleApps/WebView2APISample/{AppWindow,ViewComponent}.cpp`:
+
+1. **Device type**: switched to `IDCompositionDevice` (V1, what
+   the sample uses) — not the V2 `IDCompositionDesktopDevice`
+   that I tried in v2.
+2. **Device IID**: `DCompositionCreateDevice2(nullptr,
+   IID_PPV_ARGS(&IDCompositionDevice))` — V2 factory function
+   with V1 IID. Matches sample.
+3. **Build order**: deferred `CreateTargetForHwnd` + visual-tree
+   creation until INSIDE the composition-controller completion
+   callback. The Compositor ctor now only creates the
+   `IDCompositionDevice`; `BuildVisualTree()` runs after
+   WebView2 controller exists. **This was the most suspicious
+   difference from v2** — the sample creates target/visuals after
+   the controller, and our pre-v3 attempts created them in the
+   Compositor ctor before WebView2 init began.
+4. **Intermediate visual** preserved from v2 (root → host-visual ←
+   WebView2 sub-tree). Sample line 919.
+5. **SetClip + SetOffset** on root visual per resize. Sample
+   ViewComponent::SetBounds.
+6. **Per-frame DComp Commit** from render loop.
+7. **Parent HWND brush** set to `(HBRUSH)(COLOR_WINDOW + 1)` to
+   match the sample. Was `nullptr` before. Hypothesis: DComp
+   surface with topmost=TRUE needs a parent paint to blend
+   against; null brush leaves the parent paint state undefined.
+8. **Window styles** updated to match sample —
+   `WS_EX_CONTROLPARENT` extended style,
+   `WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN`
+   class style (was missing `WS_CLIPSIBLINGS`).
+9. **Diagnostic isolation**: created the D3D9 viewport child HWND
+   WITHOUT `WS_VISIBLE` (hidden) to rule out child-HWND
+   interference with the DComp tree. White persisted, so the
+   viewport sibling is not the cause.
+10. **SDK upgrade**: bumped `Microsoft.Web.WebView2` NuGet from
+    `1.0.3967.48` to `1.0.4015-prerelease` to match the sample.
+    Build clean. White persisted.
+
+### Result
+
+Still 100% opaque white. Every API succeeds (`hr=0x00000000`).
+React loads, posts WebMessages, navigation completes. The
+WebView2 surface is just never visible.
+
+### Things I haven't bisected
+
+- The sample's `Toolbar` component is a real child HWND running
+  Win32 widgets ABOVE the WebView2 visual area. We have an
+  equivalent (the D3D9 viewport child HWND). The sample's WORKS
+  in coexistence with WebView2 visual hosting; mine doesn't.
+  Hypothesis: the sample's `Toolbar` HWND is configured with
+  flags / styles my viewport HWND lacks, and that affects DComp.
+- The sample's `m_appBackgroundImage` rendered via `StretchBlt`
+  in `WM_PAINT` paints opaque pixels on the parent HWND. My
+  parent has a no-op `WM_PAINT` (the legacy idle-render pattern).
+  DComp may require a non-trivial parent paint to bootstrap its
+  blending, or sample's StretchBlt happens to mask a different
+  bug.
+- The sample uses `wil` (Windows Implementation Library) with
+  `wil::com_ptr` and `try_query` rather than raw `Microsoft::WRL::ComPtr`
+  + `QueryInterface`. Identical semantics, but a different ABI
+  path that *could* matter for some interface IDs.
+
+### Recommended next step
+
+Option **A** (bisect the sample) is the only path left that
+yields a definitive answer. Concretely:
+
+1. Take a clean copy of `WebView2APISample` (we have it built
+   locally at `/tmp/WebView2Samples/SampleApps/WebView2APISample`).
+2. Strip the toolbar / scenario / settings components down to
+   the minimal visual-hosting setup.
+3. ADD a `WS_CHILD | WS_VISIBLE` D3D9-style sibling HWND, populate
+   with a colored brush, see if visual hosting still renders.
+4. If it does, port that minimum diff into the host.
+
+**Estimated time**: 2-3 hours focused work.
+
+**Alternative ship path**: option **C** (`SetWindowRgn` cut-out
+on the HWND-mode WebView2). Keeps FD4's HWND mode, clips
+WebView2's HWND region to exclude the viewport rect so the
+sibling shows through the cut-out. Doesn't fight DComp at all.
+~50 LOC. Ships today. Trade-off: opaque HTML over the viewport
+rect (menu dropdowns) becomes impossible — but that's strictly
+better than today's invisible viewport.
+
+### Code preservation (v3)
+
+Same locations as v2, plus:
+
+- `Compositor::Impl::device` is now `IDCompositionDevice` (V1),
+  not `IDCompositionDesktopDevice`.
+- `Compositor` adds a `BuildVisualTree()` public method, called
+  from `HostWindow.cpp` inside the composition-controller
+  completion callback.
+- Main HWND class brush: `(HBRUSH)(COLOR_WINDOW + 1)`.
+- Main HWND CreateWindowExW: `WS_EX_CONTROLPARENT` extended +
+  `WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN` class
+  style.
