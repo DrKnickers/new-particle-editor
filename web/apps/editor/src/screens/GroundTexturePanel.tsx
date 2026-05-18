@@ -135,7 +135,7 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Ground Texture" onClose={onClose}>
+    <ToolPanel title="Ground Texture" onClose={onClose} bridge={bridge} occlusionId="tool-panel:ground">
       <label className="mb-3 flex items-center gap-2 text-xs text-neutral-200">
         <input
           type="checkbox"

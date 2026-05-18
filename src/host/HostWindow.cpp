@@ -853,11 +853,43 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_MOVE:
-        // FD8: when main moves, the viewport popup needs to follow.
-        // Convert the cached client-coord rect to a fresh screen
-        // position with ClientToScreen against main's new location.
+        // FD8: when main moves, the viewport popup follows. Position
+        // changes only — size stays cached.
         layout.RefreshScreenPosition();
         return 0;
+
+    case WM_WINDOWPOSCHANGED:
+        // FD8 polish: WM_WINDOWPOSCHANGED fires for every position/
+        // size change BEFORE WM_SIZE / WM_MOVE / WM_PAINT.
+        //
+        // (1) PredictAndApply resizes the popup synchronously to
+        //     match main's new client extent, using cached layout
+        //     offsets.
+        // (2) RenderD3D9 forces a Present after the swap chain is
+        //     Reset. Without this, Windows' modal resize loop holds
+        //     my PeekMessage idle pump and D3D9 never gets to render
+        //     fresh — the popup just stretches the LAST presented
+        //     frame, so a wider/taller resize reveals dark purple
+        //     where the ground plane should be.
+        if (hViewport)
+        {
+            layout.PredictAndApply();
+            RenderD3D9();
+        }
+        break;  // fall through so DefWindowProc continues processing
+
+    // FD8 polish: during the modal sizemove loop, WM_SIZE/WM_MOVE
+    // fire continuously. Each one calls RefreshScreenPosition so
+    // the popup tracks main's new position. The cached client-coord
+    // rect from the last layout/viewport-rect message is the source
+    // — React's ResizeObserver will fire AFTER the sizemove loop
+    // exits, sending a fresh layout/viewport-rect, but in the
+    // meantime the popup at least stays anchored to roughly the
+    // right place via owner-client translation. No
+    // WM_ENTERSIZEMOVE/EXITSIZEMOVE handling: hiding the popup
+    // during resize just exposes the bare WebView2 transparent
+    // region (which paints white through the parent's null brush),
+    // which is worse than a slightly-stale-sized popup.
 
     case WM_DESTROY:
         KillTimer(hwnd, kStatsTimerId);
@@ -1250,7 +1282,15 @@ int HostWindowImpl::Run(int nCmdShow)
     if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     wc.lpszClassName = kHostWindowClassName;
     wc.style         = CS_HREDRAW | CS_VREDRAW;
-    wc.hbrBackground = nullptr;
+    // FD8 polish: paint the parent in the same dark purple as the
+    // D3D9 viewport's clear color (engine.cpp m_background default).
+    // When the popup is briefly mispositioned during a window resize
+    // — the popup tracks main on each WM_SIZE but its cached size
+    // lags React's ResizeObserver — the uncovered area paints in
+    // dark purple instead of the WebView2 transparent-region's white
+    // default. Smoothly indistinguishable from the actual viewport
+    // until React resends the rect.
+    wc.hbrBackground = (HBRUSH)CreateSolidBrush(RGB(0x14, 0x08, 0x34));
     RegisterClassExW(&wc);
 
     WNDCLASSEXW vc{};

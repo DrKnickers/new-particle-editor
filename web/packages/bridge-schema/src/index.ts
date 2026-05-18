@@ -543,6 +543,13 @@ export type Request =
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
+  // FD8 follow-up: tell the host that a chrome region overlaps the
+  // viewport rect (a menu, tool panel, dialog…). The host applies a
+  // SetWindowRgn cut-out on the viewport popup so the chrome HTML
+  // shows through. `rect: null` removes the occlusion for that id.
+  // Rect is in MAIN-HWND-CLIENT coords, same convention as
+  // layout/viewport-rect.
+  | { kind: "viewport/occlude";           params: { id: string; rect: { x: number; y: number; w: number; h: number } | null } }
   | { kind: "spawner/start";              params: SpawnerParamsDto }
   | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }
@@ -663,6 +670,7 @@ export type ResponseFor<R extends Request> =
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
+  R extends { kind: "viewport/occlude" }          ? Record<string, never> :
   R extends { kind: "spawner/start" }             ? Record<string, never> :
   R extends { kind: "spawner/trigger" }           ? Record<string, never> :
   R extends { kind: "spawner/stop" }              ? Record<string, never> :

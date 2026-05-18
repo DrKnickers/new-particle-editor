@@ -122,7 +122,7 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Background picker" onClose={onClose}>
+    <ToolPanel title="Background picker" onClose={onClose} bridge={bridge} occlusionId="tool-panel:background">
       <div className="flex flex-col gap-3">
         {/* Solid-colour row */}
         <div className="grid grid-cols-3 gap-2">

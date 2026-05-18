@@ -85,7 +85,7 @@ export function BloomPanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Bloom Settings" onClose={onClose}>
+    <ToolPanel title="Bloom Settings" onClose={onClose} bridge={bridge} occlusionId="tool-panel:bloom">
       <ToolPanel.Section title="Bloom" alwaysOpen>
         <label className="flex items-center gap-2 text-xs text-neutral-200">
           <input

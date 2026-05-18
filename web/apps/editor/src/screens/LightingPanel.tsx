@@ -285,7 +285,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Lighting" onClose={onClose}>
+    <ToolPanel title="Lighting" onClose={onClose} bridge={bridge} occlusionId="tool-panel:lighting">
       <ToolPanel.Section title="Sun" defaultOpen>
         <ToolPanel.Row label="Intensity">
           <Spinner

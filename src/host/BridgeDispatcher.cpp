@@ -738,6 +738,36 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- viewport/occlude --------
+    // FD8 follow-up: register/clear a chrome-rectangle that overlaps
+    // the viewport popup. The host applies a SetWindowRgn cut-out so
+    // chrome HTML behind the popup shows through.
+    if (kind == "viewport/occlude")
+    {
+        const std::string id = params.value("id", std::string{});
+        if (id.empty())
+        {
+            sendErr("viewport/occlude requires a non-empty id");
+            return res;
+        }
+        if (params.contains("rect") && params["rect"].is_object())
+        {
+            const auto& r = params["rect"];
+            int x = r.value("x", 0);
+            int y = r.value("y", 0);
+            int w = r.value("w", 0);
+            int h = r.value("h", 0);
+            m_layout.SetOcclusion(id, x, y, w, h);
+        }
+        else
+        {
+            // rect=null or missing → remove the occlusion.
+            m_layout.RemoveOcclusion(id);
+        }
+        sendOk(json::object());
+        return res;
+    }
+
     // -------- register-accelerators --------
     if (kind == "register-accelerators")
     {

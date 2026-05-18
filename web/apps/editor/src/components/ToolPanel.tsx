@@ -26,19 +26,32 @@
 // Background pill again, picking a different Tools-menu entry).
 
 import { X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import type { Bridge } from "@particle-editor/bridge-schema";
+import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 
 type ToolPanelProps = {
   title: string;
   onClose: () => void;
   children?: ReactNode;
+  /** FD8 follow-up: when provided, the panel registers itself with
+   *  the host as an occlusion. The host punches a SetWindowRgn hole
+   *  in the viewport popup over this panel's rect so the panel HTML
+   *  shows through. Each panel needs a stable, unique id. */
+  bridge?: Bridge;
+  occlusionId?: string;
 };
 
 const HEADER_HEIGHT_PX = 48;
 
-export function ToolPanel({ title, onClose, children }: ToolPanelProps) {
+export function ToolPanel({ title, onClose, children, bridge, occlusionId }: ToolPanelProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // The hook is a no-op when bridge or id is missing (browser-mode,
+  // tests, or panels that haven't opted in yet).
+  useViewportOcclusion(bridge, occlusionId ?? "", ref);
   return (
     <div
+      ref={ref}
       className="absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-neutral-800 bg-neutral-950 text-neutral-100"
       role="dialog"
       aria-label={title}

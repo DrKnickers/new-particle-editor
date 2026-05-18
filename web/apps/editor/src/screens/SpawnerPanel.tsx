@@ -167,6 +167,8 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
     <ToolPanel
       title="Spawner"
       onClose={onClose}
+      bridge={bridge}
+      occlusionId="tool-panel:spawner"
     >
       {/* Header chips — active-count badge + Stop button.
           Rendered as the first section so they sit just below the

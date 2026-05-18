@@ -363,6 +363,10 @@ export class MockBridge implements Bridge {
         // Mock: no native HWND to reposition.
         return {};
 
+      case "viewport/occlude":
+        // Mock: no native HWND to clip. Acknowledge silently.
+        return {};
+
       // ---------------- file ops (Phase 3 Screen 8 Batch 3) ----------
       //
       // The mock implementations are deliberately UI-free: there's no
