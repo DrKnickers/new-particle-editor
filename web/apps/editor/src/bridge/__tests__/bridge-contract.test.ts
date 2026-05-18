@@ -915,6 +915,84 @@ describe("MockBridge contract", () => {
     expect(after2.tracks.find((t) => t.name === "alpha")?.interpolation).toBe("step");
   });
 
+  // ─── Screen 6 Batch B-β — track key mutations ────────────────────
+  //
+  // set-track-key moves an existing key (erase oldTime, insert
+  // newTime/newValue). Border keys silently fix newTime = oldTime.
+  // add-track-key inserts a new key, dedupes by epsilon-bump on
+  // exact-time collisions.
+
+  it("emitters/set-track-key moves an interior key to (newTime, newValue)", async () => {
+    const b = new MockBridge();
+    // Alpha on Smoke (id=0) has 4 keys: time 0, 20, 80, 100. Move
+    // time=20 → (25, 0.5).
+    await b.request({
+      kind: "emitters/set-track-key",
+      params: {
+        id: 0,
+        track: "alpha",
+        oldTime: 20,
+        newTime: 25,
+        newValue: 0.5,
+      },
+    });
+    const after = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha = after.tracks.find((t) => t.name === "alpha");
+    expect(alpha?.keys.map((k) => k.time)).toEqual([0, 25, 80, 100]);
+    const moved = alpha?.keys.find((k) => k.time === 25);
+    expect(moved?.value).toBe(0.5);
+    // Border-key time change is silently downgraded to value-only.
+    await b.request({
+      kind: "emitters/set-track-key",
+      params: {
+        id: 0,
+        track: "alpha",
+        oldTime: 0,
+        newTime: 5,           // would change the border key's time
+        newValue: 0.25,
+      },
+    });
+    const after2 = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha2 = after2.tracks.find((t) => t.name === "alpha");
+    expect(alpha2?.keys[0]?.time).toBe(0);    // time unchanged
+    expect(alpha2?.keys[0]?.value).toBe(0.25); // value moved
+  });
+
+  it("emitters/add-track-key inserts a new key and returns the actual inserted time", async () => {
+    const b = new MockBridge();
+    // Insert time=40 on Alpha (which has 0, 20, 80, 100 by default).
+    const r = await b.request({
+      kind: "emitters/add-track-key",
+      params: { id: 0, track: "alpha", time: 40, value: 0.6 },
+    });
+    expect(r.time).toBe(40);
+    expect(r.value).toBe(0.6);
+    const after = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha = after.tracks.find((t) => t.name === "alpha");
+    expect(alpha?.keys.map((k) => k.time)).toEqual([0, 20, 40, 80, 100]);
+    // Collision at exact time → host bumps by 0.001.
+    const r2 = await b.request({
+      kind: "emitters/add-track-key",
+      params: { id: 0, track: "alpha", time: 40, value: 0.9 },
+    });
+    expect(r2.time).toBeCloseTo(40.001, 4);
+    const after2 = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha2 = after2.tracks.find((t) => t.name === "alpha");
+    expect(alpha2?.keys.length).toBe(6);
+  });
+
   it("on() returns a working unsubscribe", async () => {
     const b = new MockBridge();
     const seen: Event[] = [];

@@ -991,3 +991,82 @@ export function setTrackInterpolationInOverlay(
   useMockTrackOverlay.getState().write(id, nextTracks);
   return true;
 }
+
+/** Move the key at `oldTime` on (emitter `id`, track `trackName`) to
+ *  `(newTime, newValue)`. Border keys (first + last by time) override
+ *  `newTime = oldTime` — only the value moves — matching the drag-time-
+ *  fixed rule + native `set-track-key` semantics.
+ *
+ *  Returns true when a matching key was found and mutated; false when
+ *  the track or the key at `oldTime` doesn't exist. The wire contract
+ *  doesn't surface that distinction (both produce a no-op response)
+ *  but tests want to assert the mutation actually landed. */
+export function setTrackKeyInOverlay(
+  id: number,
+  trackName: TrackName,
+  oldTime: number,
+  newTime: number,
+  newValue: number,
+): boolean {
+  const cur = useMockTrackOverlay.getState().read(id);
+  const trackIdx = cur.findIndex((t) => t.name === trackName);
+  if (trackIdx === -1) return false;
+  const target = cur[trackIdx]!;
+  if (target.keys.length === 0) return false;
+  const keyIdx = target.keys.findIndex((k) => k.time === oldTime);
+  if (keyIdx === -1) return false;
+  // Border-key detection: oldTime is border iff it matches the first
+  // or last key in time order (the wire contract is ascending by time).
+  const isBorder =
+    oldTime === target.keys[0]!.time ||
+    oldTime === target.keys[target.keys.length - 1]!.time;
+  const effectiveTime = isBorder ? oldTime : newTime;
+  // Build the next keys list: drop the old key, insert the new one in
+  // time order. The wire contract is ascending-by-time so callers can
+  // trust ordering after the round trip.
+  const remaining = target.keys.filter((_, i) => i !== keyIdx);
+  const inserted: TrackKey = { time: effectiveTime, value: newValue };
+  // Find insertion index (ascending by time).
+  let ins = remaining.findIndex((k) => k.time > effectiveTime);
+  if (ins === -1) ins = remaining.length;
+  const nextKeys = [...remaining.slice(0, ins), inserted, ...remaining.slice(ins)];
+  const nextTracks = cur.map((t, i) =>
+    i === trackIdx ? { ...t, keys: nextKeys } : t,
+  );
+  useMockTrackOverlay.getState().write(id, nextTracks);
+  return true;
+}
+
+/** Insert a new key at `(time, value)` on the named track. If a key
+ *  already exists at the exact `time`, bumps `time` by 0.001 (matching
+ *  the native host's dedupe-by-epsilon rule). Returns the actual
+ *  inserted (time, value) — the React side auto-selects the new key
+ *  using the returned time so a collision doesn't break selection. */
+export function addTrackKeyInOverlay(
+  id: number,
+  trackName: TrackName,
+  time: number,
+  value: number,
+): { time: number; value: number } | null {
+  const cur = useMockTrackOverlay.getState().read(id);
+  const trackIdx = cur.findIndex((t) => t.name === trackName);
+  if (trackIdx === -1) return null;
+  const target = cur[trackIdx]!;
+  let effectiveTime = time;
+  // Dedupe-by-epsilon: bump until the time is unique. The bump is
+  // small (0.001) and the loop is bounded by the key count so a
+  // pathological dataset can't lock the dispatch thread.
+  const times = new Set(target.keys.map((k) => k.time));
+  while (times.has(effectiveTime)) {
+    effectiveTime += 0.001;
+  }
+  const inserted: TrackKey = { time: effectiveTime, value };
+  let ins = target.keys.findIndex((k) => k.time > effectiveTime);
+  if (ins === -1) ins = target.keys.length;
+  const nextKeys = [...target.keys.slice(0, ins), inserted, ...target.keys.slice(ins)];
+  const nextTracks = cur.map((t, i) =>
+    i === trackIdx ? { ...t, keys: nextKeys } : t,
+  );
+  useMockTrackOverlay.getState().write(id, nextTracks);
+  return { time: effectiveTime, value };
+}

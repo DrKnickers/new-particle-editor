@@ -328,6 +328,22 @@ export type Request =
   | { kind: "emitters/set-track-interpolation";
       params: { id: number; track: TrackName; interpolation: InterpolationType } }
 
+  // Track key mutations (Phase 3 Screen 6 Batch B-β).
+  //
+  // `set-track-key` moves an existing key. The host erases the key at
+  // `oldTime` and inserts a new key at `(newTime, newValue)`. Border
+  // keys (first + last by time) silently override `newTime = oldTime`
+  // so only the value moves — matches the drag-time-fixed rule.
+  //
+  // `add-track-key` inserts a new key. If a key already exists at the
+  // exact `time`, the host bumps `time` slightly so the multiset
+  // doesn't accumulate dupes. Returns the *actual* inserted time so
+  // the React side can auto-select the new key without a re-fetch.
+  | { kind: "emitters/set-track-key";
+      params: { id: number; track: TrackName; oldTime: number; newTime: number; newValue: number } }
+  | { kind: "emitters/add-track-key";
+      params: { id: number; track: TrackName; time: number; value: number } }
+
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   | { kind: "emitters/duplicate";                       params: { id: number } }
   | { kind: "emitters/delete";                          params: { id: number } }
@@ -478,6 +494,13 @@ export type ResponseFor<R extends Request> =
   // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α)
   R extends { kind: "emitters/delete-track-keys" }       ? Record<string, never> :
   R extends { kind: "emitters/set-track-interpolation" } ? Record<string, never> :
+
+  // Track key mutations (Phase 3 Screen 6 Batch B-β).
+  // set-track-key returns empty; add-track-key returns the actual
+  // inserted (time, value) which may differ from the requested time
+  // when a same-time collision triggered a dedupe-bump.
+  R extends { kind: "emitters/set-track-key" } ? Record<string, never> :
+  R extends { kind: "emitters/add-track-key" } ? { time: number; value: number } :
 
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   R extends { kind: "emitters/duplicate" } ?

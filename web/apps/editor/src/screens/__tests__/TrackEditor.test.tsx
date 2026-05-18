@@ -74,16 +74,84 @@ describe("TrackEditor", () => {
     expect(newSvg.getAttribute("data-track")).toBe("green");
   });
 
-  it("still-deferred toolbar actions (Select / Insert) render disabled with a Batch B tooltip", () => {
-    render(<TrackEditor tracks={fixtureTracks()} />);
-    for (const tid of [
-      "track-tool-select",
-      "track-tool-insert",
-    ]) {
-      const btn = screen.getByTestId(tid) as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
-      expect(btn.title).toBe("Batch B");
-    }
+  it("Select / Insert mode toggle switches the mode state and updates data-state", () => {
+    const { container } = render(<TrackEditor tracks={fixtureTracks()} />);
+    const editor = container.querySelector(
+      "[data-testid='track-editor']",
+    ) as HTMLElement;
+    // Default mode is "select".
+    expect(editor.dataset.mode).toBe("select");
+    expect(
+      screen.getByTestId("track-tool-select").getAttribute("data-state"),
+    ).toBe("on");
+    expect(
+      screen.getByTestId("track-tool-insert").getAttribute("data-state"),
+    ).toBe("off");
+
+    // Click Insert — mode flips, data-state mirrors.
+    fireEvent.click(screen.getByTestId("track-tool-insert"));
+    expect(editor.dataset.mode).toBe("insert");
+    expect(
+      screen.getByTestId("track-tool-insert").getAttribute("data-state"),
+    ).toBe("on");
+    expect(
+      screen.getByTestId("track-tool-select").getAttribute("data-state"),
+    ).toBe("off");
+
+    // Click Select — flips back.
+    fireEvent.click(screen.getByTestId("track-tool-select"));
+    expect(editor.dataset.mode).toBe("select");
+  });
+
+  it("editing the Value spinner on a selected key fires emitters/set-track-key", async () => {
+    const { bridge, requests } = makeStubBridge();
+    // Use the 3-key fixture so we have an interior key (time=50) that
+    // isn't a border.
+    const tracks: TrackDto[] = TRACK_NAMES.map((name) => ({
+      name,
+      keys: name === "red"
+        ? [
+            { time: 0,   value: 0 },
+            { time: 50,  value: 0.5 },
+            { time: 100, value: 1 },
+          ]
+        : [
+            { time: 0,   value: 0 },
+            { time: 100, value: 1 },
+          ],
+      interpolation: "linear",
+    }));
+    const { container } = render(
+      <TrackEditor tracks={tracks} bridge={bridge} emitterId={42} />,
+    );
+    // Click the middle red key (time=50) — selects it.
+    const circles = container.querySelectorAll("[data-testid='curve-key']");
+    fireEvent.click(circles[1]!);
+
+    // The Value spinner's input should now be enabled. Re-query
+    // because TrackEditor uses `key` on the Spinner to remount it
+    // on selection change.
+    const valueInput = screen
+      .getByTestId("track-spinner-value-wrapper")
+      .querySelector("input") as HTMLInputElement;
+    expect(valueInput.disabled).toBe(false);
+    // Type a new value and commit via blur.
+    fireEvent.focus(valueInput);
+    fireEvent.change(valueInput, { target: { value: "0.75" } });
+    fireEvent.blur(valueInput);
+
+    // Bridge should have received set-track-key.
+    const match = requests.find(
+      (r) => r.kind === "emitters/set-track-key",
+    );
+    expect(match).toBeDefined();
+    expect(match!.params).toMatchObject({
+      id: 42,
+      track: "red",
+      oldTime: 50,
+      newTime: 50,        // value-only edit keeps time
+      newValue: 0.75,
+    });
   });
 
   // ─── Screen 5 / Screen 6 Batch B-α ────────────────────────────────

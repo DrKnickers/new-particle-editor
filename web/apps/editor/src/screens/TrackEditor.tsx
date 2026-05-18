@@ -10,15 +10,24 @@
 //     dropdown so it can be cleared on track-switch in one place).
 //     Identified by key TIME — see CurveEditor for the rationale.
 //
+// Screen 6 Batch B-β adds:
+//   - Functional Select / Insert mode toggle. Insert mode routes
+//     canvas-empty clicks to `emitters/add-track-key`; Select mode
+//     keeps the click-clears-selection behaviour. Mode state is
+//     local React state — short-lived, per-mount, doesn't leak into
+//     Zustand.
+//   - Drag-to-move commit. CurveEditor invokes our drag-end handler
+//     when a drag actually produced movement; we fire
+//     `emitters/set-track-key { oldTime, newTime, newValue }`.
+//   - Spinner row above the toolbar (Time + Value). Enabled iff
+//     exactly one key is selected. Border keys: Time Spinner
+//     disabled (value-only edit). Editing fires `set-track-key`.
+//
 // Active track + selection state stay local React state, not Zustand:
 // they're per-mount, short-lived, and only matter to this panel.
 // Switching the active track clears `selectedKeyTimes` so the
-// selection doesn't bleed across tracks.
-//
-// Visual-only / still deferred to Batch B (the second half of curve
-// interaction): drag-to-move, click-to-add, Select/Insert mode toggle,
-// Spinner sync, lock-to functional behaviour, border-key visual
-// differentiation, Shift+click range selection.
+// selection doesn't bleed across tracks. Lock-to functional behaviour
+// + Shift+click 2D range selection remain deferred.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import * as Select from "@radix-ui/react-select";
@@ -31,6 +40,7 @@ import type {
 } from "@particle-editor/bridge-schema";
 import { TRACK_NAMES } from "@particle-editor/bridge-schema";
 import { CurveEditor } from "./CurveEditor";
+import { Spinner } from "@/primitives/Spinner";
 
 type Props = {
   /** 7 tracks in `TRACK_NAMES` order (the wire contract). Passed in
@@ -95,6 +105,8 @@ const INTERP_KINDS: readonly InterpolationType[] = Object.freeze([
   "linear", "smooth", "step",
 ]);
 
+type EditMode = "select" | "insert";
+
 /** Per-track value range. Locked to [0, 1] for colour channels; auto-
  *  ranges for Scale / Index off the keys with a 1.2× headroom; auto-
  *  ranges symmetrically around 0 for RotationSpeed. Mirrors the
@@ -141,6 +153,9 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   const [selectedKeyTimes, setSelectedKeyTimes] = useState<Set<number>>(
     () => new Set(),
   );
+  // Select / Insert mode. Affects ONLY canvas-empty clicks; on-key
+  // clicks always do their normal thing (select / drag).
+  const [mode, setMode] = useState<EditMode>("select");
 
   const current = useMemo<TrackDto>(() => {
     const found = tracks.find((t) => t.name === activeTrack);
@@ -186,10 +201,10 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
 
   // Click handler routed from CurveEditor. Plain click → replace
   // selection with the clicked key. Ctrl/Cmd+click → toggle. Shift+
-  // click range selection is deferred to Batch B (single + toggle
-  // suffices for delete-focused workflow).
+  // click range selection is deferred (edge case; legacy lacks a
+  // clean 2D-range model).
   const handleKeyClick = useCallback(
-    (time: number, event: React.MouseEvent) => {
+    (time: number, event: React.MouseEvent | React.PointerEvent) => {
       const additive = event.ctrlKey || event.metaKey;
       setSelectedKeyTimes((prev) => {
         if (additive) {
@@ -207,6 +222,65 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   const handleCanvasClick = useCallback(() => {
     setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
   }, []);
+
+  // Drag-end commit. Fires `set-track-key { oldTime, newTime, newValue }`.
+  // The host re-applies the border-key time-fixed rule as the source
+  // of truth; the React side already clamped during the drag so the
+  // round-trip is a confirmation, not a correction. Selection follows
+  // the moved key: we replace the old time with the new one in the
+  // selection set so the post-mutation re-fetch lands with a valid
+  // selection.
+  const handleKeyDragEnd = useCallback(
+    (keyTime: number, newTime: number, newValue: number) => {
+      if (bridge === undefined || emitterId === undefined) return;
+      // Optimistic selection update: swap oldTime → newTime so the
+      // post-re-fetch render still has the (now-moved) key selected.
+      setSelectedKeyTimes((prev) => {
+        if (!prev.has(keyTime)) return prev;
+        const next = new Set(prev);
+        next.delete(keyTime);
+        next.add(newTime);
+        return next;
+      });
+      void bridge.request({
+        kind: "emitters/set-track-key",
+        params: {
+          id: emitterId,
+          track: activeTrack,
+          oldTime: keyTime,
+          newTime,
+          newValue,
+        },
+      }).catch(() => {
+        // Silent — the panel re-fetches on tree/changed. No
+        // user-visible error surface this batch.
+      });
+    },
+    [bridge, emitterId, activeTrack],
+  );
+
+  // Insert-mode canvas click. Fires `add-track-key { time, value }`
+  // and auto-selects the new key (using the returned actual time,
+  // which may differ from the requested time when a collision
+  // bumped it).
+  const handleCanvasAdd = useCallback(
+    (time: number, value: number) => {
+      if (bridge === undefined || emitterId === undefined) return;
+      void bridge.request({
+        kind: "emitters/add-track-key",
+        params: { id: emitterId, track: activeTrack, time, value },
+      }).then((res) => {
+        // Auto-select the new key. The wire response returns the
+        // actual inserted time (which may differ from `time` if the
+        // host bumped to dedupe).
+        const insertedTime = res.time ?? time;
+        setSelectedKeyTimes(new Set([insertedTime]));
+      }).catch(() => {
+        /* silent — same as handleKeyDragEnd */
+      });
+    },
+    [bridge, emitterId, activeTrack],
+  );
 
   // Delete handler — filters border keys + fires the bridge call.
   // The host re-applies the border-key filter as the source of
@@ -275,13 +349,149 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   const deleteDisabled =
     bridge === undefined || emitterId === undefined || deletableCount === 0;
 
+  // Spinner sync state. The two Spinners reflect the single selected
+  // key when exactly one key is selected. Otherwise they're disabled
+  // ("—" or empty value). The lone selected key's data is found by
+  // walking `current.keys` for the matching time.
+  const singleSelected = useMemo<{ time: number; value: number; isBorder: boolean } | null>(() => {
+    if (selectedKeyTimes.size !== 1) return null;
+    const onlyTime = selectedKeyTimes.values().next().value as number;
+    const key = current.keys.find((k) => k.time === onlyTime);
+    if (key === undefined) return null;
+    return {
+      time: key.time,
+      value: key.value,
+      isBorder: borderKeyTimes.has(key.time),
+    };
+  }, [selectedKeyTimes, current.keys, borderKeyTimes]);
+
+  const spinnerDisabled = singleSelected === null
+    || bridge === undefined
+    || emitterId === undefined;
+  // Border-key Time Spinner: always disabled (value-only edit).
+  const timeSpinnerDisabled = spinnerDisabled || (singleSelected?.isBorder ?? false);
+
+  // Spinner edit handlers. Each fires `set-track-key` with the
+  // appropriate field updated (time or value). The selection is
+  // updated optimistically (swap oldTime → newTime in the set) so
+  // the post-mutation re-fetch lands with a valid selection.
+  const handleTimeSpinner = useCallback(
+    (nextTime: number) => {
+      if (singleSelected === null) return;
+      if (bridge === undefined || emitterId === undefined) return;
+      if (singleSelected.isBorder) return;        // shouldn't happen — disabled
+      if (nextTime === singleSelected.time) return;
+      const oldTime = singleSelected.time;
+      // Clamp to the (prev, next) exclusive bound so the Spinner can
+      // never produce an invalid multiset state. Find neighbours in
+      // ascending-time order.
+      const keys = current.keys;
+      const idx = keys.findIndex((k) => k.time === oldTime);
+      let clampedTime = nextTime;
+      if (idx > 0 && idx < keys.length - 1) {
+        const eps = 1e-4;
+        clampedTime = Math.max(
+          keys[idx - 1]!.time + eps,
+          Math.min(keys[idx + 1]!.time - eps, clampedTime),
+        );
+      }
+      setSelectedKeyTimes(new Set([clampedTime]));
+      void bridge.request({
+        kind: "emitters/set-track-key",
+        params: {
+          id: emitterId,
+          track: activeTrack,
+          oldTime,
+          newTime: clampedTime,
+          newValue: singleSelected.value,
+        },
+      }).catch(() => { /* silent */ });
+    },
+    [singleSelected, bridge, emitterId, activeTrack, current.keys],
+  );
+
+  const handleValueSpinner = useCallback(
+    (nextValue: number) => {
+      if (singleSelected === null) return;
+      if (bridge === undefined || emitterId === undefined) return;
+      if (nextValue === singleSelected.value) return;
+      const clamped = Math.max(valueRange.min, Math.min(valueRange.max, nextValue));
+      void bridge.request({
+        kind: "emitters/set-track-key",
+        params: {
+          id: emitterId,
+          track: activeTrack,
+          oldTime: singleSelected.time,
+          // Border keys keep their time; the host overrides newTime =
+          // oldTime when oldTime is a border key, so passing the
+          // current time here is harmless.
+          newTime: singleSelected.time,
+          newValue: clamped,
+        },
+      }).catch(() => { /* silent */ });
+    },
+    [singleSelected, bridge, emitterId, activeTrack, valueRange.min, valueRange.max],
+  );
+
   return (
     <div
       data-testid="track-editor"
       data-active-track={activeTrack}
       data-selected-key-count={selectedKeyTimes.size}
+      data-mode={mode}
       className="flex h-full w-full flex-col gap-2 text-sm"
     >
+      {/* Spinner row — Time + Value editors for the single selected
+          key. Disabled when 0 or 2+ keys are selected. Border keys
+          additionally disable the Time spinner (value-only edit). */}
+      {/* Spinner row — Time + Value editors for the single selected
+          key. Disabled when 0 or 2+ keys are selected. Border keys
+          additionally disable the Time spinner (value-only edit).
+          The `key` prop on each Spinner is tied to the selected
+          key's identity (time-based) so the Spinner remounts when
+          the selection changes — the internal `text` state then
+          re-initialises from the new `value` prop. Without this, the
+          Spinner caches the old text and the new selection's value
+          wouldn't appear until the user focused the input. The
+          `track:value` form keys also picks up changes when the
+          ACTIVE TRACK changes (so selecting the same time on a
+          different track refreshes the displayed value). */}
+      <div
+        data-testid="track-editor-spinners"
+        className="flex items-center gap-2 border-b border-neutral-800 pb-2"
+      >
+        <label className="text-xs text-neutral-400 w-10" htmlFor="track-spinner-time">
+          Time
+        </label>
+        <div className="w-24" data-testid="track-spinner-time-wrapper">
+          <Spinner
+            key={`time:${activeTrack}:${singleSelected?.time ?? "none"}`}
+            aria-label="Selected key time"
+            value={singleSelected?.time ?? 0}
+            onChange={handleTimeSpinner}
+            min={0}
+            max={100}
+            step={1}
+            disabled={timeSpinnerDisabled}
+          />
+        </div>
+        <label className="text-xs text-neutral-400 w-10 ml-2" htmlFor="track-spinner-value">
+          Value
+        </label>
+        <div className="w-24" data-testid="track-spinner-value-wrapper">
+          <Spinner
+            key={`value:${activeTrack}:${singleSelected?.time ?? "none"}:${singleSelected?.value ?? "none"}`}
+            aria-label="Selected key value"
+            value={singleSelected?.value ?? 0}
+            onChange={handleValueSpinner}
+            min={valueRange.min}
+            max={valueRange.max}
+            step={(valueRange.max - valueRange.min) / 100}
+            disabled={spinnerDisabled}
+          />
+        </div>
+      </div>
+
       {/* Toolbar row */}
       <div
         data-testid="track-editor-toolbar"
@@ -318,24 +528,38 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
         {/* Separator */}
         <span className="mx-1 h-5 w-px bg-neutral-800" aria-hidden />
 
-        {/* Select / Insert mode toggles — visual only, Batch B. */}
+        {/* Select / Insert mode toggles. Functional in Batch B-β.
+            data-state="on"/"off" mirrors the interpolation buttons so
+            tests can assert active/inactive uniformly. */}
         <button
           type="button"
-          disabled
-          title="Batch B"
           aria-label="Select tool"
+          aria-pressed={mode === "select"}
+          data-state={mode === "select" ? "on" : "off"}
           data-testid="track-tool-select"
-          className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs text-neutral-500"
+          onClick={() => setMode("select")}
+          title="Click a key to select; click empty area to clear"
+          className={
+            mode === "select"
+              ? "h-7 rounded border border-sky-500 bg-sky-900/40 px-2 text-xs font-semibold text-sky-200"
+              : "h-7 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 hover:border-neutral-500"
+          }
         >
           Select
         </button>
         <button
           type="button"
-          disabled
-          title="Batch B"
           aria-label="Insert tool"
+          aria-pressed={mode === "insert"}
+          data-state={mode === "insert" ? "on" : "off"}
           data-testid="track-tool-insert"
-          className="h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs text-neutral-500"
+          onClick={() => setMode("insert")}
+          title="Click empty canvas to add a key"
+          className={
+            mode === "insert"
+              ? "h-7 rounded border border-sky-500 bg-sky-900/40 px-2 text-xs font-semibold text-sky-200"
+              : "h-7 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 hover:border-neutral-500"
+          }
         >
           Insert
         </button>
@@ -440,6 +664,9 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           selectedKeyTimes={selectedKeyTimes}
           onKeyClick={handleKeyClick}
           onCanvasClick={handleCanvasClick}
+          insertMode={mode === "insert"}
+          onCanvasAdd={handleCanvasAdd}
+          onKeyDragEnd={handleKeyDragEnd}
         />
       </div>
     </div>

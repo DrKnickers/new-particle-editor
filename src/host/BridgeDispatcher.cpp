@@ -1943,6 +1943,138 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/set-track-key (Screen 6 Batch B-β) ----------
+    //
+    // Drag-to-move + Spinner edit commit. Erases the key at
+    // `oldTime` from the multiset and inserts `(newTime, newValue)`.
+    // Border keys (first + last in time order on the multiset) have
+    // their `newTime` silently overridden to `oldTime` — only the
+    // value moves. This mirrors the React-side drag clamping; the
+    // host is the source of truth.
+    //
+    // `std::multiset<Key>::find` accepts a Key constructed from the
+    // time alone — operator< compares only on `time`, so the probe
+    // Key's `value` field is irrelevant. Erase + insert is the
+    // ordered-key idiom (no in-place mutation of the ordering key).
+    if (kind == "emitters/set-track-key")
+    {
+        int id = params.value("id", -1);
+        std::string trackName = params.value("track", std::string{});
+        float oldTime  = params.value("oldTime",  0.0f);
+        float newTime  = params.value("newTime",  0.0f);
+        float newValue = params.value("newValue", 0.0f);
+
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        int trackIdx = trackNameToIndex(trackName);
+        if (trackIdx < 0)
+        {
+            sendErr("unknown track");
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track* track = target->tracks[trackIdx];
+        if (track == nullptr || track->keys.empty())
+        {
+            // Nothing to move — silent ok.
+            sendOk(json::object());
+            return res;
+        }
+
+        // Identify border keys before any mutation.
+        const float firstTime = track->keys.begin()->time;
+        const float lastTime  = track->keys.rbegin()->time;
+        const bool isBorder = (oldTime == firstTime || oldTime == lastTime);
+        if (isBorder)
+        {
+            // Border keys: time fixed.
+            newTime = oldTime;
+        }
+
+        ParticleSystem::Emitter::Track::Key probe(oldTime, 0.0f);
+        auto it = track->keys.find(probe);
+        if (it == track->keys.end())
+        {
+            // Key not found at oldTime — silent ok (matches the
+            // overlay's read-modify-write semantics).
+            sendOk(json::object());
+            return res;
+        }
+
+        captureUndo();
+        track->keys.erase(it);
+        track->keys.insert(ParticleSystem::Emitter::Track::Key(newTime, newValue));
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- emitters/add-track-key (Screen 6 Batch B-β) ----------
+    //
+    // Click-to-add (Insert mode) commit. Inserts a new key into the
+    // multiset. If a key at the exact `time` already exists, bumps
+    // `time` by 0.001 until unique so the multiset doesn't accumulate
+    // ambiguously-ordered duplicates (the dedupe is mirrored by the
+    // mock at `addTrackKeyInOverlay`). Returns the actual inserted
+    // (time, value) so the React side can auto-select the new key.
+    if (kind == "emitters/add-track-key")
+    {
+        int id = params.value("id", -1);
+        std::string trackName = params.value("track", std::string{});
+        float time  = params.value("time",  0.0f);
+        float value = params.value("value", 0.0f);
+
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        int trackIdx = trackNameToIndex(trackName);
+        if (trackIdx < 0)
+        {
+            sendErr("unknown track");
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track* track = target->tracks[trackIdx];
+        if (track == nullptr)
+        {
+            // No track slot bound — silent ok with the request shape.
+            sendOk(json{{"time", time}, {"value", value}});
+            return res;
+        }
+
+        // Dedupe-by-epsilon: bump until the time is unique. Bounded
+        // by 1000 iterations as a defensive safety net so a pathological
+        // dataset can't lock the dispatch thread.
+        ParticleSystem::Emitter::Track::Key probe(time, 0.0f);
+        int safety = 1000;
+        while (track->keys.find(probe) != track->keys.end() && safety-- > 0)
+        {
+            time += 0.001f;
+            probe = ParticleSystem::Emitter::Track::Key(time, 0.0f);
+        }
+
+        captureUndo();
+        track->keys.insert(ParticleSystem::Emitter::Track::Key(time, value));
+
+        sendOk(json{{"time", time}, {"value", value}});
+        markDirty();
+        EmitEmittersTreeChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
     // -------- emitters/duplicate-with-index-increment ---------------
     //
     // Legacy `EmitterList_DuplicateEmitter(hWnd, indexDelta)` at

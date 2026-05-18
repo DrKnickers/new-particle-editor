@@ -28,6 +28,7 @@ import type {
 import {
   addDeathChildEmitter,
   addLifetimeChildEmitter,
+  addTrackKeyInOverlay,
   copyEmittersToClipboard,
   deleteEmitter,
   deleteTrackKeysInOverlay,
@@ -42,6 +43,7 @@ import {
   reparentEmitterInTree,
   setLinkGroupMembership,
   setTrackInterpolationInOverlay,
+  setTrackKeyInOverlay,
   useMockEmitterClipboard,
   useMockEmitterTree,
   useMockEngineState,
@@ -102,6 +104,11 @@ function isMutating(kind: Request["kind"]): boolean {
   // toggle are persisted mutations on the per-emitter Track state.
   if (kind === "emitters/delete-track-keys") return true;
   if (kind === "emitters/set-track-interpolation") return true;
+  // Screen 6 Batch B-β — drag-to-move + click-to-add land in the same
+  // mutating tier as delete + interpolation: both edit per-emitter
+  // Track state.
+  if (kind === "emitters/set-track-key") return true;
+  if (kind === "emitters/add-track-key") return true;
   return false;
 }
 
@@ -545,6 +552,57 @@ export class MockBridge implements Bridge {
           });
         }
         return {};
+      }
+
+      // ---------------- emitters/set-track-key (Screen 6 Batch B-β) --
+      //
+      // Drag-to-move commit. Erases the key at `oldTime` and inserts
+      // `(newTime, newValue)` in time order. Border keys (first + last
+      // in time order) silently override `newTime = oldTime` so only
+      // the value moves — matches the drag-time-fixed rule + native
+      // host semantics. Emits tree/changed + state/changed when the
+      // mutation lands so the panel re-fetches.
+      case "emitters/set-track-key": {
+        const { id, track, oldTime, newTime, newValue } = req.params;
+        const ok = setTrackKeyInOverlay(id, track, oldTime, newTime, newValue);
+        if (ok) {
+          this.emit({
+            kind: "emitters/tree/changed",
+            payload: useMockEmitterTree.getState().tree,
+          });
+          this.emit({
+            kind: "engine/state/changed",
+            payload: snapshotEngineState(),
+          });
+        }
+        return {};
+      }
+
+      // ---------------- emitters/add-track-key (Screen 6 Batch B-β) --
+      //
+      // Click-to-add commit. Inserts a new key at `(time, value)` in
+      // time order. If a key already exists at the exact `time`, the
+      // helper bumps `time` by 0.001 until unique (matches the native
+      // dedupe-by-epsilon rule). Returns the actual inserted (time,
+      // value) so the React side can auto-select the new key.
+      case "emitters/add-track-key": {
+        const { id, track, time, value } = req.params;
+        const result = addTrackKeyInOverlay(id, track, time, value);
+        if (result !== null) {
+          this.emit({
+            kind: "emitters/tree/changed",
+            payload: useMockEmitterTree.getState().tree,
+          });
+          this.emit({
+            kind: "engine/state/changed",
+            payload: snapshotEngineState(),
+          });
+          return result;
+        }
+        // Track lookup failed (unknown name). Return the request shape
+        // so the React caller has a stable promise resolution; the
+        // panel ignores the return value when no mutation landed.
+        return { time, value };
       }
 
       // ---------------- emitters/list + emitters/select (Screen 4 Batch A)

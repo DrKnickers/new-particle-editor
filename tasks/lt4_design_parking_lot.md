@@ -1026,6 +1026,161 @@ goes nowhere visible. Splitting:
 The shell-then-canvas split lets the foundation ship without
 fighting the 1044-LOC CurveEditor.cpp port simultaneously.
 
+### Screen 6 Batch B-β — Drag-to-move + Click-to-add + Insert mode + Spinner sync + Border visual (locked 2026-05-17)
+
+Second half of curve editor interaction. After this batch users can
+drag keys to move them, click on empty canvas in Insert mode to add
+keys, and edit selected key values via the Spinner controls. Border
+keys render with a different visual cue. Lock-to functional behaviour
++ Shift+click 2D range deferred (lock-to is a small follow-up batch
+on its own due to C++ aliasing complexity; 2D range select is edge
+case).
+
+**Schema additions (2 new bridge call kinds):**
+
+- `emitters/set-track-key { id: number; track: TrackName; oldTime: number; newTime: number; newValue: number }`
+  → `Record<string, never>`. Moves the key at `oldTime` to
+  `(newTime, newValue)`. C++ erases the old key + inserts the new
+  one (since `std::multiset` doesn't support in-place mutation of
+  the ordering key). Border keys: time-change request silently
+  uses `oldTime` for `newTime` (value-only move). Captures undo +
+  emits state-changed + tree-changed + dirty.
+- `emitters/add-track-key { id: number; track: TrackName; time: number; value: number }`
+  → `{ time: number; value: number }`. Inserts a new key. If a
+  key already exists at the exact `time`, the host may dedupe by
+  slightly bumping the time (subagent picks; matching legacy if
+  documented). Capture undo + emit events.
+
+No new event kinds. No new DTO fields.
+
+**Drag-to-move:**
+
+- Local state in CurveEditor: `dragging: { keyTime: number;
+  startTime: number; startValue: number; currentTime: number;
+  currentValue: number } | null`. The `startTime/Value` are the
+  drag anchor; `currentTime/Value` updates as the pointer moves.
+- Pointer down on a key circle (button === 0, no modifiers):
+  begin drag with `startTime = keyTime`, `startValue = keyValue`,
+  `currentTime = startTime`, `currentValue = startValue`.
+- Pointer move during drag: compute new (time, value) from
+  pointer position relative to canvas origin via inverse axis
+  mapping; clamp:
+  - Time: if border key, `currentTime = startTime` (fixed).
+    Else, clamp to `(prevKey.time, nextKey.time)` exclusive.
+  - Value: clamp to `[valueRange.min, valueRange.max]`.
+  - Update `currentTime/Value`, re-render the dragged key at the
+    new position. Don't fire bridge call mid-drag.
+- Pointer up: fire `emitters/set-track-key { id, track, oldTime:
+  startTime, newTime: currentTime, newValue: currentValue }`.
+  Clear `dragging`. The re-fetch via `tree/changed` confirms the
+  new position.
+- Multi-key drag: NOT supported. If multi-select is active when
+  drag starts, treat as single-key drag on the clicked key
+  (don't apply delta to others). Avoids the complexity of
+  per-key bound computation. Multi-key drag is a future polish.
+- Pointer down on canvas (not on a key, NOT in Insert mode):
+  clears selection (existing Batch A behaviour).
+- Drag-from-empty-canvas: not supported (no rubber-band select).
+  Pointer down on empty canvas in Select mode clears selection;
+  pointer move + up are no-ops.
+
+**Click-to-add (Insert mode):**
+
+- Toolbar Select / Insert toggle buttons (currently visual-only):
+  - Select mode: pointer down on canvas clears selection. Pointer
+    down on a key begins drag (or extends selection with
+    modifiers).
+  - Insert mode: pointer down on canvas computes (time, value)
+    from position, fires `emitters/add-track-key { id, track,
+    time, value }`. On success the new key auto-selects.
+- Mode state lives in TrackEditor component (`mode: "select" |
+  "insert"`, default `"select"`).
+- In Insert mode, the cursor on the canvas could change (e.g.
+  to a crosshair) — subagent decides; not strictly required.
+- Pointer down on a key in Insert mode: same as Select mode
+  (drag begins) — Insert mode only affects canvas clicks.
+
+**Spinner sync:**
+
+- TrackEditor renders TWO `<Spinner>` controls in a row above the
+  toolbar (legacy has `IDC_SPINNER1` + `IDC_SPINNER2`): Time
+  spinner + Value spinner. Currently NOT rendered.
+- When exactly one key is selected: Spinners show that key's
+  time + value. Editing a Spinner fires `emitters/set-track-key`
+  with the new (time, value).
+- When 0 keys or 2+ keys selected: Spinners disabled (greyed,
+  show empty or "—"). Editing them is disabled.
+- Border keys: Time Spinner disabled (only Value editable).
+  Mirrors the drag-time-fixed rule.
+- Spinner range: matches the per-track `valueRange`. Time
+  spinner range: `[0, 100]` (matching axis default).
+
+**Border key visual:**
+
+- Border keys (first + last by time) render with a **slightly
+  darker fill** and a **stroke ring** (`stroke: <accent>; stroke-width: 1.5; fill: <darker>`) to visually distinguish from interior keys.
+- When selected, border keys still get the selected styling
+  (filled + larger radius) but retain the ring stroke as a
+  layered cue.
+- Hover: same hover affordance as interior keys.
+
+**C++ host implementations:**
+
+- `emitters/set-track-key`:
+  - Resolve emitter + track.
+  - Identify border keys (first + last by time).
+  - Build `Key oldKey(oldTime, 0)`, find via `keys.find(oldKey)`.
+    If not found, return ok (no-op).
+  - If found is a border key, override `newTime = oldTime`.
+  - Erase the old, insert `Key(newTime, newValue)`.
+  - Capture undo (once per call) + emit events.
+- `emitters/add-track-key`:
+  - Resolve emitter + track.
+  - Check if a key with `time` already exists; if so, bump
+    `time` slightly (e.g. `time + 0.001`) or return ok with the
+    existing key's time (matches legacy behaviour — investigate).
+  - Insert `Key(time, value)`.
+  - Capture undo + emit events.
+  - Return `{ time, value }` (the actual inserted time, which
+    may differ from the requested if deduped).
+
+**MockBridge implementations:**
+
+- `set-track-key`: erase oldTime entry, insert (newTime,
+  newValue). Border-key semantics enforced same as native.
+- `add-track-key`: insert (time, value), dedupe by time bump.
+
+**Test surface for Batch B-β:**
+
+- **Vitest** (+8 specs, target 139 → 147+):
+  - `bridge-contract.test.ts` (+2): set-track-key round-trip;
+    add-track-key round-trip.
+  - `CurveEditor.test.tsx` (+3): pointer-down + pointer-move +
+    pointer-up on a key fires set-track-key with the new
+    position; border-key visual (test that first key has the
+    ring stroke); Insert mode canvas click fires add-track-key.
+  - `TrackEditor.test.tsx` (+2): Insert mode toggle switches
+    state; Spinner edit on selected key fires set-track-key.
+  - `EmitterPropertyPanel.test.tsx` (+1): selection state
+    flows into TrackEditor's Spinner values.
+- **Playwright** (+3 specs, target 66 → 69+):
+  - Drag a key (use bridge-driven verification if CDP drag is
+    flaky; fire set-track-key directly and assert state change).
+  - Insert mode + canvas click adds a key.
+  - Spinner edit on the panel moves the selected key.
+
+**Open follow-ups** (post-Screen-6 polish, not blocking ✅):
+
+- Lock-to combo functional behaviour (re-alias track slot;
+  needs C++ storage for per-emitter per-track lock-to state).
+  Small separate batch.
+- Shift+click 2D range selection in CurveEditor (edge case;
+  legacy doesn't have a clean shape for it).
+- Multi-key drag with per-key bound computation.
+- Drag cursor change (Insert vs Select mode visual cue).
+- Spinner increment behaviour for time vs value (different
+  per-axis sensitivity).
+
 ### Screen 5 / Screen 6 Batch B-α — Selection + Delete + Interpolation toggle + Smooth/Step rendering (locked 2026-05-17)
 
 First half of the Screen 5 (curve editor interaction) work — formally

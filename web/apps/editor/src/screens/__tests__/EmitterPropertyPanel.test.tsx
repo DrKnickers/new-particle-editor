@@ -172,4 +172,43 @@ describe("EmitterPropertyPanel", () => {
       });
     });
   });
+
+  // ─── Screen 6 Batch B-β ────────────────────────────────────────────
+
+  it("Spinners reflect the selected key's (time, value) when exactly one key is selected", async () => {
+    const { bridge } = makeStubBridge(7, fixtureTracksWithMiddleKey);
+    render(<EmitterPropertyPanel bridge={bridge} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("track-editor")).toBeInTheDocument();
+    });
+    // No selection yet → spinners are disabled. Note that we re-
+    // query the input on each assertion because TrackEditor uses
+    // `key` on the Spinner to remount it when the selection changes;
+    // a cached input ref would point at the detached old element.
+    const queryInputs = () => ({
+      time: screen.getByTestId("track-spinner-time-wrapper").querySelector("input") as HTMLInputElement,
+      value: screen.getByTestId("track-spinner-value-wrapper").querySelector("input") as HTMLInputElement,
+    });
+    const before = queryInputs();
+    expect(before.time.disabled).toBe(true);
+    expect(before.value.disabled).toBe(true);
+
+    // Click the middle key (time=50, value=0.5 on the red track).
+    const circles = document.querySelectorAll("[data-testid='curve-key']");
+    fireEvent.click(circles[1]!);
+
+    await waitFor(() => {
+      const after = queryInputs();
+      // After selection, both Spinners enable + pre-fill from the
+      // selected key.
+      expect(after.time.disabled).toBe(false);
+      expect(after.value.disabled).toBe(false);
+      // Time value is 50; Value is 0.5. The Spinner formats per-step
+      // decimal places — step=1 for time so "50", step is small for
+      // value so it could be "0.5".
+      expect(Number(after.time.value)).toBe(50);
+      expect(Number(after.value.value)).toBeCloseTo(0.5, 2);
+    });
+  });
 });
