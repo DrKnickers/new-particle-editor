@@ -591,6 +591,63 @@ yields a definitive answer. Concretely:
 
 **Estimated time**: 2-3 hours focused work.
 
+### FD7 — Option C (SetWindowRgn cut-out) attempted
+
+Pivoted from visual hosting to a simpler cut-out approach. Added
+in commits leading up to checkpoint:
+
+- `LayoutBroker::SetWebViewHWND` + `RefreshWebViewRegion`:
+  builds an `HRGN` = full WebView2 client minus the viewport
+  rect, applies via `SetWindowRgn(webviewHWND, region, TRUE)`.
+- `HostWindow.cpp` post-controller code: walks main HWND
+  children via `EnumChildWindows`, finds WebView2's HWND by
+  matching class-name prefix "Chrome_", hands it to LayoutBroker.
+- `ResizeWebViewToClient` also refreshes the region so the
+  cut-out tracks window resize.
+- `SetWindowPos(hViewport, HWND_TOP, ...)` after WebView2 init,
+  intended to promote viewport above WebView2's HWND in Win32
+  z-order.
+
+**What works (proven):** The cut-out is mechanically applied.
+Verified by setting the main HWND's class brush to RED — the
+viewport area then renders RED (parent peek-through), exactly
+where the WebView2 region's hole is.
+
+**What doesn't work (and why):** The viewport HWND's D3D9
+content doesn't render through the hole. Tested:
+- Viewport on `HWND_TOP` after WebView2 init — no visible
+  effect; viewport area renders white (or the parent brush
+  color when set).
+- Viewport without `WS_CLIPSIBLINGS` — also white.
+- Viewport's `hbrBackground` set to GREEN with
+  `WM_ERASEBKGND` allowed to default-paint — a thin GREEN rim
+  appeared around the cut-out hole, but D3D9 content
+  (dark-purple clear) never showed inside it.
+
+Root cause: DWM composites WebView2's DComp surface above the
+viewport's GDI/D3D9 HWND blit, regardless of Win32 sibling
+z-order. The cut-out punches a hole in WebView2's HWND, but DWM
+doesn't fall through to the viewport HWND — it either shows the
+parent's painted content (whatever the parent's brush paints) or
+nothing (white default) when the parent brush is null.
+
+A proper fix needs the viewport to be composited at the same
+DWM/DComp layer as WebView2. Three paths forward:
+
+1. **WS_EX_LAYERED viewport HWND** — DWM composites layered
+   windows as separate layers; possibly above WebView2's DComp.
+   Constraints: layered windows can't have child HWNDs and
+   `UpdateLayeredWindow` is GDI-based, not D3D9-native. May
+   require a D3D9 + GDI bitmap shim.
+2. **Top-level WS_POPUP viewport** — make the viewport a
+   borderless top-level window, owned by main, positioned over
+   the editor's viewport quadrant. Independent DWM
+   compositing layer. The cleanest path.
+3. **Texture sharing into WebView2** — render D3D9 to a shared
+   texture (DXGI keyed mutex), pass the texture to a
+   `<canvas>` in React via `chrome.webview` host-object. The
+   D3D9 output becomes WebView2 page content. Bigger rewrite.
+
 ### Bisect attempt #1 (May 2026)
 
 Approached this **outside-in** instead of inside-out: started

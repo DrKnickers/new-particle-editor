@@ -496,6 +496,11 @@ void HostWindowImpl::ResizeWebViewToClient()
     RECT r;
     GetClientRect(hMain, &r);
     webController->put_Bounds(r);
+    // FD7 Option C: WebView2 just resized — its window region needs
+    // to be reapplied because SetWindowRgn doesn't auto-scale with
+    // the underlying HWND. LayoutBroker reads its cached viewport
+    // rect and rebuilds the cut-out against the new client size.
+    layout.RefreshWebViewRegion();
 }
 
 void HostWindowImpl::OnWebMessage(const std::wstring& json)
@@ -674,6 +679,58 @@ HRESULT HostWindowImpl::InitWebView2()
                             RECT bounds;
                             GetClientRect(hMain, &bounds);
                             controller->put_Bounds(bounds);
+
+                            // FD7 Option C: walk the main HWND's children to
+                            // find WebView2's hosting HWND.
+                            {
+                                HWND child = nullptr;
+                                EnumChildWindows(hMain,
+                                    [](HWND hwnd, LPARAM lp) -> BOOL
+                                    {
+                                        wchar_t cls[64] = {};
+                                        GetClassNameW(hwnd, cls, _countof(cls));
+                                        if (wcsncmp(cls, L"Chrome_", 7) == 0)
+                                        {
+                                            *reinterpret_cast<HWND*>(lp) = hwnd;
+                                            return FALSE;  // stop enumerating
+                                        }
+                                        return TRUE;
+                                    },
+                                    reinterpret_cast<LPARAM>(&child));
+                                if (child)
+                                {
+                                    Log("[host] WebView2 HWND found: %p (cut-out enabled)\n",
+                                        static_cast<void*>(child));
+                                    layout.SetWebViewHWND(child);
+                                }
+                                else
+                                {
+                                    Log("[host] WebView2 HWND not found — viewport will stay covered\n");
+                                }
+                            }
+
+                            // FD7 Option C, sibling z-order: the D3D9 viewport
+                            // is a WS_CLIPSIBLINGS child of hMain. WebView2's
+                            // HWND occupies the FULL client area (put_Bounds);
+                            // WS_CLIPSIBLINGS clips the viewport against
+                            // WebView2's RECT — not its region — so the
+                            // viewport gets entirely clipped away when below
+                            // WebView2 in z-order. Promote viewport to
+                            // HWND_TOP so it paints fully on its own rect.
+                            // This is safe with the cut-out: WebView2 doesn't
+                            // paint in the viewport region anyway, so the
+                            // viewport-on-top doesn't occlude any HTML pixels
+                            // — opaque chrome stays visible everywhere
+                            // outside the viewport rect, and inside it the
+                            // viewport's D3D9 content is now visible.
+                            if (g_self && g_self->hViewport)
+                            {
+                                SetWindowPos(g_self->hViewport, HWND_TOP,
+                                             0, 0, 0, 0,
+                                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                                InvalidateRect(g_self->hViewport, nullptr, FALSE);
+                                Log("[host] viewport promoted to HWND_TOP (FD7 cut-out z-order)\n");
+                            }
 
                             // Production mode: map app.local → web/apps/editor/dist
                             // so the React app loads from a stable virtual origin.
@@ -1232,7 +1289,7 @@ int HostWindowImpl::Run(int nCmdShow)
     vc.lpfnWndProc   = HostViewportWndProc;
     vc.hInstance     = hInstance;
     vc.lpszClassName = kHostViewportClassName;
-    vc.hbrBackground = nullptr;
+    vc.hbrBackground = nullptr;  // D3D9 owns the surface
     RegisterClassExW(&vc);
 
     hMain = CreateWindowExW(

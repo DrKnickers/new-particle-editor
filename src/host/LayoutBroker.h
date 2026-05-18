@@ -25,6 +25,13 @@ public:
     // but skips the D3D9 swap-chain reset.
     void SetEngine(Engine* engine) { m_engine = engine; }
 
+    // FD7 (Option C, SetWindowRgn cut-out): tell the LayoutBroker about
+    // the WebView2 child HWND so it can apply a window region with a
+    // hole over the viewport rect. Without this hole, WebView2's opaque
+    // surface covers the D3D9 viewport sibling underneath. Discovered
+    // post-controller-creation via class-name child-window enumeration.
+    void SetWebViewHWND(HWND webView) { m_webView = webView; }
+
     // x/y/w/h are device pixels in the parent window's client coordinates,
     // exactly what React's ViewportSlot sends from getBoundingClientRect.
     // With per-monitor-v2 DPI awareness, child-window coordinates are in
@@ -36,8 +43,16 @@ public:
     // and produce upscale blur).
     void Apply(int x, int y, int w, int h);
 
+    // Recompute and apply the WebView2 cut-out region. Called from
+    // Apply() (per layout change) and also from HostWindowImpl on
+    // window resize. The region is "full WebView2 client rect MINUS
+    // current viewport rect", expressed in WebView2's own client
+    // coords. No-op if m_webView is null or viewport rect is empty.
+    void RefreshWebViewRegion();
+
 private:
     HWND    m_viewport;
+    HWND    m_webView = nullptr;  // FD7 Option C — see SetWebViewHWND
     Engine* m_engine;
     // Track the last applied size so we only fire a (relatively
     // expensive) D3D9 device Reset when the size actually changed.
@@ -45,6 +60,10 @@ private:
     // still report new x/y) don't churn the swap chain.
     int     m_lastW;
     int     m_lastH;
+    // FD7: cache the last viewport rect so RefreshWebViewRegion can
+    // be called from a resize handler without re-reading the rect.
+    int     m_lastX = 0;
+    int     m_lastY = 0;
 };
 
 } // namespace host
