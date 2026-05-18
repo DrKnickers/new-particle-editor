@@ -591,6 +591,33 @@ yields a definitive answer. Concretely:
 
 **Estimated time**: 2-3 hours focused work.
 
+### Bisect attempt #1 (May 2026)
+
+Approached this **outside-in** instead of inside-out: started
+from the working sample, ADDED our host's three most-suspicious
+patterns one at a time. All three ruled out.
+
+| Step | Change to sample | Result |
+|---|---|---|
+| 1 | `WS_CHILD | WS_VISIBLE` sibling HWND with red brush, at (16,100,320,240) | **Still renders.** Red rectangle visible OVER WebView2 chrome (standard Win32 sibling z-order above DComp surface) |
+| 2 | + Direct3DCreate9 + CreateDevice on the sibling HWND + Clear+Present once | **Still renders.** Dark-purple D3D9 area visible. WebView2 chrome unobscured outside it |
+| 3 | + Replace sample's `GetMessage` main loop with `PeekMessage` idle-spin (the host's render-loop pattern) | **Still renders.** Both WebView2 chrome and the D3D9 rectangle are stable |
+
+Conclusion: none of the obvious "host vs sample" differences
+(sibling HWND, D3D9 device, idle loop) cause the white. The bug
+must be in something more subtle — possibly an interaction
+between the host's `Engine` (which creates render targets,
+loads shaders, etc.) and DComp, or a Win32 setup step that
+happens BEFORE the WebView2 init in the host.
+
+A truly definitive bisect from here would require **inverting
+the direction**: start from the bisect-modified sample and
+incrementally port the host's `Engine` + WebView2 init order
++ window-class setup into it. That's no longer a bisect — it's
+a guided rewrite of the host from a known-good baseline. The
+cost-benefit at that point favours option C (`SetWindowRgn`
+cut-out) which ships today.
+
 **Alternative ship path**: option **C** (`SetWindowRgn` cut-out
 on the HWND-mode WebView2). Keeps FD4's HWND mode, clips
 WebView2's HWND region to exclude the viewport rect so the
