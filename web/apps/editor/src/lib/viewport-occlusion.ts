@@ -32,6 +32,14 @@ export function useViewportOcclusion(
   bridge: Bridge | undefined,
   id: string,
   ref: RefObject<HTMLElement | null>,
+  /** Extra CSS pixels added on each side of the bounding rect before
+   *  sending. Padding here punches a larger hole in the popup; the
+   *  WebView2 region behind only fills the actual element rect, so
+   *  any padding beyond that exposes the parent HWND brush (dark
+   *  purple) as a visible halo. Default 0 — pass a small value
+   *  only if you genuinely need to absorb a drop-shadow whose
+   *  visible-alpha pixels extend beyond the element's bounding rect. */
+  padPx: number = 0,
 ) {
   useEffect(() => {
     const el = ref.current;
@@ -46,10 +54,10 @@ export function useViewportOcclusion(
           params: {
             id,
             rect: {
-              x: Math.round(r.left * dpr),
-              y: Math.round(r.top * dpr),
-              w: Math.round(r.width * dpr),
-              h: Math.round(r.height * dpr),
+              x: Math.round((r.left - padPx) * dpr),
+              y: Math.round((r.top  - padPx) * dpr),
+              w: Math.round((r.width  + padPx * 2) * dpr),
+              h: Math.round((r.height + padPx * 2) * dpr),
             },
           },
         })
@@ -77,5 +85,5 @@ export function useViewportOcclusion(
         })
         .catch(() => { /* ignore */ });
     };
-  }, [bridge, id, ref]);
+  }, [bridge, id, ref, padPx]);
 }
