@@ -108,6 +108,7 @@ async function main() {
       "tests/emitter-multi-mutations.spec.ts",
       "tests/emitter-drag.spec.ts",
       "tests/emitter-keyboard.spec.ts",
+      "tests/track-editor.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

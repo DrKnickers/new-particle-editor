@@ -15,9 +15,14 @@ import type {
   EmitterTreeDto,
   EmitterTreeNode,
   EngineStateDto,
+  InterpolationType,
   LightDto,
   SpawnerParamsDto,
+  TrackDto,
+  TrackKey,
+  TrackName,
 } from "@particle-editor/bridge-schema";
+import { TRACK_NAMES } from "@particle-editor/bridge-schema";
 
 /** Defaults mirror `SpawnerConfig()` at [src/SpawnerDriver.h:18]:
  *  Auto mode + disabled + burst 1 + 0 s spacing + 10 s interval + origin
@@ -778,3 +783,108 @@ export const useMockRecentFiles = create<RecentFilesStore>((set, get) => ({
   },
   reset: () => set({ paths: [] }),
 }));
+
+// ─── Track fixtures (Screen 6 Batch A) ───────────────────────────────
+//
+// Deterministic per-emitter-id tracks so the mock surfaces something
+// visible in the CurveEditor for any selected emitter. The shape is
+// always 7 tracks in `TRACK_NAMES` order with small key counts that
+// match the expected real-world usage (<20 keys/track) — keeps the
+// SVG-vs-canvas profiling vehicle honest.
+//
+// The seed is the emitter id so different selections show distinct
+// curves. Each track's interpolation rotates through linear / smooth /
+// step so the toolbar's interpolation-state visual (Batch B will wire
+// the actual toggle) shows variety in screenshots.
+
+const TRACK_INTERPOLATIONS: readonly InterpolationType[] = Object.freeze([
+  "linear", "smooth", "linear", "linear", "smooth", "step", "linear",
+]);
+
+/** Tiny LCG-ish hash so the keys for emitter id N differ from id M but
+ *  stay deterministic per id. Don't use for anything that needs
+ *  cryptographic properties — this is fixture seeding only. */
+function seededFloat(id: number, salt: number, trackIdx: number): number {
+  const v = Math.abs(Math.sin((id + 1) * 13.37 + salt * 7.11 + trackIdx * 3.19));
+  return v - Math.floor(v);
+}
+
+/** Build a single track for the given (emitter id, track index) pair.
+ *  Key shapes differ per track for visual variety:
+ *   - Red (0):           ramp up 0→1 then down
+ *   - Green (1):         hold 0 then bump
+ *   - Blue (2):          steady decline
+ *   - Alpha (3):         classic fade-in-fade-out
+ *   - Scale (4):         expand 1→3
+ *   - Index (5):         step 0→3→7
+ *   - RotationSpeed (6): symmetric around 0 */
+function buildFixtureTrack(id: number, trackIdx: number): TrackDto {
+  const name: TrackName = TRACK_NAMES[trackIdx]!;
+  const jitter = seededFloat(id, 1, trackIdx) * 0.15; // ±0–15% jitter
+  let keys: TrackKey[] = [];
+  switch (trackIdx) {
+    case 0: // red
+      keys = [
+        { time: 0,   value: 0 },
+        { time: 30,  value: 0.8 + jitter * 0.2 },
+        { time: 60,  value: 1.0 },
+        { time: 100, value: 0 },
+      ];
+      break;
+    case 1: // green
+      keys = [
+        { time: 0,   value: 0 },
+        { time: 50,  value: 0 },
+        { time: 75,  value: 0.6 + jitter * 0.3 },
+        { time: 100, value: 0.2 },
+      ];
+      break;
+    case 2: // blue
+      keys = [
+        { time: 0,   value: 0.9 },
+        { time: 100, value: 0.1 },
+      ];
+      break;
+    case 3: // alpha
+      keys = [
+        { time: 0,   value: 0 },
+        { time: 20,  value: 1 },
+        { time: 80,  value: 1 },
+        { time: 100, value: 0 },
+      ];
+      break;
+    case 4: // scale
+      keys = [
+        { time: 0,   value: 1 },
+        { time: 100, value: 3 + jitter * 2 },
+      ];
+      break;
+    case 5: // index
+      keys = [
+        { time: 0,   value: 0 },
+        { time: 33,  value: 3 },
+        { time: 66,  value: 7 },
+        { time: 100, value: 7 },
+      ];
+      break;
+    case 6: // rotation speed
+      keys = [
+        { time: 0,   value: -2 + jitter },
+        { time: 50,  value: 0 },
+        { time: 100, value: 2 - jitter },
+      ];
+      break;
+  }
+  return {
+    name,
+    keys,
+    interpolation: TRACK_INTERPOLATIONS[trackIdx]!,
+  };
+}
+
+/** Build the 7-track DTO array for an emitter. Always returns 7
+ *  entries in `TRACK_NAMES` order — that fixed shape is the contract,
+ *  not a per-emitter override. */
+export function makeFixtureTracks(id: number): TrackDto[] {
+  return TRACK_NAMES.map((_n, i) => buildFixtureTrack(id, i));
+}

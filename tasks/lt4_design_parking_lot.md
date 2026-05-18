@@ -1004,6 +1004,175 @@ Phase 4.2 removes it.
 
 ---
 
+## Screen 6 — Track editor
+
+### Batching strategy (locked 2026-05-17)
+
+Screen 6 is the shell around the curve editor canvas. It also
+unblocks the **right-side emitter property panel**, which doesn't
+exist in `--new-ui` yet — Screen 4's selection event currently
+goes nowhere visible. Splitting:
+
+- **Batch A — Foundation (read-only).** Right-side property panel
+  skeleton that appears on emitter select. TrackEditor shell with
+  toolbar + lock-to combo (visual only). Read-only SVG-based
+  CurveEditor sub-component. 1 new bridge call (`emitters/get-tracks`).
+  No interaction; this is the profiling vehicle for SVG-vs-canvas.
+- **Batch B (== Screen 5 work)** — Full CurveEditor interaction:
+  click to select keys, drag to move, click-to-add, interpolation
+  toggle, delete key. Plus the toolbar buttons in TrackEditor's
+  shell become functional.
+
+The shell-then-canvas split lets the foundation ship without
+fighting the 1044-LOC CurveEditor.cpp port simultaneously.
+
+### Batch A — Foundation (read-only) (locked 2026-05-17)
+
+**Schema additions (1 new bridge call kind + 1 new DTO):**
+
+- `emitters/get-tracks { id: number }` → `{ tracks: TrackDto[] }`
+  where:
+  ```ts
+  type InterpolationType = "linear" | "smooth" | "step";
+  type TrackKey = { time: number; value: number };
+  type TrackDto = {
+    name: string;          // "red" | "green" | "blue" | "alpha" | "scale" | "index" | "rotationSpeed"
+    keys: TrackKey[];      // sorted ascending by time
+    interpolation: InterpolationType;
+  };
+  ```
+- Returns the 7 tracks (Red / Green / Blue / Alpha / Scale / Index
+  / RotationSpeed) of the specified emitter, in fixed order.
+- No selection or mutation in this batch — pure read.
+
+**Event additions:** none. Selection from Screen 4 drives the
+re-fetch.
+
+**Right-side property panel skeleton:**
+
+- New `web/apps/editor/src/screens/EmitterPropertyPanel.tsx`.
+- Mounted in `App.tsx`'s sidebar slot OR a new right-side slot
+  alongside the viewport. **Decision**: replace the existing
+  right-half of the main row — the viewport stays on the LEFT
+  half, the property panel takes the RIGHT half. (Matches legacy
+  layout.) Use a flex split so the viewport shrinks when the
+  panel is shown.
+- When `selectedEmitterId === null` (no emitter selected), show
+  a placeholder ("Select an emitter to edit its properties").
+- When an emitter is selected, fetch the tracks via
+  `emitters/get-tracks { id: selectedEmitterId }` and render the
+  TrackEditor.
+- Subscribes to `emitters/selected` to re-fetch on selection
+  change. Also `emitters/tree/changed` to re-fetch when the
+  current emitter mutates (rename, etc.).
+- Hidden default behaviour: viewport takes the full right side
+  when no emitter is selected (so existing Spawner panel work
+  isn't disrupted). When property panel opens, viewport shrinks.
+
+**TrackEditor shell:**
+
+- New `web/apps/editor/src/screens/TrackEditor.tsx`.
+- Layout: top row toolbar + lock-to combo; main area CurveEditor.
+- Toolbar: 7 toggle buttons matching the 7 tracks (one is active
+  at a time). Plus the legacy's tool toggles: Select / Insert
+  (mode switch), Linear / Smooth / Step (interpolation pick),
+  Delete (action button). **Buttons render disabled with
+  tooltips saying "Batch B" — visual only this batch.**
+- Lock-to combo: Radix Select. Options per current track:
+  - Red, Index, RotationSpeed: just "None" (combo disabled).
+  - Green: "None", "Red".
+  - Blue: "None", "Red", "Green".
+  - Alpha: "None", "Red", "Green", "Blue".
+  - Scale: "None".
+  - Per legacy `texts[7][5]` table at [src/UI/TrackEditor.cpp:90].
+  Combo is visual only this batch (no effect on rendering).
+- Active track state lives in local component state
+  (`activeTrack: TrackName`), default "red".
+
+**CurveEditor (read-only SVG):**
+
+- New `web/apps/editor/src/screens/CurveEditor.tsx` — yes, taking
+  the Screen 5 name now even though Batch B (interaction) is
+  separate. The read-only foundation lives here.
+- Pure presentational component. Props: `track: TrackDto`,
+  `valueRange: { min: number; max: number }`.
+- Renders an SVG with:
+  - Axes (time on X, value on Y).
+  - Grid lines (10 ticks per axis, light grey).
+  - Polyline connecting consecutive keys (per interpolation
+    type — for now, just straight-line linear connections;
+    smooth/step rendering refinements defer to Batch B).
+  - A circle at each key position.
+  - Time range: 0..100 (matches legacy default).
+  - Value range: from `valueRange` prop (per-track — colors
+    0..1, scale 0..reasonable-max, etc.).
+- **SVG choice locked for the profiling vehicle.** If at any
+  point during Batch A or Batch B the SVG renders 100+ keys
+  with visible lag, the decision flips to canvas — but for the
+  expected key counts (typically <20 per track), SVG is fine
+  and gives us free DOM testability.
+
+**Value-range mapping per track** (matches legacy at lines 60-82):
+
+| Track | Min | Max |
+|---|---|---|
+| Red, Green, Blue, Alpha | 0 | 1 |
+| Scale, Index | 0 | (clamp to a reasonable display max — say `max(keys.value) * 1.2` or 100, whichever is larger) |
+| RotationSpeed | (auto-range from keys, symmetric around 0) | (auto-range) |
+
+**C++ host:**
+
+- `emitters/get-tracks` handler in `src/host/BridgeDispatcher.cpp`:
+  - Resolve emitter by id.
+  - Walk the 7 track slots (`emitter.tracks[0..6]` — verify the
+    field names; might be `m_tracks` or per-named-field).
+  - For each, serialise the keys (`time`, `value` from
+    `Track::KeyMap` which is `std::multiset<Key>`) into a JSON
+    array.
+  - Interpolation type maps as: `IT_LINEAR` → `"linear"`,
+    `IT_SMOOTH` → `"smooth"`, `IT_STEP` → `"step"`.
+- Engine API: `getTrack(int)` or per-field `getRedTrack()` etc.
+  Read `src/ParticleSystem.h` to confirm.
+
+**MockBridge:**
+
+- Add a fixture: 7 tracks per emitter with sample keys (e.g.
+  red goes 0→1→0 over 0..100, scale starts at 1 and decays,
+  etc.). Returns a deterministic shape so the React snapshot
+  tests can assert on specific positions.
+
+**Test surface for Batch A:**
+
+- **Vitest** (+6 specs, target 119 → 125+):
+  - `bridge-contract.test.ts` (+1): `emitters/get-tracks` returns
+    7 tracks with the right names + interpolation values.
+  - `EmitterPropertyPanel.test.tsx` (2): renders placeholder when
+    no selection; renders TrackEditor when an emitter is selected
+    (assert via the bridge mock + the EmitterTree fixture).
+  - `TrackEditor.test.tsx` (2): renders 7 toolbar track buttons;
+    switching active track re-renders with the new track's keys.
+  - `CurveEditor.test.tsx` (1): renders a polyline + N circles
+    for an N-key track.
+- **Playwright** (+2 specs, target 62 → 64+):
+  - Selecting an emitter via the tree shows the property panel
+    on the right.
+  - The CurveEditor SVG renders inside the panel.
+
+**Legacy delete:** NOT in Batch A. `TrackEditor.cpp` +
+`CurveEditor.cpp` stay for `--legacy-ui`.
+
+**Open follow-ups** (Batch B / Screen 5 work):
+- Click to select keys + drag to move.
+- Click-to-add new keys.
+- Interpolation toggle (functional).
+- Delete key (functional).
+- Lock-to combo functional behaviour.
+- Smooth + step interpolation rendering (currently approximated as straight lines).
+- `emitters/set-track-key { id, track, oldTime?, newTime, newValue }` mutation.
+- `emitters/set-track-interpolation { id, track, type }` mutation.
+
+---
+
 ## Screen 5 — Curve editor
 
 **Replaces:** `src/UI/CurveEditor.cpp` (1044 LOC). 2D interactive curve

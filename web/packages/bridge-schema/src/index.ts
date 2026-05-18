@@ -185,6 +185,61 @@ export type EngineStateDto = {
   selectedEmitterId: number | null;
 };
 
+// ─── Track DTO (Phase 3 Screen 6 Batch A) ────────────────────────────
+//
+// Per-emitter animation curves. The native `Emitter::tracks[7]` slot
+// (one Track* per channel) maps to a fixed-order JSON array on the
+// wire: Red, Green, Blue, Alpha, Scale, Index, RotationSpeed. The
+// names are intrinsic to the array position — `TRACK_NAMES[i]` is
+// authoritative for both sides of the bridge.
+//
+// `keys` are sorted ascending by time. Time is in 0..100 (matches
+// legacy `CurveEditor_SetHorzRange(hEditor, 0.0f, 100.0f, true)` at
+// [src/UI/TrackEditor.cpp:58]). Value range is per-track and computed
+// React-side, not on the wire — the schema carries raw values.
+//
+// `interpolation` maps the native enum:
+//   IT_LINEAR (0) → "linear"
+//   IT_SMOOTH (1) → "smooth"
+//   IT_STEP   (2) → "step"
+// IT_UNKNOWN (-1) is never serialised — the host coerces it to
+// "linear" before sending.
+export type InterpolationType = "linear" | "smooth" | "step";
+
+export type TrackKey = {
+  time: number;
+  value: number;
+};
+
+export type TrackName =
+  | "red"
+  | "green"
+  | "blue"
+  | "alpha"
+  | "scale"
+  | "index"
+  | "rotationSpeed";
+
+export type TrackDto = {
+  name: TrackName;
+  keys: TrackKey[];
+  interpolation: InterpolationType;
+};
+
+/** Fixed-order names for the 7 tracks. Index matches the native
+ *  `Emitter::tracks[i]` slot, which is also the order the
+ *  `emitters/get-tracks` wire response uses. Single source of truth
+ *  for both the host serialiser and React-side label/picker lookups. */
+export const TRACK_NAMES: readonly TrackName[] = Object.freeze([
+  "red",
+  "green",
+  "blue",
+  "alpha",
+  "scale",
+  "index",
+  "rotationSpeed",
+]);
+
 // ============================================================================
 // Other DTOs (expanded in later tasks)
 // ============================================================================
@@ -258,6 +313,10 @@ export type Request =
   | { kind: "emitters/update";            params: { id: number; patch: EmitterPatchDto } }
   | { kind: "emitters/import-from-file";  params: { path: string; selected: number[] } }
   | { kind: "emitters/preview-from-file"; params: { path: string } }
+
+  // Track read (Phase 3 Screen 6 Batch A). Read-only this batch; key
+  // mutations land with Screen 5 / Screen 6 Batch B.
+  | { kind: "emitters/get-tracks";        params: { id: number } }
 
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   | { kind: "emitters/duplicate";                       params: { id: number } }
@@ -399,6 +458,12 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/preview-from-file" } ?
     | { ok: true; tree: EmitterTreeNode }
     | { ok: false; error: string } :
+
+  // Track read (Phase 3 Screen 6 Batch A). Always returns 7 tracks in
+  // TRACK_NAMES order; an unknown id yields 7 empty tracks rather than
+  // an error so the panel can render a "no data yet" stub without
+  // special-casing the failure.
+  R extends { kind: "emitters/get-tracks" } ? { tracks: TrackDto[] } :
 
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   R extends { kind: "emitters/duplicate" } ?

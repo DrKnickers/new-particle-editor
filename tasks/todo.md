@@ -1,178 +1,131 @@
-# Screen 4 Batch B2 — Add child + Move + Link-group membership + multi-select (2026-05-17)
+# Screen 6 Batch A — Foundation (read-only) (2026-05-17)
 
 ## Goal & scope
 
-**In:** Four new bridge call kinds (add-lifetime-child, add-death-child,
-move, linkGroups/set-membership), one new modal (SetLinkGroupDialog),
-six new context-menu items on EmitterTree rows with disabled states,
-React-side multi-select via a new Zustand atom (`emitter-selection`).
+**In:** 1 new read-only bridge call (`emitters/get-tracks`), right-side
+EmitterPropertyPanel that appears on emitter selection, TrackEditor
+shell (toolbar + lock-to combo — visual only, "Batch B" tooltips), and
+a pure-presentational SVG CurveEditor sub-component. This is also the
+SVG-vs-canvas profiling vehicle.
 
-**Out:** Drag/drop (Batch B3), inline rename / keyboard nav / link-group
-bracket visualisation (Batch C), legacy EmitterList.cpp edits (stays for
-`--legacy-ui` until Phase 4.2).
+**Out:** Any interaction (click/drag/add/delete/interpolation toggle,
+lock-to functional behaviour) — all deferred to Batch B / Screen 5.
+No mutations. No smooth/step rendering nuance (drawn as polyline).
+Legacy `TrackEditor.cpp` / `CurveEditor.cpp` untouched.
 
 ## What the codebase gives us
 
-- `ParticleSystem::addLifetimeEmitter` / `::addDeathEmitter` at
-  [src/ParticleSystem.cpp:1110/1125] — both no-op if slot is filled,
-  return new emitter or NULL.
-- `ParticleSystem::moveEmitter(emitter, direction)` at
-  [src/ParticleSystem.h:297] — already swap-adjacent-roots; returns
-  false at edge / non-root. Direct fit.
-- `Emitter::linkGroup` direct field write. `detachFromLinkGroup()`
-  sets it to 0.
-- Dispatcher helpers: `getEmitterById`, `captureUndo`, `markDirty`,
-  `EmitEngineStateChanged`, `EmitEmittersTreeChanged`.
-- Mock-side: `findEmitterNode`, helpers in mock-state, tree-context
-  atom.
-- Tree DTO already exposes `linkGroup` per node and children with
-  roles — sufficient to derive Add-Lifetime/Death disabled states
-  without DTO extension.
+- `ParticleSystem::Emitter::tracks[NUM_TRACKS]` (=7) at
+  [src/ParticleSystem.h:151]; each is `Track*` aliasing
+  `trackContents[i]`. Track shape: `KeyMap keys` (`std::multiset<Key>`),
+  `InterpolationType interpolation`.
+- Track order (verified by `LinkGroup.cpp:359-362` labels): Red, Green,
+  Blue, Alpha, Scale, Index, Rotation.
+- Interpolation enum at [src/ParticleSystem.h:78-81]: IT_UNKNOWN=-1,
+  IT_LINEAR=0, IT_SMOOTH=1, IT_STEP=2.
+- BridgeDispatcher: `getEmitters()`, snapshot patterns in
+  `emitters/list` at [src/host/BridgeDispatcher.cpp:1475].
+- Mock fixture tree has emitters with ids 0..5.
+- Existing screens / dialogs use ToolPanel pattern, Radix Select via
+  `@radix-ui/react-select`.
 
-## Implementation approach
+## Architecture
 
-### Schema (4 new bridge calls)
+**Schema** (`web/packages/bridge-schema/src/index.ts`):
+- New types: `InterpolationType = "linear" | "smooth" | "step"`,
+  `TrackKey = { time, value }`, `TrackDto = { name, keys, interpolation }`.
+- `TRACK_NAMES` constant export array of 7 lowercase names so the React
+  side has a single source of truth.
+- New Request kind `emitters/get-tracks { id: number }` →
+  `{ tracks: TrackDto[] }`.
 
-- `emitters/add-lifetime-child { parentId }` → `{ newId }`
-- `emitters/add-death-child   { parentId }` → `{ newId }`
-- `emitters/move              { id, direction: "up"|"down" }` → `{}`
-- `linkGroups/set-membership  { ids: number[], groupId: number | null }` → `{}`
+**MockBridge** (`web/apps/editor/src/bridge/mock.ts`, `mock-state.ts`):
+- Add a fixture-track function that generates 7 deterministic tracks
+  per emitter id (seed by id so different selections show distinct
+  curves). Keys typically <20 per track to match expected usage.
+- Mock handler in `mock.ts` for `emitters/get-tracks`. Validates the id
+  by walking the tree via `findEmitterNode`; returns
+  `{ tracks: [...] }` always (empty tracks for missing ids).
 
-### Mock
+**C++ host** (`src/host/BridgeDispatcher.cpp`):
+- New handler: `emitters/get-tracks`. Resolve emitter by id (bounds-
+  check), iterate `tracks[0..6]`, emit each `Track*`'s keys (sorted
+  ascending by time — `std::multiset<Key>` already orders by time),
+  and the interpolation enum mapped to wire strings. Returns
+  `{ tracks: [] }` on missing emitter (graceful fallback) rather than
+  ok:false — matches the read-only semantics of the contract.
 
-Helpers in `mock-state.ts`:
-- `addLifetimeChildEmitter(tree, parentId): { tree, newId } | null`
-- `addDeathChildEmitter(tree, parentId): { tree, newId } | null`
-- `moveEmitterInTree(tree, id, dir): EmitterTreeDto | null`
-- `setLinkGroupMembership(tree, ids, groupId): EmitterTreeDto`
-- `findUnusedLinkGroupId(tree): number`
+**React** (`web/apps/editor/src/screens/`):
+- `EmitterPropertyPanel.tsx`: subscribes to `emitters/selected` +
+  `emitters/tree/changed`, reads `engine/state/snapshot` on mount for
+  initial selection. When selectedEmitterId !== null, fetches tracks
+  and renders `<TrackEditor tracks={tracks} />`. When null, renders
+  nothing (panel is hidden — parent App.tsx handles the layout
+  collapse).
+- `TrackEditor.tsx`: 7 track-toggle buttons (active track = local
+  state, default "red"), tool toggles (Select/Insert + interp picker +
+  Delete) all disabled with title="Batch B", Radix Select for lock-to
+  (per-track option list), and `<CurveEditor track={track}
+  valueRange={range} />` below.
+- `CurveEditor.tsx`: pure SVG. viewBox = "0 0 W H" (default 600x300).
+  Renders axes, gridlines (10 ticks per axis), polyline through keys,
+  circles at each key. Y inversion via per-coordinate flip
+  (`H - normalisedY * H`) — simpler than a transform and keeps text
+  upright if axis labels are added later.
 
-Handlers in `mock.ts`: 4 new arms, each emits `emitters/tree/changed`.
-`isMutating` gains entries for all four.
+**App.tsx layout**:
+- Main row goes from `[Sidebar | Viewport]` to
+  `[Sidebar | Viewport | PropertyPanel?]`. When PropertyPanel is
+  visible it's a fixed-width (320px) right column; viewport flex-1
+  shrinks. When hidden, viewport remains flex-1. The conditional
+  mount handles the collapse cleanly — no flicker.
 
-### C++ host
+## Risks named up front + mitigations
 
-4 new arms in `DispatchInternal`:
-- add-lifetime-child / add-death-child: invoke ParticleSystem helper,
-  return `{ newId: emitter->index }`. Refuse with ok:false if slot
-  filled / parent not found.
-- move: `(*m_pParticleSystem)->moveEmitter(target, dir)` (dir: up=-1,
-  down=+1). Always returns `{}` (engine refusal is a no-op, not error).
-- set-membership: walk `ids`. For groupId === -1 scan all emitters for
-  max linkGroup and assign `max+1`. For null/0 set 0. Else set groupId.
+1. **Radix Select in jsdom won't open during Vitest tests.** Tests
+   would assert the trigger button is visible (which is enough for
+   "renders per-track options" coverage — the option list is
+   constructed pre-render and lives in props of `<Select.Item>`
+   children that we can query as DOM nodes). Mitigation: don't try to
+   open the combo in jsdom; assert structural presence and trigger
+   text instead.
 
-Each emits `engine/state/changed`, `emitters/tree/changed`, marks dirty.
+2. **Track order drift between C++ and React.** Mitigation: the
+   `TRACK_NAMES` export in bridge-schema is the single source. Both
+   the C++ test harness and React code use the same fixed-order
+   names. Bridge-contract test asserts the names verbatim.
 
-### React — multi-select atom (`lib/emitter-selection.ts`)
+3. **SVG performance with very large key counts.** Stated as accepted
+   for this batch — typical use is <20 keys/track. We render with
+   plain SVG elements (no virtualisation) and revisit if profiling
+   shows lag.
 
-Zustand:
-```
-ids: number[]               // ordered, set semantics via actions
-primary: number | null
-setSingle(id)
-toggle(id)                  // updates primary to id when adding,
-                            // keeps primary if removed (or clears if
-                            // removed was primary)
-range(toId, orderedIds)     // uses current primary; updates primary
-                            // to toId
-clear()
-```
-
-Selector hooks return scalars (or stable arrays via shallow-equality
-selectors).
-
-### React — EmitterTree
-
-- Compute memoized `orderedIds` (in-order walk).
-- Pass to rows. Click handler reads `event.ctrlKey || event.metaKey`,
-  `event.shiftKey`.
-- plain: setSingle + bridge select.
-- ctrl/meta: toggle (still bridge select with the new primary).
-- shift: range against current primary + orderedIds.
-- Right-click on a row not in selection: promote to single-select before
-  opening menu (matches OS behaviour).
-- Add 6 context items + 3 separators after existing menu. Disabled
-  states:
-  - Add Lifetime Child: `children.some(c => c.role === "lifetime")`
-  - Add Death Child: `children.some(c => c.role === "death")`
-  - Move Up: `role !== "root" || siblingIndex === 0`
-  - Move Down: `role !== "root" || siblingIndex === siblings.length - 1`
-  - Set Link Group…: never disabled (always usable)
-  - Leave Link Group: every selected emitter has linkGroup === 0
-- Container exposes `data-selected-count` and `data-primary-id` for
-  Playwright.
-- Row primary vs non-primary border style.
-
-### React — SetLinkGroupDialog
-
-New screen. `tree-context.open === "set-link-group"`. Body has
-plain HTML radios (no new dep) and a `<select>` of existing groups.
-OK uses current selection ids from emitter-selection atom.
-
-### tree-context + App
-
-Extend `open` union with `"set-link-group"`; mount dialog in App.tsx.
-
-## Risks + mitigations
-
-1. **Tree DTO lacks `spawnDuringLife/spawnOnDeath`** — for Add child
-   disabled state. Mitigated by deriving from children roles.
-2. **moveEmitter children are no-ops on engine** — UI disables Move
-   Up/Down for non-root emitters; matches engine refusal.
-3. **Bridge-contract test's "rejects" assertion** uses
-   `emitters/update` (still unimplemented) — leave as-is.
-4. **Radix jsdom limitations** — multi-select tests fire DOM click
-   events with modifier flags directly via `fireEvent.click(row, {
-   ctrlKey: true })` (these don't go through Radix's portal); the row's
-   own onClick is regular React, so it works.
-5. **Context-menu when right-clicked row isn't in selection** —
-   promote to single-select first (lazy, on menu-item-select handlers
-   that operate on `ids`). Implement by reading current selection at
-   handler time and falling back to `[node.id]` if empty.
+4. **Layout reflow when panel appears could shift the viewport size,
+   triggering layout/viewport-rect updates and confusing the host.**
+   Mitigation: existing layout-broker already handles dynamic
+   viewport rects (sidebar already does this); the new property
+   panel slot is structurally identical to the sidebar's pattern.
 
 ## Testing & verification
 
-### Vitest (90 → 98+)
-- bridge-contract.test.ts (+4)
-- SetLinkGroupDialog.test.tsx (+1)
-- EmitterTree.test.tsx (+2: Ctrl+click, Shift+click)
-- emitter-selection.test.ts (+1)
+**Vitest (+6 specs target):**
+- `bridge-contract.test.ts` (+1): `emitters/get-tracks` returns 7
+  tracks; names match TRACK_NAMES verbatim; interpolation is one of
+  three values; keys is an array.
+- `EmitterPropertyPanel.test.tsx` (2):
+  1. Renders placeholder when no selection.
+  2. Renders TrackEditor when selectedEmitterId !== null.
+- `TrackEditor.test.tsx` (2):
+  1. Renders 7 track-toggle buttons.
+  2. Clicking a track switches the active-track attribute.
+- `CurveEditor.test.tsx` (1): renders polyline + N circles for
+  N-key fixture.
 
-### Playwright (54 → 57+)
-- Add Lifetime Child via context menu
-- Move Down via bridge swaps adjacent roots (host has 1 root by
-  default; we duplicate first to grow the tree)
-- Ctrl+click multi-selects (via DOM + data-selected-count assertion)
+**Playwright (+2 specs target):**
+- `track-editor.spec.ts`:
+  1. Selecting an emitter shows panel by `data-testid="emitter-
+     property-panel"`.
+  2. CurveEditor SVG renders (polyline or circle inside the panel).
 
-### Build gates
-- pnpm build → 0
-- pnpm test → 98+
-- MSBuild Debug x64 → 0
-- pnpm test:native → 57+
-
-## Review
-
-All four verification gates passed:
-
-- `pnpm build` exits 0 (1869 modules transformed, 421 KB output).
-- `pnpm test` 105/105 (target 98+, delta +15).
-- MSBuild Debug x64 0 warnings / 0 errors.
-- `pnpm test:native` 57/57 (target 57+).
-
-The dispatcher implementation slotted straight onto the existing
-ParticleSystem API — `addLifetimeEmitter` / `addDeathEmitter` /
-`moveEmitter` all had the exact semantics the schema needs. The
-unused-link-group-id picker is a single linear scan; the React
-multi-select atom uses a small `number[]` + `primary` shape so
-tests can compare against arrays directly.
-
-One surprise during Playwright authoring: `moveEmitter` rewrites
-emitter indices, so a spec that captured the duplicate's `newId`
-before the move couldn't use that id to locate the row afterward.
-Workaround: identify the duplicate by its auto-suffixed name
-(`_<digits>` regex) in both pre- and post-move trees. Documented
-in the lt4_design_parking_lot.md iteration log.
-
-Batch B3 (drag/drop) and Batch C (link-group brackets, inline
-rename, keyboard nav) remain open on Screen 4.
-
+**Build + native:** pnpm build, pnpm test (≥125), MSBuild Debug x64,
+pnpm test:native (≥64).

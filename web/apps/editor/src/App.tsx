@@ -7,6 +7,7 @@ import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
+import { EmitterPropertyPanel } from "@/screens/EmitterPropertyPanel";
 import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
 import { BloomPanel } from "@/screens/BloomPanel";
@@ -54,6 +55,31 @@ function AppShell() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
+
+  // Phase 3 Screen 6 Batch A — track the selected emitter id at the
+  // shell level so the EmitterPropertyPanel can be conditionally
+  // mounted on the RIGHT side of the main row (collapsing to "viewport
+  // claims the full right" when nothing is selected). The panel's own
+  // subscription is independent — this scalar exists only to gate the
+  // mount.
+  const [selectedEmitterId, setSelectedEmitterId] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    bridge
+      .request({ kind: "engine/state/snapshot", params: {} })
+      .then((snap) => {
+        if (cancelled) return;
+        setSelectedEmitterId(snap.selectedEmitterId);
+      })
+      .catch(() => { /* ignore — defaults to null */ });
+    return () => { cancelled = true; };
+  }, [bridge]);
+  useEffect(() => {
+    const off = bridge.on("emitters/selected", (e) => {
+      setSelectedEmitterId(e.payload.id);
+    });
+    return off;
+  }, [bridge]);
 
   // Screen 8 Batch 3: subscribe to file-state events (dirty/changed,
   // recent/changed, engine/state/changed) and seed from snapshot +
@@ -173,6 +199,15 @@ function AppShell() {
 
         {/* Viewport */}
         <ViewportSlot bridge={bridge} />
+
+        {/* Phase 3 Screen 6 Batch A — right-side emitter property panel.
+            Mounted only when an emitter is selected, so the viewport
+            claims the full right side in the no-selection state. The
+            panel has its own width (w-80) so the surrounding flex
+            shrinks the viewport when the panel appears. */}
+        {selectedEmitterId !== null && (
+          <EmitterPropertyPanel bridge={bridge} />
+        )}
 
         {/* Tool-panel host. Single panel mounted at a time, driven by
             the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}

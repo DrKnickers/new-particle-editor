@@ -34,6 +34,7 @@ import {
   duplicateWithIndexIncrement,
   findEmitterNode,
   makeDefaultEngineState,
+  makeFixtureTracks,
   moveEmitterInTree,
   pasteEmittersFromClipboard,
   renameEmitter,
@@ -468,6 +469,28 @@ export class MockBridge implements Bridge {
             ],
           },
         };
+
+      // ---------------- emitters/get-tracks (Screen 6 Batch A) -------
+      //
+      // Read-only. Always returns 7 deterministic tracks per emitter
+      // id from the fixture generator (see `makeFixtureTracks`). An
+      // unknown id is not an error — the contract returns the same
+      // 7-element shape with empty key arrays so the panel can render
+      // a "no data" stub without special-casing failure.
+      case "emitters/get-tracks": {
+        const cur = useMockEmitterTree.getState().tree;
+        const node = findEmitterNode(cur, req.params.id);
+        if (node === null || node.id === -1) {
+          // Empty tracks for missing / synthetic-root id.
+          return {
+            tracks: makeFixtureTracks(-1).map((t) => ({
+              ...t,
+              keys: [],
+            })),
+          };
+        }
+        return { tracks: makeFixtureTracks(node.id) };
+      }
 
       // ---------------- emitters/list + emitters/select (Screen 4 Batch A)
       //

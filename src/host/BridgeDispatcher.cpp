@@ -1548,6 +1548,83 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/get-tracks (Screen 6 Batch A) ----------------
+    //
+    // Read-only. Serialises the named emitter's 7 tracks (Red, Green,
+    // Blue, Alpha, Scale, Index, RotationSpeed in fixed order). Each
+    // track's `keys` are emitted in ascending-time order (the source
+    // `std::multiset<Key>` already orders by `time` via Key::operator<).
+    // Interpolation enum maps as documented in
+    // `bridge-schema/src/index.ts`:
+    //   IT_LINEAR (0) → "linear"
+    //   IT_SMOOTH (1) → "smooth"
+    //   IT_STEP   (2) → "step"
+    // IT_UNKNOWN (-1) is coerced to "linear" before sending so the
+    // wire never carries the sentinel.
+    //
+    // Unknown id (or no system bound) returns 7 empty tracks rather
+    // than ok:false — the React panel renders a "no data" stub instead
+    // of an error toast on transient mismatches (e.g. selection lands
+    // on an id that was just deleted).
+    if (kind == "emitters/get-tracks")
+    {
+        static const char* kTrackNames[ParticleSystem::NUM_TRACKS] = {
+            "red", "green", "blue", "alpha",
+            "scale", "index", "rotationSpeed",
+        };
+        auto interpToString = [](ParticleSystem::Emitter::Track::InterpolationType it) -> const char* {
+            switch (it)
+            {
+                case ParticleSystem::Emitter::Track::IT_LINEAR: return "linear";
+                case ParticleSystem::Emitter::Track::IT_SMOOTH: return "smooth";
+                case ParticleSystem::Emitter::Track::IT_STEP:   return "step";
+                default: return "linear";
+            }
+        };
+
+        int id = params.value("id", -1);
+        json tracksArr = json::array();
+        const ParticleSystem::Emitter* emit = nullptr;
+        if (id >= 0 && m_pParticleSystem != nullptr && *m_pParticleSystem)
+        {
+            const auto& emitters = (*m_pParticleSystem)->getEmitters();
+            if (static_cast<size_t>(id) < emitters.size() && emitters[id] != nullptr)
+            {
+                emit = emitters[id];
+            }
+        }
+        for (int i = 0; i < ParticleSystem::NUM_TRACKS; i++)
+        {
+            json keysArr = json::array();
+            const char* interp = "linear";
+            if (emit != nullptr)
+            {
+                const ParticleSystem::Emitter::Track* t = emit->tracks[i];
+                if (t != nullptr)
+                {
+                    // KeyMap is `std::multiset<Key>` ordered by time —
+                    // a straight iteration emits keys in ascending
+                    // time order.
+                    for (const auto& k : t->keys)
+                    {
+                        keysArr.push_back(json{
+                            {"time",  k.time},
+                            {"value", k.value},
+                        });
+                    }
+                    interp = interpToString(t->interpolation);
+                }
+            }
+            tracksArr.push_back(json{
+                {"name",          kTrackNames[i]},
+                {"keys",          keysArr},
+                {"interpolation", interp},
+            });
+        }
+        sendOk(json{{"tracks", tracksArr}});
+        return res;
+    }
+
     // -------- Screen 4 Batch B1 — emitter mutations -----------------
     //
     // Each handler validates the target emitter, captures an undo
