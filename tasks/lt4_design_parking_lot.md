@@ -4556,3 +4556,132 @@ surface invited natural extra coverage). 64 Playwright (62 → 64,
 | B (== Screen 5 work) — Full curve interaction + track mutations | ⏳ pending |
 
 Screen 6 fully ✅ after Batch B.
+
+### 2026-05-17 · Screen 5/6 Batch B-α (curve key selection + delete + interpolation + smooth/step rendering)
+
+First half of curve editor interaction. After this batch users can
+select curve keys (single + Ctrl/Cmd multi), delete non-border
+keys, toggle interpolation type (Linear/Smooth/Step) with proper
+rendering. Drag-to-move, click-to-add, Spinner sync, lock-to
+functional, and border-key visual differentiation stay deferred to
+Batch B-β (the second half).
+
+Commit: `56b90a3` (single feat — no new deps). Tests 139 Vitest
+(131 → 139, +8) + 66 Playwright (64 → 66, +2). MSBuild 0/0.
+
+**What changed:**
+
+- *2 new bridge call kinds.* `emitters/delete-track-keys { id,
+  track, times: number[] }` and `emitters/set-track-interpolation
+  { id, track, interpolation }`. Both capture undo + emit
+  `engine/state/changed` + `emitters/tree/changed` + dirty after
+  any actual mutation; zero-mutation calls (no-op delete, same-
+  interpolation set) skip the event churn.
+- *`std::multiset::find` by time-only Key works cleanly.*
+  `Key::operator<` at [src/ParticleSystem.h:93] compares only on
+  time, so `Key probe(time, 0.0f)` matches any key with that time
+  regardless of value. No surprise; clean delete-by-time semantics.
+- *Border-key filtering at both layers.* C++ caches
+  `firstTime = keys.begin()->time` and `lastTime = keys.rbegin()->time`
+  before the loop; silently skips matching times. React filters
+  for clean UX (Delete button disables when all candidates are
+  border keys via `deletableCount`).
+- *Smooth + Step rendering.* `buildSmoothPath` builds an SVG path
+  d string with cubic Bezier control points at 1/4 and 3/4 per
+  segment (matches legacy `PolyBezier` formula at
+  [src/UI/CurveEditor.cpp:289-292]). `buildStepPolyline` emits
+  staircase points: start at `points[0]`, then for each segment
+  emit corner `(p2.x, p1.y)` followed by next key `(p2.x, p2.y)`.
+  Single-key tracks suppress the curve element entirely.
+- *Selection state local to TrackEditor*, `useState<Set<number>>`.
+  Keyed by key TIME (not array index) so it stays stable across
+  multiset reordering. Cleared on active-track change, canvas
+  click, and post-delete.
+- *`registerDeleteHandler` callback pattern* lets
+  EmitterPropertyPanel invoke TrackEditor's *fresh* delete
+  closure on Delete keypress. TrackEditor `useEffect`-registers
+  the handler whenever the closure changes; panel calls through
+  the registered fn. Avoids stale-closure bugs that plain
+  prop-drilling would hit.
+- *Mock track overlay store.* `useMockTrackOverlay` is a Zustand
+  store of per-emitter track mutations layered atop the fixture
+  tracks. `get-tracks` reads through; delete + set-interpolation
+  write the overlay. Mutations persist across `get-tracks` calls
+  in browser mode.
+
+**Locks worth surfacing for future batches:**
+
+- *`std::multiset::find` with partial Keys is the right shape for
+  by-time mutations.* `Key::operator<` compares only on time, so
+  the find probe doesn't need the full value. Pattern repeats for
+  any future track mutation keyed by time (Batch B-β's
+  move-key-to-new-time will use the same).
+- *Source-of-truth filter at the host, UX filter at the client.*
+  Border-key delete is silently no-op'd by the host (always
+  correct) AND filtered by React (clean UX: disabled button
+  instead of letting the user click and get nothing). Same
+  pattern likely applies to any future "this is invalid but
+  recoverable" mutation: enforce server-side; mirror in the
+  client for affordance.
+- *`registerDeleteHandler` callback indirection.* When a parent
+  needs to invoke a child's fresh closure (which closes over
+  state the child manages), passing a "register" callback that
+  the child wires via `useEffect` beats prop-drilling. The
+  parent calls `handlerRef.current?.()`; the child re-registers
+  whenever the closure changes. Pattern works for keyboard
+  shortcuts, hotkey systems, and any "do the right thing for
+  whichever sub-screen is mounted" surface.
+- *Mock-state overlay pattern* — when a fixture generator
+  produces deterministic data per render (like
+  `makeFixtureTracks(id)` from Screen 6 Batch A), a mutation
+  layer between the generator and the wire response lets
+  mutations persist without rewriting the generator. The
+  overlay is per-emitter + per-track; mutations layer on top.
+  This decoupling is cleaner than mutating the generator's
+  output directly.
+
+**Implementer notes (from the commit + report):**
+
+1. *`data-interpolation` attribute on both SVG root + child
+   polyline caused a selector collision.* Initially the test
+   selector `[data-interpolation='step']` matched the parent
+   SVG first → empty points. Fixed by tightening to
+   `polyline[data-interpolation='step']`. No production code
+   change needed; future tests using `data-*` for multiple
+   nested elements should disambiguate from the start.
+2. *Sky-blue accent `#0EA5E9` literal* used for selection
+   styling. Matches Screen 4's primary-selection accent. Not in
+   `design-tokens` yet — defensible since the design lock named
+   the exact hex.
+3. *Delete button destructive styling* (rose border + accent)
+   matches Screen 4's destructive-action pattern. Disabled state
+   stays neutral-grey so the panel doesn't scream until a
+   non-border key is selectable.
+4. *Zero-mutation early return* — both C++ handlers check
+   whether any work was actually done and skip event emission
+   when not. Avoids tree-refresh thrash on no-op calls. Same
+   pattern as Screen 4 Batch B2's `moveEmitterToRootIndex`
+   no-op detection.
+
+**Open follow-ups** (Screen 5/6 Batch B-β):
+
+- Drag-to-move keys (the biggest remaining piece).
+- Click empty canvas to add a key.
+- Select/Insert mode toggle (still visual-only).
+- Spinner sync (TrackEditor's time + value spinners — currently
+  not even rendered; Batch B-β adds them).
+- Lock-to combo functional behaviour (re-alias track slot on
+  the C++ side; render the locked track's curve instead).
+- Border-key visual differentiation (currently border keys
+  render identically; legacy uses a different colour).
+- Shift+click 2D range selection.
+
+### Screen 6 progress after Batch B-α
+
+| Batch | Status |
+|---|---|
+| A — Foundation (panel + read-only TrackEditor + SVG CurveEditor) | ✅ shipped |
+| **B-α — Selection + Delete + Interpolation toggle + Smooth/Step rendering** | **✅ shipped** |
+| B-β — Drag/add/Spinner sync/lock-to functional/border visual | ⏳ pending |
+
+Screen 6 fully ✅ after Batch B-β.
