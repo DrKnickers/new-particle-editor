@@ -401,3 +401,101 @@ direct WndProc); (b) cursor + DPI + edge cases.
 - (b) accept deferring Playwright CDP to a separate PR?
 - (c) is the Risk 5 fallback (revert to FD4 white viewport on
   GPU failure) acceptable, or should we abort init instead?
+
+---
+
+## 8. Postmortem of attempt #1 + attempt #2
+
+**Both attempts on this machine produced a 100% opaque-white client
+area despite every API succeeding (`put_RootVisualTarget`,
+`Commit`, `WebMessageReceived` all fire and React posts messages).
+The visual tree is built, WebView2 is alive and navigating, but its
+rendered surface does not reach the screen.**
+
+### Attempt #1 (FD6 v1, reverted in commit chain leading up to
+6b0d936)
+
+- Used `IDCompositionDevice` (V1) with `IDCompositionVisual` root.
+- Passed root visual directly to `put_RootVisualTarget`.
+- Tried both `topmost=TRUE` and `topmost=FALSE` on
+  `CreateTargetForHwnd`.
+- Tried `NotifyParentWindowPositionChanged()` post-attach.
+- Tried HWND_TOP promotion of viewport (separate experiment).
+- Result: white.
+
+### Attempt #2 (FD6 v2, reverted; uncommitted)
+
+- Switched to `IDCompositionDesktopDevice` (V2) +
+  `IDCompositionVisual2`.
+- Verified against
+  `WebView2Samples/SampleApps/WebView2APISample/ViewComponent.cpp`
+  + `AppWindow.cpp`. Sample fetched via `gh api repos/MicrosoftEdge/WebView2Samples/contents/...`
+  with `Accept: application/vnd.github.v3.raw` and saved to
+  `/tmp/webview2-ref/`.
+- Sample diffs incorporated:
+  - **Intermediate "host" visual** added between root and WebView2
+    (root → host visual ← WebView2). Sample's
+    `BuildDCompTreeUsingVisual`:
+    `CreateVisual(&rootVisual); SetRoot(root);
+    CreateVisual(&webViewVisual); rootVisual->AddVisual(webViewVisual);
+    put_RootVisualTarget(webViewVisual);`
+  - **No D3D11 device, no DXGI device** — pass `nullptr` to
+    `DCompositionCreateDevice2(nullptr, IID_PPV_ARGS(&device))`.
+    Sample doesn't create its own D3D device.
+  - **`SetClip` + `SetOffsetX/Y` on root visual** per resize. Sample
+    `ViewComponent::SetBounds` does this in `if (m_dcompDevice)`.
+  - **Per-frame `Commit()` from render loop.** WebView2 doesn't own a
+    DComp device — host's device must commit for any visual change.
+  - Tried setting WebView2's default background to OPAQUE RED to
+    test whether the visual is rendering at all. **Still saw white.**
+    Definitive proof that the WebView2 surface output is not reaching
+    our visual tree.
+- Result: also white.
+
+### Hypotheses worth testing in the next session
+
+1. **DComp device may need to share GPU adapter / D3D device with
+   WebView2.** Sample passes `nullptr`, but WebView2 might internally
+   bind to whatever IDXGIDevice is available. If our D3D9 device
+   (running on a different adapter) is locking the GPU, WebView2's
+   D3D11 device might pick a different adapter and the DComp tree
+   composites on a third surface. Worth instrumenting via
+   `IDXGIAdapter` enumeration on both sides.
+2. **`WS_EX_NOREDIRECTIONBITMAP` on the main HWND.** The sample
+   doesn't use it, but some visual-hosting tutorials say it's
+   required to disable the GDI redirection bitmap that DComp
+   otherwise has to alpha-blend with. Worth a single-character
+   experiment: add the flag to `CreateWindowExW` line 1422 of
+   HostWindow.cpp.
+3. **WebView2 SDK version.** We're on 1.0.3967.48; the sample
+   targets a newer/older version. Maybe a quirk of this specific
+   build. Try upgrading the NuGet to a recent one and re-run.
+4. **The sample alone may already fail on this machine.** Build
+   the actual `WebView2APISample` from
+   `MicrosoftEdge/WebView2Samples` and confirm its visual-hosting
+   path renders. If it does, port their *exact* DComp init code
+   line-for-line. If it doesn't, this machine has a driver/SDK
+   issue and we should switch strategy.
+5. **Alternative path — option C from the original session:**
+   `SetWindowRgn` to clip WebView2's HWND in HWND-mode to exclude
+   the viewport rect. Bypasses visual hosting entirely, restores
+   menu z-order from FD4, and the viewport sibling becomes visible
+   in the cut-out region. Simpler; ship-ready.
+
+### Code preservation
+
+The v2 Compositor module and HostWindow.cpp diffs were reverted
+from the worktree but the design + every API call is documented
+here. To resurrect:
+
+- Compositor.h + Compositor.cpp: see Section 3.1, then apply the
+  v2 sample-derived corrections — V2 device, intermediate visual,
+  `nullptr` to `DCompositionCreateDevice2`, `SetClip`/`SetOffset`
+  on root visual.
+- HostWindow.cpp: see Section 3.2 — split InitWebView2 into a
+  composition path + HWND fallback, add `FinishControllerSetup`,
+  add `ForwardMouseToWebView2`, add WM_DESTROY teardown order.
+- ParticleEditor.vcxproj: add `d3d11.lib;dxgi.lib;dcomp.lib` to
+  AdditionalDependencies and a per-file `AdditionalIncludeDirectories`
+  override on `host\Compositor.cpp` that omits `$(DXSDK_DIR)Include`
+  so Windows 10 SDK's d3d11.h wins for that TU.
