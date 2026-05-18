@@ -34,12 +34,37 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import * as Checkbox from "@radix-ui/react-checkbox";
-import { Check } from "lucide-react";
+import * as Select from "@radix-ui/react-select";
+import { Check, ChevronDown } from "lucide-react";
 import type {
   Bridge,
   EmitterPropertiesDto,
+  Vec4,
 } from "@particle-editor/bridge-schema";
 import { Spinner } from "@/primitives/Spinner";
+
+// Blend mode dropdown options — mirrors the legacy `BlendModes[]` table
+// at [src/UI/Emitter.cpp:20-31]. The engine has additional blend mode
+// values (8, 9, 10, 13) but the legacy UI doesn't expose them via the
+// dropdown — keep parity here.
+const BLEND_MODE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "None" },
+  { value: 1, label: "Additive" },
+  { value: 2, label: "Transparent" },
+  { value: 3, label: "Inverse" },
+  { value: 4, label: "Depth additive" },
+  { value: 5, label: "Depth transparent" },
+  { value: 6, label: "Depth inverse" },
+  { value: 7, label: "Diffuse transparent" },
+  { value: 11, label: "Bump map" },
+  { value: 12, label: "Decal bump map" },
+];
+
+// BLEND_BUMP (==11) forces face-camera orientation. Mirrors the legacy
+// `forceFace = (emitter->blendMode == ParticleSystem::BLEND_BUMP)`
+// at [src/UI/Emitter.cpp:167] — only the BLEND_BUMP value triggers
+// the cascade, not BLEND_DECAL_BUMPMAP.
+const BLEND_BUMP = 11;
 
 type Props = {
   bridge: Bridge;
@@ -173,10 +198,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         className="flex-1 min-h-0 overflow-y-auto p-3 outline-none"
         data-testid="tab-appearance-content"
       >
-        <ComingSoon
-          dispatch={2}
-          fields="colour texture, blend mode, random colours, hasTail, isHeatParticle, isWorldOriented, etc."
-        />
+        <AppearanceTab properties={properties} onCommit={commit} />
       </Tabs.Content>
       <Tabs.Content
         value="physics"
@@ -512,5 +534,225 @@ function FieldCheckbox({
         </Checkbox.Indicator>
       </Checkbox.Root>
     </FieldRow>
+  );
+}
+
+function FieldSelect({
+  label,
+  value,
+  options,
+  disabled,
+  onCommit,
+  testId,
+}: {
+  label: string;
+  value: number;
+  options: { value: number; label: string }[];
+  disabled?: boolean;
+  onCommit: (value: number) => void;
+  testId?: string;
+}) {
+  const selected = options.find((o) => o.value === value);
+  return (
+    <FieldRow label={label}>
+      <Select.Root
+        value={String(value)}
+        onValueChange={(v) => onCommit(Number(v))}
+        disabled={disabled}
+      >
+        <Select.Trigger
+          data-testid={testId}
+          aria-label={label}
+          className="flex h-[26px] w-full items-center justify-between gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 outline-none transition hover:border-neutral-500 focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Select.Value>{selected?.label ?? ""}</Select.Value>
+          <Select.Icon>
+            <ChevronDown className="size-3 text-neutral-500" />
+          </Select.Icon>
+        </Select.Trigger>
+        <Select.Portal>
+          <Select.Content
+            position="popper"
+            sideOffset={4}
+            className="z-50 min-w-[160px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+          >
+            <Select.Viewport>
+              {options.map((opt) => (
+                <Select.Item
+                  key={opt.value}
+                  value={String(opt.value)}
+                  data-testid={
+                    testId ? `${testId}-option-${opt.value}` : undefined
+                  }
+                  className="cursor-pointer rounded px-2 py-0.5 text-xs text-neutral-200 outline-none data-[highlighted]:bg-sky-700/40 data-[highlighted]:text-sky-100"
+                >
+                  <Select.ItemText>{opt.label}</Select.ItemText>
+                </Select.Item>
+              ))}
+            </Select.Viewport>
+          </Select.Content>
+        </Select.Portal>
+      </Select.Root>
+    </FieldRow>
+  );
+}
+
+// ─── Appearance tab ─────────────────────────────────────────────────
+
+// Exported for direct testing — Radix Tabs in jsdom doesn't reliably
+// switch via fireEvent (the known pointer-event flake noted in the
+// Fix dispatch 1 tests), so vitest mounts AppearanceTab directly.
+export function AppearanceTab({
+  properties,
+  onCommit,
+}: {
+  properties: EmitterPropertiesDto;
+  onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
+}) {
+  // BLEND_BUMP forces face-camera orientation — disables the
+  // `isWorldOriented` checkbox and shows it as unchecked. Mirrors
+  // [src/UI/Emitter.cpp:167-168] which disables IDC_CHECK16 when
+  // `blendMode == BLEND_BUMP`. The legacy WM_COMMAND handler (line
+  // 522-525) also flips `isWorldOriented = false` on the model the
+  // moment the user picks the bump-map blend mode. We don't auto-mutate
+  // the property here (the user may switch blend modes back and forth),
+  // but the UI presents the field as unchecked + disabled while the
+  // bump-map cascade is active.
+  const forceFace = properties.blendMode === BLEND_BUMP;
+  const tailEnabled = properties.hasTail;
+
+  // Display 0..1 random-colour values as 0..100% in the spinners
+  // (matches the legacy IDC_SPINNER19-26 percentage spinners at
+  // [src/UI/Emitter.cpp:243-246]).
+  const updateRandomColors = (idx: 0 | 1 | 2 | 3, displayed: number) => {
+    const next: [number, number, number, number] = [
+      properties.randomColors[0],
+      properties.randomColors[1],
+      properties.randomColors[2],
+      properties.randomColors[3],
+    ];
+    next[idx] = displayed / 100;
+    onCommit({ randomColors: next as unknown as Vec4 });
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* TODO(MT-1): wire the TexturePalette popup (legacy IDC_BUTTON_PALETTE
+          at [src/UI/Emitter.cpp:411]) — text-input + commit-on-blur for
+          now, deferred to a polish batch. */}
+      <FieldText
+        label="Colour Texture"
+        value={properties.colorTexture}
+        onCommit={(v) => onCommit({ colorTexture: v })}
+      />
+      <FieldText
+        label="Normal Texture"
+        value={properties.normalTexture}
+        onCommit={(v) => onCommit({ normalTexture: v })}
+      />
+      <FieldSelect
+        label="Blend Mode"
+        value={properties.blendMode}
+        options={BLEND_MODE_OPTIONS}
+        onCommit={(v) => onCommit({ blendMode: v })}
+        testId="appearance-blend-mode-trigger"
+      />
+      <FieldSpinner
+        label="Texture Size"
+        value={properties.textureSize}
+        min={1}
+        step={1}
+        decimals={0}
+        onCommit={(v) => onCommit({ textureSize: Math.max(1, Math.round(v)) })}
+      />
+      <FieldSpinner
+        label="Triangles"
+        value={properties.nTriangles}
+        min={1}
+        step={1}
+        decimals={0}
+        onCommit={(v) => onCommit({ nTriangles: Math.max(1, Math.round(v)) })}
+      />
+      <FieldCheckbox
+        label="Add Grayscale"
+        checked={properties.doColorAddGrayscale}
+        onCheckedChange={(v) => onCommit({ doColorAddGrayscale: v })}
+      />
+      <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
+        <label className="pt-1 text-xs text-neutral-400">Random Colours</label>
+        <div className="grid grid-cols-2 gap-1">
+          <Spinner
+            value={properties.randomColors[0] * 100}
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            onChange={(v) => updateRandomColors(0, v)}
+            aria-label="Random Colour R"
+          />
+          <Spinner
+            value={properties.randomColors[1] * 100}
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            onChange={(v) => updateRandomColors(1, v)}
+            aria-label="Random Colour G"
+          />
+          <Spinner
+            value={properties.randomColors[2] * 100}
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            onChange={(v) => updateRandomColors(2, v)}
+            aria-label="Random Colour B"
+          />
+          <Spinner
+            value={properties.randomColors[3] * 100}
+            min={0}
+            max={100}
+            step={1}
+            unit="%"
+            onChange={(v) => updateRandomColors(3, v)}
+            aria-label="Random Colour A"
+          />
+        </div>
+      </div>
+      <FieldCheckbox
+        label="Has Tail"
+        checked={properties.hasTail}
+        onCheckedChange={(v) => onCommit({ hasTail: v })}
+      />
+      <FieldSpinner
+        label="Tail Size"
+        value={properties.tailSize}
+        min={0}
+        step={0.1}
+        disabled={!tailEnabled}
+        onCommit={(v) => onCommit({ tailSize: v })}
+      />
+      <FieldCheckbox
+        label="Heat Particle"
+        checked={properties.isHeatParticle}
+        onCheckedChange={(v) => onCommit({ isHeatParticle: v })}
+      />
+      <FieldCheckbox
+        label="World Oriented"
+        checked={forceFace ? false : properties.isWorldOriented}
+        disabled={forceFace}
+        onCheckedChange={(v) => onCommit({ isWorldOriented: v })}
+      />
+      <FieldCheckbox
+        label="No Depth Test"
+        checked={properties.noDepthTest}
+        onCheckedChange={(v) => onCommit({ noDepthTest: v })}
+      />
+      <FieldCheckbox
+        label="Affected by Wind"
+        checked={properties.affectedByWind}
+        onCheckedChange={(v) => onCommit({ affectedByWind: v })}
+      />
+    </div>
   );
 }

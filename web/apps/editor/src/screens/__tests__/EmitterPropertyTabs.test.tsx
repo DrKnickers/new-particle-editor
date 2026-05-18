@@ -18,7 +18,7 @@ import type {
   Bridge,
   EmitterPropertiesDto,
 } from "@particle-editor/bridge-schema";
-import { EmitterPropertyTabs } from "../EmitterPropertyTabs";
+import { EmitterPropertyTabs, AppearanceTab } from "../EmitterPropertyTabs";
 import { makeDefaultEngineState, makeFixtureProperties } from "@/bridge/mock-state";
 
 type SelectionListener = (e: { payload: { id: number | null } }) => void;
@@ -137,6 +137,63 @@ describe("EmitterPropertyTabs", () => {
     // queryable.
     expect(screen.getByTestId("tab-appearance-content")).toBeInTheDocument();
     expect(screen.getByTestId("tab-physics-content")).toBeInTheDocument();
+  });
+
+  // ─── Appearance tab specs (Fix dispatch 2) ─────────────────────
+  // AppearanceTab is exported and mounted directly — Radix Tabs in
+  // jsdom doesn't reliably switch tabs via fireEvent (the known
+  // pointer-event flake from Fix dispatch 1), so we test the panel
+  // content in isolation.
+
+  it("AppearanceTab renders all 13 field labels", () => {
+    const props = makeFixtureProperties(0);
+    render(<AppearanceTab properties={props} onCommit={() => {}} />);
+    const expectedLabels = [
+      "Colour Texture",
+      "Normal Texture",
+      "Blend Mode",
+      "Texture Size",
+      "Triangles",
+      "Add Grayscale",
+      "Random Colours",
+      "Has Tail",
+      "Tail Size",
+      "Heat Particle",
+      "World Oriented",
+      "No Depth Test",
+      "Affected by Wind",
+    ];
+    for (const label of expectedLabels) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("AppearanceTab: editing Tail Size fires onCommit with patch.tailSize", async () => {
+    const onCommit = vi.fn();
+    const props = { ...makeFixtureProperties(0), hasTail: true, tailSize: 0.5 };
+    render(<AppearanceTab properties={props} onCommit={onCommit} />);
+    const tailSizeInput = screen.getByLabelText("Tail Size") as HTMLInputElement;
+    fireEvent.focus(tailSizeInput);
+    fireEvent.change(tailSizeInput, { target: { value: "1.25" } });
+    fireEvent.blur(tailSizeInput);
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith({ tailSize: 1.25 });
+    });
+  });
+
+  it("AppearanceTab: hasTail === false disables Tail Size spinner", () => {
+    const props = { ...makeFixtureProperties(0), hasTail: false, tailSize: 2 };
+    render(<AppearanceTab properties={props} onCommit={() => {}} />);
+    const tailSizeInput = screen.getByLabelText("Tail Size") as HTMLInputElement;
+    expect(tailSizeInput.disabled).toBe(true);
+  });
+
+  it("AppearanceTab: blendMode === 11 (BLEND_BUMP) unchecks + disables World Oriented", () => {
+    const props = { ...makeFixtureProperties(0), blendMode: 11, isWorldOriented: true };
+    render(<AppearanceTab properties={props} onCommit={() => {}} />);
+    const worldOriented = screen.getByLabelText("World Oriented");
+    expect(worldOriented.getAttribute("data-state")).toBe("unchecked");
+    expect(worldOriented.getAttribute("data-disabled")).not.toBeNull();
   });
 
   it("editing Lifetime fires emitters/set-properties with patch.lifetime", async () => {
