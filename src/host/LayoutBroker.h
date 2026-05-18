@@ -1,7 +1,12 @@
 // LayoutBroker — applies the React-side `layout/viewport-rect` message
-// to the D3D9 viewport child HWND. Trivial wrapper around SetWindowPos
-// + InvalidateRect; lives as its own type so the dispatcher doesn't
-// reach into HostWindow internals.
+// to the D3D9 viewport HWND.
+//
+// FD8 (May 2026): the viewport is now a top-level WS_POPUP owned by
+// the main HWND, not a WS_CHILD. React still reports the viewport
+// quadrant rect in main-client coordinates; LayoutBroker converts to
+// screen coordinates for SetWindowPos on the popup. The popup is
+// composited by DWM as its own layer, above any child HWND including
+// WebView2 — that's what makes the viewport visible.
 #ifndef HOST_LAYOUT_BROKER_H
 #define HOST_LAYOUT_BROKER_H
 
@@ -25,34 +30,25 @@ public:
     // but skips the D3D9 swap-chain reset.
     void SetEngine(Engine* engine) { m_engine = engine; }
 
-    // FD7 (Option C, SetWindowRgn cut-out): tell the LayoutBroker about
-    // the WebView2 child HWND so it can apply a window region with a
-    // hole over the viewport rect. Without this hole, WebView2's opaque
-    // surface covers the D3D9 viewport sibling underneath. Discovered
-    // post-controller-creation via class-name child-window enumeration.
-    void SetWebViewHWND(HWND webView) { m_webView = webView; }
-
-    // x/y/w/h are device pixels in the parent window's client coordinates,
-    // exactly what React's ViewportSlot sends from getBoundingClientRect.
-    // With per-monitor-v2 DPI awareness, child-window coordinates are in
-    // physical pixels — we pass through to SetWindowPos.
+    // x/y/w/h are device pixels in the OWNER MAIN HWND'S client
+    // coordinates, exactly what React's ViewportSlot sends from
+    // getBoundingClientRect. With per-monitor-v2 DPI awareness,
+    // child-window coordinates are in physical pixels.
     //
-    // When the viewport's client size actually changes, the Engine's
-    // D3D9 swap chain is reset so the backbuffer matches the new HWND
-    // size (otherwise the 320×240 initial backbuffer would be stretched
-    // and produce upscale blur).
+    // FD8 converts to screen coords via ClientToScreen(owner, …)
+    // before SetWindowPos because the viewport is now a top-level
+    // popup, not a child.
     void Apply(int x, int y, int w, int h);
 
-    // Recompute and apply the WebView2 cut-out region. Called from
-    // Apply() (per layout change) and also from HostWindowImpl on
-    // window resize. The region is "full WebView2 client rect MINUS
-    // current viewport rect", expressed in WebView2's own client
-    // coords. No-op if m_webView is null or viewport rect is empty.
-    void RefreshWebViewRegion();
+    // FD8: re-apply the last-cached client-coord rect, with a fresh
+    // ClientToScreen translation. Called from HostWindow's WM_MOVE
+    // handler when the main window is dragged across the desktop so
+    // the popup viewport follows. Skips the Engine::Reset path
+    // (size didn't change, only position).
+    void RefreshScreenPosition();
 
 private:
     HWND    m_viewport;
-    HWND    m_webView = nullptr;  // FD7 Option C — see SetWebViewHWND
     Engine* m_engine;
     // Track the last applied size so we only fire a (relatively
     // expensive) D3D9 device Reset when the size actually changed.
@@ -60,8 +56,9 @@ private:
     // still report new x/y) don't churn the swap chain.
     int     m_lastW;
     int     m_lastH;
-    // FD7: cache the last viewport rect so RefreshWebViewRegion can
-    // be called from a resize handler without re-reading the rect.
+    // FD8: cache the last viewport rect (in main-client coords) so
+    // RefreshScreenPosition can rebuild the screen-coord rect on
+    // owner move.
     int     m_lastX = 0;
     int     m_lastY = 0;
 };

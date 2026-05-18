@@ -496,11 +496,13 @@ void HostWindowImpl::ResizeWebViewToClient()
     RECT r;
     GetClientRect(hMain, &r);
     webController->put_Bounds(r);
-    // FD7 Option C: WebView2 just resized — its window region needs
-    // to be reapplied because SetWindowRgn doesn't auto-scale with
-    // the underlying HWND. LayoutBroker reads its cached viewport
-    // rect and rebuilds the cut-out against the new client size.
-    layout.RefreshWebViewRegion();
+    // FD8: when main resizes, the viewport popup's screen position
+    // may need to change too (the main HWND's client origin shifted
+    // in screen space). React will re-send a layout/viewport-rect
+    // once its ResizeObserver fires, which is the authoritative
+    // source. Just nudge the screen position from the cached client
+    // rect in the meantime so the viewport doesn't lag visually.
+    layout.RefreshScreenPosition();
 }
 
 void HostWindowImpl::OnWebMessage(const std::wstring& json)
@@ -680,57 +682,14 @@ HRESULT HostWindowImpl::InitWebView2()
                             GetClientRect(hMain, &bounds);
                             controller->put_Bounds(bounds);
 
-                            // FD7 Option C: walk the main HWND's children to
-                            // find WebView2's hosting HWND.
-                            {
-                                HWND child = nullptr;
-                                EnumChildWindows(hMain,
-                                    [](HWND hwnd, LPARAM lp) -> BOOL
-                                    {
-                                        wchar_t cls[64] = {};
-                                        GetClassNameW(hwnd, cls, _countof(cls));
-                                        if (wcsncmp(cls, L"Chrome_", 7) == 0)
-                                        {
-                                            *reinterpret_cast<HWND*>(lp) = hwnd;
-                                            return FALSE;  // stop enumerating
-                                        }
-                                        return TRUE;
-                                    },
-                                    reinterpret_cast<LPARAM>(&child));
-                                if (child)
-                                {
-                                    Log("[host] WebView2 HWND found: %p (cut-out enabled)\n",
-                                        static_cast<void*>(child));
-                                    layout.SetWebViewHWND(child);
-                                }
-                                else
-                                {
-                                    Log("[host] WebView2 HWND not found — viewport will stay covered\n");
-                                }
-                            }
-
-                            // FD7 Option C, sibling z-order: the D3D9 viewport
-                            // is a WS_CLIPSIBLINGS child of hMain. WebView2's
-                            // HWND occupies the FULL client area (put_Bounds);
-                            // WS_CLIPSIBLINGS clips the viewport against
-                            // WebView2's RECT — not its region — so the
-                            // viewport gets entirely clipped away when below
-                            // WebView2 in z-order. Promote viewport to
-                            // HWND_TOP so it paints fully on its own rect.
-                            // This is safe with the cut-out: WebView2 doesn't
-                            // paint in the viewport region anyway, so the
-                            // viewport-on-top doesn't occlude any HTML pixels
-                            // — opaque chrome stays visible everywhere
-                            // outside the viewport rect, and inside it the
-                            // viewport's D3D9 content is now visible.
-                            if (g_self && g_self->hViewport)
-                            {
-                                SetWindowPos(g_self->hViewport, HWND_TOP,
-                                             0, 0, 0, 0,
-                                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                                InvalidateRect(g_self->hViewport, nullptr, FALSE);
-                                Log("[host] viewport promoted to HWND_TOP (FD7 cut-out z-order)\n");
-                            }
+                            // FD8: viewport is now a top-level WS_POPUP
+                            // owned by hMain (created in WM_CREATE). DWM
+                            // composites top-level popups as their own
+                            // layer in screen space, above any child HWND's
+                            // DComp surface (including WebView2). No
+                            // SetWindowRgn cut-out is required, no z-order
+                            // promotion is needed — owned popups naturally
+                            // stay above their owner.
 
                             // Production mode: map app.local → web/apps/editor/dist
                             // so the React app loads from a stable virtual origin.
@@ -817,21 +776,24 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
     case WM_CREATE:
     {
-        // Create the D3D9 viewport child sibling. Initial size 320×240 so
-        // the visual is non-degenerate even before React's first layout
-        // message arrives. The viewport is intentionally kept BELOW
-        // WebView2 in sibling z-order: WebView2 has a transparent default
-        // background (see InitWebView2 below), so the viewport shows
-        // through wherever HTML is transparent, but opaque HTML elements
-        // (menu dropdowns, modals, tool panels) cover the viewport.
-        // Last-created sibling is topmost by default, and WebView2 is
-        // created later in InitWebView2 — so we DON'T promote the
-        // viewport to HWND_TOP here. Doing so would put particles over
-        // every menu dropdown that drops into the viewport rect.
+        // FD8: viewport is a top-level WS_POPUP window OWNED by main
+        // (not a WS_CHILD). DWM composites top-level popups as their
+        // own layer in screen space, above any child HWND's DComp
+        // surface — including WebView2's. WS_EX_NOACTIVATE prevents
+        // the popup from stealing focus on click (camera drag still
+        // works because mouse capture is explicit in ViewportWndProc).
+        // WS_EX_TOOLWINDOW keeps the popup out of the taskbar.
+        //
+        // Ownership semantics: an owned popup follows the owner's
+        // minimize/restore state, gets destroyed when the owner is
+        // destroyed, and stays z-ordered above the owner. Position
+        // is in SCREEN coords; LayoutBroker translates from main-
+        // client coords via ClientToScreen.
         hViewport = CreateWindowExW(
-            0, kHostViewportClassName, L"",
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-            16, 16, 320, 240, hwnd, nullptr,
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            kHostViewportClassName, L"",
+            WS_POPUP | WS_VISIBLE,
+            16, 16, 320, 240, hwnd /* owner */, nullptr,
             hInstance, nullptr);
         if (!hViewport)
         {
@@ -888,6 +850,13 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_SIZE:
         ResizeWebViewToClient();
+        return 0;
+
+    case WM_MOVE:
+        // FD8: when main moves, the viewport popup needs to follow.
+        // Convert the cached client-coord rect to a fresh screen
+        // position with ClientToScreen against main's new location.
+        layout.RefreshScreenPosition();
         return 0;
 
     case WM_DESTROY:

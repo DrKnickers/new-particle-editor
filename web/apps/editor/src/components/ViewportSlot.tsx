@@ -39,10 +39,15 @@ export function ViewportSlot({ bridge }: Props) {
   return (
     <div
       ref={ref}
-      className="flex-1 bg-transparent flex items-center justify-center text-neutral-600 text-sm"
+      className="absolute inset-0 bg-transparent flex items-center justify-center text-neutral-600 text-sm"
     >
       {/* The native D3D9 viewport sibling renders here. In browser-mode
-          (MockBridge), the underlying body bg shows through. */}
+          (MockBridge), the underlying body bg shows through.
+          `absolute inset-0` fills the positioned parent — the
+          quadrant-viewport <div> has `relative` so this stretches to
+          its full rect. Without this, `flex-1` did nothing (parent
+          isn't a flex container vertically) and the slot collapsed
+          to the height of its content. */}
       <span className="select-none pointer-events-none">D3D9 viewport</span>
     </div>
   );
