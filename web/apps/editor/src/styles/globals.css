@@ -16,6 +16,9 @@
 
 @layer base {
   html, body, #root { height: 100%; }
+  /* html must also be transparent — the browser's system canvas paints white
+     when the html element has no background, even if body is transparent. */
+  html, #root { background: transparent; }
   /* Phase 4.1 FD4 follow-up: body must NOT carry an opaque background.
      WebView2 is set to transparent (DefaultBackgroundColor {0,0,0,0}) so
      the D3D9 viewport sibling-HWND can show through transparent HTML
@@ -26,7 +29,11 @@
      the host) shows the default white page in the viewport rect — that
      is intentional. */
   body {
-    @apply text-neutral-100 antialiased;
+    /* bg-transparent (NOT browser-default white) so the WebView2 transparent
+       surface composites onto the D3D9 viewport sibling-HWND in host mode.
+       In browser mode (`pnpm dev`), this shows whatever the browser fills
+       transparent pages with (usually white). */
+    @apply bg-transparent text-neutral-100 antialiased;
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   }
 }
