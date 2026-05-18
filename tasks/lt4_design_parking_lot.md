@@ -5300,3 +5300,75 @@ Commit: `de0932e` (single fix — `@radix-ui/react-tabs` +
 
 Phase 4.2 still BLOCKED until Fix dispatches 2-5 land.
 
+### 2026-05-17 · Phase 4.1 Fix dispatch 2 (Appearance tab UI)
+
+Wired the 13 Appearance fields in `EmitterPropertyTabs.tsx`.
+Schema-only batch on the React side — no new bridge calls, no C++
+changes (DTO + handlers were complete from Fix dispatch 1).
+
+Commit: `f833e14` (single fix — no new deps). Tests 159 Vitest
+(155 → 159, +4) + 72 Playwright (71 → 72, +1). MSBuild 0/0.
+
+**What changed:**
+
+- *13 form fields wired*: colorTexture / normalTexture (text
+  inputs); blendMode (Radix Select, 10 options matching legacy
+  `BlendModes[]`); textureSize / nTriangles (Spinners);
+  doColorAddGrayscale / hasTail / isHeatParticle /
+  isWorldOriented / noDepthTest / affectedByWind (Checkboxes);
+  tailSize (Spinner, cascades-disabled by hasTail);
+  randomColors (4 Spinners in 2×2 grid, 0..1 ↔ 0..100% display
+  conversion).
+- *`forceFace` cascade*. When `blendMode === 11` (BLEND_BUMP only
+  — NOT BLEND_DECAL_BUMPMAP=12, verified from
+  `src/UI/Emitter.cpp:167`), the `isWorldOriented` Checkbox
+  renders as unchecked + disabled. Underlying property value is
+  preserved (user's stored `isWorldOriented` not auto-mutated).
+  **Subagent caught this spec discrepancy and corrected** from
+  "11 OR 12" → "11 only" by reading legacy.
+- *Radix Tabs.Content lazy-mount workaround*. Exported
+  `AppearanceTab` so Vitest specs can mount it directly (Radix
+  doesn't render inactive Tabs.Content + click-to-switch path is
+  jsdom-flaky). Matches Fix dispatch 1's pattern.
+
+**Locks worth surfacing for future fix dispatches:**
+
+- *Subagents should override dispatch specs when legacy evidence
+  contradicts*. The `forceFace` spec said "BLEND_BUMP OR
+  BLEND_DECAL_BUMPMAP". Reading the source showed BLEND_BUMP
+  only. Subagent corrected. Legacy IS the truth for parity
+  work; the spec is an interpretation that can be wrong.
+- *Lazy-mount-the-inner-component is the canonical Vitest
+  workaround for non-default Radix Tabs.Content*. Export the
+  inner alongside the parent. Three places this applies now
+  (BasicTab via default-mount, AppearanceTab via export, future
+  PhysicsTab same).
+- *Schema-complete-from-the-start paid off again.* Wire-only
+  React work landed clean without touching schema / C++ /
+  MockBridge. Same pattern will apply to Physics tab next.
+
+**Implementer notes:**
+
+1. *2×2 grid for `randomColors`*. Narrow lower-left quadrant
+   (`w-80` = 320px) makes single-row 4-spinner cramped. 2×2 with
+   one "Random Colours" label is cleaner; each spinner has its
+   own aria-label.
+2. *Texture fields are plain text only*. No TexturePalette
+   popup. TODO comments inline point at legacy
+   `IDC_BUTTON_PALETTE` for the future polish batch.
+3. *4 specs vs +3-4 target*. Landed at +4 — spec density on
+   `forceFace` cascade was worth it.
+
+**Open follow-ups** (Phase 4.1 fix dispatches remaining):
+
+- **Fix dispatch 3**: Physics tab UI (acceleration / gravity /
+  inwardSpeed / etc. + Random Param `groups`).
+- **Fix dispatch 4**: Finding #1 — D3D viewport z-order +
+  DPI scaling.
+- **Fix dispatch 5**: Finding #4 + #5 — marquee select + Mods
+  + Emitters top-level menus.
+- *TexturePalette popup* for textures — post-shipment polish.
+
+Phase 4.2 still BLOCKED until Fix dispatches 3-5 land.
+
+
