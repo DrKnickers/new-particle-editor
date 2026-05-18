@@ -5875,6 +5875,134 @@ Most of the fix is observable only at runtime. Tests can verify:
 
 After this dispatch: **Phase 4.2 (legacy delete) is unblocked.**
 
+### 2026-05-18 · Phase 4.1 Fix dispatch 4 (D3D z-order + DPI/blur) — Phase 4.1 fully ✅
+
+Last Phase 4.1 fix. Closes finding #1 (D3D viewport renders over
+menus + blurry). After this dispatch, **Phase 4.2 (legacy chrome
+delete) is unblocked.**
+
+Commit: `bf53004` (single fix — no new deps; no schema; minimal
+C++ host changes). Tests 180 Vitest (unchanged — no new
+unit-testable surface) + 77 Playwright (76 → 77, +1
+resize-survives smoke). MSBuild 0/0.
+
+**What changed:**
+
+- *Z-order fix*. Removed `SetWindowPos(hViewport, HWND_TOP, ...)`
+  in `HostWindow.cpp` WM_CREATE. Also caught LayoutBroker's
+  SetWindowPos calls were ALSO passing `HWND_TOP` — replaced
+  with `nullptr + SWP_NOZORDER` so subsequent layout events
+  don't re-promote the viewport. Without this second fix, the
+  first React layout/viewport-rect event after init would have
+  undone the WM_CREATE fix. WebView2 (created later in
+  `InitWebView2`) now sits naturally on top, with transparent
+  background letting viewport pixels show through where HTML
+  is transparent, opaque dropdowns/modals covering viewport.
+- *DPI/blur fix via Engine reset on layout change*. Used the
+  EXISTING `Engine::Reset()` method (same one legacy WM_SIZE at
+  [src/main.cpp:3024] calls) — no factor-out needed. New flow
+  in `LayoutBroker::Apply`:
+  ```cpp
+  SetWindowPos(viewport, nullptr, x, y, w, h, ...);
+  InvalidateRect(viewport, nullptr, FALSE);
+  if (engine && (w != lastW || h != lastH)) {
+      lastW = w; lastH = h;
+      try { engine->Reset(); } catch (...) {}
+  }
+  ```
+  Same-size guard prevents thrash on ResizeObserver churn
+  (most events report same w/h, only x/y differ). Engine's
+  `Reset()` does the full D3DPOOL_DEFAULT release →
+  `m_pDevice->Reset(presentationParameters)` →
+  resource-recreate cycle. With `Windowed=TRUE` and
+  `BackBufferWidth=0`, D3D9 auto-derives backbuffer size from
+  `hDeviceWindow`'s client rect, which has just been resized.
+- *try/catch around Engine::Reset* in LayoutBroker so a single
+  bad layout doesn't crash the host; next non-degenerate
+  resize retries.
+
+**Locks worth surfacing for future work:**
+
+- *"Fixed in init, undone on event" trap*. The WM_CREATE
+  HWND_TOP fix was insufficient because LayoutBroker
+  re-applied HWND_TOP on every resize event. When fixing
+  init-time behavior, **also audit event-time code paths
+  that touch the same state**. Generalizable: any "set
+  once" call has a complementary "set repeatedly" risk
+  through event handlers. Worth promoting to lessons.md if
+  this class of bug recurs.
+- *D3D9 BackBufferWidth=0 in windowed mode auto-derives from
+  hDeviceWindow*. Host doesn't need to compute and push
+  explicit dimensions — resize the HWND first, then call
+  Reset, and D3D9 reads the new HWND client rect during
+  Reset. Generalizable: when an OS-level handle has a
+  natural "current state" the API can re-query, prefer
+  Reset-with-defaults over explicit dimension passing. Less
+  bookkeeping; fewer wrong-stride bugs.
+- *Same-size guard for resize-driven Reset*. ResizeObserver
+  fires on layout pass regardless of size change (often
+  10-20× per UI transition); guarding on `(w,h)` delta
+  avoids needless GPU work + RT recreation thrash. Cheap
+  guard, big perf win.
+
+**Implementer notes:**
+
+1. *No new Engine API needed* — `Reset()` was already public
+   from legacy use. Same pattern as Screen 6 B-α's
+   `std::multiset::find by time-only Key` — engine layer
+   often has what we need already.
+2. *Sub-millisecond Reset cost*. Tool-panel slide-in
+   triggers 10-20 size changes over 200ms; each Reset is
+   sub-ms in practice (D3D9's lost/reset cycle is
+   well-optimized). No debounce added.
+3. *D3DPOOL_DEFAULT release path is in Engine, not LayoutBroker*.
+   `Engine::Reset()` calls `ReleaseBloomTargets()`,
+   `SAFE_RELEASE` on scene/distort/depth-stencil RT,
+   `OnLostDevice` on shaders + bloom effect — then
+   reset → re-apply via `ResetParameters()`. Encapsulated;
+   LayoutBroker just triggers the cycle.
+
+**Open follow-ups** (post-shipment polish, no longer
+blocking Phase 4.2):
+
+- Visibility toggle per row + bridge wiring.
+- Reset Camera menu item + bridge call.
+- Reset View Settings (registry cleanup).
+- TexturePalette popup for colour/normal texture fields.
+- Force Align checkbox for Lighting panel.
+- Lock-to combo functional behaviour for tracks.
+- Slot-picker popup for emitter-tree drag/drop reparent.
+- Paste-as-Lifetime / Paste-as-Death context menu items.
+- Ctrl+A select-all in emitter tree.
+- Multi-lane bracket rendering for overlapping link groups.
+
+### Phase 4.1 progress — fully ✅
+
+| Fix | Status |
+|---|---|
+| #1 — Layout reshuffle + Basic property tab | ✅ |
+| #2 — Appearance tab UI | ✅ |
+| #3 — Physics tab + groups + panel scroll | ✅ |
+| #4 — D3D viewport z-order + DPI scaling | ✅ |
+| #5 — Marquee select + MenuBar restructure | ✅ |
+
+**Phase 4.2 (legacy chrome delete) is now unblocked.**
+Remaining LT-4 work:
+
+- **Phase 4.1.6** (post-shipment polish, not blocking) —
+  visibility toggle / reset camera / reset view settings /
+  TexturePalette popup / force align / lock-to functional /
+  slot-picker / paste-as / select-all / multi-lane brackets.
+  Optional; can ship Phase 4.2 first then polish.
+- **Phase 4.2** — delete `src/UI/` entirely (~6500 LOC across
+  EmitterList.cpp + CurveEditor.cpp + TrackEditor.cpp +
+  utilities) + the legacy `WM_COMMAND` paths in `src/main.cpp`.
+  Big risk-bearing change.
+- **Phase 4.3** — ROADMAP + CHANGELOG ship entry for LT-4.
+- **Phase 4.4** — release zip update (bundle
+  `MicrosoftEdgeWebview2Setup.exe` + `web/apps/editor/dist/`).
+
+
 
 
 
