@@ -1516,9 +1516,9 @@ options, time-range display. Three custom interpolation icons:
 around the CurveEditor — track list, per-track toggle, lock-to combo,
 keyframe-mode buttons.
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅ shipped 2026-05-17 across Batches A → B-α → B-β. Lock-to functional is a small follow-up batch (deferred).
 
-**Wire-up:** 🟡 pending
+**Wire-up:** ✅ shipped 2026-05-17 across Batches A → B-α → B-β.
 
 **Current behaviour (legacy):**
 
@@ -4840,3 +4840,127 @@ Commit: `56b90a3` (single feat — no new deps). Tests 139 Vitest
 | B-β — Drag/add/Spinner sync/lock-to functional/border visual | ⏳ pending |
 
 Screen 6 fully ✅ after Batch B-β.
+
+### 2026-05-17 · Screen 6 Batch B-β (drag + click-to-add + Insert mode + Spinner sync + border visual) — Screen 6 fully ✅
+
+Second half of curve editor interaction. After this batch users can
+drag keys to move them (with proper bounds), click on empty canvas
+in Insert mode to add keys, edit selected-key values via Time +
+Value Spinners. Border keys render with a stroke ring + darker fill.
+
+Commit: `a6b65e4` (single feat — no new deps). Tests 147 Vitest
+(139 → 147, +8) + 69 Playwright (66 → 69, +3). MSBuild 0/0.
+
+**What changed:**
+
+- *2 new bridge call kinds.* `emitters/set-track-key { id, track,
+  oldTime, newTime, newValue }` (erase + insert on the multiset
+  since key ordering by time changes); `emitters/add-track-key
+  { id, track, time, value }` → `{ time, value }` (epsilon-bump
+  dedupe when a key already exists at the requested time; returns
+  the actual inserted time).
+- *Drag-to-move with pointer events.* `setPointerCapture` guarded
+  with `typeof t.setPointerCapture === "function"` + try/catch
+  so jsdom (which doesn't implement capture) doesn't break.
+  Pointer-move/up handlers attach to the SVG, not the circle,
+  so events route correctly even without capture.
+- *DRAG_SLOP = 1.5 px* (viewBox units) distinguishes click from
+  drag on pointer-up. Plain `<circle onClick>` still wired as
+  fallback for environments without pointer events, suppressed
+  during active drag via `dragRef.current === null` check.
+- *Mid-drag re-render via `useState(0)` tick* bumped on every
+  pointer-move. The dragged key's `time` in the prop array stays
+  the original time; only the rendered position shifts (so
+  curve segments redraw smoothly with the dragged endpoint).
+- *Bounds clamping*. Border keys: time fixed; value clamped to
+  `[valueRange.min, valueRange.max]`. Interior: time clamped to
+  `(prev.time + 1e-4, next.time - 1e-4)` exclusive; value
+  clamped to track range.
+- *Insert mode state local to TrackEditor.* Toolbar Select /
+  Insert buttons functional. Canvas-pointer-down in Insert mode
+  computes (time, value) via inverse axis mapping, fires
+  `emitters/add-track-key`. On-key clicks ignore mode (always
+  drag or click-select). Crosshair cursor on the backdrop in
+  Insert mode (cheap visual cue).
+- *Spinner row* — Time + Value Spinners rendered above the
+  toolbar. Enable rule: exactly-one-key-selected AND bridge +
+  emitterId available. Border keys: Time spinner disabled
+  (value-only edit). Border-key time changes are silently
+  ignored host-side anyway, but the client disables for clean
+  affordance.
+- *Spinner remount on selection change* — `key={\`time:${activeTrack}:${singleSelected?.time}\`}` forces React to unmount + remount the Spinner when the selected key changes, so the displayed value updates immediately instead of waiting for the Spinner's next focus event.
+- *Border-key visual*: `stroke="#0EA5E9"` (sky-500) + `stroke-width="1.5"` + `fill="#94A3B8"` (slate-400). Selected border keys keep the ring stroke layered over the selected-fill (`#0EA5E9` + r=5).
+
+**Locks worth surfacing for future batches:**
+
+- *`setPointerCapture` is jsdom-unsafe — guard it.* The pattern
+  is generalizable to any pointer-driven interaction that needs
+  to test in jsdom: feature-detect with `typeof t.setPointerCapture
+  === "function"`, wrap in try/catch, and ensure event handlers
+  also live at a level the events reach even without capture
+  (e.g. the SVG container instead of the target circle). Worth
+  noting alongside the existing Radix-in-jsdom and jsdom-DragEvent
+  workarounds.
+- *Spinner doesn't auto-resync from value prop, but `key`-based
+  remount is the right workaround.* Spinner caches displayed
+  text in internal state and only resyncs on focus. Passing
+  `key={someIdentifier}` to force a remount when the underlying
+  selection changes is clean idiomatic React; it costs one
+  unmount cycle per selection change but the displayed value
+  updates immediately. Same pattern could apply to any future
+  "controlled-input mirror has its own state" surface.
+- *Playwright `fill()` doesn't always reach React 19 controlled
+  inputs.* Switched to a `click(clickCount: 3) + press("Delete")
+  + type + press("Enter")` sequence to trigger React's onChange
+  properly. Likely related to React 19's controlled-input
+  diffing against the DOM value setter. Pattern: when
+  `fill()`-based Playwright assertions don't land, fall back to
+  the keyboard sequence.
+- *`getBoundingClientRect` in jsdom returns 0×0.* Stub it
+  explicitly in Vitest tests when the production code maps via
+  rect-based math. Generalizable: any SVG / canvas / DOM-position
+  math in Vitest needs an explicit rect stub.
+- *DRAG_SLOP threshold separates click from drag cleanly.* 1.5
+  viewBox-units handled the click-or-drag ambiguity without
+  any timer-based debouncing. Future drag handlers (Screen 5
+  multi-key drag if it lands, or any future interactive surface)
+  can reuse the same constant.
+
+**Implementer notes (from the commit + report):**
+
+1. *Mode + selection state stay local to TrackEditor.* Continues
+   the Screen 4 Batch C rule (component-state-over-Zustand for
+   per-component short-lived state).
+2. *Border-time-fixed enforced host-side.* The handler overrides
+   `newTime = oldTime` when the key is a border. React's UI
+   filters too (Time spinner disabled, time fixed during drag)
+   for clean affordance but the host is the truth.
+3. *`tick` state via `useState(0)` for mid-drag re-render.*
+   Counter-intuitive that React needs an extra state bump to
+   re-render at a different position when the underlying prop
+   doesn't change — but the drag is intentionally NOT mutating
+   the prop array (only the rendered position) until commit.
+   The tick bump triggers a re-render at the new position.
+4. *Auto-select after add.* New key auto-selects via the
+   host-returned `time` (handles epsilon-bump collisions). Sets
+   `selectedKeyTimes = new Set([res.time])` rather than the
+   requested time.
+
+**Open follow-ups** (post-Screen-6 polish, NOT blocking ✅):
+
+- *Lock-to combo functional behaviour.* Small separate batch:
+  C++ stores per-emitter per-track lock-to state; aliases the
+  Track* pointer on get; `emitters/set-track-lock-to` toggles.
+- *Shift+click 2D range selection.* Edge case; defer.
+- *Multi-key drag.* Per-key bound computation is non-trivial;
+  single-key drag covers 95% of the workflow.
+
+### Screen 6 progress — fully ✅
+
+| Batch | Status |
+|---|---|
+| A — Foundation (panel + read-only TrackEditor + SVG CurveEditor) | ✅ shipped |
+| B-α — Selection + Delete + Interpolation toggle + Smooth/Step rendering | ✅ shipped |
+| **B-β — Drag + click-to-add + Insert mode + Spinner sync + border visual** | **✅ shipped** |
+
+Screen 6 closes pending Phase 4.2 legacy delete (`src/UI/TrackEditor.cpp`, 483 LOC + `src/UI/CurveEditor.cpp`, 1044 LOC). Lock-to functional remains a small post-shipment polish item.
