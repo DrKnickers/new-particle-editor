@@ -6,6 +6,7 @@
 #include <d3d9.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
@@ -117,8 +118,91 @@ void AlphaCompositor::Resize(int w, int h)
     m_impl->height = h;
 }
 IDirect3DSurface9* AlphaCompositor::GetRenderTarget() const { return m_impl->offscreenRT.Get(); }
-void AlphaCompositor::SetOcclusion(std::string /*id*/, RECT /*rectClient*/, int /*feather*/) {}
-void AlphaCompositor::RemoveOcclusion(const std::string& /*id*/) {}
+void AlphaCompositor::SetOcclusion(std::string id, RECT rectClient, int feather)
+{
+    if (feather < 0) feather = 0;
+    m_impl->occlusions[std::move(id)] = Occlusion{ rectClient, feather };
+}
+
+void AlphaCompositor::RemoveOcclusion(const std::string& id)
+{
+    m_impl->occlusions.erase(id);
+}
+
+namespace {
+
+// smoothstep(0, w, x) — classic cubic, clamped.
+inline float smoothstep01(float x)
+{
+    if (x <= 0.0f) return 0.0f;
+    if (x >= 1.0f) return 1.0f;
+    return x * x * (3.0f - 2.0f * x);
+}
+
+// Apply a single occlusion to the DIB. Pixels strictly inside the
+// rect, beyond the `feather` inset, are zeroed (RGBA = 0). Pixels
+// in the `feather` band along the inner edge get RGBA *= weight,
+// where weight ramps from 0 (deepest inside) to 1 (at the rect's
+// outer edge), so alpha falls off smoothly and the premultiplied
+// RGB matches the new alpha. Pixels outside the rect are untouched.
+void ApplyOcclusion(uint8_t* dib, int dibW, int dibH,
+                    const RECT& rect, int feather)
+{
+    // Clip to DIB bounds.
+    const int x0 = (std::max)(static_cast<int>(rect.left),   0);
+    const int y0 = (std::max)(static_cast<int>(rect.top),    0);
+    const int x1 = (std::min)(static_cast<int>(rect.right),  dibW);
+    const int y1 = (std::min)(static_cast<int>(rect.bottom), dibH);
+    if (x1 <= x0 || y1 <= y0) return;
+
+    const int rowBytes = dibW * 4;
+
+    for (int y = y0; y < y1; ++y)
+    {
+        // Distance from the nearest horizontal edge of the rect.
+        const int dyTop = y - y0;
+        const int dyBot = (y1 - 1) - y;
+        const int dy    = (dyTop < dyBot) ? dyTop : dyBot;
+
+        uint8_t* row = dib + y * rowBytes;
+        for (int x = x0; x < x1; ++x)
+        {
+            const int dxLeft = x - x0;
+            const int dxRight = (x1 - 1) - x;
+            const int dx      = (dxLeft < dxRight) ? dxLeft : dxRight;
+
+            // Chebyshev distance from the rect's outer edge (so the
+            // closer we are to the boundary, the smaller this is).
+            const int d = (dx < dy) ? dx : dy;
+
+            // d=0 at the rect's outer edge → keep pixel mostly opaque.
+            // d=feather → fully cut (weight 0). Between: smoothstep.
+            float weight = 0.0f;
+            if (feather > 0 && d < feather)
+            {
+                weight = 1.0f - smoothstep01(static_cast<float>(d) / static_cast<float>(feather));
+            }
+
+            uint8_t* px = row + x * 4;
+            if (weight <= 0.0f)
+            {
+                px[0] = px[1] = px[2] = px[3] = 0;
+            }
+            else
+            {
+                // Multiply RGB and A by `weight` to preserve the
+                // premultiplied-alpha invariant ULW_ALPHA requires.
+                px[0] = static_cast<uint8_t>(px[0] * weight);
+                px[1] = static_cast<uint8_t>(px[1] * weight);
+                px[2] = static_cast<uint8_t>(px[2] * weight);
+                px[3] = static_cast<uint8_t>(px[3] * weight);
+            }
+        }
+    }
+}
+
+} // namespace
+
 void AlphaCompositor::Composite(HWND layeredHwnd)
 {
     if (!layeredHwnd) return;
@@ -148,7 +232,14 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
 
     m_impl->sysMemSurface->UnlockRect();
 
-    // Occlusion stamp happens here in T4.
+    // Stamp the alpha (and premultiplied RGB) for each occluded
+    // chrome rect. Outside occlusions the DIB keeps the engine's
+    // fully-opaque pixels.
+    for (const auto& kv : m_impl->occlusions)
+    {
+        ApplyOcclusion(dst, m_impl->width, m_impl->height,
+                       kv.second.rect, kv.second.feather);
+    }
 
     POINT srcPoint = { 0, 0 };
     SIZE  bmpSize  = { m_impl->width, m_impl->height };
