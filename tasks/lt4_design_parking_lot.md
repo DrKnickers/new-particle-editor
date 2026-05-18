@@ -302,9 +302,9 @@ context menu, link-group glyph badges, checkbox visibility toggles,
 inline-edit rename, parent/child hierarchy (root → lifetime / death
 children).
 
-**Design checkpoint:** 🟡 pending
+**Design checkpoint:** ✅ shipped 2026-05-17 across Batches A → B1 → B2 → B3 → C.
 
-**Wire-up:** 🟡 pending
+**Wire-up:** ✅ shipped 2026-05-17 across Batches A → B1 → B2 → B3 → C.
 
 **Current behaviour (legacy):**
 
@@ -3977,3 +3977,137 @@ Commit: `2cbdad1` (single feat — no new deps). Tests 109 Vitest
 | C — Link-group brackets + inline rename + keyboard nav | ⏳ pending |
 
 Only Batch C (polish) remains on Screen 4.
+
+### 2026-05-17 · Screen 4 Batch C (link-group brackets + inline rename + keyboard nav + clipboard) — Screen 4 fully ✅
+
+The polish batch that closes Screen 4. Four sub-features in one
+opus dispatch — link-group brackets, inline rename (replaces B1's
+modal), keyboard nav, Cut/Copy/Paste.
+
+Commit: `81e9e76` (single feat — no new deps). Tests 119 Vitest
+(109 → 119, +10) + 62 Playwright (59 → 62, +3). MSBuild 0/0.
+RenameEmitterDialog cleanly deleted (2 files removed).
+
+**What changed:**
+
+- *3 new bridge call kinds.* `emitters/copy { ids }`,
+  `emitters/cut { ids }`, `emitters/paste { afterId? }`. C++
+  clipboard is a per-id `std::vector<std::vector<uint8_t>>`
+  on `BridgeDispatcher` using the LT-3 import-from-file
+  `MemoryFile` + `Emitter::copy(writer)` + `Emitter(ChunkReader&)`
+  pattern reused unchanged.
+- *Link-group brackets.* Single-lane visualisation in the tree's
+  16px right gutter. Per-group vertical 2px bar at `top:
+  firstRow * 24 + 12`, height spans to last row, with 4px
+  horizontal caps top + bottom. 8-colour palette cycled by
+  `(groupId - 1) % 8`. New `lib/link-group-colors.ts` holds
+  both the palette and the range-computation helper.
+- *Inline rename.* F2 / double-click on label / context-menu
+  Rename all converge to `beginEdit(id, currentName)`. Local
+  component state `editing: { id, value, original } | null`
+  + a mirror ref to keep the latest value available for
+  blur/Enter callbacks. Auto-focus + select-all on mount.
+  Enter/blur commits; Esc cancels; empty/unchanged input
+  silently reverts. **`RenameEmitterDialog` from B1 is
+  deleted.**
+- *Keyboard navigation.* Tree container `tabIndex={0}` +
+  `onKeyDown`. Input-target guard (`target.tagName === "INPUT"`)
+  + `editingRef.current !== null` short-circuit. Arrow Up/Down,
+  Home/End, Enter, F2, Delete, Ctrl/Cmd+C/X/V all routed.
+  Focus shift uses
+  `treeContainerRef.querySelector('button[data-emitter-id="..."]').focus()`.
+- *Cut atomicity.* Single `captureUndo()` at start, descending-
+  id delete loop (sorted `std::greater<int>`), each iteration
+  re-resolves `getEmitterById` (legacy `deleteEmitter` shifts
+  subsequent slots). Single `markDirty` + tree-changed emit at
+  the end.
+- *Delete-on-multi-selection.* React-side descending-id loop
+  dispatching the existing single-emitter `emitters/delete` per
+  id. No bulk-delete kind added — looping single works on both
+  mock and native.
+
+**Locks worth surfacing for future batches:**
+
+- *LT-3 serialise pattern generalises cleanly.* The
+  `MemoryFile` + `Emitter::copy(writer)` flow was designed for
+  import-from-file but extends to clipboard with zero
+  adaptation. Pattern: any future C++ feature needing
+  serialise/deserialise of emitter subtrees (export-to-file,
+  drag-out-to-shell, template export) uses the same
+  per-emitter `MemoryFile` buffer + per-buffer `ChunkReader`
+  shape. No length-prefixing or concatenation needed if
+  buffers stay separate.
+- *Input-target guard is the right shape for tree keyboard
+  handlers.* Future hierarchical lists with their own
+  keyboard nav (Screens 5/6's curve points or track segments)
+  should follow the same pattern: tree container
+  `tabIndex={0}` with `onKeyDown`; check `target.tagName ===
+  "INPUT"` AND any in-progress edit state ref AND stop-
+  propagation in any inner input's own keydown. Belt + braces
+  prevents the most common "keyboard handler stole my
+  keystroke" bug.
+- *Single-lane bracket rendering as an acceptable starting
+  point.* When overlap is rare (most particle systems have
+  ≤2 link groups), single-lane brackets visually overlap
+  cleanly — and adding multi-lane support requires the legacy
+  DPI-aware lane-width-clamping math which is non-trivial.
+  Generalizable: ship the simple-case visual first, defer
+  overlap-handling polish unless user feedback says it
+  matters.
+- *Component-state-over-Zustand-atom when state is per-row +
+  short-lived.* The inline-rename `editing` state lives in
+  EmitterTree component state, NOT a Zustand atom (unlike the
+  modal-flow atoms from prior batches). The rule: short-lived
+  state tied to a single component's lifecycle stays local;
+  state that crosses components (modal coordination, tool
+  panels, multi-select) lives in a Zustand atom. Inline
+  rename happens entirely inside EmitterTree, so no atom.
+
+**Implementer notes (from the commit + report):**
+
+1. *Per-emitter MemoryFile buffers vs concatenated stream.*
+   Subagent picked per-emitter (one `std::vector<uint8_t>`
+   per id) over a single concatenated stream with length
+   prefixes. Keeps deserialise simple (one `ChunkReader` per
+   buffer with the embedded `Emitter::write` chunk structure
+   terminating naturally). Trade-off: slightly more memory
+   per id, but emitter buffers are small (few KB each).
+2. *`ROW_HEIGHT_PX = 24` constant.* Hard-coded matching the
+   existing `py-1 + text-sm` row styling. If the tree ever
+   gains virtualisation or variable row heights, this
+   constant becomes a per-row measurement via
+   `ResizeObserver`. Not blocking; well-flagged.
+3. *Mock-vs-native paste-empty-clipboard divergence.* Mock's
+   `isMutating` returns true for `emitters/paste`
+   unconditionally, so empty-clipboard paste flips dirty in
+   browser mode. Native short-circuits before `markDirty`.
+   Accepted: UI shouldn't allow paste-before-copy in practice.
+4. *Vitest jsdom keyboard events worked fine.* No workarounds
+   needed (unlike the B3 DragEvent property propagation
+   issues). `fireEvent.keyDown(container, { key: "F2" })`
+   propagated as expected.
+
+**Open follow-ups** (Screen 4 fully ✅ — these are post-Screen-4
+polish):
+
+- *Multi-lane bracket rendering* — when groups span overlapping
+  row ranges. Polish.
+- *Slot-picker popup for reparent* (legacy line 1411) — auto-
+  pick suffices most of the time. Polish.
+- *Paste-as-Lifetime / Paste-as-Death context-menu items* —
+  legacy has these as separate menu items ([src/UI/EmitterList.cpp:3747-3748]).
+  Bridge call could extend `emitters/paste` with `asChildOf?:
+  number; slot?: "lifetime" | "death"` params. Polish.
+- *Ctrl+A select-all.* Polish.
+
+### Screen 4 progress — fully ✅
+
+| Batch | Status |
+|---|---|
+| A — Foundation (read-only tree + click-to-select) | ✅ shipped |
+| B1 — Mutations + context menu + 3 Screen-8 sub-dialogs | ✅ shipped |
+| B2 — Add Child + Move + Link-group membership + multi-select | ✅ shipped |
+| B3 — Drag/drop + reparent | ✅ shipped |
+| **C — Link-group brackets + inline rename + keyboard nav + clipboard** | **✅ shipped** |
+
+Screen 4 closes pending Phase 4.2 legacy delete (`src/UI/EmitterList.cpp`, 4955 LOC).
