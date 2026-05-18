@@ -5671,6 +5671,104 @@ Mods / View / Help. Plan:
 - Phase 4.2 cutover (legacy delete) — unblocked after Fix
   dispatches 4 + 5 ship.
 
+### 2026-05-18 · Phase 4.1 Fix dispatch 5 (marquee select + MenuBar restructure)
+
+Closes findings #4 (marquee select on curve editor) and #5
+(Mods + Emitters top-level menus missing). Polish dispatch —
+new marquee interaction + legacy-parity MenuBar restructure.
+
+Commit: `6757f0d` (single fix — no new deps; 1 new bridge call
+`emitters/add-root`). Tests 180 Vitest (168 → 180, +12) +
+76 Playwright (74 → 76, +2). MSBuild 0/0.
+
+**What changed:**
+
+- *Marquee select on CurveEditor*. Pointer-down on empty
+  canvas in Select mode starts a rubber-band rectangle (SVG
+  `<rect>` with semi-transparent fill + dashed border).
+  Pointer-up selects all keys whose `(time, value)` falls
+  within the rect (inclusive). Shift-held appends to existing
+  selection; non-shifted replaces. Esc cancels. Insert mode
+  unchanged (still adds a key on canvas click).
+- *MenuBar restructure to legacy parity*. Top-level order is
+  now **File / Edit / Emitters / Mods / View / Help**.
+  - **`Emitters` top-level menu** added with: New Emitter
+    submenu (Root / Lifetime / Death), Rename Emitter (F2),
+    Rescale Emitter…, Toggle Visibility (disabled, TODO),
+    Show All / Hide All Emitters (disabled, TODO), Spawner…
+    (F7).
+  - **`Mods` promoted to top-level** from being a Tools
+    submenu. Dynamic list unchanged.
+  - **`Tools` removed entirely**. All its items moved:
+    Lighting + Bloom Settings → View; Spawner → Emitters.
+  - **View** finalised with Bloom Settings + Lighting moved
+    in; Reset Camera + Reset View Settings rendered disabled
+    with TODO.
+- *`emitters/add-root` bridge call added.* Wraps
+  `ParticleSystem::addRootEmitter()`. Schema + MockBridge +
+  C++ handler. Required to wire the new "New Emitter ▶ Root"
+  menu item.
+- *`tree-action.ts` atom added.* Tiny single-shot rename-request
+  atom (`requestEmitterRename(id)`). Separate from
+  `tree-context.ts` (modal-target state) because lifecycles
+  differ — rename is inline edit, modals are open/close.
+
+**Locks worth surfacing for future fix dispatches:**
+
+- *Synthetic click double-fire on backdrop after captured
+  pointer-up*. Browsers fire a synthetic `click` event on the
+  backdrop after a captured pointer-up sequence — even when
+  the pointer moved during the gesture. Without suppression,
+  marquee pointer-up's no-slop branch fires `onCanvasClick`
+  AND the backdrop's `onClick` fires the same. Fixed via
+  `marqueeConsumedClickRef`. Worth knowing for any future
+  drag-on-canvas interaction.
+- *Inclusive vs exclusive hit-test at rect boundaries*.
+  Marquee uses inclusive (`<=` on both axes) so a key exactly
+  on the edge selects. Float-precision risk minimal because
+  projected (x, y) values are pre-computed once per render
+  and reused. Generalizable for any future spatial selection.
+- *Separate atoms when state lifecycles differ*. `tree-context.ts`
+  manages modal-target state (open / close / id-of-target).
+  `tree-action.ts` is a single-shot rename request (fired,
+  consumed, cleared). Folding the latter into the former
+  would conflate lifecycles. Pattern: when two states have
+  different "cleared by whom / when" rules, give them
+  separate atoms.
+
+**Implementer notes (from the report):**
+
+1. *MarqueeState shape*: `{ startX, startY, currX, currY,
+   clientStartX, clientStartY, shift, pointerId, target,
+   movedPastSlop }`. Held as `useState` so re-rendering on
+   each pointer-move updates the rect naturally. Shift state
+   captured AT marquee-start (not continuously) — matches
+   typical OS marquee UX.
+2. *3 existing native tests needed updates* for the Tools →
+   Emitters / View relocations (lighting + spawner moved).
+   Updated rather than left as stubs.
+3. *menu-bar.spec.ts trigger-order assertion strengthened* to
+   `expect.toEqual([...])` (strict order) instead of
+   `arrayContaining` — catches future regressions in menu
+   reshuffles.
+
+**Open follow-ups** (post Fix dispatch 5):
+
+- **Fix dispatch 4**: Finding #1 — D3D viewport z-order +
+  DPI scaling. The hardest remaining piece — Win32
+  composition + WebView2 interaction.
+- *Toggle Visibility / Show All / Hide All* — menu items
+  rendered disabled with TODO. Post-shipment polish batch:
+  add per-row eye-icon affordance + bridge wiring.
+- *Reset Camera* — menu item rendered disabled. Post-shipment
+  polish: bridge call + C++ handler with sensible default
+  camera pose.
+- *Reset View Settings* — multi-setting registry cleanup.
+  Same defer as before.
+
+Phase 4.2 still BLOCKED on Fix dispatch 4 (D3D viewport).
+
+
 
 
 
