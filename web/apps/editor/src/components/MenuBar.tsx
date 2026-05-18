@@ -19,7 +19,7 @@
 // All items wired to existing bridge calls + atoms; deferred items
 // log a `[Menu] X — TODO` marker and render as `disabled`.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Check, ChevronRight } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
@@ -27,6 +27,36 @@ import { promptSaveChanges, useFileState } from "@/lib/file-state";
 import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
 import { useTreeContextStore } from "@/lib/tree-context";
 import { requestEmitterRename } from "@/lib/tree-action";
+import { useViewportOcclusion } from "@/lib/viewport-occlusion";
+
+// FD8 follow-up: each MenubarContent needs to register itself with the
+// host as a viewport occlusion while open so the popup punches a
+// SetWindowRgn hole over the menu rect and the menu HTML shows
+// through. This wrapper uses a ref + the useViewportOcclusion hook,
+// scoped to the time the menu is mounted (Radix only mounts content
+// while the menu is open, so the hook auto-cleans on close).
+type MenuContentProps = ComponentProps<typeof Menubar.Content> & {
+  bridge: Bridge;
+  occlusionId: string;
+};
+
+function OccludingMenubarContent({
+  bridge,
+  occlusionId,
+  children,
+  ...rest
+}: MenuContentProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useViewportOcclusion(bridge, occlusionId, ref);
+  // Wrap children in a measuring div so we capture the bounding rect
+  // regardless of whether Radix's ref forwarding lands on the DOM
+  // element we expect. The wrapper inherits the layout of its child.
+  return (
+    <Menubar.Content {...rest}>
+      <div ref={ref}>{children}</div>
+    </Menubar.Content>
+  );
+}
 
 type Props = {
   bridge: Bridge;
@@ -201,7 +231,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>File</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:file"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -260,7 +292,7 @@ export function MenuBar({
             <Menubar.Item className={ITEM} onSelect={handleExit}>
               Exit<Hint>Alt+F4</Hint>
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
 
@@ -268,7 +300,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>Edit</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:edit"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -317,7 +351,7 @@ export function MenuBar({
             >
               Clear All Particles<Hint>Ctrl+Del</Hint>
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
 
@@ -325,7 +359,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>Emitters</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:emitters"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -404,7 +440,7 @@ export function MenuBar({
             <Menubar.Item className={ITEM} onSelect={() => onOpenSpawnerPanel()}>
               Spawner…<Hint>F7</Hint>
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
 
@@ -412,7 +448,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>Mods</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:mods"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -423,7 +461,7 @@ export function MenuBar({
             <Menubar.Item className={ITEM} disabled>
               (none)
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
 
@@ -431,7 +469,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>View</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:view"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -556,7 +596,7 @@ export function MenuBar({
             >
               Reset View Settings
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
 
@@ -564,7 +604,9 @@ export function MenuBar({
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>Help</Menubar.Trigger>
         <Menubar.Portal>
-          <Menubar.Content
+          <OccludingMenubarContent
+            bridge={bridge}
+            occlusionId="menu:help"
             className={CONTENT}
             align="start"
             sideOffset={4}
@@ -572,7 +614,7 @@ export function MenuBar({
             <Menubar.Item className={ITEM} onSelect={() => onOpenAboutDialog()}>
               About
             </Menubar.Item>
-          </Menubar.Content>
+          </OccludingMenubarContent>
         </Menubar.Portal>
       </Menubar.Menu>
     </Menubar.Root>
