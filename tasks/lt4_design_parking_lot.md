@@ -5768,6 +5768,114 @@ Commit: `6757f0d` (single fix — no new deps; 1 new bridge call
 
 Phase 4.2 still BLOCKED on Fix dispatch 4 (D3D viewport).
 
+### Fix dispatch 4 — D3D viewport z-order + DPI scaling (locked 2026-05-18)
+
+The hardest remaining Phase 4.1 piece. Closes finding #1: viewport
+renders over menus + viewport is blurry. Two root causes, two
+distinct fixes.
+
+**Root cause 1 — Z-order:**
+
+`HostWindow.cpp:783-784` explicitly calls
+`SetWindowPos(hViewport, HWND_TOP, ...)` putting the D3D9 viewport
+HWND ABOVE WebView2 in z-order. Comment claims this is needed for
+the viewport to "compose on top of the transparent slot" — but
+that's backwards. WebView2 has transparent background
+(`put_DefaultBackgroundColor({0,0,0,0})` per line 567), so when
+WebView2 is on top:
+
+- Transparent WebView2 areas → viewport (below) shows through ✅
+- Opaque WebView2 areas (header, sidebar, menu dropdowns, modals)
+  → cover the viewport with HTML content ✅
+
+When viewport is on top (current state):
+
+- Viewport always covers WebView2 in its rect, regardless of
+  whether HTML content is opaque or transparent there ❌
+- Menus that drop down into the viewport's rect get hidden behind
+  particles ❌
+
+**Fix**: remove the `SetWindowPos(hViewport, HWND_TOP, ...)` call.
+Sibling z-order naturally puts WebView2 (created later in
+`InitWebView2`) above the viewport (created in `WM_CREATE`). Update
+the misleading comment.
+
+Verify post-fix:
+- Particles still render in the viewport's rect (WebView2 is
+  transparent there)
+- Menu dropdowns + modals + Background panel + tool panels all
+  render over particles, not under them
+
+**Root cause 2 — Blur:**
+
+The Engine constructs its D3D9 swap chain at the initial viewport
+size (320×240 per line 771 — `CreateWindowExW(..., 16, 16, 320,
+240, ...)`). When React's `layout/viewport-rect` event fires and
+LayoutBroker resizes the viewport HWND to the actual layout size
+(e.g. 800×600 at 100% DPI, or 1400×1050 at 175% DPI), the Engine's
+swap chain is NOT resized. Result: the 320×240 backbuffer is
+stretched to fill the larger HWND, producing blur (linear
+upscale).
+
+The React side DOES send physical pixels (multiplies
+`getBoundingClientRect` by `window.devicePixelRatio` at
+`ViewportSlot.tsx:17-21`). Host's PMv2 DPI awareness is also set
+at line 1179. The bug is just: swap chain isn't resized.
+
+**Fix**: when LayoutBroker.Apply changes the viewport HWND size,
+the Engine needs to reset its swap chain to the new dimensions.
+
+Implementation options:
+
+1. **WM_SIZE on viewport HWND triggers Engine reset.** The
+   viewport's WndProc receives WM_SIZE when SetWindowPos changes
+   its size. Engine listens for that (or HostWindowImpl listens
+   and calls `engine->ResizeBackbuffer(w, h)`). Engine needs a
+   resize method.
+2. **LayoutBroker calls Engine resize directly.** Pass an Engine
+   reference to LayoutBroker.Apply; after SetWindowPos, call
+   `engine->ResizeBackbuffer(w, h)`.
+3. **Engine polls HWND size each frame.** If the HWND size has
+   changed since last frame, trigger an internal reset before
+   rendering. Self-contained but costs a `GetClientRect` per
+   frame.
+
+**Subagent decision**: option 2 (LayoutBroker → Engine reset)
+is cleanest — the size change and reset happen atomically in
+one call. Option 1 is fragile (WM_SIZE on a child HWND has
+subtle timing with the parent's WM_SIZE). Option 3 is the
+fallback if Engine's resize API requires per-frame ordering.
+
+**Engine resize API**: investigate what's there. Legacy main.cpp
+WM_SIZE at [src/main.cpp:3024] handles render-window resize —
+look for Engine method names like `Reset`, `ResizeBackbuffer`,
+`OnResize`, `SetClientSize`. If a public method exists, use it.
+If not, factor a minimal one out of the legacy WM_SIZE handler.
+
+**Test surface for Fix dispatch 4:**
+
+Most of the fix is observable only at runtime. Tests can verify:
+
+- **Vitest** (+0-1 spec): no new bridge surface; nothing
+  meaningful at the unit-test level.
+- **Playwright** (+1 spec, target 76 → 77+): smoke-check that
+  the host doesn't crash on resize (drive `layout/viewport-rect`
+  with multiple different sizes in sequence; assert
+  `engine/state/snapshot` keeps responding).
+- **Manual smoke**: verify menu dropdowns / popovers / modals
+  cover the viewport, and verify viewport renders crisply (no
+  upscale blur) on a high-DPI display.
+
+**Out of scope:**
+
+- Camera reset / View settings reset (still post-shipment polish).
+- Multi-monitor DPI change (WM_DPICHANGED) — the fix should handle
+  it naturally because LayoutBroker re-applies on each
+  `layout/viewport-rect`, but no explicit test.
+
+After this dispatch: **Phase 4.2 (legacy delete) is unblocked.**
+
+
 
 
 

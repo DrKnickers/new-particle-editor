@@ -762,9 +762,15 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
         // Create the D3D9 viewport child sibling. Initial size 320×240 so
         // the visual is non-degenerate even before React's first layout
-        // message arrives. SetWindowPos with HWND_TOP after creation puts
-        // it above WebView2 in z-order, so it composes on top of the
-        // transparent slot.
+        // message arrives. The viewport is intentionally kept BELOW
+        // WebView2 in sibling z-order: WebView2 has a transparent default
+        // background (see InitWebView2 below), so the viewport shows
+        // through wherever HTML is transparent, but opaque HTML elements
+        // (menu dropdowns, modals, tool panels) cover the viewport.
+        // Last-created sibling is topmost by default, and WebView2 is
+        // created later in InitWebView2 — so we DON'T promote the
+        // viewport to HWND_TOP here. Doing so would put particles over
+        // every menu dropdown that drops into the viewport rect.
         hViewport = CreateWindowExW(
             0, kHostViewportClassName, L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
@@ -780,9 +786,6 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // LT-4: no host-owned D3D9 device. The Engine constructs the
         // live device internally below, targeting this viewport HWND.
 
-        SetWindowPos(hViewport, HWND_TOP, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
         // Construct the Engine now that both HWNDs exist. hFocus = parent,
         // hDevice = viewport child — same wiring as legacy main.cpp.
         try
@@ -790,6 +793,7 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             engine = std::make_unique<Engine>(
                 hwnd, hViewport, textureManager, shaderManager, fileManager);
             if (dispatcher) dispatcher->SetEngine(engine.get());
+            layout.SetEngine(engine.get());
             Log("[host] Engine constructed OK\n");
         }
         catch (const std::exception& e)
@@ -1260,8 +1264,14 @@ int HostWindowImpl::Run(int nCmdShow)
 
     // WM_CREATE fired during CreateWindowEx; viewport + engine now exist.
     // Wire the engine into the dispatcher (it was null when we constructed
-    // the dispatcher because hMain hadn't been created yet).
-    if (engine) dispatcher->SetEngine(engine.get());
+    // the dispatcher because hMain hadn't been created yet). LayoutBroker
+    // already received the engine inside WM_CREATE; re-binding here is a
+    // defensive no-op for symmetry with the dispatcher path.
+    if (engine)
+    {
+        dispatcher->SetEngine(engine.get());
+        layout.SetEngine(engine.get());
+    }
 
     // LT-4 host-state plumbing: construct the live ParticleSystem +
     // SpawnerDriver and hand pointer-to-pointer access to the
