@@ -38,8 +38,24 @@
 //     points distinct from interior keys. When selected they keep
 //     the selected styling (filled accent + r=5) and the ring stroke
 //     as a layered cue.
+//
+// Phase 4.1 Fix dispatch 5 adds:
+//   - Marquee (rubber-band) select on empty-canvas pointer-down in
+//     Select mode. While dragging, a semi-transparent rectangle with
+//     a dashed border tracks the cursor. At pointer-up every key
+//     whose projected (x, y) falls inside the rectangle (INCLUSIVE
+//     on both edges in viewBox space) is collected and passed to
+//     `onCanvasMarqueeSelect`. Shift-held marquee passes
+//     `shift: true` so the parent appends rather than replaces.
+//     Esc during an active marquee cancels — the rectangle is
+//     cleared and the callback is NOT fired. When the gesture never
+//     grows past `DRAG_SLOP` between down and up we treat it as a
+//     plain click and fire `onCanvasClick` (preserves the existing
+//     "click empty area to clear selection" UX from FD3). Insert
+//     mode is unchanged: empty-canvas pointer-down still fires
+//     `onCanvasAdd` and marquee is suppressed.
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { TrackDto } from "@particle-editor/bridge-schema";
 
 type Props = {
@@ -88,6 +104,16 @@ type Props = {
    *  When the drag ends with no net movement, this is NOT called;
    *  the original click path fires instead. */
   onKeyDragEnd?: (keyTime: number, newTime: number, newValue: number) => void;
+  /** Marquee-select handler (Phase 4.1 Fix dispatch 5). Fires at
+   *  pointer-up when a Select-mode rubber-band drag has covered at
+   *  least one key. `times` is the set of key TIMES inside the
+   *  rectangle (inclusive on both axes in viewBox space). `shift`
+   *  reflects whether Shift was held at marquee-start; the parent
+   *  should append to the existing selection when true, replace when
+   *  false. When the gesture is too short to qualify as a drag the
+   *  marquee is treated as a click and `onCanvasClick` fires
+   *  instead. */
+  onCanvasMarqueeSelect?: (times: number[], shift: boolean) => void;
 };
 
 const DEFAULT_WIDTH = 600;
@@ -192,6 +218,7 @@ export function CurveEditor({
   insertMode,
   onCanvasAdd,
   onKeyDragEnd,
+  onCanvasMarqueeSelect,
 }: Props) {
   const { min: vMin, max: vMax } = valueRange;
 
@@ -238,6 +265,36 @@ export function CurveEditor({
   // batching delays; we bump a tiny counter to flush a re-render so
   // the dragged circle's cx/cy reflects the latest cursor position.
   const [, setDragTick] = useState(0);
+
+  // Phase 4.1 Fix dispatch 5 — marquee state. Held as React state
+  // (not a ref) because the rectangle rendering already needs a
+  // re-render on every pointer-move; useState gives us both the
+  // value-tracking and the render side-effect in one. Coordinates
+  // are stored in VIEWBOX SPACE — same coordinate system as the
+  // projected key points, so the hit test at pointer-up is a direct
+  // numeric compare with no extra projection step. `clientStartX/Y`
+  // is the raw pointer-down client position; we use it to compute
+  // movement-past-slop without re-deriving from the viewBox values.
+  type MarqueeState = {
+    startX: number;       // viewBox space anchor
+    startY: number;
+    currX: number;        // viewBox space current cursor
+    currY: number;
+    clientStartX: number; // raw client for slop test
+    clientStartY: number;
+    shift: boolean;       // shift held at marquee-start
+    pointerId: number;
+    target: Element | null;
+    movedPastSlop: boolean;
+  };
+  const [marquee, setMarquee] = useState<MarqueeState | null>(null);
+  // After a Select-mode pointer-up handled the click-vs-drag decision,
+  // the browser still fires a synthetic `click` event on the captured
+  // backdrop. We set this ref on every consume from the pointer-up
+  // path; the backdrop's onClick reads + clears it before deciding
+  // whether to forward to onCanvasClick. Without this, plain clicks
+  // would double-fire (once from marquee, once from backdrop click).
+  const marqueeConsumedClickRef = useRef(false);
 
   // Grid: 10 evenly-spaced cells on each axis → 11 lines including
   // the bordering ones. The outer axes (left + bottom) are stroked
@@ -295,10 +352,30 @@ export function CurveEditor({
     }
   };
 
-  /** Pointer-move during an active drag. Re-projects the pointer's
-   *  client coords into (time, value), applies the per-key bounds,
-   *  stores the new live position, and bumps the render tick. */
+  /** Pointer-move during an active drag OR marquee. Key drag takes
+   *  priority — `dragRef.current !== null` is checked first. Marquee
+   *  and key-drag are mutually exclusive in practice because marquee
+   *  only begins on the empty backdrop and key-drag only begins on a
+   *  circle; the priority is defensive. */
   const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    // ── Marquee branch ────────────────────────────────────────────
+    if (dragRef.current === null && marquee !== null
+        && event.pointerId === marquee.pointerId) {
+      const svg = event.currentTarget;
+      const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const dx = event.clientX - marquee.clientStartX;
+      const dy = event.clientY - marquee.clientStartY;
+      const movedNow = Math.abs(dx) > DRAG_SLOP || Math.abs(dy) > DRAG_SLOP;
+      setMarquee({
+        ...marquee,
+        currX: x,
+        currY: y,
+        movedPastSlop: marquee.movedPastSlop || movedNow,
+      });
+      return;
+    }
+    // ── Key-drag branch (original behaviour) ──────────────────────
     const drag = dragRef.current;
     if (drag === null) return;
     if (event.pointerId !== drag.pointerId) return;
@@ -343,8 +420,55 @@ export function CurveEditor({
     setDragTick((n) => n + 1);
   };
 
-  /** Pointer-up — commit drag or treat as click. */
+  /** Pointer-up — commit drag, commit marquee, or treat as click. */
   const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    // ── Marquee branch ────────────────────────────────────────────
+    if (dragRef.current === null && marquee !== null
+        && event.pointerId === marquee.pointerId) {
+      const { startX, startY, currX, currY, shift, movedPastSlop, target } = marquee;
+      // Release pointer capture if held.
+      if (target !== null) {
+        const el = target as Element & { releasePointerCapture?: (id: number) => void };
+        if (typeof el.releasePointerCapture === "function") {
+          try { el.releasePointerCapture(event.pointerId); } catch { /* swallow */ }
+        }
+      }
+      setMarquee(null);
+      // The synthetic `click` event will fire on the backdrop right
+      // after this pointer-up. Set the suppress flag so the backdrop
+      // onClick doesn't re-invoke onCanvasClick — we own the click-
+      // vs-drag decision here.
+      marqueeConsumedClickRef.current = true;
+      if (!movedPastSlop) {
+        // Treat as a plain canvas click — preserve the "click empty
+        // area clears selection" UX (existing FD3 behaviour). The
+        // backdrop's onClick handler would normally fire this; we do
+        // it explicitly here because pointer-down on the backdrop
+        // started a marquee and the click event won't reliably reach
+        // the backdrop onClick after a captured pointer-up.
+        onCanvasClick?.(event as unknown as React.MouseEvent);
+        return;
+      }
+      // Compute inclusive rectangle bounds in viewBox space.
+      const xMin = Math.min(startX, currX);
+      const xMax = Math.max(startX, currX);
+      const yMin = Math.min(startY, currY);
+      const yMax = Math.max(startY, currY);
+      // Hit test: a key is selected when its projected (x, y)
+      // satisfies xMin ≤ x ≤ xMax AND yMin ≤ y ≤ yMax (INCLUSIVE on
+      // both ends — a key exactly on the edge is selected). The
+      // points list was already projected at render time; reuse those
+      // numbers instead of re-projecting.
+      const hits: number[] = [];
+      for (const p of points) {
+        if (p.x >= xMin && p.x <= xMax && p.y >= yMin && p.y <= yMax) {
+          hits.push(p.time);
+        }
+      }
+      onCanvasMarqueeSelect?.(hits, shift);
+      return;
+    }
+    // ── Key-drag branch (original behaviour) ──────────────────────
     const drag = dragRef.current;
     if (drag === null) return;
     if (event.pointerId !== drag.pointerId) return;
@@ -372,8 +496,12 @@ export function CurveEditor({
     }
   };
 
-  /** Pointer cancel — drop the drag without committing. */
+  /** Pointer cancel — drop the drag OR marquee without committing. */
   const onPointerCancel = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (marquee !== null && event.pointerId === marquee.pointerId) {
+      setMarquee(null);
+      return;
+    }
     const drag = dragRef.current;
     if (drag === null) return;
     if (event.pointerId !== drag.pointerId) return;
@@ -381,21 +509,65 @@ export function CurveEditor({
     setDragTick((n) => n + 1);
   };
 
+  // Esc-cancel for marquee. Window-level keydown listener is mounted
+  // ONLY while a marquee is active so we don't leak handlers when
+  // idle. The marquee state clears without firing the callback —
+  // selection is left untouched.
+  useEffect(() => {
+    if (marquee === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMarquee(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => { window.removeEventListener("keydown", handler); };
+  }, [marquee]);
+
   /** Pointer-down on the canvas backdrop (empty area). In Insert
    *  mode, computes (time, value) and fires `onCanvasAdd`. In
-   *  Select mode, falls through to the click path (parent clears
-   *  selection). */
+   *  Select mode (FD5), starts a marquee — pointer-move grows the
+   *  rectangle; pointer-up commits the selection or, if no drag past
+   *  slop, fires the click path (clears selection). */
   const onCanvasPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (event.button !== 0) return;
-    if (!insertMode || !onCanvasAdd) return;
     const svg = event.currentTarget.ownerSVGElement;
     if (svg === null) return;
+    if (insertMode) {
+      if (!onCanvasAdd) return;
+      const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const time = unproject(x, timeMin, timeMax, width);
+      const value = unproject(height - y, vMin, vMax, height);
+      event.stopPropagation();
+      onCanvasAdd(time, value);
+      return;
+    }
+    // ── Select mode — start a marquee. Even when no marquee callback
+    // is wired we still capture the pointer so a pointer-up with no
+    // movement past slop can fire onCanvasClick at the right moment
+    // (rather than letting the backdrop's onClick race with the
+    // captured pointer-up).
     const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    const time = unproject(x, timeMin, timeMax, width);
-    const value = unproject(height - y, vMin, vMax, height);
+    const t = event.currentTarget;
+    if (typeof t.setPointerCapture === "function") {
+      try { t.setPointerCapture(event.pointerId); } catch { /* swallow */ }
+    }
     event.stopPropagation();
-    onCanvasAdd(time, value);
+    setMarquee({
+      startX: x,
+      startY: y,
+      currX: x,
+      currY: y,
+      clientStartX: event.clientX,
+      clientStartY: event.clientY,
+      shift: event.shiftKey,
+      pointerId: event.pointerId,
+      target: t,
+      movedPastSlop: false,
+    });
   };
 
   // Build the render-time points list, overriding the dragged key's
@@ -456,9 +628,15 @@ export function CurveEditor({
           e.stopPropagation();
           // In Insert mode the pointer-down branch already fired
           // onCanvasAdd — don't double-fire onCanvasClick here.
-          if (!insertMode) {
-            onCanvasClick?.(e);
+          if (insertMode) return;
+          // After a Select-mode pointer-up the marquee branch already
+          // decided whether to fire onCanvasClick. Skip the
+          // synthetic-click double-fire by consuming the ref flag.
+          if (marqueeConsumedClickRef.current) {
+            marqueeConsumedClickRef.current = false;
+            return;
           }
+          onCanvasClick?.(e);
         }}
         style={{ cursor: insertMode ? "crosshair" : undefined }}
       />
@@ -566,6 +744,26 @@ export function CurveEditor({
           />
         );
       })}
+
+      {/* Marquee rectangle (FD5). Rendered last so it draws over the
+          keys. `pointerEvents="none"` keeps the captured backdrop in
+          control of the gesture — the rect is purely visual. The
+          fill colour follows the design lock: sky-500 at 15% opacity
+          with a dashed sky-500 border. */}
+      {marquee !== null && marquee.movedPastSlop && (
+        <rect
+          data-testid="curve-marquee"
+          x={Math.min(marquee.startX, marquee.currX)}
+          y={Math.min(marquee.startY, marquee.currY)}
+          width={Math.abs(marquee.currX - marquee.startX)}
+          height={Math.abs(marquee.currY - marquee.startY)}
+          fill="rgb(14 165 233 / 0.15)"
+          stroke="#0EA5E9"
+          strokeDasharray="4 4"
+          strokeWidth={1}
+          pointerEvents="none"
+        />
+      )}
     </svg>
   );
 }

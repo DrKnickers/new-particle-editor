@@ -73,16 +73,17 @@ async function closeAnyPanel(p: Page) {
   }
 }
 
-test("Tools → Lighting opens the Lighting panel", async () => {
+test("View → Lighting opens the Lighting panel", async () => {
+  // FD5: Lighting moved from Tools to View.
   await closeAnyPanel(page);
-  await openMenuItem(page, "Tools", "Lighting");
+  await openMenuItem(page, "View", "Lighting");
   await waitForPanel(page, "Lighting");
 });
 
 test("Opening Background closes the Lighting panel (mutual exclusion)", async () => {
   // Ensure Lighting is the currently-open panel.
   await closeAnyPanel(page);
-  await openMenuItem(page, "Tools", "Lighting");
+  await openMenuItem(page, "View", "Lighting");
   await waitForPanel(page, "Lighting");
 
   // Click the Background pill in the top bar. Its aria-label is "Background".

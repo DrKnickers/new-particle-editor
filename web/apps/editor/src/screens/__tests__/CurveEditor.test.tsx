@@ -13,6 +13,7 @@
 //     commands; step interpolation renders the staircase polyline.
 
 import type { InterpolationType, TrackDto } from "@particle-editor/bridge-schema";
+import type * as React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { CurveEditor } from "../CurveEditor";
@@ -266,6 +267,146 @@ describe("CurveEditor", () => {
     const [time, value] = onCanvasAdd.mock.calls[0] as [number, number];
     expect(time).toBeCloseTo(30, 1);
     expect(value).toBeCloseTo(0.7, 2);
+  });
+
+  // ─── Phase 4.1 Fix dispatch 5: marquee select ─────────────────────
+
+  /** Helper — render a CurveEditor with bounding-rect-stubbed SVG so
+   *  the viewBox-coord math has a deterministic scale. Returns the
+   *  container + SVG element + backdrop element. */
+  function renderForMarquee(
+    track: TrackDto,
+    extras: Partial<React.ComponentProps<typeof CurveEditor>> = {},
+  ) {
+    const result = render(
+      <CurveEditor
+        track={track}
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        {...extras}
+      />,
+    );
+    const svg = result.container.querySelector(
+      "[data-testid='curve-editor-svg']",
+    ) as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+    const backdrop = result.container.querySelector(
+      "[data-testid='curve-canvas-backdrop']",
+    ) as SVGRectElement;
+    backdrop.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+    return { ...result, svg, backdrop };
+  }
+
+  it("Select-mode marquee drag selects every key whose (time, value) falls inside the rect (inclusive)", () => {
+    // 5 keys at times 0, 25, 50, 75, 100; alternating values 0.1 / 0.9.
+    // viewBox 600×300; with valueRange [0, 1]:
+    //   time 0   → x=0    | time 100 → x=600
+    //   value 0.1 → y=270 | value 0.9 → y=30
+    // Drag a marquee from client (120, 0) → (480, 300) covers x∈[120,480]
+    // which corresponds to times 25, 50, 75 (their x = 150, 300, 450)
+    // and y∈[0, 300] which covers ALL values. Expected hits: {25, 50, 75}.
+    const track = fixtureTrack(5);
+    const onMarquee = vi.fn();
+    const { svg, backdrop } = renderForMarquee(track, {
+      onCanvasMarqueeSelect: onMarquee,
+    });
+
+    fireEvent.pointerDown(backdrop, {
+      pointerId: 10, button: 0, clientX: 120, clientY: 0, shiftKey: false,
+    });
+    fireEvent.pointerMove(svg, { pointerId: 10, clientX: 480, clientY: 300 });
+    fireEvent.pointerUp(svg, { pointerId: 10, clientX: 480, clientY: 300 });
+
+    expect(onMarquee).toHaveBeenCalledTimes(1);
+    const [times, shift] = onMarquee.mock.calls[0] as [number[], boolean];
+    expect(shift).toBe(false);
+    // Sort because hit-test order matches points array order, but
+    // assertion clarity wins over implementation detail.
+    expect([...times].sort((a, b) => a - b)).toEqual([25, 50, 75]);
+  });
+
+  it("Shift-held marquee passes shift: true to the callback (parent appends)", () => {
+    const track = fixtureTrack(5);
+    const onMarquee = vi.fn();
+    const { svg, backdrop } = renderForMarquee(track, {
+      onCanvasMarqueeSelect: onMarquee,
+    });
+
+    fireEvent.pointerDown(backdrop, {
+      pointerId: 11, button: 0, clientX: 120, clientY: 0, shiftKey: true,
+    });
+    fireEvent.pointerMove(svg, { pointerId: 11, clientX: 480, clientY: 300 });
+    fireEvent.pointerUp(svg, { pointerId: 11, clientX: 480, clientY: 300 });
+
+    expect(onMarquee).toHaveBeenCalledTimes(1);
+    const [, shift] = onMarquee.mock.calls[0] as [number[], boolean];
+    expect(shift).toBe(true);
+  });
+
+  it("Esc during an active marquee cancels — callback not fired, rect removed", () => {
+    const track = fixtureTrack(5);
+    const onMarquee = vi.fn();
+    const onClick = vi.fn();
+    const { container, backdrop, svg } = renderForMarquee(track, {
+      onCanvasMarqueeSelect: onMarquee,
+      onCanvasClick: onClick,
+    });
+
+    fireEvent.pointerDown(backdrop, {
+      pointerId: 12, button: 0, clientX: 120, clientY: 30, shiftKey: false,
+    });
+    // Drag past slop so the rect renders.
+    fireEvent.pointerMove(svg, { pointerId: 12, clientX: 280, clientY: 200 });
+    expect(container.querySelector("[data-testid='curve-marquee']")).not.toBeNull();
+    // Esc cancels.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector("[data-testid='curve-marquee']")).toBeNull();
+    // A subsequent pointer-up should NOT fire either callback because
+    // the marquee state was cleared. The pointer-up here lands without
+    // any active marquee, so it's a no-op.
+    fireEvent.pointerUp(svg, { pointerId: 12, clientX: 280, clientY: 200 });
+    expect(onMarquee).not.toHaveBeenCalled();
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("Marquee is suppressed in Insert mode — pointer-down still routes to onCanvasAdd", () => {
+    const track = fixtureTrack(3);
+    const onMarquee = vi.fn();
+    const onAdd = vi.fn();
+    const { backdrop } = renderForMarquee(track, {
+      insertMode: true,
+      onCanvasAdd: onAdd,
+      onCanvasMarqueeSelect: onMarquee,
+    });
+    fireEvent.pointerDown(backdrop, {
+      pointerId: 13, button: 0, clientX: 180, clientY: 90,
+    });
+    // Insert mode: onCanvasAdd fires immediately; no marquee state
+    // gets set, so a follow-up move/up is irrelevant.
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onMarquee).not.toHaveBeenCalled();
+  });
+
+  it("Select-mode pointer-down/up without drag past slop fires onCanvasClick (preserves clear-selection)", () => {
+    const track = fixtureTrack(3);
+    const onMarquee = vi.fn();
+    const onClick = vi.fn();
+    const { svg, backdrop } = renderForMarquee(track, {
+      onCanvasMarqueeSelect: onMarquee,
+      onCanvasClick: onClick,
+    });
+    fireEvent.pointerDown(backdrop, {
+      pointerId: 14, button: 0, clientX: 300, clientY: 150,
+    });
+    // Tiny micro-move within DRAG_SLOP (1.5 viewBox units) — still a
+    // "click", not a "drag".
+    fireEvent.pointerMove(svg, { pointerId: 14, clientX: 300.5, clientY: 150.5 });
+    fireEvent.pointerUp(svg, { pointerId: 14, clientX: 300.5, clientY: 150.5 });
+    expect(onMarquee).not.toHaveBeenCalled();
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it("smooth interpolation renders a <path> with cubic-Bezier (C) commands; step renders a staircase polyline", () => {

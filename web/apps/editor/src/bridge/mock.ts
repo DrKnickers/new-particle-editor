@@ -28,6 +28,7 @@ import type {
 import {
   addDeathChildEmitter,
   addLifetimeChildEmitter,
+  addRootEmitterMock,
   addTrackKeyInOverlay,
   copyEmittersToClipboard,
   deleteEmitter,
@@ -89,6 +90,7 @@ function isMutating(kind: Request["kind"]): boolean {
   // change persisted tree state, so they ride the dirty bit.
   if (kind === "emitters/add-lifetime-child") return true;
   if (kind === "emitters/add-death-child") return true;
+  if (kind === "emitters/add-root") return true;
   if (kind === "emitters/move") return true;
   if (kind === "linkGroups/set-membership") return true;
   // Screen 4 Batch B3 — drag/drop reorder + reparent. Both modes
@@ -778,6 +780,19 @@ export class MockBridge implements Bridge {
           this.emit({ kind: "emitters/tree/changed", payload: cur });
           return { newId: -1 };
         }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { newId: result.newId };
+      }
+
+      // Phase 4.1 Fix dispatch 5 — new top-level "New Root Emitter"
+      // menu item. Always succeeds at the mock level (the engine has
+      // no max-roots cap). Tree-changed + state-changed events match
+      // the other add-child handlers.
+      case "emitters/add-root": {
+        const cur = useMockEmitterTree.getState().tree;
+        const result = addRootEmitterMock(cur);
         useMockEmitterTree.getState().setTree(result.tree);
         this.emit({ kind: "emitters/tree/changed", payload: result.tree });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });

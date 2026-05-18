@@ -223,6 +223,26 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
     setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
   }, []);
 
+  // Phase 4.1 Fix dispatch 5 — marquee select. Replace selection
+  // with the rectangle's key set when `shift` is false; append
+  // otherwise. Empty `times` (the user drew a rectangle covering
+  // no keys) still replaces — matches the "drag in empty area to
+  // clear selection" semantics most curve editors converge on.
+  const handleCanvasMarqueeSelect = useCallback(
+    (times: number[], shift: boolean) => {
+      setSelectedKeyTimes((prev) => {
+        if (shift) {
+          if (times.length === 0) return prev;
+          const next = new Set(prev);
+          for (const t of times) next.add(t);
+          return next;
+        }
+        return new Set(times);
+      });
+    },
+    [],
+  );
+
   // Drag-end commit. Fires `set-track-key { oldTime, newTime, newValue }`.
   // The host re-applies the border-key time-fixed rule as the source
   // of truth; the React side already clamped during the drag so the
@@ -667,6 +687,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           insertMode={mode === "insert"}
           onCanvasAdd={handleCanvasAdd}
           onKeyDragEnd={handleKeyDragEnd}
+          onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
         />
       </div>
     </div>

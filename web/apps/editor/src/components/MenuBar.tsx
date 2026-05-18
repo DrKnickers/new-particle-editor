@@ -1,12 +1,32 @@
 // Phase 3 Screen 2 — React-rendered menu bar using Radix UI Menubar.
-// Five top-level menus: File · Edit · View · Tools · Help.
-// Items wired to existing bridge calls where behaviour exists today;
-// remaining items log "[Menu] X — Phase 3 Screen 8" as a TODO marker.
+//
+// Phase 4.1 Fix dispatch 5: restructured to legacy top-level order
+//   File / Edit / Emitters / Mods / View / Help
+// (legacy [src/ParticleEditor.en.rc:565-630]). Changes vs the original
+// 5-menu shape:
+//   - Added top-level `Emitters` menu with New Emitter submenu
+//     (Root / Lifetime Child / Death Child), Rename Emitter (via
+//     `tree-action` atom), Rescale Emitter… (via `tree-context`
+//     atom), Spawner… (was under Tools), plus disabled placeholders
+//     for Toggle Visibility / Show All / Hide All (FD5 design lock —
+//     wiring deferred to a future polish batch).
+//   - Promoted `Mods` from a Tools submenu to a top-level menu.
+//     Placeholder list unchanged (dynamic mod detection still
+//     deferred).
+//   - Moved `Lighting…` and `Bloom Settings…` from Tools to View.
+//   - Removed `Tools` menu entirely (its remaining item, Spawner,
+//     lives in Emitters now).
+// All items wired to existing bridge calls + atoms; deferred items
+// log a `[Menu] X — TODO` marker and render as `disabled`.
+
 import { useEffect, useState } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Check, ChevronRight } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { promptSaveChanges, useFileState } from "@/lib/file-state";
+import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
+import { useTreeContextStore } from "@/lib/tree-context";
+import { requestEmitterRename } from "@/lib/tree-action";
 
 type Props = {
   bridge: Bridge;
@@ -43,7 +63,7 @@ function CheckSlot({ active }: { active: boolean }) {
 }
 
 const todo = (label: string) => () =>
-  console.log(`[Menu] ${label} — Phase 3 Screen 8`);
+  console.log(`[Menu] ${label} — TODO (Phase 4.1 follow-up)`);
 
 /** Extract the basename from a full path for the Recent Files submenu
  *  labels. Splits on the last `/` or `\\`; falls back to the whole
@@ -86,6 +106,12 @@ export function MenuBar({
   const bloomAvailable = state?.bloomAvailable ?? false;
   const paused = state?.paused ?? false;
   const heatDebug = state?.heatDebug ?? false;
+
+  // Primary selection drives the Emitters-menu item enabled state.
+  // Rename / Rescale / Add Child operate on the primary; Add Root is
+  // selection-independent.
+  const primaryEmitterId = useEmitterSelectionPrimary();
+  const hasPrimary = primaryEmitterId !== null;
 
   // Screen 8 Batch 3: File-menu wiring needs the recent-files list +
   // the prompt-save-changes helper.
@@ -135,6 +161,38 @@ export function MenuBar({
     // React cleanly involves window-placement persistence + other
     // concerns out of scope for Batch 3 (parking-lot decision).
     console.log("[Menu] Exit — TODO Batch N+1");
+  };
+
+  // ── Emitters menu handlers (FD5) ─────────────────────────────────
+
+  const handleAddRoot = () => {
+    void bridge.request({ kind: "emitters/add-root", params: {} });
+  };
+
+  const handleAddLifetimeChild = () => {
+    if (primaryEmitterId === null) return;
+    void bridge.request({
+      kind: "emitters/add-lifetime-child",
+      params: { parentId: primaryEmitterId },
+    });
+  };
+
+  const handleAddDeathChild = () => {
+    if (primaryEmitterId === null) return;
+    void bridge.request({
+      kind: "emitters/add-death-child",
+      params: { parentId: primaryEmitterId },
+    });
+  };
+
+  const handleRenameEmitter = () => {
+    if (primaryEmitterId === null) return;
+    requestEmitterRename(primaryEmitterId);
+  };
+
+  const handleRescaleEmitter = () => {
+    if (primaryEmitterId === null) return;
+    useTreeContextStore.getState().openDialog("rescale", primaryEmitterId);
   };
 
   return (
@@ -263,6 +321,112 @@ export function MenuBar({
         </Menubar.Portal>
       </Menubar.Menu>
 
+      {/* ─── Emitters (FD5) ─── */}
+      <Menubar.Menu>
+        <Menubar.Trigger className={TRIGGER}>Emitters</Menubar.Trigger>
+        <Menubar.Portal>
+          <Menubar.Content
+            className={CONTENT}
+            align="start"
+            sideOffset={4}
+          >
+            <Menubar.Sub>
+              <Menubar.SubTrigger className={ITEM}>
+                New Emitter
+                <ChevronRight className="ml-auto size-3.5" />
+              </Menubar.SubTrigger>
+              <Menubar.Portal>
+                <Menubar.SubContent
+                  className={CONTENT}
+                  sideOffset={2}
+                  alignOffset={-4}
+                >
+                  <Menubar.Item className={ITEM} onSelect={handleAddRoot}>
+                    Root Emitter
+                  </Menubar.Item>
+                  <Menubar.Item
+                    className={ITEM}
+                    disabled={!hasPrimary}
+                    onSelect={handleAddLifetimeChild}
+                  >
+                    Lifetime Child
+                  </Menubar.Item>
+                  <Menubar.Item
+                    className={ITEM}
+                    disabled={!hasPrimary}
+                    onSelect={handleAddDeathChild}
+                  >
+                    Death Child
+                  </Menubar.Item>
+                </Menubar.SubContent>
+              </Menubar.Portal>
+            </Menubar.Sub>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasPrimary}
+              onSelect={handleRenameEmitter}
+            >
+              Rename Emitter<Hint>F2</Hint>
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasPrimary}
+              onSelect={handleRescaleEmitter}
+            >
+              Rescale Emitter…
+            </Menubar.Item>
+            <Menubar.Separator className={SEPARATOR} />
+            {/* TODO (Phase 4.1 follow-up): per-row eye-icon visibility
+                affordance + bridge wiring. Items render disabled to
+                signal the surface is locked but inert. */}
+            <Menubar.Item
+              className={ITEM}
+              disabled
+              onSelect={todo("Toggle Visibility")}
+            >
+              Toggle Visibility
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
+              disabled
+              onSelect={todo("Show All Emitters")}
+            >
+              Show All Emitters
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
+              disabled
+              onSelect={todo("Hide All Emitters")}
+            >
+              Hide All Emitters
+            </Menubar.Item>
+            <Menubar.Separator className={SEPARATOR} />
+            <Menubar.Item className={ITEM} onSelect={() => onOpenSpawnerPanel()}>
+              Spawner…<Hint>F7</Hint>
+            </Menubar.Item>
+          </Menubar.Content>
+        </Menubar.Portal>
+      </Menubar.Menu>
+
+      {/* ─── Mods (FD5: promoted from Tools submenu to top-level) ─── */}
+      <Menubar.Menu>
+        <Menubar.Trigger className={TRIGGER}>Mods</Menubar.Trigger>
+        <Menubar.Portal>
+          <Menubar.Content
+            className={CONTENT}
+            align="start"
+            sideOffset={4}
+          >
+            {/* TODO (Phase 4.1 follow-up): dynamic detected-mod list.
+                For now the placeholder stays identical to the pre-FD5
+                Tools > Mods submenu content. */}
+            <Menubar.Item className={ITEM} disabled>
+              (none)
+            </Menubar.Item>
+          </Menubar.Content>
+        </Menubar.Portal>
+      </Menubar.Menu>
+
       {/* ─── View ─── */}
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>View</Menubar.Trigger>
@@ -308,12 +472,20 @@ export function MenuBar({
               Bloom
               {!bloomAvailable && <Hint>unavailable</Hint>}
             </Menubar.Item>
+            {/* FD5: Bloom Settings + Lighting moved from Tools to View. */}
             <Menubar.Item
               className={ITEM}
               onSelect={() => onOpenBloomPanel()}
             >
               <CheckSlot active={false} />
               Bloom Settings…
+            </Menubar.Item>
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => onOpenLightingPanel()}
+            >
+              <CheckSlot active={false} />
+              Lighting…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
             <Menubar.Item
@@ -335,6 +507,15 @@ export function MenuBar({
               })}
             >
               Step Forward
+            </Menubar.Item>
+            {/* TODO (Phase 4.1 follow-up): Reset Camera bridge call +
+                C++ handler. Disabled placeholder for FD5. */}
+            <Menubar.Item
+              className={ITEM}
+              disabled
+              onSelect={todo("Reset Camera")}
+            >
+              Reset Camera
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
             <Menubar.Item
@@ -366,47 +547,14 @@ export function MenuBar({
               <CheckSlot active={heatDebug} />
               Heat Debug
             </Menubar.Item>
+            {/* Already-deferred Reset View Settings — left in place
+                from the original menu shape. */}
             <Menubar.Item
               className={ITEM}
+              disabled
               onSelect={todo("Reset View Settings")}
             >
               Reset View Settings
-            </Menubar.Item>
-          </Menubar.Content>
-        </Menubar.Portal>
-      </Menubar.Menu>
-
-      {/* ─── Tools ─── */}
-      <Menubar.Menu>
-        <Menubar.Trigger className={TRIGGER}>Tools</Menubar.Trigger>
-        <Menubar.Portal>
-          <Menubar.Content
-            className={CONTENT}
-            align="start"
-            sideOffset={4}
-          >
-            <Menubar.Item className={ITEM} onSelect={() => onOpenLightingPanel()}>
-              Lighting…
-            </Menubar.Item>
-            <Menubar.Sub>
-              <Menubar.SubTrigger className={ITEM}>
-                Mods
-                <ChevronRight className="ml-auto size-3.5" />
-              </Menubar.SubTrigger>
-              <Menubar.Portal>
-                <Menubar.SubContent
-                  className={CONTENT}
-                  sideOffset={2}
-                  alignOffset={-4}
-                >
-                  <Menubar.Item className={ITEM} disabled>
-                    (none)
-                  </Menubar.Item>
-                </Menubar.SubContent>
-              </Menubar.Portal>
-            </Menubar.Sub>
-            <Menubar.Item className={ITEM} onSelect={() => onOpenSpawnerPanel()}>
-              Spawner…
             </Menubar.Item>
           </Menubar.Content>
         </Menubar.Portal>

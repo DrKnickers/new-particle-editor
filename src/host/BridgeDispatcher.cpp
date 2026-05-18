@@ -2561,6 +2561,35 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/add-root --------------------------------------
+    //
+    // Phase 4.1 Fix dispatch 5 — wraps `ParticleSystem::addRootEmitter()`
+    // for the new top-level Emitters → New Emitter → Root menu item.
+    // The engine always succeeds (no max-roots cap); the only failure
+    // path is a missing particle-system pointer, surfaced as
+    // `newId: -1` for parity with the add-child handlers.
+    if (kind == "emitters/add-root")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        captureUndo();
+        ParticleSystem::Emitter* child =
+            (*m_pParticleSystem)->addRootEmitter();
+        if (child == nullptr)
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        sendOk(json{{"newId", static_cast<int>(child->index)}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- emitters/add-death-child -------------------------------
     if (kind == "emitters/add-death-child")
     {

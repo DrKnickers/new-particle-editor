@@ -18,9 +18,9 @@ test.afterAll(async () => {
   await browser?.close();
 });
 
-// ── 1. All 5 triggers present ────────────────────────────────────────────────
+// ── 1. All 6 triggers present in legacy order (FD5) ──────────────────────────
 
-test("All 5 menu triggers render in the menubar", async () => {
+test("All 6 menu triggers render in the menubar in legacy order [File, Edit, Emitters, Mods, View, Help]", async () => {
   const triggers = await page.evaluate(() => {
     const bar = document.querySelector('[role="menubar"]');
     if (!bar) return [];
@@ -30,9 +30,9 @@ test("All 5 menu triggers render in the menubar", async () => {
       (b) => b.textContent?.trim()
     );
   });
-  expect(triggers).toEqual(
-    expect.arrayContaining(["File", "Edit", "View", "Tools", "Help"])
-  );
+  expect(triggers).toEqual(["File", "Edit", "Emitters", "Mods", "View", "Help"]);
+  // Tools menu is removed in FD5.
+  expect(triggers).not.toContain("Tools");
 });
 
 // ── 2. Edit › Clear All Particles dispatches engine/action/clear ─────────────
@@ -108,6 +108,33 @@ test("View > Pause dispatches engine/set/paused and flips state", async () => {
 });
 
 // ── 5. File menu opens and exposes items via Radix portal ────────────────────
+
+// ── FD5 — Emitters top-level menu dispatches emitters/add-root ──────────────
+
+test("Emitters > New Emitter > Root Emitter dispatches emitters/add-root", async () => {
+  // Bridge-level verification: the dispatch surface for the new menu
+  // item exists and produces a tree-changed event. The DOM click path
+  // through the Radix submenu portal is brittle in headed CDP — we
+  // exercise the same handler the menu item calls.
+  const result = await page.evaluate(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = (window as any).bridge;
+    const before = await b.request({ kind: "emitters/list", params: {} });
+    const rootsBefore = before.root.children.length;
+    const r = await b.request({ kind: "emitters/add-root", params: {} });
+    await new Promise((rs) => setTimeout(rs, 100));
+    const after = await b.request({ kind: "emitters/list", params: {} });
+    return {
+      newId: r.newId,
+      rootsBefore,
+      rootsAfter: after.root.children.length,
+      lastRole: after.root.children[after.root.children.length - 1]?.role,
+    };
+  });
+  expect(result.newId).toBeGreaterThan(0);
+  expect(result.rootsAfter).toBe(result.rootsBefore + 1);
+  expect(result.lastRole).toBe("root");
+});
 
 test("File menu opens to reveal items in the DOM", async () => {
   // Click the File trigger in the menubar. Radix renders triggers as

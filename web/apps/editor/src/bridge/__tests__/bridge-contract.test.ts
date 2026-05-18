@@ -615,6 +615,26 @@ describe("MockBridge contract", () => {
     off();
   });
 
+  it("emitters/add-root appends a new empty root emitter and returns its newId (FD5)", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    const before = await b.request({ kind: "emitters/list", params: {} });
+    const rootCountBefore = before.root.children.length;
+    const r = await b.request({ kind: "emitters/add-root", params: {} });
+    expect(r.newId).toBeGreaterThan(0);
+    expect(lastTree).not.toBeNull();
+    expect(lastTree!.root.children).toHaveLength(rootCountBefore + 1);
+    // New root is appended at the end with role: "root", empty name,
+    // no children, link group 0.
+    const last = lastTree!.root.children[lastTree!.root.children.length - 1]!;
+    expect(last.id).toBe(r.newId);
+    expect(last.role).toBe("root");
+    expect(last.children).toHaveLength(0);
+    expect(last.linkGroup).toBe(0);
+    off();
+  });
+
   it("emitters/add-death-child adds a death child under the parent and returns its newId", async () => {
     const b = new MockBridge();
     let lastTree: EmitterTreeDto | null = null;

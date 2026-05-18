@@ -481,6 +481,13 @@ export type Request =
   //     the smallest unused positive uint32_t.
   | { kind: "emitters/add-lifetime-child";  params: { parentId: number } }
   | { kind: "emitters/add-death-child";     params: { parentId: number } }
+  // Phase 4.1 Fix dispatch 5: legacy "New Root Emitter" menu item.
+  // Wraps `ParticleSystem::addRootEmitter()` (parameter-less; the
+  // optional template overload isn't exposed across the wire). Always
+  // succeeds at the engine level — returns `newId: -1` only when the
+  // particle-system pointer is unavailable (shouldn't happen in
+  // practice).
+  | { kind: "emitters/add-root";            params: Record<string, never> }
   | { kind: "emitters/move";                params: { id: number; direction: "up" | "down" } }
   | { kind: "linkGroups/set-membership";    params: { ids: number[]; groupId: number | null } }
 
@@ -631,6 +638,7 @@ export type ResponseFor<R extends Request> =
   // Emitter mutations (Phase 3 Screen 4 Batch B2)
   R extends { kind: "emitters/add-lifetime-child" } ? { newId: number } :
   R extends { kind: "emitters/add-death-child" }    ? { newId: number } :
+  R extends { kind: "emitters/add-root" }           ? { newId: number } :
   R extends { kind: "emitters/move" }               ? Record<string, never> :
   R extends { kind: "linkGroups/set-membership" }   ? Record<string, never> :
 

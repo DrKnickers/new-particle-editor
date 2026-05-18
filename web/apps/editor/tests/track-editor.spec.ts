@@ -456,3 +456,68 @@ test("Spinner edit on a selected key fires set-track-key", async () => {
     await bridge!.request({ kind: "emitters/select", params: { id: null } });
   });
 });
+
+// ── FD5 — marquee select on curve editor in Select mode ────────────────────
+
+test("dragging a marquee on the curve editor canvas renders the dashed rectangle (Select mode)", async () => {
+  // Drive selection so the property panel mounts with TrackEditor +
+  // CurveEditor inside.
+  const selectedId = await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    const list = await bridge!.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { id: number }[] };
+    };
+    const firstId = list.root.children[0]?.id;
+    if (firstId === undefined) throw new Error("no emitters in tree");
+    await bridge!.request({ kind: "emitters/select", params: { id: firstId } });
+    return firstId;
+  });
+
+  const panel = page.locator('[data-testid="emitter-property-panel"]');
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  const svg = panel.locator('[data-testid="curve-editor-svg"]');
+  await expect(svg).toBeVisible({ timeout: 5_000 });
+
+  // Ensure we're in Select mode (default; clicking it is idempotent).
+  const selectBtn = panel.locator('[data-testid="track-tool-select"]');
+  await selectBtn.click();
+
+  // Get the SVG's bounding box and drag from interior point A to B.
+  const box = await svg.boundingBox();
+  if (box === null) throw new Error("svg has no bounding box");
+  const ax = box.x + box.width * 0.2;
+  const ay = box.y + box.height * 0.2;
+  const bx = box.x + box.width * 0.8;
+  const by = box.y + box.height * 0.8;
+
+  await page.mouse.move(ax, ay);
+  await page.mouse.down();
+  // Multiple steps so the move clears the slop threshold reliably.
+  await page.mouse.move(ax + 20, ay + 20);
+  await page.mouse.move(bx, by, { steps: 5 });
+
+  // While the pointer is still down, the marquee rectangle should be
+  // present in the DOM.
+  await expect(svg.locator('[data-testid="curve-marquee"]')).toBeVisible({
+    timeout: 2_000,
+  });
+
+  // Release — marquee is removed; selection (or empty selection) is
+  // applied. We don't assert on selection contents because the host's
+  // seeded track may have zero keys in the rect.
+  await page.mouse.up();
+  await expect(svg.locator('[data-testid="curve-marquee"]')).toHaveCount(0, {
+    timeout: 2_000,
+  });
+
+  // Tear down.
+  await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    await bridge!.request({ kind: "emitters/select", params: { id: null } });
+  });
+  void selectedId;
+});

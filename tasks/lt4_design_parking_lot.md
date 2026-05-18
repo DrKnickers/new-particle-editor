@@ -5569,6 +5569,109 @@ C++ work). Tests 168 Vitest (159 → 168, +9) + 74 Playwright
 
 Phase 4.2 still BLOCKED until Fix dispatches 4 + 5 land.
 
+### Fix dispatch 5 — Marquee select + MenuBar restructure (locked 2026-05-18)
+
+Closes findings #4 (marquee select on curve editor) and #5 (Mods +
+Emitters top-level menus missing). Polish dispatch — mostly menu
+reshuffles + one new interaction in CurveEditor.
+
+**Marquee select on CurveEditor:**
+
+- In **Select mode** (not Insert mode), pointer-down on empty
+  canvas starts a rubber-band rectangle. Existing
+  `clearSelection` on empty-canvas-pointer-down moves to
+  pointer-up (so an immediate up clears; a drag selects).
+- Pointer-move during drag: update rectangle dimensions. Render
+  visible SVG `<rect>` with semi-transparent fill (`fill:
+  rgb(14 165 233 / 0.15)`) + dashed border (`stroke: #0EA5E9;
+  stroke-dasharray: 4 4`).
+- Pointer-up: collect all keys whose `(time, value)` falls within
+  the rectangle (inclusive bounds). Replace `selectedKeyTimes`
+  with the collected set.
+- Esc during drag: cancel — clear the rectangle, leave selection
+  untouched.
+- **Shift-held marquee**: append marquee result to existing
+  selection rather than replacing.
+- **Insert mode**: marquee NOT active. Pointer-down on empty
+  canvas adds a key (existing FD3 behaviour).
+
+**MenuBar restructure to match legacy:**
+
+Legacy top-level order (from
+[src/ParticleEditor.en.rc:565-630]): File / Edit / Emitters /
+Mods / View / Help. Plan:
+
+1. **Add `Emitters` top-level menu** with:
+   - New Emitter submenu (Root / Lifetime / Death) →
+     existing `emitters/add-lifetime-child` /
+     `emitters/add-death-child` for child slots; `Root`
+     uses... need a `emitters/add-root` bridge call OR
+     subagent uses an existing pattern. Look at how
+     EmitterTree's context menu handles "Add Root Emitter"
+     (probably doesn't yet — may need to wire). For now,
+     gray it out + TODO if no clean bridge call exists.
+   - Rename Emitter (F2) → triggers inline rename via the
+     existing `tree-context` atom OR fires the same keydown
+     path EmitterTree handles. Subagent picks the cleaner
+     plumbing.
+   - Rescale Emitter… → opens existing `RescaleEmitterDialog`
+     via the `tree-context` atom.
+   - **Spawner…** → opens existing Spawner panel (currently
+     under Tools).
+   - **Toggle Visibility / Show All / Hide All** — DEFER to
+     a future polish batch (needs per-row eye-icon
+     affordance too). Add as menu items but grayed with
+     TODO.
+2. **Add `Mods` top-level menu**. Currently a SUBMENU under
+   Tools at [web/apps/editor/src/components/MenuBar.tsx]
+   — promote to top-level. Dynamic list of detected mods
+   stays unchanged.
+3. **Move Lighting + Bloom Settings to View menu**. Currently
+   under Tools.
+4. **Remove `Tools` menu** entirely. All its items have
+   moved.
+5. View menu items finalised: Ground / Bloom Settings... /
+   Lighting... / Pause / Step Forward / Reset Camera (TODO)
+   / Reload Shaders / Reload Textures / Heat Debug /
+   Background... / Ground Texture... / Reset View Settings
+   (TODO).
+6. **Out of scope**: actual emit toggle visibility wiring,
+   reset camera implementation, reset view settings.
+
+**Schema additions** (minimal):
+
+- Possibly `emitters/add-root { template?: EmitterPropertiesDto }`
+  for "New Root Emitter" menu item. If `ParticleSystem::addRootEmitter`
+  exists already on the C++ side (it does, per Screen 4 B1), the
+  bridge handler is a one-liner.
+- No other new calls — Toggle Visibility / Show All / Hide All /
+  Reset Camera all deferred with menu items wired to no-op
+  console.log + `Coming soon` aria-disabled state.
+
+**Test surface:**
+
+- **Vitest** (+5-7 specs, target 168 → 173+):
+  - `CurveEditor.test.tsx`: marquee drag on empty canvas
+    selects keys inside the rect; Esc cancels.
+  - `MenuBar.test.tsx`: top-level menu list matches
+    [File, Edit, Emitters, Mods, View, Help].
+  - `MenuBar.test.tsx`: Emitters menu contains the expected
+    items.
+  - `MenuBar.test.tsx`: Mods top-level menu has the dynamic
+    list.
+- **Playwright** (+1-2 specs, target 74 → 76+):
+  - Marquee drag selects keys (use real mouse events).
+  - Mods top-level menu opens.
+
+**Open follow-ups** (post Fix dispatch 5):
+
+- Toggle Visibility per-row affordance + bridge wiring.
+- Reset Camera bridge call + handler.
+- Reset View Settings (multi-setting registry cleanup).
+- Phase 4.2 cutover (legacy delete) — unblocked after Fix
+  dispatches 4 + 5 ship.
+
+
 
 
 

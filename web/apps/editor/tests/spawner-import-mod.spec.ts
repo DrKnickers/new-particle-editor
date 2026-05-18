@@ -59,15 +59,16 @@ async function closeAnyPanel(p: Page) {
   }
 }
 
-test("Tools → Spawner opens the Spawner panel", async () => {
+test("Emitters → Spawner opens the Spawner panel", async () => {
+  // FD5: Spawner moved from Tools to the new top-level Emitters menu.
   await closeAnyPanel(page);
-  await openMenuItem(page, "Tools", "Spawner");
+  await openMenuItem(page, "Emitters", "Spawner");
   await waitForPanel(page, "Spawner");
 });
 
 test("Opening Background closes the Spawner panel (mutual exclusion)", async () => {
   await closeAnyPanel(page);
-  await openMenuItem(page, "Tools", "Spawner");
+  await openMenuItem(page, "Emitters", "Spawner");
   await waitForPanel(page, "Spawner");
 
   await page.locator('button[aria-label="Background"]').first().click();
@@ -82,7 +83,7 @@ test("Opening Background closes the Spawner panel (mutual exclusion)", async () 
 
 test("Changing Burst size fires engine/state/changed with new spawner.burstSize", async () => {
   await closeAnyPanel(page);
-  await openMenuItem(page, "Tools", "Spawner");
+  await openMenuItem(page, "Emitters", "Spawner");
   await waitForPanel(page, "Spawner");
 
   // Subscribe to engine/state/changed and capture each spawner.burstSize.

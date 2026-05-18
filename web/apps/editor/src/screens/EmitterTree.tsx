@@ -65,6 +65,7 @@ import type {
   EmitterTreeNode,
 } from "@particle-editor/bridge-schema";
 import { openTreeContextDialog } from "@/lib/tree-context";
+import { useTreeActionStore } from "@/lib/tree-action";
 import {
   useEmitterSelectionIds,
   useEmitterSelectionPrimary,
@@ -848,6 +849,21 @@ export function EmitterTree({ bridge }: Props) {
   // render and the shift-click range computation.
   const flatRows  = useMemo(() => flattenTree(tree), [tree]);
   const orderedIds = useMemo(() => flatRows.map((r) => r.node.id), [flatRows]);
+
+  // Phase 4.1 Fix dispatch 5 — subscribe to menu-driven rename
+  // requests. The MenuBar's "Rename Emitter" item writes the target
+  // id into the tree-action atom; we pick it up, begin inline edit
+  // (same path as F2 / context-menu Rename / dbl-click), and consume
+  // the request. Silently no-op if the target id doesn't resolve to
+  // a current row — matches the defensive guard the F2 handler uses
+  // for the same race (mid-mutation, deleted emitter, etc.).
+  const renameRequest = useTreeActionStore((s) => s.renameRequest);
+  useEffect(() => {
+    if (renameRequest === null) return;
+    const node = flatRows.find((r) => r.node.id === renameRequest)?.node ?? null;
+    if (node !== null) beginEdit(node.id, node.name);
+    useTreeActionStore.getState().consumeRenameRequest();
+  }, [renameRequest, flatRows, beginEdit]);
 
   const handleRowClick = useCallback(
     (

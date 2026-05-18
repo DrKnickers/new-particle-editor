@@ -483,6 +483,32 @@ export function addLifetimeChildEmitter(
   return { tree: next, newId };
 }
 
+/** Add a new empty root emitter (Phase 4.1 Fix dispatch 5).
+ *
+ *  Mirrors `ParticleSystem::addRootEmitter()` with the default empty
+ *  Emitter argument: the new root has no name, link group 0, visible,
+ *  no children. Always succeeds (the engine has no "max roots" cap).
+ *  New id = `maxIdIn(tree) + 1` to match the existing id-allocator
+ *  pattern used by the other add helpers. Appended at the end of the
+ *  root child list — mirrors the engine's push-back insertion. */
+export function addRootEmitterMock(
+  tree: EmitterTreeDto,
+): { tree: EmitterTreeDto; newId: number } {
+  const newId = maxIdIn(tree) + 1;
+  const child: EmitterTreeNode = {
+    id: newId,
+    name: "",
+    role: "root",
+    linkGroup: 0,
+    visible: true,
+    children: [],
+  };
+  return {
+    tree: { root: { ...tree.root, children: [...tree.root.children, child] } },
+    newId,
+  };
+}
+
 /** Add a death child under `parentId`. Refused when the parent
  *  already has a death child. */
 export function addDeathChildEmitter(
