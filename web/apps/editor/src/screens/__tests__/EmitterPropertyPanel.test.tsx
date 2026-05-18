@@ -175,6 +175,23 @@ describe("EmitterPropertyPanel", () => {
 
   // ─── Screen 6 Batch B-β ────────────────────────────────────────────
 
+  // ─── Phase 4.1 Fix dispatch 1 — panel moved to lower-right quadrant
+  it("renders at full width (no sidebar w-80 class) since it lives in the lower-right quadrant", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<EmitterPropertyPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("emitter-property-panel")).toBeInTheDocument();
+    });
+    const panel = screen.getByTestId("emitter-property-panel");
+    // Old layout had `w-80` (sidebar). New layout uses `w-full h-full`
+    // because the parent quadrant div sets dimensions.
+    expect(panel.className).toContain("w-full");
+    expect(panel.className).not.toContain("w-80");
+    // border-l (sidebar separator) is gone now that the quadrant grid
+    // owns the borders.
+    expect(panel.className).not.toContain("border-l");
+  });
+
   it("Spinners reflect the selected key's (time, value) when exactly one key is selected", async () => {
     const { bridge } = makeStubBridge(7, fixtureTracksWithMiddleKey);
     render(<EmitterPropertyPanel bridge={bridge} />);

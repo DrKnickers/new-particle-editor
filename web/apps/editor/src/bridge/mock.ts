@@ -45,6 +45,7 @@ import {
   setTrackInterpolationInOverlay,
   setTrackKeyInOverlay,
   useMockEmitterClipboard,
+  useMockEmitterProperties,
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
@@ -109,6 +110,8 @@ function isMutating(kind: Request["kind"]): boolean {
   // Track state.
   if (kind === "emitters/set-track-key") return true;
   if (kind === "emitters/add-track-key") return true;
+  // Phase 4.1 Fix dispatch 1 — per-emitter property patch.
+  if (kind === "emitters/set-properties") return true;
   return false;
 }
 
@@ -507,6 +510,60 @@ export class MockBridge implements Bridge {
         // Read through the overlay so mutations made via
         // delete-track-keys / set-track-interpolation are reflected.
         return { tracks: useMockTrackOverlay.getState().read(node.id) };
+      }
+
+      // ---------------- emitters/get-properties (Phase 4.1 Fix 1) ----
+      //
+      // Returns the merged fixture+overlay DTO for `id`. Unknown ids
+      // (including the synthetic root id=-1) return default-shaped
+      // properties so the React form can render a disabled placeholder
+      // rather than special-casing the failure. The native host returns
+      // ok:false on unknown id; the contract test asserts the success
+      // path against a known id.
+      case "emitters/get-properties": {
+        const cur = useMockEmitterTree.getState().tree;
+        const node = findEmitterNode(cur, req.params.id);
+        if (node === null || node.id === -1) {
+          return {
+            properties: useMockEmitterProperties.getState().read(-1),
+          };
+        }
+        return {
+          properties: useMockEmitterProperties.getState().read(node.id),
+        };
+      }
+
+      // ---------------- emitters/set-properties (Phase 4.1 Fix 1) ----
+      //
+      // Batch patch: apply every key in `patch` to the overlay, emit
+      // tree/changed + state/changed once so the React form re-fetches
+      // and any downstream consumers (selection-aware components) see
+      // the mutation. Missing ids are a silent no-op (the React side
+      // disables the form when no emitter is selected).
+      case "emitters/set-properties": {
+        const cur = useMockEmitterTree.getState().tree;
+        const node = findEmitterNode(cur, req.params.id);
+        if (node === null || node.id === -1) {
+          return {};
+        }
+        useMockEmitterProperties.getState().patch(node.id, req.params.patch);
+        // If the patch includes `name`, mirror it onto the tree node so
+        // the EmitterTree label updates without an extra `emitters/rename`
+        // round-trip.
+        if (typeof req.params.patch.name === "string") {
+          useMockEmitterTree.getState().setTree(
+            renameEmitter(cur, node.id, req.params.patch.name),
+          );
+        }
+        this.emit({
+          kind: "emitters/tree/changed",
+          payload: useMockEmitterTree.getState().tree,
+        });
+        this.emit({
+          kind: "engine/state/changed",
+          payload: snapshotEngineState(),
+        });
+        return {};
       }
 
       // ---------------- emitters/delete-track-keys (Screen 5/6 B-α) --

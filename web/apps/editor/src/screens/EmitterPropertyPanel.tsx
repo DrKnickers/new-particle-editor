@@ -1,11 +1,16 @@
-// EmitterPropertyPanel — right-side panel that surfaces per-emitter
-// properties for the currently selected emitter.
+// EmitterPropertyPanel — lower-RIGHT quadrant of the four-quadrant
+// layout (Phase 4.1 Fix dispatch 1). Hosts the TrackEditor + Curve
+// editor for the currently selected emitter; "Select an emitter"
+// placeholder when nothing is selected.
+//
+// Phase 4.1 Fix dispatch 1: moved from the right-side sidebar to the
+// lower-right quadrant. The form-field property inspector that used
+// to be planned for this panel is now `EmitterPropertyTabs` in the
+// lower-LEFT quadrant. The panel keeps its Delete-key handler that
+// routes Delete to TrackEditor's deleteSelected.
 //
 // Phase 3 Screen 6 Batch A: foundation. Renders <TrackEditor> when an
 // emitter is selected, a "Select an emitter" placeholder otherwise.
-// Future batches will add the property inspector (Phase 3 Screens 1-3
-// emitter parameters), the random-params grid, the link-group panel,
-// etc. — those slot in as additional sections of this panel.
 //
 // Selection sync:
 //   - On mount, fetch `engine/state/snapshot` to seed
@@ -146,7 +151,7 @@ export function EmitterPropertyPanel({ bridge }: Props) {
       // onKeyDown wouldn't see it.
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      className="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sky-700"
+      className="flex h-full w-full flex-col overflow-y-auto bg-neutral-950 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sky-700"
       aria-label="Emitter properties"
     >
       {selectedId === null ? (

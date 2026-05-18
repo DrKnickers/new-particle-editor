@@ -240,6 +240,107 @@ export const TRACK_NAMES: readonly TrackName[] = Object.freeze([
   "rotationSpeed",
 ]);
 
+// ─── Emitter properties DTO (Phase 4.1 Fix dispatch 1) ──────────────
+//
+// Mirrors every editable field on `ParticleSystem::Emitter`
+// ([src/ParticleSystem.h:71-204]). Grouped by the UI tab that surfaces
+// the field (Basic / Appearance / Physics) so a reviewer can see at a
+// glance what's wired where. Fix dispatch 1 wires the Basic group to
+// `EmitterPropertyTabs`; Appearance + Physics ride this DTO so dispatches
+// 2 and 3 add only UI, not schema.
+//
+// `groups: GroupDto[]` mirrors the C array `Group groups[NUM_GROUPS]`
+// (NUM_GROUPS = 3). Per-Group fields match the `#pragma pack(1)` struct
+// in `ParticleSystem::Emitter::Group`. The position-vec triples (`minX/
+// minY/minZ`, etc.) collapse into `Vec3` on the wire so the JS side
+// doesn't have to spell out each axis. The `type` field is the engine
+// enum index (`GT_EXACT` / `GT_BOX` / `GT_CUBE` / `GT_SPHERE` /
+// `GT_CYLINDER`); kept as a number rather than a string union because
+// the UI surfaces it as a Radix Select with numeric values matching the
+// engine enum.
+
+export type GroupDto = {
+  type: number;                  // ParticleSystem::GT_* (0..4)
+  min: Vec3;                     // (minX, minY, minZ)
+  max: Vec3;                     // (maxX, maxY, maxZ)
+  sideLength: number;
+  sphereRadius: number;
+  sphereEdge: number;
+  cylinderRadius: number;
+  cylinderEdge: number;
+  cylinderHeight: number;
+  val: Vec3;                     // (valX, valY, valZ)
+};
+
+export type EmitterPropertiesDto = {
+  // ── Basic ── ([ParticleSystem.h:140] name, :154 linkToSystem,
+  // :162 randomRotation, :165 useBursts, :168 lifetime, :169 initialDelay,
+  // :170 burstDelay, :175 randomLifetimePerc, :174 randomScalePerc,
+  // :178 parentLinkStrength, :180-181 randomRotationAverage/Variance,
+  // :184-185 freezeTime/skipTime, :188 nBursts, :189 index,
+  // :192 nParticlesPerSecond, :194 nParticlesPerBurst).
+  name: string;
+  lifetime: number;
+  initialDelay: number;
+  useBursts: boolean;
+  nBursts: number;
+  burstDelay: number;
+  nParticlesPerBurst: number;
+  nParticlesPerSecond: number;
+  randomLifetimePerc: number;
+  randomScalePerc: number;
+  randomRotation: boolean;
+  randomRotationDirection: boolean;
+  randomRotationAverage: number;
+  randomRotationVariance: number;
+  freezeTime: number;
+  skipTime: number;
+  linkToSystem: boolean;
+  parentLinkStrength: number;
+  index: number;
+
+  // ── Appearance ── ([ParticleSystem.h:141-142 colorTexture/
+  // normalTexture, :156 doColorAddGrayscale, :157 affectedByWind,
+  // :158 isHeatParticle, :160 hasTail, :161 noDepthTest,
+  // :164 isWorldOriented, :177 tailSize, :182 randomColors,
+  // :190 blendMode, :191 textureSize, :193 nTriangles).
+  colorTexture: string;
+  normalTexture: string;
+  blendMode: number;
+  textureSize: number;
+  nTriangles: number;
+  doColorAddGrayscale: boolean;
+  randomColors: Vec4;
+  hasTail: boolean;
+  tailSize: number;
+  isHeatParticle: boolean;
+  isWorldOriented: boolean;
+  noDepthTest: boolean;
+  affectedByWind: boolean;
+
+  // ── Physics ── ([ParticleSystem.h:155 objectSpaceAcceleration,
+  // :159 isWeatherParticle, :166 emitFromMesh, :167 gravity,
+  // :171 inwardSpeed, :172 inwardAcceleration, :173 acceleration,
+  // :176 weatherCubeSize, :179 weatherCubeDistance, :183 bounciness,
+  // :186 emitFromMeshOffset, :187 weatherFadeoutDistance,
+  // :195 groundBehavior). `groups` is :145.
+  acceleration: Vec3;
+  gravity: number;
+  inwardSpeed: number;
+  inwardAcceleration: number;
+  objectSpaceAcceleration: boolean;
+  bounciness: number;
+  groundBehavior: number;
+  emitFromMesh: number;
+  emitFromMeshOffset: number;
+  isWeatherParticle: boolean;
+  weatherCubeSize: number;
+  weatherCubeDistance: number;
+  weatherFadeoutDistance: number;
+
+  groups: GroupDto[];
+};
+
 // ============================================================================
 // Other DTOs (expanded in later tasks)
 // ============================================================================
@@ -317,6 +418,15 @@ export type Request =
   // Track read (Phase 3 Screen 6 Batch A). Read-only this batch; key
   // mutations land with Screen 5 / Screen 6 Batch B.
   | { kind: "emitters/get-tracks";        params: { id: number } }
+
+  // Emitter property read/write (Phase 4.1 Fix dispatch 1). Single
+  // round-trip read returns the full property DTO for `id`. Writes use
+  // a JSON patch object — only the keys actually present in `patch` are
+  // applied to the engine, so the React form can fire one field at a
+  // time without sending the whole DTO each commit.
+  | { kind: "emitters/get-properties";    params: { id: number } }
+  | { kind: "emitters/set-properties";
+      params: { id: number; patch: Partial<EmitterPropertiesDto> } }
 
   // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α). Border
   // keys (first + last in time order) are silently skipped server-side
@@ -490,6 +600,14 @@ export type ResponseFor<R extends Request> =
   // an error so the panel can render a "no data yet" stub without
   // special-casing the failure.
   R extends { kind: "emitters/get-tracks" } ? { tracks: TrackDto[] } :
+
+  // Emitter properties (Phase 4.1 Fix dispatch 1). Read returns the
+  // full DTO; write returns an empty object after the patch is
+  // applied. Unknown id: read returns default-shaped properties
+  // (zeros + empty strings) so the form can render a disabled
+  // placeholder instead of an error; write is a silent no-op.
+  R extends { kind: "emitters/get-properties" } ? { properties: EmitterPropertiesDto } :
+  R extends { kind: "emitters/set-properties" } ? Record<string, never> :
 
   // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α)
   R extends { kind: "emitters/delete-track-keys" }       ? Record<string, never> :

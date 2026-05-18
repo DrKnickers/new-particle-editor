@@ -1,131 +1,99 @@
-# Screen 6 Batch A — Foundation (read-only) (2026-05-17)
+# LT-4 Phase 4.1 — Fix dispatch 1: Layout reshuffle + Basic-tab property panel
 
 ## Goal & scope
 
-**In:** 1 new read-only bridge call (`emitters/get-tracks`), right-side
-EmitterPropertyPanel that appears on emitter selection, TrackEditor
-shell (toolbar + lock-to combo — visual only, "Batch B" tooltips), and
-a pure-presentational SVG CurveEditor sub-component. This is also the
-SVG-vs-canvas profiling vehicle.
+Land the four-quadrant layout matching legacy + the Basic tab of a new
+`EmitterPropertyTabs` component. Closes parity findings #2 (missing
+emitter property panel) and #3 (curve editor on right instead of legacy
+bottom). Schema is complete for Basic + Appearance + Physics + groups so
+follow-up dispatches just add UI without schema churn.
 
-**Out:** Any interaction (click/drag/add/delete/interpolation toggle,
-lock-to functional behaviour) — all deferred to Batch B / Screen 5.
-No mutations. No smooth/step rendering nuance (drawn as polyline).
-Legacy `TrackEditor.cpp` / `CurveEditor.cpp` untouched.
+**In:** Four-quadrant App.tsx; EmitterPropertyTabs with Radix Tabs (3
+tabs); Basic tab — 18 fields wired via `emitters/set-properties`;
+Appearance + Physics tab placeholders; EmitterPropertiesDto with every
+Basic + Appearance + Physics + groups field; `emitters/get-properties` +
+`emitters/set-properties` bridge calls; C++ handlers; MockBridge
+overlay; +8 Vitest, +2 Playwright.
 
-## What the codebase gives us
+**Out:** Appearance UI (dispatch 2), Physics UI + Group distribution
+(dispatch 3), D3D viewport bugs (dispatch 4), marquee select / menus
+(dispatch 5). Legacy `src/UI/Emitter.cpp` untouched.
 
-- `ParticleSystem::Emitter::tracks[NUM_TRACKS]` (=7) at
-  [src/ParticleSystem.h:151]; each is `Track*` aliasing
-  `trackContents[i]`. Track shape: `KeyMap keys` (`std::multiset<Key>`),
-  `InterpolationType interpolation`.
-- Track order (verified by `LinkGroup.cpp:359-362` labels): Red, Green,
-  Blue, Alpha, Scale, Index, Rotation.
-- Interpolation enum at [src/ParticleSystem.h:78-81]: IT_UNKNOWN=-1,
-  IT_LINEAR=0, IT_SMOOTH=1, IT_STEP=2.
-- BridgeDispatcher: `getEmitters()`, snapshot patterns in
-  `emitters/list` at [src/host/BridgeDispatcher.cpp:1475].
-- Mock fixture tree has emitters with ids 0..5.
-- Existing screens / dialogs use ToolPanel pattern, Radix Select via
-  `@radix-ui/react-select`.
+## Approach
 
-## Architecture
+- Schema: `EmitterPropertiesDto` (all Basic/Appearance/Physics + groups),
+  `GroupDto`, +2 Request kinds.
+- MockBridge: id-keyed overlay store layered on `makeFixtureProperties`,
+  mirroring `useMockTrackOverlay` pattern.
+- C++ host: `emitters/get-properties` walks the emitter; `emitters/
+  set-properties` iterates patch keys, captures undo once, emits events
+  once. Pattern mirrors `emitters/get-tracks` + `emitters/rename` from
+  Screens 4/6.
+- React: new `EmitterPropertyTabs` mounted in lower-left quadrant. Old
+  `EmitterPropertyPanel` repurposed as lower-right TrackEditor mount.
+  `App.tsx` layout becomes 2x2 grid.
 
-**Schema** (`web/packages/bridge-schema/src/index.ts`):
-- New types: `InterpolationType = "linear" | "smooth" | "step"`,
-  `TrackKey = { time, value }`, `TrackDto = { name, keys, interpolation }`.
-- `TRACK_NAMES` constant export array of 7 lowercase names so the React
-  side has a single source of truth.
-- New Request kind `emitters/get-tracks { id: number }` →
-  `{ tracks: TrackDto[] }`.
+## Risks
 
-**MockBridge** (`web/apps/editor/src/bridge/mock.ts`, `mock-state.ts`):
-- Add a fixture-track function that generates 7 deterministic tracks
-  per emitter id (seed by id so different selections show distinct
-  curves). Keys typically <20 per track to match expected usage.
-- Mock handler in `mock.ts` for `emitters/get-tracks`. Validates the id
-  by walking the tree via `findEmitterNode`; returns
-  `{ tracks: [...] }` always (empty tracks for missing ids).
+1. Radix Tabs flaky in jsdom — assert via `data-state` + Basic default-open.
+2. Schema bloat — group fields by tab, cross-ref struct line ranges.
+3. C++ partial patch — iterate `patch.items()`, not field-by-field.
+4. Optimistic local update vs engine echo — tree/changed re-fetch wins.
+5. Tool-panel overlay positioning — keep ToolPanels inside viewport
+   quadrant which becomes their positioned ancestor.
+6. Delete-key handler on EmitterPropertyPanel — unchanged; routes Delete
+   to TrackEditor.deleteSelected.
+7. Panel sidebar styling — drop `w-80` + `border-l` from inner panel.
 
-**C++ host** (`src/host/BridgeDispatcher.cpp`):
-- New handler: `emitters/get-tracks`. Resolve emitter by id (bounds-
-  check), iterate `tracks[0..6]`, emit each `Track*`'s keys (sorted
-  ascending by time — `std::multiset<Key>` already orders by time),
-  and the interpolation enum mapped to wire strings. Returns
-  `{ tracks: [] }` on missing emitter (graceful fallback) rather than
-  ok:false — matches the read-only semantics of the contract.
+## Verification
 
-**React** (`web/apps/editor/src/screens/`):
-- `EmitterPropertyPanel.tsx`: subscribes to `emitters/selected` +
-  `emitters/tree/changed`, reads `engine/state/snapshot` on mount for
-  initial selection. When selectedEmitterId !== null, fetches tracks
-  and renders `<TrackEditor tracks={tracks} />`. When null, renders
-  nothing (panel is hidden — parent App.tsx handles the layout
-  collapse).
-- `TrackEditor.tsx`: 7 track-toggle buttons (active track = local
-  state, default "red"), tool toggles (Select/Insert + interp picker +
-  Delete) all disabled with title="Batch B", Radix Select for lock-to
-  (per-track option list), and `<CurveEditor track={track}
-  valueRange={range} />` below.
-- `CurveEditor.tsx`: pure SVG. viewBox = "0 0 W H" (default 600x300).
-  Renders axes, gridlines (10 ticks per axis), polyline through keys,
-  circles at each key. Y inversion via per-coordinate flip
-  (`H - normalisedY * H`) — simpler than a transform and keeps text
-  upright if axis labels are added later.
+- pnpm build (0 exit).
+- pnpm test 155+ (was 147).
+- MSBuild Debug x64 (0 exit).
+- pnpm test:native 71+ (was 69).
 
-**App.tsx layout**:
-- Main row goes from `[Sidebar | Viewport]` to
-  `[Sidebar | Viewport | PropertyPanel?]`. When PropertyPanel is
-  visible it's a fixed-width (320px) right column; viewport flex-1
-  shrinks. When hidden, viewport remains flex-1. The conditional
-  mount handles the collapse cleanly — no flicker.
+## Progress
 
-## Risks named up front + mitigations
+- [x] Add deps `@radix-ui/react-tabs` + `@radix-ui/react-checkbox`.
+- [x] Schema: GroupDto + EmitterPropertiesDto + get/set-properties.
+- [x] mock-state: fixture + overlay store.
+- [x] mock.ts: 2 handlers.
+- [x] bridge-contract.test: +2 specs.
+- [x] EmitterPropertyTabs.tsx: new component.
+- [x] EmitterPropertyTabs.test: 5 specs.
+- [x] App.tsx: four-quadrant layout.
+- [x] EmitterPropertyPanel.tsx: drop sidebar styling.
+- [x] EmitterPropertyPanel.test: update assertions if needed.
+- [x] Playwright spec: tests/property-tabs.spec.ts (+ register).
+- [x] C++ host: get-properties + set-properties handlers.
+- [x] Verify all four gates green.
 
-1. **Radix Select in jsdom won't open during Vitest tests.** Tests
-   would assert the trigger button is visible (which is enough for
-   "renders per-track options" coverage — the option list is
-   constructed pre-render and lives in props of `<Select.Item>`
-   children that we can query as DOM nodes). Mitigation: don't try to
-   open the combo in jsdom; assert structural presence and trigger
-   text instead.
+## Review
 
-2. **Track order drift between C++ and React.** Mitigation: the
-   `TRACK_NAMES` export in bridge-schema is the single source. Both
-   the C++ test harness and React code use the same fixed-order
-   names. Bridge-contract test asserts the names verbatim.
-
-3. **SVG performance with very large key counts.** Stated as accepted
-   for this batch — typical use is <20 keys/track. We render with
-   plain SVG elements (no virtualisation) and revisit if profiling
-   shows lag.
-
-4. **Layout reflow when panel appears could shift the viewport size,
-   triggering layout/viewport-rect updates and confusing the host.**
-   Mitigation: existing layout-broker already handles dynamic
-   viewport rects (sidebar already does this); the new property
-   panel slot is structurally identical to the sidebar's pattern.
-
-## Testing & verification
-
-**Vitest (+6 specs target):**
-- `bridge-contract.test.ts` (+1): `emitters/get-tracks` returns 7
-  tracks; names match TRACK_NAMES verbatim; interpolation is one of
-  three values; keys is an array.
-- `EmitterPropertyPanel.test.tsx` (2):
-  1. Renders placeholder when no selection.
-  2. Renders TrackEditor when selectedEmitterId !== null.
-- `TrackEditor.test.tsx` (2):
-  1. Renders 7 track-toggle buttons.
-  2. Clicking a track switches the active-track attribute.
-- `CurveEditor.test.tsx` (1): renders polyline + N circles for
-  N-key fixture.
-
-**Playwright (+2 specs target):**
-- `track-editor.spec.ts`:
-  1. Selecting an emitter shows panel by `data-testid="emitter-
-     property-panel"`.
-  2. CurveEditor SVG renders (polyline or circle inside the panel).
-
-**Build + native:** pnpm build, pnpm test (≥125), MSBuild Debug x64,
-pnpm test:native (≥64).
+- **Deps:** `@radix-ui/react-tabs@^1` + `@radix-ui/react-checkbox@^1`
+  added to `web/apps/editor/package.json`.
+- **Schema:** added `GroupDto`, `EmitterPropertiesDto` (covers Basic +
+  Appearance + Physics + 3 groups), 2 new Request kinds + 2 ResponseFor
+  arms.
+- **MockBridge:** `makeFixtureProperties(id)` + `useMockEmitterProperties`
+  overlay store mirror the `useMockTrackOverlay` pattern from Screen 6.
+  Properties patch via `name` also mirrors onto the tree node so the
+  emitter tree label updates without a separate rename round-trip.
+- **C++ host:** `emitters/get-properties` walks the emitter (~45 fields
+  + 3 Group entries) and emits the DTO; `emitters/set-properties`
+  iterates patch keys with type guards, captures undo once, fires
+  state/changed + tree/changed + markDirty once. MSBuild Debug x64
+  clean.
+- **App.tsx:** 2x2 grid; left column `w-80`; right column flex-1; left
+  bottom `h-72`, right bottom `h-80`. All four quadrants tagged with
+  `data-testid="quadrant-<role>"`.
+- **EmitterPropertyPanel:** repurposed — drops `w-80` / `border-l`,
+  now fills the lower-right quadrant naturally.
+- **EmitterPropertyTabs:** new component, Basic tab fully wired (18
+  fields), Appearance + Physics show "Coming in Fix dispatch N"
+  placeholders. `useBursts` and `randomRotation` enable/disable the
+  related fields per legacy mutex behaviour.
+- **Vitest:** 147 → 155 (+8). +2 bridge-contract, +5
+  EmitterPropertyTabs, +1 EmitterPropertyPanel layout assert.
+- **Playwright:** 69 → 71 (+2). `tests/property-tabs.spec.ts`.
+- **All four gates green.**

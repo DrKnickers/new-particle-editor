@@ -1659,6 +1659,277 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         m_undo->Capture(*sys, selIdx, 0);
     };
 
+    // -------- emitters/get-properties (Phase 4.1 Fix dispatch 1) ----
+    //
+    // Walks every editable Basic + Appearance + Physics field on the
+    // named emitter and serialises into an EmitterPropertiesDto. The
+    // `groups: GroupDto[]` field surfaces the 3 Group entries (NUM_GROUPS).
+    // Unknown id / no system returns ok:false; the React panel
+    // tolerates the failure by rendering the placeholder branch.
+    if (kind == "emitters/get-properties")
+    {
+        int id = params.value("id", -1);
+        const ParticleSystem::Emitter* emit = getEmitterById(id);
+        if (emit == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        // Helper: pack a Vec3 from three scalars.
+        auto vec3 = [](float x, float y, float z) {
+            return json::array({x, y, z});
+        };
+
+        json groupsArr = json::array();
+        for (int g = 0; g < ParticleSystem::NUM_GROUPS; g++)
+        {
+            const auto& gr = emit->groups[g];
+            groupsArr.push_back(json{
+                {"type",            static_cast<int>(gr.type)},
+                {"min",             vec3(gr.minX, gr.minY, gr.minZ)},
+                {"max",             vec3(gr.maxX, gr.maxY, gr.maxZ)},
+                {"sideLength",      gr.sideLength},
+                {"sphereRadius",    gr.sphereRadius},
+                {"sphereEdge",      static_cast<int>(gr.sphereEdge)},
+                {"cylinderRadius",  gr.cylinderRadius},
+                {"cylinderEdge",    static_cast<int>(gr.cylinderEdge)},
+                {"cylinderHeight",  gr.cylinderHeight},
+                {"val",             vec3(gr.valX, gr.valY, gr.valZ)},
+            });
+        }
+
+        json props = {
+            // ── Basic ───────────────────────────────────────────────
+            {"name",                     emit->name},
+            {"lifetime",                 emit->lifetime},
+            {"initialDelay",             emit->initialDelay},
+            {"useBursts",                emit->useBursts},
+            {"nBursts",                  static_cast<int>(emit->nBursts)},
+            {"burstDelay",               emit->burstDelay},
+            {"nParticlesPerBurst",       static_cast<int>(emit->nParticlesPerBurst)},
+            {"nParticlesPerSecond",      static_cast<int>(emit->nParticlesPerSecond)},
+            {"randomLifetimePerc",       emit->randomLifetimePerc},
+            {"randomScalePerc",          emit->randomScalePerc},
+            {"randomRotation",           emit->randomRotation},
+            {"randomRotationDirection",  emit->randomRotationDirection},
+            {"randomRotationAverage",    emit->randomRotationAverage},
+            {"randomRotationVariance",   emit->randomRotationVariance},
+            {"freezeTime",               emit->freezeTime},
+            {"skipTime",                 emit->skipTime},
+            {"linkToSystem",             emit->linkToSystem},
+            {"parentLinkStrength",       emit->parentLinkStrength},
+            {"index",                    static_cast<int>(emit->index)},
+
+            // ── Appearance ─────────────────────────────────────────
+            {"colorTexture",             emit->colorTexture},
+            {"normalTexture",            emit->normalTexture},
+            {"blendMode",                static_cast<int>(emit->blendMode)},
+            {"textureSize",              static_cast<int>(emit->textureSize)},
+            {"nTriangles",               static_cast<int>(emit->nTriangles)},
+            {"doColorAddGrayscale",      emit->doColorAddGrayscale},
+            {"randomColors",             json::array({
+                emit->randomColors[0], emit->randomColors[1],
+                emit->randomColors[2], emit->randomColors[3],
+            })},
+            {"hasTail",                  emit->hasTail},
+            {"tailSize",                 emit->tailSize},
+            {"isHeatParticle",           emit->isHeatParticle},
+            {"isWorldOriented",          emit->isWorldOriented},
+            {"noDepthTest",              emit->noDepthTest},
+            {"affectedByWind",           emit->affectedByWind},
+
+            // ── Physics ────────────────────────────────────────────
+            {"acceleration",             vec3(emit->acceleration[0],
+                                              emit->acceleration[1],
+                                              emit->acceleration[2])},
+            {"gravity",                  emit->gravity},
+            {"inwardSpeed",              emit->inwardSpeed},
+            {"inwardAcceleration",       emit->inwardAcceleration},
+            {"objectSpaceAcceleration",  emit->objectSpaceAcceleration},
+            {"bounciness",               emit->bounciness},
+            {"groundBehavior",           static_cast<int>(emit->groundBehavior)},
+            {"emitFromMesh",             emit->emitFromMesh},
+            {"emitFromMeshOffset",       emit->emitFromMeshOffset},
+            {"isWeatherParticle",        emit->isWeatherParticle},
+            {"weatherCubeSize",          emit->weatherCubeSize},
+            {"weatherCubeDistance",      emit->weatherCubeDistance},
+            {"weatherFadeoutDistance",   emit->weatherFadeoutDistance},
+
+            {"groups",                   groupsArr},
+        };
+        sendOk(json{{"properties", props}});
+        return res;
+    }
+
+    // -------- emitters/set-properties (Phase 4.1 Fix dispatch 1) ----
+    //
+    // Batch patch: iterate over each key present in `patch` and apply
+    // it directly to the target emitter's struct field. Captures undo
+    // once, emits state/changed + tree/changed once, marks dirty once
+    // per call regardless of how many fields the patch touched.
+    //
+    // Field type guards: nlohmann::json's `.value(key, fallback)` reads
+    // through `get<T>`, which throws on type mismatch. Each branch uses
+    // `is_*` checks before assignment so a stray null / wrong-type
+    // field is a silent skip rather than a hard fault.
+    if (kind == "emitters/set-properties")
+    {
+        int id = params.value("id", -1);
+        ParticleSystem::Emitter* emit = getEmitterById(id);
+        if (emit == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+        if (!params.contains("patch") || !params["patch"].is_object())
+        {
+            sendErr("missing patch");
+            return res;
+        }
+        const json& patch = params["patch"];
+
+        captureUndo();
+
+        // Helper macros — keep the per-field branch concise. Each
+        // branch reads through `at()` only after a `contains()` check
+        // so missing keys are a no-op.
+        auto getBool = [&](const char* key, bool fallback) -> bool {
+            if (patch.contains(key) && patch.at(key).is_boolean()) return patch.at(key).get<bool>();
+            return fallback;
+        };
+        auto getFloat = [&](const char* key, float fallback) -> float {
+            if (patch.contains(key) && patch.at(key).is_number()) return patch.at(key).get<float>();
+            return fallback;
+        };
+        auto getInt = [&](const char* key, int fallback) -> int {
+            if (patch.contains(key) && patch.at(key).is_number_integer()) return patch.at(key).get<int>();
+            if (patch.contains(key) && patch.at(key).is_number()) return static_cast<int>(patch.at(key).get<double>());
+            return fallback;
+        };
+        auto getString = [&](const char* key, const std::string& fallback) -> std::string {
+            if (patch.contains(key) && patch.at(key).is_string()) return patch.at(key).get<std::string>();
+            return fallback;
+        };
+
+        // ── Basic ───────────────────────────────────────────────────
+        if (patch.contains("name"))                    emit->name = getString("name", emit->name);
+        if (patch.contains("lifetime"))                emit->lifetime = getFloat("lifetime", emit->lifetime);
+        if (patch.contains("initialDelay"))            emit->initialDelay = getFloat("initialDelay", emit->initialDelay);
+        if (patch.contains("useBursts"))               emit->useBursts = getBool("useBursts", emit->useBursts);
+        if (patch.contains("nBursts"))                 emit->nBursts = static_cast<unsigned long>(getInt("nBursts", static_cast<int>(emit->nBursts)));
+        if (patch.contains("burstDelay"))              emit->burstDelay = getFloat("burstDelay", emit->burstDelay);
+        if (patch.contains("nParticlesPerBurst"))      emit->nParticlesPerBurst = static_cast<unsigned long>(getInt("nParticlesPerBurst", static_cast<int>(emit->nParticlesPerBurst)));
+        if (patch.contains("nParticlesPerSecond"))     emit->nParticlesPerSecond = static_cast<unsigned long>(getInt("nParticlesPerSecond", static_cast<int>(emit->nParticlesPerSecond)));
+        if (patch.contains("randomLifetimePerc"))      emit->randomLifetimePerc = getFloat("randomLifetimePerc", emit->randomLifetimePerc);
+        if (patch.contains("randomScalePerc"))         emit->randomScalePerc = getFloat("randomScalePerc", emit->randomScalePerc);
+        if (patch.contains("randomRotation"))          emit->randomRotation = getBool("randomRotation", emit->randomRotation);
+        if (patch.contains("randomRotationDirection")) emit->randomRotationDirection = getBool("randomRotationDirection", emit->randomRotationDirection);
+        if (patch.contains("randomRotationAverage"))   emit->randomRotationAverage = getFloat("randomRotationAverage", emit->randomRotationAverage);
+        if (patch.contains("randomRotationVariance"))  emit->randomRotationVariance = getFloat("randomRotationVariance", emit->randomRotationVariance);
+        if (patch.contains("freezeTime"))              emit->freezeTime = getFloat("freezeTime", emit->freezeTime);
+        if (patch.contains("skipTime"))                emit->skipTime = getFloat("skipTime", emit->skipTime);
+        if (patch.contains("linkToSystem"))            emit->linkToSystem = getBool("linkToSystem", emit->linkToSystem);
+        if (patch.contains("parentLinkStrength"))      emit->parentLinkStrength = getFloat("parentLinkStrength", emit->parentLinkStrength);
+        if (patch.contains("index"))                   emit->index = static_cast<size_t>(getInt("index", static_cast<int>(emit->index)));
+
+        // ── Appearance ─────────────────────────────────────────────
+        if (patch.contains("colorTexture"))            emit->colorTexture = getString("colorTexture", emit->colorTexture);
+        if (patch.contains("normalTexture"))           emit->normalTexture = getString("normalTexture", emit->normalTexture);
+        if (patch.contains("blendMode"))               emit->blendMode = static_cast<unsigned long>(getInt("blendMode", static_cast<int>(emit->blendMode)));
+        if (patch.contains("textureSize"))             emit->textureSize = static_cast<unsigned long>(getInt("textureSize", static_cast<int>(emit->textureSize)));
+        if (patch.contains("nTriangles"))              emit->nTriangles = static_cast<unsigned long>(getInt("nTriangles", static_cast<int>(emit->nTriangles)));
+        if (patch.contains("doColorAddGrayscale"))     emit->doColorAddGrayscale = getBool("doColorAddGrayscale", emit->doColorAddGrayscale);
+        if (patch.contains("randomColors") && patch.at("randomColors").is_array() && patch.at("randomColors").size() == 4)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                if (patch.at("randomColors")[i].is_number())
+                    emit->randomColors[i] = patch.at("randomColors")[i].get<float>();
+            }
+        }
+        if (patch.contains("hasTail"))                 emit->hasTail = getBool("hasTail", emit->hasTail);
+        if (patch.contains("tailSize"))                emit->tailSize = getFloat("tailSize", emit->tailSize);
+        if (patch.contains("isHeatParticle"))          emit->isHeatParticle = getBool("isHeatParticle", emit->isHeatParticle);
+        if (patch.contains("isWorldOriented"))         emit->isWorldOriented = getBool("isWorldOriented", emit->isWorldOriented);
+        if (patch.contains("noDepthTest"))             emit->noDepthTest = getBool("noDepthTest", emit->noDepthTest);
+        if (patch.contains("affectedByWind"))          emit->affectedByWind = getBool("affectedByWind", emit->affectedByWind);
+
+        // ── Physics ────────────────────────────────────────────────
+        if (patch.contains("acceleration") && patch.at("acceleration").is_array() && patch.at("acceleration").size() == 3)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                if (patch.at("acceleration")[i].is_number())
+                    emit->acceleration[i] = patch.at("acceleration")[i].get<float>();
+            }
+        }
+        if (patch.contains("gravity"))                 emit->gravity = getFloat("gravity", emit->gravity);
+        if (patch.contains("inwardSpeed"))             emit->inwardSpeed = getFloat("inwardSpeed", emit->inwardSpeed);
+        if (patch.contains("inwardAcceleration"))      emit->inwardAcceleration = getFloat("inwardAcceleration", emit->inwardAcceleration);
+        if (patch.contains("objectSpaceAcceleration")) emit->objectSpaceAcceleration = getBool("objectSpaceAcceleration", emit->objectSpaceAcceleration);
+        if (patch.contains("bounciness"))              emit->bounciness = getFloat("bounciness", emit->bounciness);
+        if (patch.contains("groundBehavior"))          emit->groundBehavior = static_cast<unsigned long>(getInt("groundBehavior", static_cast<int>(emit->groundBehavior)));
+        if (patch.contains("emitFromMesh"))            emit->emitFromMesh = getInt("emitFromMesh", emit->emitFromMesh);
+        if (patch.contains("emitFromMeshOffset"))      emit->emitFromMeshOffset = getFloat("emitFromMeshOffset", emit->emitFromMeshOffset);
+        if (patch.contains("isWeatherParticle"))       emit->isWeatherParticle = getBool("isWeatherParticle", emit->isWeatherParticle);
+        if (patch.contains("weatherCubeSize"))         emit->weatherCubeSize = getFloat("weatherCubeSize", emit->weatherCubeSize);
+        if (patch.contains("weatherCubeDistance"))     emit->weatherCubeDistance = getFloat("weatherCubeDistance", emit->weatherCubeDistance);
+        if (patch.contains("weatherFadeoutDistance"))  emit->weatherFadeoutDistance = getFloat("weatherFadeoutDistance", emit->weatherFadeoutDistance);
+
+        // ── Groups (NUM_GROUPS=3) ──────────────────────────────────
+        if (patch.contains("groups") && patch.at("groups").is_array())
+        {
+            const json& gs = patch.at("groups");
+            const int n = std::min<int>(ParticleSystem::NUM_GROUPS,
+                                        static_cast<int>(gs.size()));
+            for (int gi = 0; gi < n; gi++)
+            {
+                const json& g = gs[gi];
+                if (!g.is_object()) continue;
+                auto& dst = emit->groups[gi];
+                if (g.contains("type") && g.at("type").is_number_integer())
+                    dst.type = static_cast<unsigned int>(g.at("type").get<int>());
+                if (g.contains("min") && g.at("min").is_array() && g.at("min").size() == 3)
+                {
+                    dst.minX = g.at("min")[0].get<float>();
+                    dst.minY = g.at("min")[1].get<float>();
+                    dst.minZ = g.at("min")[2].get<float>();
+                }
+                if (g.contains("max") && g.at("max").is_array() && g.at("max").size() == 3)
+                {
+                    dst.maxX = g.at("max")[0].get<float>();
+                    dst.maxY = g.at("max")[1].get<float>();
+                    dst.maxZ = g.at("max")[2].get<float>();
+                }
+                if (g.contains("sideLength") && g.at("sideLength").is_number())
+                    dst.sideLength = g.at("sideLength").get<float>();
+                if (g.contains("sphereRadius") && g.at("sphereRadius").is_number())
+                    dst.sphereRadius = g.at("sphereRadius").get<float>();
+                if (g.contains("sphereEdge") && g.at("sphereEdge").is_number_integer())
+                    dst.sphereEdge = static_cast<unsigned int>(g.at("sphereEdge").get<int>());
+                if (g.contains("cylinderRadius") && g.at("cylinderRadius").is_number())
+                    dst.cylinderRadius = g.at("cylinderRadius").get<float>();
+                if (g.contains("cylinderEdge") && g.at("cylinderEdge").is_number_integer())
+                    dst.cylinderEdge = static_cast<unsigned int>(g.at("cylinderEdge").get<int>());
+                if (g.contains("cylinderHeight") && g.at("cylinderHeight").is_number())
+                    dst.cylinderHeight = g.at("cylinderHeight").get<float>();
+                if (g.contains("val") && g.at("val").is_array() && g.at("val").size() == 3)
+                {
+                    dst.valX = g.at("val")[0].get<float>();
+                    dst.valY = g.at("val")[1].get<float>();
+                    dst.valZ = g.at("val")[2].get<float>();
+                }
+            }
+        }
+
+        sendOk(json::object());
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- emitters/duplicate -------------------------------------
     //
     // Mirrors legacy `EmitterList_DuplicateEmitter` at

@@ -109,6 +109,7 @@ async function main() {
       "tests/emitter-drag.spec.ts",
       "tests/emitter-keyboard.spec.ts",
       "tests/track-editor.spec.ts",
+      "tests/property-tabs.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

@@ -1472,6 +1472,218 @@ re-fetch.
 
 ---
 
+## Phase 4.1 fix dispatches
+
+Findings surfaced during the parity acceptance walkthrough. Fix
+order: layout + Basic tab → Appearance tab → Physics tab → D3D
+viewport bugs → polish.
+
+### Fix dispatch 1 — Layout reshuffle + emitter property panel Basic tab (locked 2026-05-17)
+
+Addresses findings #2 (missing Appearance/Physics property tabs)
+and #3 (curve editor on right vs legacy bottom) in one dispatch
+since both touch `App.tsx`.
+
+**Legacy layout** (from [src/main.cpp:2728-2780] WM_SIZE handler):
+
+```
++------------------+----------------------+
+| Emitter tree     | Viewport             |
+| (upper-left)     | (upper-right)        |
+|                  |                      |
+|                  |                      |
++------------------+----------------------+
+| Property tabs    | Track + Curve editor |
+| (lower-left)     | (lower-right)        |
+| Basic/Appear./   |                      |
+|  Physics         |                      |
++------------------+----------------------+
+```
+
+Both columns are vertically split. Left column gets a fixed width
+(legacy `props.right` — derive from the tabs control's preferred
+width, default ~320px); right column takes the rest. Vertical
+split within each column is also fixed (legacy uses each tabs
+control's `bottom` from `GetClientRect` as the bottom-pane height
+— pick a reasonable static height like ~280px for B1).
+
+**App.tsx restructure:**
+
+```tsx
+<div className="flex h-full w-full flex-col">
+  <Header />
+  <Toolbar />
+  <div className="flex flex-1 min-h-0 overflow-hidden">
+    {/* Left column */}
+    <div className="flex w-80 shrink-0 flex-col border-r border-neutral-800">
+      <EmitterTree />              {/* upper-left, flex-1 */}
+      <EmitterPropertyTabs />      {/* lower-left, h-72 */}
+    </div>
+    {/* Right column */}
+    <div className="flex flex-1 min-w-0 flex-col">
+      <ViewportSlot />             {/* upper-right, flex-1 */}
+      <TrackEditor />              {/* lower-right, h-80 */}
+    </div>
+  </div>
+  <StatusBar />
+</div>
+```
+
+**New `EmitterPropertyTabs` component:**
+
+- `web/apps/editor/src/screens/EmitterPropertyTabs.tsx`.
+- Uses `@radix-ui/react-tabs`. Three tabs: Basic / Appearance / Physics.
+- Shows "Select an emitter" placeholder when no emitter selected.
+- Re-fetches via `emitters/get-properties { id }` on selection
+  change + `emitters/tree/changed` event.
+- Basic tab populated; Appearance + Physics tabs render
+  "Coming in Fix dispatch 2 / 3" placeholders.
+
+**Schema additions (2 new bridge call kinds + 1 new DTO):**
+
+- `EmitterPropertiesDto`: large object exposing every editable
+  Emitter field. Per [src/ParticleSystem.h:153-204] (50+ fields):
+  - **Basic** (this batch wires these to the UI):
+    - `name: string`
+    - `lifetime: number`
+    - `initialDelay: number`
+    - `useBursts: boolean`
+    - `nBursts: number`, `burstDelay: number`,
+      `nParticlesPerBurst: number`
+    - `nParticlesPerSecond: number`
+    - `randomLifetimePerc: number` (0-1)
+    - `randomScalePerc: number` (0-1)
+    - `randomRotation: boolean`,
+      `randomRotationDirection: boolean`,
+      `randomRotationAverage: number`,
+      `randomRotationVariance: number`
+    - `freezeTime: number`, `skipTime: number`
+    - `linkToSystem: boolean`
+    - `parentLinkStrength: number`
+    - `index: number`
+  - **Appearance** (this batch wires "Coming soon"; Fix dispatch
+    2 wires them):
+    - `colorTexture: string`, `normalTexture: string`
+    - `blendMode: number`
+    - `textureSize: number`, `nTriangles: number`
+    - `doColorAddGrayscale: boolean`,
+      `randomColors: [number, number, number, number]`
+    - `hasTail: boolean`, `tailSize: number`
+    - `isHeatParticle: boolean`,
+      `isWorldOriented: boolean`,
+      `noDepthTest: boolean`,
+      `affectedByWind: boolean`
+  - **Physics** (this batch wires "Coming soon"; Fix dispatch 3
+    wires them):
+    - `acceleration: [number, number, number]`
+    - `gravity: number`
+    - `inwardSpeed: number`, `inwardAcceleration: number`
+    - `objectSpaceAcceleration: boolean`
+    - `bounciness: number`, `groundBehavior: number`
+    - `emitFromMesh: number`, `emitFromMeshOffset: number`
+    - `isWeatherParticle: boolean`,
+      `weatherCubeSize: number`,
+      `weatherCubeDistance: number`,
+      `weatherFadeoutDistance: number`
+    - `groups: GroupDto[]` — the `Group` distribution shapes
+      (NUM_GROUPS instances per emitter).
+
+- `emitters/get-properties { id: number }` → `{ properties:
+  EmitterPropertiesDto }`.
+- `emitters/set-properties { id: number; patch: Partial<EmitterPropertiesDto> }`
+  → `Record<string, never>`. Single-call batch update. Captures
+  undo + emits `engine/state/changed` + `emitters/tree/changed`
+  + dirty.
+
+**Basic tab form fields (full wire-up this batch):**
+
+Each field uses Screen 7's Spinner / ColorButton / TexturePalette
+primitives or a Radix Checkbox. Form layout: 2-column grid with
+label-on-left.
+
+| Field | Primitive | Range / shape |
+|---|---|---|
+| `name` | text input (HTML `<input>`) | non-empty |
+| `lifetime` | Spinner | `[0, FLT_MAX]`, step 0.1, unit "s" |
+| `initialDelay` | Spinner | `[0, FLT_MAX]`, step 0.1, unit "s" |
+| `useBursts` | Checkbox | toggles bursts-vs-rate mode |
+| `nBursts` | Spinner | `[1, ∞]`, step 1, integer |
+| `burstDelay` | Spinner | `[0, ∞]`, step 0.1, unit "s" |
+| `nParticlesPerBurst` | Spinner | `[1, ∞]`, step 1, integer |
+| `nParticlesPerSecond` | Spinner | `[0, ∞]`, step 1, integer |
+| `randomLifetimePerc` | Spinner | `[0, 100]`, step 1, unit "%" |
+| `randomScalePerc` | Spinner | `[0, 100]`, step 1, unit "%" |
+| `randomRotation` | Checkbox | enables rotation block |
+| `randomRotationDirection` | Checkbox | only when randomRotation true |
+| `randomRotationAverage` | Spinner | enables when randomRotation true |
+| `randomRotationVariance` | Spinner | enables when randomRotation true |
+| `freezeTime` | Spinner | `[0, ∞]`, step 0.1, unit "s" |
+| `skipTime` | Spinner | `[0, ∞]`, step 0.1, unit "s" |
+| `linkToSystem` | Checkbox | — |
+| `parentLinkStrength` | Spinner | `[0, ∞]`, step 0.01 |
+| `index` | Spinner | `[0, ∞]`, step 1, integer (display only?) |
+
+Enabling logic mirrors legacy: when `useBursts` is checked,
+nBursts/burstDelay/nParticlesPerBurst enable + nParticlesPerSecond
+disables. Inverse otherwise. Radio-button-style mutual exclusivity.
+
+Commits: each field's `onChange` fires `emitters/set-properties
+{ id, patch: { fieldName: value } }`. Debounce text input
+edits to commit-on-blur (avoid wire spam per keystroke).
+
+**C++ host:**
+
+- `emitters/get-properties`: walk every Basic + Appearance +
+  Physics field on `emitter`, populate the DTO, return.
+- `emitters/set-properties`: for each `field: value` in patch,
+  assign to `emitter.<field>`. Capture undo (once per call), emit
+  state/changed + tree/changed + dirty.
+- The `groups: GroupDto[]` field maps to the `Group groups[NUM_GROUPS]`
+  array. Each `Group` has `type`, `minX/Y/Z`, `maxX/Y/Z`,
+  `sideLength`, `sphereRadius`, `sphereEdge`, `cylinderRadius`,
+  `cylinderEdge`, `cylinderHeight`, `valX/Y/Z`. Define matching
+  `GroupDto` type in the schema. Fix dispatch 3 will surface them
+  in UI; this batch just gets them on the wire.
+
+**MockBridge:**
+
+- Overlay store `useMockEmitterProperties` — per-emitter overrides
+  layered on top of a `makeFixtureProperties(id)` generator.
+- `get-properties` returns merged data.
+- `set-properties` writes to overlay; emits tree/changed.
+
+**Test surface:**
+
+- **Vitest** (+8 specs, target 147 → 155+):
+  - `bridge-contract.test.ts` (+2): get-properties round-trip;
+    set-properties round-trip applies patch.
+  - `EmitterPropertyTabs.test.tsx` (3): renders 3 tabs, Basic
+    tab fields renderable; switching tabs shows different
+    content; placeholder shows when no emitter selected.
+  - `EmitterPropertyPanel.test.tsx` (revisited — +1): the panel
+    now hosts both tabs AND the TrackEditor? Or TrackEditor moves
+    to a separate slot? **Decision**: rename the existing
+    EmitterPropertyPanel to be the tabs-only panel; TrackEditor
+    gets its own slot in the right column. Test asserts the
+    layout split.
+  - `App.tsx` layout (+2 implicit): four-quadrant structure
+    renders.
+- **Playwright** (+2 specs, target 69 → 71+):
+  - Selecting an emitter shows property tabs on the lower-left
+    (assert tabs container visible AND track editor visible
+    simultaneously — they're in different quadrants now).
+  - Editing the Lifetime spinner in Basic tab commits via
+    set-properties.
+
+**Out of scope (later fix dispatches):**
+
+- Appearance tab content (Fix dispatch 2).
+- Physics tab content + Random Param groups (Fix dispatch 3).
+- D3D viewport bugs (Fix dispatch 4 — finding #1).
+- Marquee select + menu structure (Fix dispatch 5 — findings #4 + #5).
+
+---
+
 ## Screen 5 — Curve editor
 
 **Replaces:** `src/UI/CurveEditor.cpp` (1044 LOC). 2D interactive curve

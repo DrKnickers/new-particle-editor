@@ -12,9 +12,11 @@
 
 import { create } from "zustand";
 import type {
+  EmitterPropertiesDto,
   EmitterTreeDto,
   EmitterTreeNode,
   EngineStateDto,
+  GroupDto,
   InterpolationType,
   LightDto,
   SpawnerParamsDto,
@@ -1036,6 +1038,142 @@ export function setTrackKeyInOverlay(
   useMockTrackOverlay.getState().write(id, nextTracks);
   return true;
 }
+
+// ─── Emitter properties fixture + overlay (Phase 4.1 Fix dispatch 1) ─
+//
+// Same pattern as `useMockTrackOverlay`: a deterministic generator
+// (`makeFixtureProperties`) supplies the baseline; a per-id overlay
+// Map layers user mutations on top. `read(id)` merges them.
+//
+// The fixture's *defaults* mirror `ParticleSystem::Emitter`'s zero-init
+// (mostly zeros + the name "Emitter <id>" + nParticlesPerSecond=10 so
+// continuous-spawn mode looks alive in design iteration). Different
+// emitter ids get slightly different starting lifetimes / blendModes
+// so multiple selections show distinct values.
+
+function makeDefaultGroup(): GroupDto {
+  return {
+    type: 0,                  // GT_EXACT
+    min: [0, 0, 0],
+    max: [0, 0, 0],
+    sideLength: 0,
+    sphereRadius: 0,
+    sphereEdge: 0,
+    cylinderRadius: 0,
+    cylinderEdge: 0,
+    cylinderHeight: 0,
+    val: [0, 0, 0],
+  };
+}
+
+export function makeFixtureProperties(id: number): EmitterPropertiesDto {
+  // Per-id deterministic perturbation so different selections show
+  // different starting values without sharing a global counter.
+  const lifetimeSeed = ((Math.abs(id) % 5) + 1);  // 1..5 s
+  return {
+    // Basic
+    name: id === -1 ? "" : `Emitter ${id}`,
+    lifetime: lifetimeSeed,
+    initialDelay: 0,
+    useBursts: false,
+    nBursts: 1,
+    burstDelay: 0,
+    nParticlesPerBurst: 10,
+    nParticlesPerSecond: 10,
+    randomLifetimePerc: 0,
+    randomScalePerc: 0,
+    randomRotation: false,
+    randomRotationDirection: false,
+    randomRotationAverage: 0,
+    randomRotationVariance: 0,
+    freezeTime: 0,
+    skipTime: 0,
+    linkToSystem: false,
+    parentLinkStrength: 1,
+    index: id < 0 ? 0 : id,
+
+    // Appearance
+    colorTexture: "",
+    normalTexture: "",
+    blendMode: 0,
+    textureSize: 1,
+    nTriangles: 1,
+    doColorAddGrayscale: false,
+    randomColors: [0, 0, 0, 0],
+    hasTail: false,
+    tailSize: 0,
+    isHeatParticle: false,
+    isWorldOriented: false,
+    noDepthTest: false,
+    affectedByWind: false,
+
+    // Physics
+    acceleration: [0, 0, 0],
+    gravity: 0,
+    inwardSpeed: 0,
+    inwardAcceleration: 0,
+    objectSpaceAcceleration: false,
+    bounciness: 0,
+    groundBehavior: 0,
+    emitFromMesh: 0,
+    emitFromMeshOffset: 0,
+    isWeatherParticle: false,
+    weatherCubeSize: 0,
+    weatherCubeDistance: 0,
+    weatherFadeoutDistance: 0,
+
+    groups: [makeDefaultGroup(), makeDefaultGroup(), makeDefaultGroup()],
+  };
+}
+
+type PropertyOverlayStore = {
+  /** id → full EmitterPropertiesDto. Present entry wins over the fixture. */
+  overlay: Map<number, EmitterPropertiesDto>;
+  /** Read-merge: returns the live properties for `id`, seeding from the
+   *  fixture if the overlay doesn't yet carry this id. */
+  read: (id: number) => EmitterPropertiesDto;
+  /** Replace the full DTO for `id`. */
+  write: (id: number, props: EmitterPropertiesDto) => void;
+  /** Apply a partial patch on top of the current value for `id`. */
+  patch: (id: number, patch: Partial<EmitterPropertiesDto>) => void;
+  reset: () => void;
+};
+
+export const useMockEmitterProperties = create<PropertyOverlayStore>((set, get) => ({
+  overlay: new Map(),
+  read: (id) => {
+    const explicit = get().overlay.get(id);
+    if (explicit !== undefined) {
+      // Return a defensive shallow clone so external consumers can't
+      // mutate the store's value directly.
+      return {
+        ...explicit,
+        acceleration: [...explicit.acceleration] as [number, number, number],
+        randomColors: [...explicit.randomColors] as [number, number, number, number],
+        groups: explicit.groups.map((g) => ({
+          ...g,
+          min: [...g.min] as [number, number, number],
+          max: [...g.max] as [number, number, number],
+          val: [...g.val] as [number, number, number],
+        })),
+      };
+    }
+    return makeFixtureProperties(id);
+  },
+  write: (id, props) => {
+    const next = new Map(get().overlay);
+    next.set(id, props);
+    set({ overlay: next });
+  },
+  patch: (id, p) => {
+    const cur = get().read(id);
+    const merged = { ...cur, ...p };
+    const next = new Map(get().overlay);
+    next.set(id, merged);
+    set({ overlay: next });
+  },
+  reset: () => set({ overlay: new Map() }),
+}));
 
 /** Insert a new key at `(time, value)` on the named track. If a key
  *  already exists at the exact `time`, bumps `time` by 0.001 (matching

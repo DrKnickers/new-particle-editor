@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { MockBridge } from "../mock";
 import {
   useMockEmitterClipboard,
+  useMockEmitterProperties,
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
@@ -29,6 +30,7 @@ beforeEach(() => {
   useMockLinkGroupExempt.getState().resetAll();
   useMockEmitterClipboard.getState().reset();
   useMockTrackOverlay.getState().reset();
+  useMockEmitterProperties.getState().reset();
 });
 
 describe("MockBridge contract", () => {
@@ -991,6 +993,71 @@ describe("MockBridge contract", () => {
     });
     const alpha2 = after2.tracks.find((t) => t.name === "alpha");
     expect(alpha2?.keys.length).toBe(6);
+  });
+
+  // ─── Phase 4.1 Fix dispatch 1 — emitters/get-properties + set-properties
+
+  it("emitters/get-properties returns a full EmitterPropertiesDto with Basic/Appearance/Physics fields", async () => {
+    const b = new MockBridge();
+    const r = await b.request({
+      kind: "emitters/get-properties",
+      params: { id: 0 },
+    });
+    expect(r).toHaveProperty("properties");
+    const p = r.properties;
+    // Basic fields
+    expect(p).toHaveProperty("name");
+    expect(p).toHaveProperty("lifetime");
+    expect(p).toHaveProperty("useBursts");
+    expect(p).toHaveProperty("nParticlesPerSecond");
+    expect(p).toHaveProperty("randomRotation");
+    expect(p).toHaveProperty("parentLinkStrength");
+    expect(p).toHaveProperty("index");
+    // Appearance fields
+    expect(p).toHaveProperty("colorTexture");
+    expect(p).toHaveProperty("blendMode");
+    expect(p).toHaveProperty("hasTail");
+    expect(p).toHaveProperty("randomColors");
+    expect(p.randomColors).toHaveLength(4);
+    // Physics fields
+    expect(p).toHaveProperty("acceleration");
+    expect(p.acceleration).toHaveLength(3);
+    expect(p).toHaveProperty("gravity");
+    expect(p).toHaveProperty("groundBehavior");
+    expect(p).toHaveProperty("weatherCubeSize");
+    // Groups
+    expect(p).toHaveProperty("groups");
+    expect(p.groups).toHaveLength(3);
+    expect(p.groups[0]).toHaveProperty("type");
+    expect(p.groups[0]).toHaveProperty("min");
+    expect(p.groups[0].min).toHaveLength(3);
+  });
+
+  it("emitters/set-properties applies a partial patch that is observable via get-properties", async () => {
+    const b = new MockBridge();
+    // Verify baseline differs from the patch values so the round-trip
+    // assertion is meaningful.
+    const before = await b.request({
+      kind: "emitters/get-properties",
+      params: { id: 0 },
+    });
+    expect(before.properties.lifetime).not.toBe(5.0);
+    expect(before.properties.useBursts).toBe(false);
+
+    await b.request({
+      kind: "emitters/set-properties",
+      params: { id: 0, patch: { lifetime: 5.0, useBursts: true, nBursts: 3 } },
+    });
+
+    const after = await b.request({
+      kind: "emitters/get-properties",
+      params: { id: 0 },
+    });
+    expect(after.properties.lifetime).toBe(5.0);
+    expect(after.properties.useBursts).toBe(true);
+    expect(after.properties.nBursts).toBe(3);
+    // Untouched fields stay at their fixture values.
+    expect(after.properties.nParticlesPerSecond).toBe(before.properties.nParticlesPerSecond);
   });
 
   it("on() returns a working unsubscribe", async () => {

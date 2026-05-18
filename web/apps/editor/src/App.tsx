@@ -8,6 +8,7 @@ import { MenuBar } from "@/components/MenuBar";
 import { BackgroundButton } from "@/screens/BackgroundButton";
 import { BackgroundPicker } from "@/screens/BackgroundPicker";
 import { EmitterPropertyPanel } from "@/screens/EmitterPropertyPanel";
+import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
 import { BloomPanel } from "@/screens/BloomPanel";
@@ -187,45 +188,85 @@ function AppShell() {
       {/* Toolbar — 4 groups (File · Edit · View · Render) */}
       <Toolbar bridge={bridge} />
 
-      {/* Main row */}
-      <div className="relative flex flex-1 overflow-hidden">
-        {/* Sidebar — Phase 3 Screen 4 Batch A. Read-only tree view of
-            the live ParticleSystem's emitters with click-to-select.
-            Mutations / drag-drop / context menu / inline rename land in
-            Batches B and C. */}
-        <aside className="w-64 shrink-0 overflow-y-auto border-r border-neutral-800 p-3 text-sm">
-          <EmitterTree bridge={bridge} />
-        </aside>
+      {/* Main row — Phase 4.1 Fix dispatch 1 four-quadrant layout:
+            ┌──────────────┬───────────────────┐
+            │ Emitter tree │ Viewport          │
+            │ (upper-left) │ (upper-right)     │
+            ├──────────────┼───────────────────┤
+            │ Property     │ Track + Curve     │
+            │ tabs         │ editor            │
+            │ (lower-left) │ (lower-right)     │
+            └──────────────┴───────────────────┘
+            Mirrors legacy `WM_SIZE` layout at
+            [src/main.cpp:2712-2780]. Left column fixed `w-80` (~320px);
+            right column flex. Within each column, bottom pane fixed
+            height (`h-72` / `h-80`); top pane fills the remaining
+            space via `flex-1 min-h-0`. */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Left column */}
+        <div className="flex w-80 shrink-0 flex-col border-r border-neutral-800">
+          {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
+              Read-only tree view with click-to-select + Batches B/C
+              mutations (rename, drag/drop, context menus). */}
+          <aside
+            data-testid="quadrant-emitter-tree"
+            className="flex-1 min-h-0 overflow-y-auto p-3 text-sm"
+          >
+            <EmitterTree bridge={bridge} />
+          </aside>
+          {/* Lower-left — Property tabs (Basic / Appearance / Physics).
+              Phase 4.1 Fix dispatch 1: Basic tab wired; Appearance +
+              Physics placeholders. */}
+          <div
+            data-testid="quadrant-property-tabs"
+            className="h-72 shrink-0 border-t border-neutral-800"
+          >
+            <EmitterPropertyTabs bridge={bridge} />
+          </div>
+        </div>
 
-        {/* Viewport */}
-        <ViewportSlot bridge={bridge} />
-
-        {/* Phase 3 Screen 6 Batch A — right-side emitter property panel.
-            Mounted only when an emitter is selected, so the viewport
-            claims the full right side in the no-selection state. The
-            panel has its own width (w-80) so the surrounding flex
-            shrinks the viewport when the panel appears. */}
-        {selectedEmitterId !== null && (
-          <EmitterPropertyPanel bridge={bridge} />
-        )}
-
-        {/* Tool-panel host. Single panel mounted at a time, driven by
-            the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
-        {openPanel === "background" && (
-          <BackgroundPicker bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-        )}
-        {openPanel === "lighting" && (
-          <LightingPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-        )}
-        {openPanel === "bloom" && (
-          <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-        )}
-        {openPanel === "ground" && (
-          <GroundTexturePanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-        )}
-        {openPanel === "spawner" && (
-          <SpawnerPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-        )}
+        {/* Right column */}
+        <div className="flex flex-1 min-w-0 flex-col">
+          {/* Upper-right — Viewport. Tool panels overlay this region
+              (positioned ancestor for absolute-positioned ToolPanels). */}
+          <div
+            data-testid="quadrant-viewport"
+            className="relative flex-1 min-h-0"
+          >
+            <ViewportSlot bridge={bridge} />
+            {/* Tool-panel host. Single panel mounted at a time, driven
+                by the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
+            {openPanel === "background" && (
+              <BackgroundPicker bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+            )}
+            {openPanel === "lighting" && (
+              <LightingPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+            )}
+            {openPanel === "bloom" && (
+              <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+            )}
+            {openPanel === "ground" && (
+              <GroundTexturePanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+            )}
+            {openPanel === "spawner" && (
+              <SpawnerPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
+            )}
+          </div>
+          {/* Lower-right — Track + Curve editor. Mounted only when an
+              emitter is selected; placeholder otherwise. */}
+          <div
+            data-testid="quadrant-track-editor"
+            className="h-80 shrink-0 border-t border-neutral-800"
+          >
+            {selectedEmitterId !== null ? (
+              <EmitterPropertyPanel bridge={bridge} />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-neutral-500">
+                Select an emitter to edit its tracks
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Status bar */}
