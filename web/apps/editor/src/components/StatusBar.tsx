@@ -34,7 +34,7 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
   );
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-neutral-800 px-4 text-xs">
+    <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-neutral-800 bg-neutral-950 px-4 text-xs">
       {cell("FPS", placeholder ? "—" : s!.fps.toFixed(0))}
       <span className="text-neutral-700">·</span>
       {cell("Emitters", placeholder ? "—" : s!.emitters.toString())}

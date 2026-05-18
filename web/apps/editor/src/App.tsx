@@ -159,9 +159,9 @@ function AppShell() {
   }, [bridge]);
 
   return (
-    <div className="flex h-full w-full flex-col bg-neutral-950 text-neutral-100">
+    <div className="flex h-full w-full flex-col text-neutral-100">
       {/* Top bar */}
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 px-4 text-sm">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 bg-neutral-950 px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>
         <MenuBar
           bridge={bridge}
@@ -204,7 +204,7 @@ function AppShell() {
             space via `flex-1 min-h-0`. */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left column */}
-        <div className="flex w-80 shrink-0 flex-col border-r border-neutral-800">
+        <div className="flex w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
           {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
               Read-only tree view with click-to-select + Batches B/C
               mutations (rename, drag/drop, context menus). */}
@@ -256,7 +256,7 @@ function AppShell() {
               emitter is selected; placeholder otherwise. */}
           <div
             data-testid="quadrant-track-editor"
-            className="h-80 shrink-0 border-t border-neutral-800"
+            className="h-80 shrink-0 border-t border-neutral-800 bg-neutral-950"
           >
             {selectedEmitterId !== null ? (
               <EmitterPropertyPanel bridge={bridge} />
