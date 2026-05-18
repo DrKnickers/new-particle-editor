@@ -4280,3 +4280,135 @@ polish):
 | **C — Link-group brackets + inline rename + keyboard nav + clipboard** | **✅ shipped** |
 
 Screen 4 closes pending Phase 4.2 legacy delete (`src/UI/EmitterList.cpp`, 4955 LOC).
+
+### 2026-05-17 · Screen 6 Batch A (right-side property panel + TrackEditor shell + read-only CurveEditor)
+
+First batch of Screen 6 (Track editor). Also the first batch of
+the **right-side emitter property panel** which didn't exist in
+`--new-ui` until now — Screen 4's selection event had nowhere to
+land. After this batch the panel appears on emitter-select and
+shows a SVG-rendered curve for the currently-active track.
+
+Commit: `6f57020` (single feat — no new deps). Tests 131 Vitest
+(119 → 131, +12 — beat the +6 target because TrackEditor's
+surface invited natural extra coverage). 64 Playwright (62 → 64,
++2). MSBuild 0/0.
+
+**What changed:**
+
+- *1 new bridge call.* `emitters/get-tracks { id }` → `{ tracks:
+  TrackDto[] }`. Returns the emitter's 7 fixed-order tracks
+  (red/green/blue/alpha/scale/index/rotationSpeed) with their
+  keys + interpolation type. C++ handler dereferences
+  `emitter->tracks[i]` (the pointer-aliasing slot at
+  [src/ParticleSystem.h:151]).
+- *Right-side property panel skeleton.* `EmitterPropertyPanel.tsx`
+  mounts on the right of App.tsx's main row when
+  `selectedEmitterId !== null`. Viewport claims full right side
+  when no emitter selected (preserves Spawner panel's existing
+  claim); shrinks to make room when one is selected. Layout:
+  `[Sidebar w-64 | Viewport flex-1 | PropertyPanel? w-80]`.
+- *TrackEditor shell.* Toolbar with 7 track-toggle buttons +
+  Select/Insert mode toggles + Linear/Smooth/Step interpolation
+  toggles + Delete button (all **visual only** this batch,
+  tooltips say "Batch B"). Lock-to Radix Select combo with
+  per-track options (Red/Index/Rotation/Scale: just "None"
+  disabled; Green: +Red; Blue: +Red/Green; Alpha: +Red/Green/Blue
+  — matches legacy `texts[7][5]` table verbatim).
+- *Read-only SVG CurveEditor.* Pure presentational. `<svg
+  viewBox="0 0 600 300" preserveAspectRatio="none">` with
+  separate `<g>` groups for grid (11×11 lines), axes, polyline
+  connecting consecutive keys, and per-key `<circle r=4>`.
+  Y-axis inverted per-coordinate (not via transform — keeps
+  future text labels right-side-up). Active track state local
+  to TrackEditor.
+- *Per-track value range mapping* matches legacy:
+  - Red/Green/Blue/Alpha: `[0, 1]`.
+  - Scale/Index: `[0, max(keys.value) * 1.2]` (or 100 baseline).
+  - RotationSpeed: auto-range symmetric around 0.
+- *Mock fixture* — `makeFixtureTracks(id)` deterministic
+  generator. Per-id seed so different emitters render
+  distinguishable curves in dev mode.
+
+**Locks worth surfacing for future batches:**
+
+- *Pointer-aliasing on `Emitter::tracks[7]` is intentional* — it
+  enables the legacy "lock to another track" feature without
+  duplicating key data. Batch A doesn't use the aliasing but
+  the wire shape (TrackDto carries `name` + `keys`) doesn't
+  preclude it. When Batch B wires the lock-to combo's actual
+  behaviour, the C++ side can re-alias `emitter->tracks[i]` to
+  point at another slot without re-serialising key data on the
+  wire. The wire just sees the resolved (post-aliasing) data
+  each call.
+- *Mount-gate vs render-gate split is fine.* The property panel
+  is conditionally mounted by App.tsx based on selection state
+  AND independently renders a placeholder when no emitter is
+  passed (or selection is null). Two cheap subscriptions to the
+  same scalar; each component stays self-contained and unit-
+  testable in isolation. Generalizable: when a component might
+  be embedded somewhere that doesn't have the parent's mount
+  logic (a demo route, a Vitest harness), give it its own
+  internal selection subscription rather than requiring a
+  pre-resolved prop.
+- *SVG-vs-canvas decision locks for SVG.* At expected key counts
+  (typically <20 per track, max ~50), SVG renders instantly and
+  the DOM gives us free testability (assert on polyline element,
+  count circles, check data-attributes). If a future user
+  imports a particle system with 200+ keys per track and lag
+  appears, the call flips — but the indirection
+  (`CurveEditor.tsx` as a leaf component) means the swap is
+  internal and doesn't affect TrackEditor or above.
+- *Component-state-over-Zustand-atom continues.* Active track in
+  TrackEditor is local component state. Selected key in Batch B
+  will also be local. Following Screen 4 Batch C's rule:
+  short-lived per-component state stays local; cross-component
+  state (mount visibility, multi-select) goes to atoms.
+
+**Implementer notes (from the commit + report):**
+
+1. *Two redundant selection subscriptions* — accepted. App.tsx
+   subscribes to gate the mount; EmitterPropertyPanel
+   subscribes independently for internal state. Each is cheap
+   and the redundancy lets both components be unit-tested in
+   isolation without one assuming the other's setup.
+2. *Per-coordinate Y-axis flip over transform.* Future tick
+   labels render right-side-up without a counter-transform per
+   text element. Small code complexity savings now will pay off
+   when labels land in Batch B.
+3. *Test-attribute scaffolding for Radix-in-jsdom.*
+   `data-active-track`, `data-track`, `data-key-count` on the
+   curve and toolbar buttons let Vitest assert on state
+   without driving Radix Select open. Same pattern as Screen 4
+   Batch B2's `data-selected-count` / `data-primary-id` for
+   multi-select.
+4. *Vitest count overshoot.* TrackEditor's lock-to per-track
+   options table invited natural extra coverage (verifying
+   Red is disabled, Alpha is enabled with the right option
+   list, etc.). +12 vs +6 target — useful spec density.
+
+**Open follow-ups** (Screen 5 / Screen 6 Batch B):
+
+- Click to select keys + drag to move.
+- Click-to-add new keys.
+- Interpolation toggle (functional).
+- Delete key (functional).
+- Lock-to combo functional behaviour (re-alias track slot,
+  re-render).
+- Smooth + step interpolation rendering (currently approximated
+  as straight lines).
+- Toolbar Select/Insert mode switch.
+- `emitters/set-track-key { id, track, oldTime?, newTime,
+  newValue }` mutation.
+- `emitters/set-track-interpolation { id, track, type }`
+  mutation.
+- Track-colored curve stroke (cosmetic polish).
+
+### Screen 6 progress after Batch A
+
+| Batch | Status |
+|---|---|
+| **A — Foundation (property panel + read-only TrackEditor shell + SVG CurveEditor)** | **✅ shipped** |
+| B (== Screen 5 work) — Full curve interaction + track mutations | ⏳ pending |
+
+Screen 6 fully ✅ after Batch B.
