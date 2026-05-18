@@ -193,6 +193,7 @@
     <ClInclude Include="utils.h" />
     <ClInclude Include="xml.h" />
     <ClInclude Include="host\AcceleratorBridge.h" />
+    <ClInclude Include="host\AlphaCompositor.h" />
     <ClInclude Include="host\BridgeDispatcher.h" />
     <ClInclude Include="host\HostBridgeProxy.h" />
     <ClInclude Include="host\HostWindow.h" />
@@ -231,6 +232,10 @@
     <ClCompile Include="utils.cpp" />
     <ClCompile Include="xml.cpp" />
     <ClCompile Include="host\AcceleratorBridge.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="host\AlphaCompositor.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
     </ClCompile>

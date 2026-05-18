@@ -1,0 +1,84 @@
+// AlphaCompositor — bridges D3D9 rendering to a WS_EX_LAYERED top-level
+// popup via UpdateLayeredWindow. Replaces FD7/FD8's SetWindowRgn cut-out
+// with software alpha-stamping: the engine still renders fully opaque
+// pixels into an off-screen ARGB RT, the readback path stamps alpha=0
+// (with a smoothstep feather) inside chrome occlusion rectangles, and
+// the layered popup composites with the WebView2 underneath so menu
+// dropdowns / tool panels show through cleanly.
+//
+// Pipeline per frame:
+//   1. Engine renders the scene into the off-screen D3DFMT_A8R8G8B8 RT
+//      we own (GetRenderTarget()).
+//   2. Engine calls Composite(layeredHwnd).
+//   3. We GetRenderTargetData → D3DPOOL_SYSTEMMEM surface.
+//   4. LockRect, memcpy into a CreateDIBSection-allocated bitmap.
+//   5. For each registered occlusion, stamp the DIB alpha bytes to 0
+//      inside the rect, smoothstep-ramp on the feather band.
+//   6. UpdateLayeredWindow(ULW_ALPHA) pushes the bitmap to the popup.
+//
+// Resize() must be called whenever the popup HWND's client area changes.
+// The RT, system-mem surface, and DIB are all reallocated to match.
+//
+// SetOcclusion / RemoveOcclusion are single-threaded (UI thread only)
+// — they match the existing LayoutBroker invariant. The map is mutated
+// only between Render frames.
+//
+// FD9b. See tasks/todo.md.
+#ifndef HOST_ALPHA_COMPOSITOR_H
+#define HOST_ALPHA_COMPOSITOR_H
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#include <memory>
+#include <string>
+
+struct IDirect3DDevice9;
+struct IDirect3DSurface9;
+
+namespace host {
+
+class AlphaCompositor
+{
+public:
+    // The device must outlive the AlphaCompositor. HostWindowImpl
+    // guarantees this: Engine owns the device, the compositor is
+    // detached on WM_DESTROY before either is destroyed.
+    explicit AlphaCompositor(IDirect3DDevice9* device);
+    ~AlphaCompositor();
+
+    AlphaCompositor(const AlphaCompositor&)            = delete;
+    AlphaCompositor& operator=(const AlphaCompositor&) = delete;
+
+    // Resize the internal RT/sysmem/DIB to match the popup's client
+    // size. Idempotent when (w, h) is unchanged. Throws
+    // std::runtime_error on allocation failure.
+    void Resize(int width, int height);
+
+    // The off-screen ARGB render target Engine should set on slot 0
+    // at the start of Render(). Returns nullptr until Resize() has
+    // been called with a non-degenerate size.
+    IDirect3DSurface9* GetRenderTarget() const;
+
+    // Register / replace an occlusion rectangle. `rectClient` is in
+    // popup-client coords (same coord space as the DIB). `feather`
+    // is the smoothstep band (in pixels) at the rect's outer edge;
+    // 0 disables feathering (hard rectangular alpha cut, same shape
+    // as the old SetWindowRgn).
+    void SetOcclusion(std::string id, RECT rectClient, int feather = 3);
+
+    // Remove a previously registered occlusion. No-op if id unknown.
+    void RemoveOcclusion(const std::string& id);
+
+    // Per-frame readback + occlusion stamp + UpdateLayeredWindow push.
+    // No-op if Resize hasn't run or the HWND is null.
+    void Composite(HWND layeredHwnd);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
+} // namespace host
+
+#endif // HOST_ALPHA_COMPOSITOR_H
