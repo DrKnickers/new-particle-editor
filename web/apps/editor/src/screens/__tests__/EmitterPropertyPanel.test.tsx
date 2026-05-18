@@ -9,7 +9,7 @@
 //     and the resolved tracks reach TrackEditor.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   Bridge,
   EmitterTreeDto,
@@ -30,9 +30,31 @@ function fixtureTracks(): TrackDto[] {
   }));
 }
 
+/** Variant with 3 keys on the active (red) track so there's at least
+ *  one non-border key for the delete spec to act on. */
+function fixtureTracksWithMiddleKey(): TrackDto[] {
+  return TRACK_NAMES.map((name) => ({
+    name,
+    keys: name === "red"
+      ? [
+          { time: 0,   value: 0 },
+          { time: 50,  value: 0.5 },
+          { time: 100, value: 1 },
+        ]
+      : [
+          { time: 0,   value: 0 },
+          { time: 100, value: 1 },
+        ],
+    interpolation: "linear",
+  }));
+}
+
 type SelectionListener = (e: { payload: { id: number | null } }) => void;
 
-function makeStubBridge(initialSelectedId: number | null) {
+function makeStubBridge(
+  initialSelectedId: number | null,
+  tracksFactory: () => TrackDto[] = fixtureTracks,
+) {
   // Allow tests to push selection events after mount via the returned
   // `pushSelection` helper.
   const listeners: SelectionListener[] = [];
@@ -48,7 +70,7 @@ function makeStubBridge(initialSelectedId: number | null) {
         });
       }
       if (req.kind === "emitters/get-tracks") {
-        return Promise.resolve({ tracks: fixtureTracks() });
+        return Promise.resolve({ tracks: tracksFactory() });
       }
       if (req.kind === "emitters/list") return Promise.resolve(tree);
       return Promise.resolve({});
@@ -101,5 +123,53 @@ describe("EmitterPropertyPanel", () => {
         screen.getByTestId(`track-toggle-${name}`),
       ).toBeInTheDocument();
     }
+  });
+
+  // ─── Screen 5 / Screen 6 Batch B-α ────────────────────────────────
+
+  it("Delete keypress on the focused panel fires emitters/delete-track-keys with the current selection (border keys filtered)", async () => {
+    const { bridge } = makeStubBridge(7, fixtureTracksWithMiddleKey);
+    render(<EmitterPropertyPanel bridge={bridge} />);
+
+    // Wait for TrackEditor to mount + render the curve key circles.
+    await waitFor(() => {
+      expect(screen.getByTestId("track-editor")).toBeInTheDocument();
+    });
+
+    // Pick the middle key (time=50) — only non-border key on the
+    // active (red) track. Click selects it.
+    const circles = document.querySelectorAll("[data-testid='curve-key']");
+    expect(circles.length).toBeGreaterThanOrEqual(3);
+    fireEvent.click(circles[1]!);
+
+    // The panel has tabIndex=0 — focus it before firing the keypress.
+    const panel = screen.getByTestId("emitter-property-panel");
+    panel.focus();
+
+    // Fire the Delete keypress on the panel. The handler reads
+    // selection from TrackEditor (via the registered handler) and
+    // dispatches the bridge call.
+    fireEvent.keyDown(panel, { key: "Delete" });
+
+    // Assert the bridge received delete-track-keys with the right
+    // params. Wait because the handler dispatches asynchronously via
+    // the bridge's request promise; the request itself is
+    // synchronous but the test framework's vi.fn() captures it as
+    // soon as it's invoked, which is the same tick.
+    await waitFor(() => {
+      const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls;
+      const match = calls.find(
+        (call) => (call[0] as { kind: string }).kind === "emitters/delete-track-keys",
+      );
+      expect(match).toBeDefined();
+      expect(match![0]).toMatchObject({
+        kind: "emitters/delete-track-keys",
+        params: {
+          id: 7,
+          track: "red",
+          times: [50],   // border keys (0, 100) filtered out
+        },
+      });
+    });
   });
 });

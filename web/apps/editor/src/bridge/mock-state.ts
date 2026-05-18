@@ -888,3 +888,106 @@ function buildFixtureTrack(id: number, trackIdx: number): TrackDto {
 export function makeFixtureTracks(id: number): TrackDto[] {
   return TRACK_NAMES.map((_n, i) => buildFixtureTrack(id, i));
 }
+
+// ─── Mutable per-emitter track overrides (Screen 5 / Screen 6 Batch B-α)
+//
+// `makeFixtureTracks` is a pure-function generator. To make the mock
+// observe track mutations (delete-key, set-interpolation) across
+// successive `emitters/get-tracks` calls, we layer a tiny overlay
+// store keyed by emitter id. The overlay holds the FULL 7-track
+// array for any emitter that's been mutated; missing entries fall
+// back to the fixture generator on demand.
+//
+// Mutations always read-modify-write the overlay (seeding it from the
+// fixture on first touch). Reset wipes the overlay so the fixture
+// shines through again — used by the contract-test `beforeEach`.
+
+type TrackOverlayStore = {
+  /** id → 7-track DTO array. Present entry wins over the fixture. */
+  overlay: Map<number, TrackDto[]>;
+  /** Read-merge: returns the live tracks for `id`, seeding from the
+   *  fixture if the overlay doesn't carry this id yet. Pure read —
+   *  does not mutate. */
+  read: (id: number) => TrackDto[];
+  /** Replace the full 7-track array for `id`. The mutators below
+   *  build the next array off `read(id)` then call `write`. */
+  write: (id: number, tracks: TrackDto[]) => void;
+  reset: () => void;
+};
+
+export const useMockTrackOverlay = create<TrackOverlayStore>((set, get) => ({
+  overlay: new Map(),
+  read: (id) => {
+    const explicit = get().overlay.get(id);
+    if (explicit !== undefined) return explicit.map((t) => ({
+      ...t,
+      keys: t.keys.map((k) => ({ ...k })),
+    }));
+    return makeFixtureTracks(id);
+  },
+  write: (id, tracks) => {
+    const next = new Map(get().overlay);
+    next.set(id, tracks.map((t) => ({
+      ...t,
+      keys: t.keys.map((k) => ({ ...k })),
+    })));
+    set({ overlay: next });
+  },
+  reset: () => set({ overlay: new Map() }),
+}));
+
+/** Delete the named-time keys from `track` on emitter `id`. Border
+ *  keys (first + last by time) are silently skipped — they define the
+ *  track's time range and aren't deletable per legacy semantics. The
+ *  match tolerance for `time` is exact float equality (the React side
+ *  carries the key's wire-shipped `time` value directly, so equality
+ *  holds within IEEE-754 round-trip rules). Returns the count of
+ *  keys actually removed (0 = nothing matched / all border keys). */
+export function deleteTrackKeysInOverlay(
+  id: number,
+  trackName: TrackName,
+  times: number[],
+): number {
+  const cur = useMockTrackOverlay.getState().read(id);
+  const trackIdx = cur.findIndex((t) => t.name === trackName);
+  if (trackIdx === -1) return 0;
+  const target = cur[trackIdx]!;
+  if (target.keys.length === 0) return 0;
+  // Border keys = first + last in time order. The fixture wire
+  // contract is keys-ascending-by-time, so first/last are simply
+  // indices 0 and length-1.
+  const borderTimes = new Set<number>([
+    target.keys[0]!.time,
+    target.keys[target.keys.length - 1]!.time,
+  ]);
+  const toDelete = new Set<number>();
+  for (const t of times) {
+    if (!borderTimes.has(t)) toDelete.add(t);
+  }
+  if (toDelete.size === 0) return 0;
+  const nextKeys = target.keys.filter((k) => !toDelete.has(k.time));
+  const removed = target.keys.length - nextKeys.length;
+  if (removed === 0) return 0;
+  const nextTracks = cur.map((t, i) =>
+    i === trackIdx ? { ...t, keys: nextKeys } : t,
+  );
+  useMockTrackOverlay.getState().write(id, nextTracks);
+  return removed;
+}
+
+/** Set `track.interpolation = interp` on emitter `id`. Always succeeds
+ *  (when the track is known) — no refusal path on the wire. */
+export function setTrackInterpolationInOverlay(
+  id: number,
+  trackName: TrackName,
+  interp: InterpolationType,
+): boolean {
+  const cur = useMockTrackOverlay.getState().read(id);
+  const trackIdx = cur.findIndex((t) => t.name === trackName);
+  if (trackIdx === -1) return false;
+  const nextTracks = cur.map((t, i) =>
+    i === trackIdx ? { ...t, interpolation: interp } : t,
+  );
+  useMockTrackOverlay.getState().write(id, nextTracks);
+  return true;
+}

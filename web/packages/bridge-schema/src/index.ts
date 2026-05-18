@@ -318,6 +318,16 @@ export type Request =
   // mutations land with Screen 5 / Screen 6 Batch B.
   | { kind: "emitters/get-tracks";        params: { id: number } }
 
+  // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α). Border
+  // keys (first + last in time order) are silently skipped server-side
+  // by `delete-track-keys` — they define the track's time range and
+  // are not deletable per legacy semantics. The React UI filters them
+  // out before calling for cleanliness; the host enforces.
+  | { kind: "emitters/delete-track-keys";
+      params: { id: number; track: TrackName; times: number[] } }
+  | { kind: "emitters/set-track-interpolation";
+      params: { id: number; track: TrackName; interpolation: InterpolationType } }
+
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   | { kind: "emitters/duplicate";                       params: { id: number } }
   | { kind: "emitters/delete";                          params: { id: number } }
@@ -464,6 +474,10 @@ export type ResponseFor<R extends Request> =
   // an error so the panel can render a "no data yet" stub without
   // special-casing the failure.
   R extends { kind: "emitters/get-tracks" } ? { tracks: TrackDto[] } :
+
+  // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α)
+  R extends { kind: "emitters/delete-track-keys" }       ? Record<string, never> :
+  R extends { kind: "emitters/set-track-interpolation" } ? Record<string, never> :
 
   // Emitter mutations (Phase 3 Screen 4 Batch B1)
   R extends { kind: "emitters/duplicate" } ?

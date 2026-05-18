@@ -1789,6 +1789,160 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/delete-track-keys + set-track-interpolation --
+    //
+    // Screen 5 / Screen 6 Batch B-α track mutations. Both handlers
+    // resolve the emitter by id, look up the named track on `tracks[]`
+    // (the slot pointer aliasing — see the comment block in
+    // ParticleSystem.h:148), then mutate the underlying multiset /
+    // enum directly. Border keys (first + last in time order on the
+    // multiset, which is already ordered by Key::operator<) are
+    // silently skipped by delete-track-keys per legacy semantics;
+    // they define the track's [0, 100] time range and aren't
+    // deletable.
+    //
+    // Both mutations capture undo, mark the editor dirty, and emit
+    // engine/state/changed + emitters/tree/changed so the React
+    // panel re-fetches via `emitters/get-tracks`.
+    auto trackNameToIndex = [](const std::string& name) -> int {
+        if (name == "red")           return ParticleSystem::TRACK_RED_CHANNEL;
+        if (name == "green")         return ParticleSystem::TRACK_GREEN_CHANNEL;
+        if (name == "blue")          return ParticleSystem::TRACK_BLUE_CHANNEL;
+        if (name == "alpha")         return ParticleSystem::TRACK_ALPHA_CHANNEL;
+        if (name == "scale")         return ParticleSystem::TRACK_SCALE;
+        if (name == "index")         return ParticleSystem::TRACK_INDEX;
+        if (name == "rotationSpeed") return ParticleSystem::TRACK_ROTATION_SPEED;
+        return -1;
+    };
+
+    if (kind == "emitters/delete-track-keys")
+    {
+        int id = params.value("id", -1);
+        std::string trackName = params.value("track", std::string{});
+        const json& timesJson = params.contains("times") ? params["times"] : json::array();
+
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        int trackIdx = trackNameToIndex(trackName);
+        if (trackIdx < 0)
+        {
+            sendErr("unknown track");
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track* track = target->tracks[trackIdx];
+        if (track == nullptr || track->keys.empty())
+        {
+            // Nothing to delete — return success silently to match the
+            // mock's no-op semantics. Don't emit; nothing changed.
+            sendOk(json::object());
+            return res;
+        }
+
+        // Border keys = first + last in the multiset (ordered by
+        // Key::operator< on `time`). std::multiset::begin / rbegin
+        // are the cheapest way to grab them; cache the time values
+        // for the skip check below.
+        const float firstTime = track->keys.begin()->time;
+        const float lastTime  = track->keys.rbegin()->time;
+
+        // Capture undo BEFORE any erase — if every requested time is
+        // a border-key no-op we'll discover that in the loop and
+        // the capture is a wasted snapshot, but Undo coalescing
+        // handles that gracefully and the alternative (capture-late)
+        // can't restore the half-mutated multiset if iteration aborts.
+        captureUndo();
+
+        int removed = 0;
+        for (const auto& t : timesJson)
+        {
+            if (!t.is_number()) continue;
+            float timeVal = t.get<float>();
+            // Silent-skip border keys.
+            if (timeVal == firstTime || timeVal == lastTime) continue;
+            // std::multiset::find takes a `Key` constructed from the
+            // time alone; operator< compares only on time so the
+            // probe value's `value` field is irrelevant.
+            ParticleSystem::Emitter::Track::Key probe(timeVal, 0.0f);
+            auto it = track->keys.find(probe);
+            if (it != track->keys.end())
+            {
+                track->keys.erase(it);
+                removed++;
+            }
+        }
+
+        sendOk(json::object());
+        if (removed > 0)
+        {
+            markDirty();
+            EmitEmittersTreeChanged();
+            EmitEngineStateChanged();
+        }
+        return res;
+    }
+
+    if (kind == "emitters/set-track-interpolation")
+    {
+        int id = params.value("id", -1);
+        std::string trackName  = params.value("track",         std::string{});
+        std::string interpName = params.value("interpolation", std::string{});
+
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        int trackIdx = trackNameToIndex(trackName);
+        if (trackIdx < 0)
+        {
+            sendErr("unknown track");
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track* track = target->tracks[trackIdx];
+        if (track == nullptr)
+        {
+            // No track slot bound — silent no-op (matches the wire
+            // contract which never surfaces a refusal envelope).
+            sendOk(json::object());
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track::InterpolationType next;
+        if      (interpName == "linear") next = ParticleSystem::Emitter::Track::IT_LINEAR;
+        else if (interpName == "smooth") next = ParticleSystem::Emitter::Track::IT_SMOOTH;
+        else if (interpName == "step")   next = ParticleSystem::Emitter::Track::IT_STEP;
+        else
+        {
+            sendErr("unknown interpolation");
+            return res;
+        }
+
+        if (track->interpolation == next)
+        {
+            // No-op — don't capture undo or fire events.
+            sendOk(json::object());
+            return res;
+        }
+
+        captureUndo();
+        track->interpolation = next;
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
     // -------- emitters/duplicate-with-index-increment ---------------
     //
     // Legacy `EmitterList_DuplicateEmitter(hWnd, indexDelta)` at

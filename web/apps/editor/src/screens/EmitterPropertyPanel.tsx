@@ -33,9 +33,20 @@ type Props = {
   bridge: Bridge;
 };
 
+/** DOM tag names that own their own keyboard handling (text edits,
+ *  combo navigation, etc.). When a Delete keypress originates inside
+ *  one of these we MUST NOT intercept — typing "Delete" in a text
+ *  field should delete a character, not a curve key. */
+const TYPING_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
 export function EmitterPropertyPanel({ bridge }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [tracks, setTracks] = useState<TrackDto[] | null>(null);
+  // Imperative-style handle into TrackEditor's deleteSelected. The
+  // child re-registers on every selection / active-track change so
+  // we always invoke a fresh closure. Null when no TrackEditor is
+  // mounted (placeholder branch).
+  const deleteHandlerRef = useRef<(() => void) | null>(null);
   // Track which id we last fetched for so a late-arriving response
   // for a stale selection doesn't clobber the current data. Compared
   // by reference; the selection scalar is a primitive number/null so
@@ -105,11 +116,37 @@ export function EmitterPropertyPanel({ bridge }: Props) {
     return off;
   }, [bridge, fetchTracks, selectedId]);
 
+  // Keyboard handler — Delete key invokes the registered TrackEditor
+  // delete handler (which filters border keys + fires the bridge
+  // call). Skipped when the event target is a typing surface (input /
+  // textarea / select) so text-editing Delete keystrokes still work
+  // normally. Skipped when the panel is on the placeholder branch
+  // (no TrackEditor registered).
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key !== "Delete") return;
+    const target = e.target as HTMLElement | null;
+    if (target !== null && TYPING_TAGS.has(target.tagName)) return;
+    const handler = deleteHandlerRef.current;
+    if (handler === null) return;
+    e.preventDefault();
+    handler();
+  }, []);
+
+  const registerDeleteHandler = useCallback((h: (() => void) | null) => {
+    deleteHandlerRef.current = h;
+  }, []);
+
   return (
     <aside
       data-testid="emitter-property-panel"
       data-selected-id={selectedId === null ? "null" : String(selectedId)}
-      className="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-3 text-sm"
+      // tabIndex={0} makes the panel itself focus-target so keyboard
+      // events route here. Without it the Delete key on an
+      // un-focused-input panel would go to the document body and our
+      // onKeyDown wouldn't see it.
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="flex h-full w-80 shrink-0 flex-col overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sky-700"
       aria-label="Emitter properties"
     >
       {selectedId === null ? (
@@ -122,7 +159,12 @@ export function EmitterPropertyPanel({ bridge }: Props) {
       ) : tracks === null ? (
         <div className="text-neutral-500">Loading…</div>
       ) : (
-        <TrackEditor tracks={tracks} />
+        <TrackEditor
+          tracks={tracks}
+          bridge={bridge}
+          emitterId={selectedId}
+          registerDeleteHandler={registerDeleteHandler}
+        />
       )}
     </aside>
   );

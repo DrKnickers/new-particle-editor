@@ -11,6 +11,7 @@ import {
   useMockEngineState,
   useMockLinkGroupExempt,
   useMockRecentFiles,
+  useMockTrackOverlay,
   makeDefaultEmitterTree,
   makeDefaultEngineState,
 } from "../mock-state";
@@ -27,6 +28,7 @@ beforeEach(() => {
   useMockEmitterTree.setState({ tree: makeDefaultEmitterTree() });
   useMockLinkGroupExempt.getState().resetAll();
   useMockEmitterClipboard.getState().reset();
+  useMockTrackOverlay.getState().reset();
 });
 
 describe("MockBridge contract", () => {
@@ -847,6 +849,70 @@ describe("MockBridge contract", () => {
     for (const t of r.tracks) {
       expect(t.keys).toEqual([]);
     }
+  });
+
+  // ─── Screen 5 / Screen 6 Batch B-α — track mutations ────────────
+  //
+  // delete-track-keys removes the named keys (silently skipping border
+  // keys — first + last in time order); set-track-interpolation
+  // overrides the track's interpolation type. Both round-trip through
+  // a subsequent `emitters/get-tracks` to prove the overlay is wired.
+
+  it("emitters/delete-track-keys removes the specified non-border key from the track", async () => {
+    const b = new MockBridge();
+    // Alpha on id=0 (Smoke) has 4 keys: time 0, 20, 80, 100.
+    // Border keys are time 0 and 100. Deleting time=20 should leave
+    // 3 keys (times 0, 80, 100); deleting time=0 is a no-op (border).
+    await b.request({
+      kind: "emitters/delete-track-keys",
+      params: { id: 0, track: "alpha", times: [20] },
+    });
+    const after = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha = after.tracks.find((t) => t.name === "alpha");
+    expect(alpha?.keys).toHaveLength(3);
+    expect(alpha?.keys.map((k) => k.time)).toEqual([0, 80, 100]);
+
+    // Border-key delete attempt is a silent no-op.
+    await b.request({
+      kind: "emitters/delete-track-keys",
+      params: { id: 0, track: "alpha", times: [0, 100] },
+    });
+    const after2 = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha2 = after2.tracks.find((t) => t.name === "alpha");
+    expect(alpha2?.keys).toHaveLength(3);
+  });
+
+  it("emitters/set-track-interpolation updates the track's interpolation type", async () => {
+    const b = new MockBridge();
+    // The Smoke fixture's alpha track is "linear" by default. Flip to
+    // "smooth" and re-read.
+    await b.request({
+      kind: "emitters/set-track-interpolation",
+      params: { id: 0, track: "alpha", interpolation: "smooth" },
+    });
+    const after = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    const alpha = after.tracks.find((t) => t.name === "alpha");
+    expect(alpha?.interpolation).toBe("smooth");
+
+    // Round-trip to "step".
+    await b.request({
+      kind: "emitters/set-track-interpolation",
+      params: { id: 0, track: "alpha", interpolation: "step" },
+    });
+    const after2 = await b.request({
+      kind: "emitters/get-tracks",
+      params: { id: 0 },
+    });
+    expect(after2.tracks.find((t) => t.name === "alpha")?.interpolation).toBe("step");
   });
 
   it("on() returns a working unsubscribe", async () => {

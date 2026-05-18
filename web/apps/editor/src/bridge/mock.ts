@@ -30,22 +30,24 @@ import {
   addLifetimeChildEmitter,
   copyEmittersToClipboard,
   deleteEmitter,
+  deleteTrackKeysInOverlay,
   duplicateEmitter,
   duplicateWithIndexIncrement,
   findEmitterNode,
   makeDefaultEngineState,
-  makeFixtureTracks,
   moveEmitterInTree,
   pasteEmittersFromClipboard,
   renameEmitter,
   reorderRootEmitter,
   reparentEmitterInTree,
   setLinkGroupMembership,
+  setTrackInterpolationInOverlay,
   useMockEmitterClipboard,
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
   useMockRecentFiles,
+  useMockTrackOverlay,
   snapshotEngineState,
 } from "./mock-state";
 
@@ -96,6 +98,10 @@ function isMutating(kind: Request["kind"]): boolean {
   if (kind === "emitters/paste") return true;
   if (kind === "linkGroups/set-exempt-fields") return true;
   if (kind === "linkGroups/reset-exempt-fields") return true;
+  // Screen 5 / Screen 6 Batch B-α — track key deletion + interpolation
+  // toggle are persisted mutations on the per-emitter Track state.
+  if (kind === "emitters/delete-track-keys") return true;
+  if (kind === "emitters/set-track-interpolation") return true;
   return false;
 }
 
@@ -481,15 +487,64 @@ export class MockBridge implements Bridge {
         const cur = useMockEmitterTree.getState().tree;
         const node = findEmitterNode(cur, req.params.id);
         if (node === null || node.id === -1) {
-          // Empty tracks for missing / synthetic-root id.
+          // Empty tracks for missing / synthetic-root id. The overlay
+          // is bypassed here intentionally — invalid ids must not be
+          // observable through the overlay channel either.
           return {
-            tracks: makeFixtureTracks(-1).map((t) => ({
+            tracks: useMockTrackOverlay.getState().read(-1).map((t) => ({
               ...t,
               keys: [],
             })),
           };
         }
-        return { tracks: makeFixtureTracks(node.id) };
+        // Read through the overlay so mutations made via
+        // delete-track-keys / set-track-interpolation are reflected.
+        return { tracks: useMockTrackOverlay.getState().read(node.id) };
+      }
+
+      // ---------------- emitters/delete-track-keys (Screen 5/6 B-α) --
+      //
+      // Border keys (first + last in time order) are silently skipped.
+      // The wire contract returns Record<string, never> on every call;
+      // a request that targets only border keys is a successful no-op
+      // from the React side's perspective (the C++ host is the source
+      // of truth for what's a border key — React filters defensively).
+      case "emitters/delete-track-keys": {
+        const { id, track, times } = req.params;
+        const removed = deleteTrackKeysInOverlay(id, track, times);
+        if (removed > 0) {
+          this.emit({
+            kind: "emitters/tree/changed",
+            payload: useMockEmitterTree.getState().tree,
+          });
+          this.emit({
+            kind: "engine/state/changed",
+            payload: snapshotEngineState(),
+          });
+        }
+        return {};
+      }
+
+      // ---------------- emitters/set-track-interpolation (Screen 5/6 B-α)
+      //
+      // Always succeeds (when the track is known); the mock surfaces a
+      // missing-track as a silent no-op (matching the native host's
+      // "track pointer null" path). Fires tree/changed so the panel
+      // re-fetches and the toolbar's active-button visual updates.
+      case "emitters/set-track-interpolation": {
+        const { id, track, interpolation } = req.params;
+        const ok = setTrackInterpolationInOverlay(id, track, interpolation);
+        if (ok) {
+          this.emit({
+            kind: "emitters/tree/changed",
+            payload: useMockEmitterTree.getState().tree,
+          });
+          this.emit({
+            kind: "engine/state/changed",
+            payload: snapshotEngineState(),
+          });
+        }
+        return {};
       }
 
       // ---------------- emitters/list + emitters/select (Screen 4 Batch A)

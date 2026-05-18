@@ -1026,6 +1026,150 @@ goes nowhere visible. Splitting:
 The shell-then-canvas split lets the foundation ship without
 fighting the 1044-LOC CurveEditor.cpp port simultaneously.
 
+### Screen 5 / Screen 6 Batch B-α — Selection + Delete + Interpolation toggle + Smooth/Step rendering (locked 2026-05-17)
+
+First half of the Screen 5 (curve editor interaction) work — formally
+Screen 6 Batch B-α, calling it "Screen 5 Batch A" in commits since
+that's the natural way the work groups (the CurveEditor sub-component
+goes from read-only to interactive). After this batch users can
+select keys, delete non-border keys, switch interpolation
+(Linear/Smooth/Step) with proper rendering. Drag-to-move, click-to-add,
+Spinner sync, lock-to functional, and border-key visual differentiation
+stay deferred to Screen 5 Batch B (the second half of curve interaction).
+
+**Schema additions (2 new bridge call kinds):**
+
+- `emitters/delete-track-keys { id: number; track: TrackName; times: number[] }`
+  → `Record<string, never>`. Deletes the keys at the named times from
+  the track. Border keys (first + last) silently no-op'd if included
+  (host enforces). Capture undo + emit `engine/state/changed` + dirty.
+- `emitters/set-track-interpolation { id: number; track: TrackName; interpolation: InterpolationType }`
+  → `Record<string, never>`. Sets the track's interpolation type.
+  Capture undo + emit state-changed + dirty.
+
+No new events. No new DTO types (reuses `TrackName` + `InterpolationType`
+from Batch A).
+
+**Smooth + Step rendering in CurveEditor:**
+
+Legacy formulas (from [src/UI/CurveEditor.cpp:276-310]):
+
+- **Linear** (already shipped): polyline straight-line between keys.
+- **Smooth**: cubic Bezier with control points at 1/4 and 3/4. For
+  each (p1, p2) pair:
+  - `cp1 = (p1.x + (p2.x - p1.x)/4, p1.y)`
+  - `cp2 = (p1.x + (p2.x - p1.x)*3/4, p2.y)`
+  - SVG: `<path d="M x1 y1 C cp1.x cp1.y, cp2.x cp2.y, x2 y2 ..." />`.
+- **Step**: staircase — for each (p1, p2) pair, line from p1 to
+  (p2.x, p1.y) then to (p2.x, p2.y). SVG `<polyline>` with the
+  staircase points expanded.
+
+Render branch in CurveEditor: switch on `track.interpolation` and
+return the appropriate SVG element (path for smooth, polyline for
+linear + step). Single circle render for keys regardless of
+interpolation.
+
+**Selection state:**
+
+- New local state in `CurveEditor.tsx`: `selectedKeyTimes: Set<number>`.
+  Using key TIME as the identity (not array index) because the
+  multiset can reorder keys when their times change — even though
+  this batch doesn't move keys, Batch B will, and using time keeps
+  the selection stable across mutations.
+- Click on a key circle → set selection to `{ time }`.
+- Ctrl/Cmd+click → toggle in set.
+- Shift+click — **defer to Batch B** (2D range selection is
+  non-obvious; single + toggle suffices for delete-focused workflow).
+- Click on empty SVG canvas → clear selection.
+- Switching active track → clear selection (selection is per-track).
+- Selected key visual: filled circle with `fill: <accent>` and slightly
+  larger radius (`r=5` vs `r=4` unselected). Same accent colour as
+  Screen 4's primary selection (`sky-500`).
+
+**Delete keys:**
+
+- Toolbar's existing Delete button (currently visual-only per
+  Batch A) wires to a handler that:
+  1. Filters `selectedKeyTimes` to exclude border keys (first + last
+     in time order).
+  2. If anything remains, fires `emitters/delete-track-keys { id,
+     track, times: <filtered> }`.
+  3. Clears `selectedKeyTimes` after the call resolves.
+- Delete key on the CurveEditor with focus does the same. Add
+  `tabIndex={0}` on the SVG container to receive focus + keyboard
+  events. Don't intercept when an `<input>` is focused elsewhere.
+
+**Interpolation toggle:**
+
+- The three toggle buttons in TrackEditor (Linear/Smooth/Step,
+  currently visual per Batch A) become functional.
+- One always shows as active based on the current track's
+  interpolation type.
+- Click → fires `emitters/set-track-interpolation { id, track,
+  interpolation }`. The button visually flips to active immediately
+  (optimistic) and the re-fetched track from `emitters/tree/changed`
+  confirms.
+
+**Border keys:**
+
+- The FIRST key and LAST key (in time order) of each track are
+  "border keys" — they define the track's time range. Per legacy,
+  they can't be deleted (or moved — but moving is Batch B).
+- For Batch A, the visual differentiation (legacy renders border
+  keys in a different colour) **defers to Batch B**. This batch
+  just enforces the delete refusal on the C++ side + silent skip
+  on the React side.
+
+**C++ host implementations:**
+
+- `emitters/delete-track-keys`:
+  - Resolve emitter + track.
+  - Find first + last key times (border keys).
+  - For each time in `times` that isn't a border key, find the
+    matching key in `track.keys` (use `std::multiset::find` with a
+    Key constructed from the time) and erase.
+  - If at least one key was deleted, capture undo, emit
+    state-changed + tree-changed + dirty.
+- `emitters/set-track-interpolation`:
+  - Resolve emitter + track. Set `track.interpolation = mapped
+    value` (`"linear"` → `IT_LINEAR`, etc.).
+  - Capture undo + emit state-changed + dirty.
+
+**MockBridge implementations:**
+
+Mirror the C++ semantics. `mock-state` has the fixture tracks per
+emitter; mutate in place. Border-key skip + capture-undo-equivalent
++ tree-changed event.
+
+**Test surface for Batch A:**
+
+- **Vitest** (+8 specs, target 131 → 139+):
+  - `bridge-contract.test.ts` (+2): delete-track-keys round-trip;
+    set-track-interpolation round-trip.
+  - `CurveEditor.test.tsx` (+3): clicking a key selects it (fill
+    color check); Ctrl+click toggles; smooth interpolation renders
+    a `<path>` element (vs polyline for linear); step interpolation
+    renders a staircase polyline.
+  - `TrackEditor.test.tsx` (+2): clicking Linear/Smooth/Step
+    toolbar button fires the bridge call; the active button visually
+    reflects the current interpolation.
+  - `EmitterPropertyPanel.test.tsx` (+1): Delete key on focused
+    panel fires delete-track-keys with selected times.
+- **Playwright** (+2 specs, target 64 → 66+):
+  - Clicking a curve key applies the selected-style.
+  - Clicking the Smooth interpolation toggle button fires the
+    bridge call (observe state/changed).
+
+**Open follow-ups** (Screen 5 Batch B):
+- Drag to move keys.
+- Click empty space to add a key.
+- Click-to-toggle Select / Insert mode.
+- Spinner sync (TrackEditor's time + value spinners show
+  selected key, edits commit move).
+- Border key visual differentiation.
+- Lock-to combo functional behaviour (re-alias track slot).
+- Shift+click range selection.
+
 ### Batch A — Foundation (read-only) (locked 2026-05-17)
 
 **Schema additions (1 new bridge call kind + 1 new DTO):**
