@@ -5176,3 +5176,127 @@ Commit: `a6b65e4` (single feat — no new deps). Tests 147 Vitest
 | **B-β — Drag + click-to-add + Insert mode + Spinner sync + border visual** | **✅ shipped** |
 
 Screen 6 closes pending Phase 4.2 legacy delete (`src/UI/TrackEditor.cpp`, 483 LOC + `src/UI/CurveEditor.cpp`, 1044 LOC). Lock-to functional remains a small post-shipment polish item.
+
+### 2026-05-17 · Phase 4.1 Fix dispatch 1 (layout reshuffle + Basic property tab)
+
+First fix landing for the parity-acceptance regressions. Addresses
+findings #2 (missing emitter property panel — Basic/Appearance/
+Physics tabs) and #3 (curve editor on right vs legacy bottom) in
+one dispatch since both touch `App.tsx`.
+
+Commit: `de0932e` (single fix — `@radix-ui/react-tabs` +
+`@radix-ui/react-checkbox` added). Tests 155 Vitest (147 → 155,
++8) + 71 Playwright (69 → 71, +2). MSBuild 0/0.
+
+**What changed:**
+
+- *Four-quadrant layout matching legacy.* App.tsx restructured
+  to a 2×2 grid:
+  ```
+  +----------------+--------------------+
+  | Emitter tree   | Viewport           |
+  | (upper-left)   | (upper-right)      |
+  | flex-1         | flex-1 + relative  |
+  +----------------+--------------------+
+  | Property tabs  | Track + Curve      |
+  | (lower-left)   | (lower-right)      |
+  | h-72           | h-80               |
+  +----------------+--------------------+
+  ```
+  Left column `w-80` fixed (320px); right column `flex-1`. Bottom
+  panes static heights (matches legacy's
+  `GetClientRect`-derived heights from
+  [src/main.cpp:2728-2729]). Tool panel `relative`-positioned
+  ancestor moved into the viewport quadrant — all existing
+  ToolPanel specs still pass without modification.
+- *Complete `EmitterPropertiesDto` on the wire.* 19 Basic + 13
+  Appearance + 13 Physics + `groups: GroupDto[]` (length 3 =
+  `NUM_GROUPS`). All fields present even though only Basic
+  has UI this batch — lets future dispatches add UI without
+  schema churn.
+- *Basic tab fully wired.* 18 of 18 fields per the design lock
+  table. Spinner + Checkbox + native `<input>` for text.
+  `useBursts` mutex (nBursts/burstDelay/nParticlesPerBurst vs
+  nParticlesPerSecond); `randomRotation` gates the rotation
+  block. `name` commits on blur + Enter; Esc reverts.
+- *Appearance + Physics tabs scaffolded.* Both render placeholder
+  messages naming what's coming. Tabs.Content wrappers exist for
+  all three so structural assertions can target them.
+- *`emitters/get-properties` + `emitters/set-properties`*. The
+  set handler is a batch update — patch keys dispatched per-type
+  with `is_boolean` / `is_number` / `is_string` / `is_array(3|4)`
+  guards. Stray keys / wrong types are silent skips. Captures
+  undo once + emits state-changed + tree-changed + dirty once
+  per call (no event churn on patch-multi).
+- *Mock overlay pattern repeats.* `useMockEmitterProperties`
+  mirrors `useMockTrackOverlay` — `Map<id, DTO>` with read-merges
+  + write-replaces. `read()` returns defensive deep copies.
+  `set-properties` mirrors `name` patches into the emitter tree
+  store immediately (avoids a separate `emitters/rename`
+  round-trip).
+
+**Locks worth surfacing for future fix dispatches:**
+
+- *Schema-complete-from-the-start when the surface is going to
+  grow.* Shipping the full `EmitterPropertiesDto` (Basic +
+  Appearance + Physics + groups) before all the UI lands lets
+  Fix dispatches 2 + 3 add UI without re-touching the schema or
+  the C++ get-properties walker. This minimises wire-schema
+  churn across iterative UI builds. Same pattern would apply
+  to any future panel that's split across multiple dispatches.
+- *Tool-panel `relative`-positioned-ancestor mechanic survives
+  layout refactors.* Moving the ToolPanel ancestor from the
+  App main row to the viewport quadrant DID NOT break any
+  existing tool-panel test. The `absolute right-0` + `relative`
+  contract is self-contained to the parent-child pair, not the
+  whole layout. Generalizable: layout reshuffles are
+  cheaper-than-they-look when child components anchor to a
+  named parent.
+- *Mock overlay pattern is the canonical for any "DTO with
+  per-id mutations".* Three instances now: track overlay, emitter
+  clipboard, properties overlay. Pattern: a Zustand `Map<id,
+  DTO>` overlay layered on top of a deterministic fixture
+  generator. `read(id)` merges fixture + overlay; `write/patch`
+  mutates the overlay; `clear` resets in test setup. Future
+  per-id mutation surfaces should follow the same.
+
+**Implementer notes (from the commit + report):**
+
+1. *Radix Tabs in jsdom* hits the same pointer-event flake as
+   other Radix primitives (per existing lessons doc): `fireEvent.click`
+   on a Tabs trigger doesn't switch the active tab in jsdom. Workaround:
+   assert structurally on `Tabs.Content` wrappers (queryable via
+   `data-testid`) + `data-state="inactive"` on inactive triggers.
+   The Playwright spec covers the real switch behaviour.
+2. *FieldText sync ref pattern.* The `name` text-input needed a
+   `useRef` + render-time compare against the prop's `value` so
+   external changes (re-fetch on tree/changed) overwrite the
+   local edit-buffer when the user isn't focused. No `useEffect`
+   needed; the comparison happens during render.
+3. *`Group::#pragma pack(1)`* layout kept as positional fields,
+   packed into `min/max/val` Vec3s on the wire to reduce JSON
+   verbosity. The C++ `Group` struct retains its packed
+   layout; only the wire shape is repacked.
+4. *Subagent overshoot.* Test count overshot the +8 target
+   slightly (extra coverage of the Tabs structural assertions).
+   Same pattern as Screen 6 Batch A's +12-vs-+6 — natural extra
+   coverage when the surface invites it.
+
+**Open follow-ups** (Phase 4.1 fix dispatches remaining):
+
+- **Fix dispatch 2**: Appearance tab UI (colour texture +
+  normal texture + blend mode + textureSize + nTriangles +
+  random colours + hasTail/tailSize + isHeatParticle +
+  isWorldOriented + noDepthTest + affectedByWind +
+  doColorAddGrayscale).
+- **Fix dispatch 3**: Physics tab UI (acceleration +
+  gravity + inwardSpeed + inwardAcceleration +
+  objectSpaceAcceleration + bounciness + groundBehavior +
+  emitFromMesh + emitFromMeshOffset + weather fields + groups).
+- **Fix dispatch 4**: Finding #1 — D3D viewport z-order
+  (renders over menus) + DPI scaling (blurry).
+- **Fix dispatch 5**: Finding #4 (marquee select on curve) +
+  finding #5 (Mods top-level menu + Emitters top-level menu).
+
+Phase 4.2 still BLOCKED until Fix dispatches 2-5 land.
+
