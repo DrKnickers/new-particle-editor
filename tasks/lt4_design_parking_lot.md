@@ -5473,5 +5473,102 @@ with `val: [0,0,0]`, groups 1 + 2 = unused defaults).
 
 Phase 4.2 still BLOCKED until Fix dispatches 3-5 land.
 
+### 2026-05-18 · Phase 4.1 Fix dispatch 3 (Physics tab + groups + panel scroll)
+
+Closes the property panel content work. 13 Physics fields + 3
+Random Param GroupSections wired; panel scroll confirmed working.
+
+Commit: `c28204e` (single fix — no new deps; no schema work; no
+C++ work). Tests 168 Vitest (159 → 168, +9) + 74 Playwright
+(72 → 74, +2). MSBuild 0/0.
+
+**What changed:**
+
+- *Panel scroll*. The `overflow-y-auto` + `min-h-0` setup from
+  Fix dispatch 1 was already correct — turned out the
+  computer-use "fields below the fold" observation was the
+  scroll working as designed (just had to actually scroll
+  inside the tab content). Added a Vitest spec asserting the
+  class is present on each `Tabs.Content` outer.
+- *13 Physics fields wired*. Acceleration X/Y/Z as a single
+  triple-Spinner row (mirrors legacy GROUPBOX layout),
+  Gravity / Inward Speed / Inward Acceleration / Bounciness
+  (Spinners), Object Space Acceleration / Is Weather
+  Particle (Checkboxes), Ground Behavior / Emit From Mesh
+  (Radix Selects with 4 options each), and the 3 weather
+  fields.
+- *Cascade rules extended beyond the spec*. Subagent caught
+  the `groundBehavior` → `bounciness` gating from legacy
+  ([src/UI/Emitter.cpp:190]) — bounciness disables when
+  ground behavior isn't Bounce. Matches the legacy-is-truth
+  pattern from Fix dispatch 2.
+- *3 GroupSections rendered*. `<fieldset>` per group with
+  per-type conditional sub-fields (5 types: Exact / Box /
+  Cube / Sphere / Cylinder). Integer fields use
+  `step: 1 + decimals: 0 + Math.round`.
+- *Legacy group semantic labels found.* `src/ParticleSystem.h:28-30`
+  defines `GROUP_SPEED` / `GROUP_LIFETIME` / `GROUP_POSITION`.
+  Surfaced as "Initial Speed" / "Lifetime" / "Initial
+  Position". No placeholder labels needed — actual labels
+  recovered from the engine header in <5 min of digging.
+- *Legacy hides GROUP_LIFETIME from Physics dialog.* Per
+  `src/UI/Emitter.cpp:849-852` legacy populates only
+  GROUP_POSITION + GROUP_SPEED. We surface all 3 (engine
+  carries them all) with a `TODO(MT-2)` flag noting the UX
+  placement question.
+
+**Locks worth surfacing for future fix dispatches:**
+
+- *Subagent-overrides-spec-when-legacy-contradicts is now a
+  three-time pattern.* Fix dispatch 2's `forceFace`
+  (BLEND_BUMP only); Fix dispatch 3's `bounciness` cascade
+  (gates on Bounce ground behavior). When subagent finds a
+  cascade missing from spec, applies + documents inline.
+  Legacy IS the truth for parity work; the spec is a
+  best-effort interpretation.
+- *`overflow-y-auto` in flex columns needs `min-h-0`* on the
+  flex child to engage. Without it, the flex-item default
+  `min-height: auto` defeats the overflow. Worth documenting
+  alongside the established Tailwind patterns — it traps
+  most developers once.
+- *Engine enum labels live in `ParticleSystem.h`, not legacy
+  UI strings.* Group labels (`GROUP_SPEED` etc.) came from
+  the engine header, not an `IDS_*` resource. Generalizable
+  for any future port: **check engine headers before legacy
+  UI .rc for label / enum constants**. The UI may rename or
+  hide them; engine names are stable.
+
+**Implementer notes:**
+
+1. *Vec3 readonly cast pattern* — same as `randomColors` in
+   AppearanceTab. Write through `[number, number, number]`
+   intermediate then `as unknown as Vec3`.
+2. *Integer spinner pattern* — `step: 1`, `decimals: 0`,
+   `Math.max(0, Math.round(v))` on commit. Reusable for any
+   future int-typed field.
+3. *`<fieldset>` + `<legend>` for group sections* — more
+   semantic than div + label. Browser a11y tree picks up the
+   legend as the section name.
+4. *Editor-process WebView2Loader.dll lock* — first MSBuild
+   attempt failed on the DLL copy because an externally-run
+   editor process held the lock. `test:native`'s pre-flight
+   `taskkill /F /IM ParticleEditor.exe` released it. Worth
+   knowing — keep external editor instances closed during fix
+   dispatches.
+
+**Open follow-ups** (Phase 4.1 remaining):
+
+- **Fix dispatch 4**: Finding #1 — D3D viewport z-order +
+  DPI scaling. The hardest one — Win32 composition + WebView2
+  interaction.
+- **Fix dispatch 5**: Finding #4 (marquee select on curve) +
+  finding #5 (Mods + Emitters top-level menus).
+- *GROUP_LIFETIME placement* (TODO(MT-2)) — decide whether
+  to keep in Physics or relocate.
+- *TexturePalette popup* — post-shipment polish.
+
+Phase 4.2 still BLOCKED until Fix dispatches 4 + 5 land.
+
+
 
 
