@@ -119,6 +119,51 @@ void AlphaCompositor::Resize(int w, int h)
 IDirect3DSurface9* AlphaCompositor::GetRenderTarget() const { return m_impl->offscreenRT.Get(); }
 void AlphaCompositor::SetOcclusion(std::string /*id*/, RECT /*rectClient*/, int /*feather*/) {}
 void AlphaCompositor::RemoveOcclusion(const std::string& /*id*/) {}
-void AlphaCompositor::Composite(HWND /*layeredHwnd*/) {}
+void AlphaCompositor::Composite(HWND layeredHwnd)
+{
+    if (!layeredHwnd) return;
+    if (!m_impl->offscreenRT || !m_impl->sysMemSurface || !m_impl->dibBitmap) return;
+    if (m_impl->width <= 0 || m_impl->height <= 0) return;
+
+    // GPU → SYSTEMMEM. The actual readback cost (~1-3 ms on modern
+    // hardware for a typical viewport size).
+    HRESULT hr = m_impl->device->GetRenderTargetData(
+        m_impl->offscreenRT.Get(), m_impl->sysMemSurface.Get());
+    if (FAILED(hr)) return;
+
+    D3DLOCKED_RECT locked = {};
+    hr = m_impl->sysMemSurface->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+    if (FAILED(hr)) return;
+
+    // D3DFMT_A8R8G8B8 stores pixels as BB GG RR AA in memory; GDI
+    // BI_RGB 32bpp shares that byte order. Direct memcpy works,
+    // accounting for the source pitch (locked.Pitch >= w * 4).
+    auto*       dst      = static_cast<uint8_t*>(m_impl->dibPixels);
+    const auto* src      = static_cast<const uint8_t*>(locked.pBits);
+    const int   rowBytes = m_impl->width * 4;
+    for (int y = 0; y < m_impl->height; ++y)
+    {
+        memcpy(dst + y * rowBytes, src + y * locked.Pitch, rowBytes);
+    }
+
+    m_impl->sysMemSurface->UnlockRect();
+
+    // Occlusion stamp happens here in T4.
+
+    POINT srcPoint = { 0, 0 };
+    SIZE  bmpSize  = { m_impl->width, m_impl->height };
+    BLENDFUNCTION blend = {};
+    blend.BlendOp             = AC_SRC_OVER;
+    blend.BlendFlags          = 0;
+    blend.SourceConstantAlpha = 0xFF;
+    blend.AlphaFormat         = AC_SRC_ALPHA;
+
+    // pptDst = nullptr → screen position unchanged (LayoutBroker has
+    // already SetWindowPos'd the viewport popup).
+    UpdateLayeredWindow(layeredHwnd, nullptr /*hdcDst*/,
+                        nullptr /*pptDst*/, &bmpSize,
+                        m_impl->memDC, &srcPoint,
+                        0 /*crKey*/, &blend, ULW_ALPHA);
+}
 
 } // namespace host
