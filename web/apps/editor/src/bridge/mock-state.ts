@@ -656,6 +656,100 @@ export function reparentEmitterInTree(
   return { root: walk(tree.root) };
 }
 
+// ─── Batch C helpers — clipboard (copy / cut / paste) ───────────────
+//
+// The mock clipboard is a plain `EmitterTreeNode[]` array of cloned
+// subtrees. `copy` deep-clones the named nodes into the clipboard,
+// `cut` does the same then deletes the originals, `paste` deep-clones
+// the clipboard back into the tree as new roots with fresh ids. The
+// shape mirrors the native C++ host's `std::vector<std::vector<uint8_t>>`
+// — one serialised buffer per copied subtree.
+
+/** In-memory clipboard. Survives across copy → paste; cleared on
+ *  every fresh `copy` / `cut`. The Zustand store exposes setters so
+ *  the bridge handler can mutate without React rerender storms. */
+type EmitterClipboardStore = {
+  buffer: EmitterTreeNode[];
+  set: (buffer: EmitterTreeNode[]) => void;
+  reset: () => void;
+};
+
+export const useMockEmitterClipboard = create<EmitterClipboardStore>(
+  (set) => ({
+    buffer: [],
+    set: (buffer) => set({ buffer: buffer.map(cloneNode) }),
+    reset: () => set({ buffer: [] }),
+  }),
+);
+
+/** Reassign ids in a (deep-cloned) subtree starting at `startId`,
+ *  walking depth-first. Returns the new root id + the mutated subtree
+ *  (in-place — caller must have already cloned). */
+function reassignIdsInPlace(n: EmitterTreeNode, startId: number): number {
+  let next = startId;
+  const walk = (m: EmitterTreeNode) => {
+    m.id = next++;
+    m.children.forEach(walk);
+  };
+  walk(n);
+  return next;
+}
+
+/** Copy the named nodes' subtrees into the clipboard. Returns the
+ *  list of cloned subtrees (order matches `ids`). Missing ids are
+ *  silently skipped. */
+export function copyEmittersToClipboard(
+  tree: EmitterTreeDto,
+  ids: number[],
+): EmitterTreeNode[] {
+  const out: EmitterTreeNode[] = [];
+  for (const id of ids) {
+    if (id === -1) continue;
+    const n = findEmitterNode(tree, id);
+    if (n === null) continue;
+    out.push(cloneNode(n));
+  }
+  return out;
+}
+
+/** Paste the clipboard buffer as new roots. Reassigns ids from
+ *  `max+1`. If `afterId` is provided AND matches a current root, the
+ *  pasted roots land directly after it; else they append at the end
+ *  of roots. Returns the new tree + the list of newly-assigned root
+ *  ids in the order they were pasted. */
+export function pasteEmittersFromClipboard(
+  tree: EmitterTreeDto,
+  clipboard: EmitterTreeNode[],
+  afterId: number | null,
+): { tree: EmitterTreeDto; newIds: number[] } {
+  if (clipboard.length === 0) {
+    return { tree, newIds: [] };
+  }
+  let nextId = maxIdIn(tree) + 1;
+  const newIds: number[] = [];
+  const newRoots: EmitterTreeNode[] = clipboard.map((src) => {
+    const clone = cloneNode(src);
+    const rootId = nextId;
+    nextId = reassignIdsInPlace(clone, nextId);
+    // Pasted nodes always land as roots (legacy default; paste-as-
+    // Lifetime/Death is a future polish).
+    clone.role = "root";
+    newIds.push(rootId);
+    return clone;
+  });
+  const roots = tree.root.children;
+  let insertAt = roots.length;
+  if (afterId !== null) {
+    const idx = roots.findIndex((c) => c.id === afterId);
+    if (idx !== -1) insertAt = idx + 1;
+  }
+  const nextRoots = [...roots.slice(0, insertAt), ...newRoots, ...roots.slice(insertAt)];
+  return {
+    tree: { root: { ...tree.root, children: nextRoots } },
+    newIds,
+  };
+}
+
 /** Walks the fixture and returns the node with the matching id, or null
  *  when the id isn't present in the tree. The synthetic id=-1 root
  *  matches too — callers that explicitly forbid the synthetic root must

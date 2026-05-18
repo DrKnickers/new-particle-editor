@@ -246,4 +246,122 @@ describe("EmitterTree", () => {
     expect(sel.ids).toEqual([0, 1, 2, 3, 4]);
     expect(sel.primary).toBe(4);
   });
+
+  // ─── Batch C — link-group brackets ───────────────────────────────
+
+  it("renders link-group brackets in the right gutter for grouped rows", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Fixture: Smoke (id=0) + Sparks (id=3) share linkGroup=1. Flash
+    // (id=5) is unlinked. We expect exactly one bracket descriptor
+    // (group 1) in the gutter.
+    const gutter = screen.getByTestId("link-group-bracket-gutter");
+    expect(gutter).toBeInTheDocument();
+    const bracket1 = screen.getByTestId("link-group-bracket-1");
+    expect(bracket1).toBeInTheDocument();
+    expect(bracket1.getAttribute("data-link-group")).toBe("1");
+    // No bracket for group 0 (unlinked) or any other group.
+    expect(screen.queryByTestId("link-group-bracket-0")).toBeNull();
+    expect(screen.queryByTestId("link-group-bracket-2")).toBeNull();
+  });
+
+  // ─── Batch C — inline rename ─────────────────────────────────────
+
+  it("F2 on the focused row enters inline rename mode (input renders with current name)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Focus the Smoke row (id=0) via click.
+    fireEvent.click(screen.getByText("Smoke"));
+    // Fire F2 on the tree container (the keydown handler is attached
+    // to the container, not the row).
+    const tree = screen.getByTestId("emitter-tree");
+    fireEvent.keyDown(tree, { key: "F2" });
+
+    const input = screen.getByTestId("emitter-rename-input-0") as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe("Smoke");
+  });
+
+  it("Enter on the inline-rename input commits via emitters/rename", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.keyDown(screen.getByTestId("emitter-tree"), { key: "F2" });
+
+    const input = screen.getByTestId("emitter-rename-input-0") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Smoke 2" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const renameCall = calls.find((c) => c.kind === "emitters/rename");
+    expect(renameCall).toBeDefined();
+    expect(renameCall.params).toEqual({ id: 0, name: "Smoke 2" });
+  });
+
+  it("Esc on the inline-rename input cancels (no emitters/rename dispatched)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.keyDown(screen.getByTestId("emitter-tree"), { key: "F2" });
+
+    const input = screen.getByTestId("emitter-rename-input-0") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Smoke 2" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // The input should be gone (cancel returns to label view).
+    expect(screen.queryByTestId("emitter-rename-input-0")).toBeNull();
+    // No rename request fired.
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "emitters/rename")).toBeUndefined();
+  });
+
+  // ─── Batch C — keyboard nav ──────────────────────────────────────
+
+  it("ArrowDown on the tree shifts primary to the next row in flat order", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Click Smoke first (focus + primary = 0). Tree order:
+    //   Smoke(0), Smoke embers(1), Smoke puff(2), Sparks(3), Spark trail(4), Flash(5).
+    fireEvent.click(screen.getByText("Smoke"));
+    const tree = screen.getByTestId("emitter-tree");
+    // Stub the row button focus, since we don't actually need DOM
+    // focus to change — the handler updates the React-side primary.
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    expect(useEmitterSelectionStore.getState().primary).toBe(1);
+  });
+
+  // ─── Batch C — Ctrl+C clipboard dispatch ─────────────────────────
+
+  it("Ctrl+C on the tree dispatches emitters/copy with the current selection ids", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Select Smoke (id=0) + Sparks (id=3) via plain + Ctrl+click.
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Sparks"), { ctrlKey: true });
+    const tree = screen.getByTestId("emitter-tree");
+    fireEvent.keyDown(tree, { key: "c", ctrlKey: true });
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const copyCall = calls.find((c) => c.kind === "emitters/copy");
+    expect(copyCall).toBeDefined();
+    expect(copyCall.params).toEqual({ ids: [0, 3] });
+  });
 });

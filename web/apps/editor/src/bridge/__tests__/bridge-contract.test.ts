@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { MockBridge } from "../mock";
 import {
+  useMockEmitterClipboard,
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
@@ -25,6 +26,7 @@ beforeEach(() => {
   useMockRecentFiles.getState().reset();
   useMockEmitterTree.setState({ tree: makeDefaultEmitterTree() });
   useMockLinkGroupExempt.getState().resetAll();
+  useMockEmitterClipboard.getState().reset();
 });
 
 describe("MockBridge contract", () => {
@@ -724,6 +726,63 @@ describe("MockBridge contract", () => {
     const flashUnderSparks = sparks.children.find((c) => c.id === 5);
     expect(flashUnderSparks).toBeDefined();
     expect(flashUnderSparks!.role).toBe("death");
+    off();
+  });
+
+  // ─── Screen 4 Batch C — clipboard (copy / cut / paste) ───────────
+
+  it("emitters/copy stashes the named subtrees and emits no tree change", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Copy Smoke (id=0) — should NOT emit tree/changed (read-only op).
+    const r = await b.request({ kind: "emitters/copy", params: { ids: [0] } });
+    expect(r).toEqual({});
+    expect(lastTree).toBeNull();
+    // Tree is untouched.
+    const after = await b.request({ kind: "emitters/list", params: {} });
+    expect(after.root.children.map((c) => c.name)).toEqual(["Smoke", "Sparks", "Flash"]);
+    off();
+  });
+
+  it("emitters/cut serialises + deletes + a follow-up paste restores the subtree as a new root", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Cut Sparks (id=3) — has a lifetime child (id=4). After cut, the
+    // root list should be [Smoke, Flash] (Sparks gone), with the
+    // clipboard holding the Sparks subtree.
+    await b.request({ kind: "emitters/cut", params: { ids: [3] } });
+    expect(lastTree).not.toBeNull();
+    expect(lastTree!.root.children.map((c) => c.name)).toEqual(["Smoke", "Flash"]);
+    // Paste back — clipboard buffer is consumed by reference (deep
+    // clone on every set), so a fresh paste should produce a Sparks
+    // subtree with fresh ids appended at the end of roots.
+    const r = await b.request({ kind: "emitters/paste", params: {} });
+    expect(r.newIds).toHaveLength(1);
+    expect(lastTree).not.toBeNull();
+    const names = lastTree!.root.children.map((c) => c.name);
+    expect(names).toEqual(["Smoke", "Flash", "Sparks"]);
+    // The pasted Sparks should carry the child (Spark trail).
+    const pastedSparks = lastTree!.root.children.find((c) => c.name === "Sparks")!;
+    expect(pastedSparks.children).toHaveLength(1);
+    expect(pastedSparks.children[0]!.name).toBe("Spark trail");
+    // Pasted ids are fresh (above the pre-cut max=5).
+    expect(pastedSparks.id).toBeGreaterThan(5);
+    off();
+  });
+
+  it("emitters/paste with afterId splices the pasted roots after the named root", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    // Copy Flash (id=5), then paste with afterId=0 (Smoke). Expected
+    // root order after paste: [Smoke, Flash-copy, Sparks, Flash].
+    await b.request({ kind: "emitters/copy", params: { ids: [5] } });
+    await b.request({ kind: "emitters/paste", params: { afterId: 0 } });
+    expect(lastTree).not.toBeNull();
+    const names = lastTree!.root.children.map((c) => c.name);
+    expect(names).toEqual(["Smoke", "Flash", "Sparks", "Flash"]);
     off();
   });
 

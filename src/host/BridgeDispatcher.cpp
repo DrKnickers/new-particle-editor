@@ -2135,6 +2135,180 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/copy / cut / paste (Screen 4 Batch C) --------
+    //
+    // Process-local clipboard. We reuse the existing LT-3 import-from-
+    // file serialise pattern: per emitter, allocate a MemoryFile, wrap
+    // it with a ChunkWriter, call `Emitter::copy(writer)` (which is
+    // `write(writer, true)` — preserves identity-less form), then
+    // snapshot the bytes into a `std::vector<uint8_t>`. Paste reverses
+    // the round-trip via `Emitter(ChunkReader&)`. One buffer per copied
+    // subtree so each can be deserialised independently (multi-id paste
+    // produces multiple new roots).
+    //
+    // Cut = copy + delete. Single undo capture at the start, single
+    // tree-changed at the end — the user sees one atomic step in undo.
+    // Descending-id delete order keeps lower indices valid through the
+    // loop (deleteEmitter shifts everything above the deleted index
+    // down by one).
+    if (kind == "emitters/copy" || kind == "emitters/cut")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json::object());
+            return res;
+        }
+        // Pull the id list from params.ids (an array of numbers).
+        std::vector<int> ids;
+        if (params.contains("ids") && params["ids"].is_array())
+        {
+            for (const auto& v : params["ids"])
+            {
+                if (v.is_number_integer()) ids.push_back(v.get<int>());
+            }
+        }
+        // Clear the clipboard before refilling — every copy/cut
+        // replaces the entire contents.
+        m_emitterClipboard.clear();
+        for (int id : ids)
+        {
+            ParticleSystem::Emitter* source = getEmitterById(id);
+            if (source == nullptr) continue;
+            MemoryFile* memfile = new MemoryFile;
+            try
+            {
+                ChunkWriter writer(memfile);
+                source->copy(writer);
+                std::vector<uint8_t> buf(memfile->size());
+                memfile->seek(0);
+                if (!buf.empty())
+                {
+                    memfile->read(buf.data(), static_cast<unsigned long>(buf.size()));
+                }
+                m_emitterClipboard.push_back(std::move(buf));
+            }
+            catch (...)
+            {
+                // Best-effort: skip this id and continue with the rest.
+            }
+            memfile->Release();
+        }
+        if (kind == "emitters/copy")
+        {
+            // Read-only — no undo, no dirty, no tree-changed.
+            sendOk(json::object());
+            return res;
+        }
+        // ---- cut: delete the originals atomically ----
+        captureUndo();
+        // Sort ids descending so the iteration is robust against any
+        // mid-loop index reshuffling. We also re-resolve each id via
+        // getEmitterById inside the loop because the legacy
+        // `deleteEmitter` shifts subsequent slots down, invalidating
+        // raw pointers across calls.
+        std::sort(ids.begin(), ids.end(), std::greater<int>());
+        ParticleSystem* sys = m_pParticleSystem->get();
+        bool clearedSelection = false;
+        for (int id : ids)
+        {
+            ParticleSystem::Emitter* target = getEmitterById(id);
+            if (target == nullptr) continue;
+            if (m_selectedEmitterId == id) clearedSelection = true;
+            sys->deleteEmitter(target);
+        }
+        if (clearedSelection)
+        {
+            m_selectedEmitterId = -1;
+            if (m_emit)
+            {
+                json env = {
+                    {"type",    "evt"},
+                    {"kind",    "emitters/selected"},
+                    {"payload", json{{"id", json(nullptr)}}},
+                };
+                m_emit(env.dump());
+            }
+        }
+        sendOk(json::object());
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+    if (kind == "emitters/paste")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"newIds", json::array()}});
+            return res;
+        }
+        if (m_emitterClipboard.empty())
+        {
+            // Nothing to paste — silent no-op, no dirty, no undo.
+            sendOk(json{{"newIds", json::array()}});
+            return res;
+        }
+        // Optional `afterId` — the root the paste should land directly
+        // after. When omitted or not a current root, paste at the end
+        // of the root list.
+        int afterId = -1;
+        if (params.contains("afterId") && !params["afterId"].is_null())
+        {
+            afterId = params.value("afterId", -1);
+        }
+        captureUndo();
+        ParticleSystem* sys = m_pParticleSystem->get();
+        json newIds = json::array();
+        ParticleSystem::Emitter* prevAnchor = (afterId >= 0)
+            ? getEmitterById(afterId)
+            : nullptr;
+        // Track failure separately so a partial paste still emits one
+        // tree-changed and returns the ids that *did* land.
+        for (auto& buf : m_emitterClipboard)
+        {
+            if (buf.empty()) continue;
+            MemoryFile* memfile = new MemoryFile;
+            ParticleSystem::Emitter* pasted = nullptr;
+            try
+            {
+                memfile->write(buf.data(),
+                               static_cast<unsigned long>(buf.size()));
+                memfile->seek(0);
+                ChunkReader reader(memfile);
+                ParticleSystem::Emitter staging(reader);
+                staging.name = GenerateDuplicateName(sys, staging.name);
+                if (prevAnchor != nullptr)
+                {
+                    pasted = sys->insertEmitterAfter(prevAnchor, staging);
+                }
+                else
+                {
+                    pasted = sys->addRootEmitter(staging);
+                }
+            }
+            catch (...)
+            {
+                // Skip this entry; continue with the rest.
+            }
+            memfile->Release();
+            if (pasted != nullptr)
+            {
+                newIds.push_back(static_cast<int>(pasted->index));
+                // Chain subsequent pastes after this one so multi-id
+                // paste keeps clipboard order.
+                prevAnchor = pasted;
+            }
+        }
+        sendOk(json{{"newIds", newIds}});
+        if (!newIds.empty())
+        {
+            markDirty();
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+        }
+        return res;
+    }
+
     // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
     return res;

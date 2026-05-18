@@ -7,9 +7,13 @@
 // Phase 3 Screen 4 Batch B2: Add Lifetime/Death Child, Move Up/Down,
 //                            Set Link Group… / Leave Link Group, plus
 //                            React-side multi-select (Ctrl/Cmd + Shift
-//                            + plain click). Drag/drop is Batch B3,
-//                            inline rename / keyboard nav / link-group
-//                            bracket visualisation is Batch C.
+//                            + plain click).
+// Phase 3 Screen 4 Batch B3: HTML5 drag/drop reorder + reparent.
+// Phase 3 Screen 4 Batch C : Link-group bracket gutter + inline rename
+//                            (F2 / dbl-click / context-menu Rename;
+//                            replaces B1's modal — `RenameEmitterDialog`
+//                            is deleted) + keyboard nav (arrows / Home
+//                            / End / Enter / F2 / Delete / Ctrl+C/X/V).
 //
 // Multi-select model: server tracks only the primary id (via the
 // existing `emitters/select`); React layers an in-memory `ids[]` +
@@ -27,10 +31,33 @@
 // when `visible === false`.
 //
 // Link-group dot: a small filled circle in `bg-sky-500` when
-// `linkGroup !== 0`. Tooltip exposes the group ID for now; the full
-// coloured-bracket visualization (MT-9 port) is Batch C.
+// `linkGroup !== 0`. The full coloured-bracket visualization (MT-9
+// port) renders in the right gutter (Batch C); the dot itself stays
+// as a per-row affordance for quick "this row is linked" recognition.
+//
+// Inline rename: a string-keyed Zustand atom would be overkill — local
+// component state suffices because (a) only the tree owns the input
+// HWND, (b) only the tree binds the keyboard handlers that drive the
+// transitions. `editing: { id, value } | null`. Triggers: F2 on focused
+// row, double-click on row label, or context-menu Rename. Commit on
+// Enter / blur / click-outside via `emitters/rename`; cancel on Esc.
+// Empty value reverts to the original (no commit).
+//
+// Keyboard nav: the tree's outer `<div>` carries `tabIndex={0}` so the
+// container itself can receive focus, but each row is already a focus-
+// able `<button>` — arrows shift focus row-by-row in flat order. The
+// handler is attached to the tree container; it doesn't intercept
+// keystrokes when the focus target is an `<input>` (so inline rename
+// + downstream text fields stay usable).
+//
+// Clipboard: Ctrl+C / Ctrl+X / Ctrl+V on the focused tree dispatch
+// `emitters/copy` / `emitters/cut` / `emitters/paste` against the
+// current multi-selection. The C++ host owns the buffer; React just
+// fires the bridge call. Paste appends new roots at the end (or after
+// `afterId` — not surfaced through the keyboard path; only the future
+// "Paste below selection" menu would supply it).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type {
   Bridge,
@@ -50,6 +77,7 @@ import {
   resolveReparentSlot,
   type DropZone,
 } from "@/lib/drop-zone";
+import { computeLinkGroupBrackets } from "@/lib/link-group-colors";
 
 type Props = {
   bridge: Bridge;
@@ -106,6 +134,16 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
 // in. `null` means no active drag-over.
 type DropIndicator = { targetId: number; zone: DropZone } | null;
 
+// Inline-rename state (Batch C). `editing.id` is the row currently in
+// rename mode; `editing.value` is the live input value. The original
+// name is captured at edit-start (`original`) so an empty-commit can
+// revert without a tree re-fetch round-trip.
+export type RenameEditingState = {
+  id: number;
+  value: string;
+  original: string;
+} | null;
+
 type RowProps = {
   row: FlatRow;
   primaryId: number | null;
@@ -121,17 +159,39 @@ type RowProps = {
   setIndicator: (i: DropIndicator) => void;
   rootChildren: EmitterTreeNode[];
   tree: EmitterTreeDto | null;
+  // Batch C — inline rename. `editing.id === node.id` means this row
+  // renders an `<input>` instead of the label span. `beginEdit` starts
+  // a new rename session against this row; `setEditValue` updates the
+  // live value; `commitEdit` / `cancelEdit` end the session.
+  editing: RenameEditingState;
+  beginEdit: (id: number, currentName: string) => void;
+  setEditValue: (value: string) => void;
+  commitEdit: () => void;
+  cancelEdit: () => void;
 };
 
 function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
   draggingId, draggingNode, indicator, setDraggingId, setIndicator,
   rootChildren, tree,
+  editing, beginEdit, setEditValue, commitEdit, cancelEdit,
 }: RowProps) {
   const { node, depth, siblings, indexInSiblings } = row;
   const isPrimary = primaryId === node.id;
   const isSelected = selectedIds.includes(node.id);
   const isLinked = node.linkGroup !== 0;
+  const isEditing = editing !== null && editing.id === node.id;
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-focus + select-all on the input the moment editing toggles to
+  // this row. The ref binds in the same render where `isEditing` flips
+  // to true; the effect fires post-mount.
+  useEffect(() => {
+    if (isEditing && inputRef.current !== null) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
 
   // Disabled states (derived from the tree DTO + the multi-selection).
   // The DTO doesn't expose `spawnDuringLife` / `spawnOnDeath` directly,
@@ -201,8 +261,10 @@ function EmitterRow({
   };
 
   const handleRename = () => {
+    // Batch C: context-menu Rename starts inline edit instead of
+    // opening a modal. `RenameEmitterDialog` has been removed.
     resolveTargetIds();
-    openTreeContextDialog("rename", node.id);
+    beginEdit(node.id, node.name);
   };
   const handleDuplicate = () => {
     resolveTargetIds();
@@ -519,8 +581,58 @@ function EmitterRow({
             >
               {roleGlyph(node.role)}
             </span>
-            <span className="truncate">{node.name}</span>
-            {isLinked && (
+            {isEditing ? (
+              // Inline-rename input. Stops click + drag propagation so
+              // typing doesn't accidentally re-trigger row selection /
+              // drag-start. Commit on Enter, cancel on Esc; blur also
+              // commits. Empty value reverts on commit (handled in the
+              // parent's `commitEdit`).
+              <input
+                ref={inputRef}
+                data-testid={`emitter-rename-input-${node.id}`}
+                value={editing!.value}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={(e) => {
+                  // Stop the tree-level keyboard handler from snatching
+                  // Backspace / Enter / Esc / arrows from the input.
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitEdit();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelEdit();
+                  }
+                }}
+                onBlur={() => {
+                  // Blur happens AFTER Enter / Esc handlers fire and
+                  // toggle `editing` off; the conditional in the parent
+                  // makes a second commit a no-op. Safer to always
+                  // route through commitEdit on blur so click-outside
+                  // works without an explicit click handler.
+                  commitEdit();
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className="min-w-0 flex-1 rounded border border-sky-500 bg-neutral-950 px-1 py-0 text-sm text-neutral-50 outline-none"
+              />
+            ) : (
+              <span
+                className="truncate"
+                onDoubleClick={(e) => {
+                  // Double-click on the label starts inline rename. The
+                  // stopPropagation prevents the click-handler chain
+                  // above from re-firing single-select on the second
+                  // click.
+                  e.stopPropagation();
+                  beginEdit(node.id, node.name);
+                }}
+              >
+                {node.name}
+              </span>
+            )}
+            {isLinked && !isEditing && (
               <span
                 title={`Link group ${node.linkGroup}`}
                 aria-label={`Link group ${node.linkGroup}`}
@@ -610,6 +722,14 @@ function EmitterRow({
   );
 }
 
+// Row-height for the bracket gutter math. Matches the `py-1`+`text-sm`
+// row styling — empirically ~24px in the current theme. Static so the
+// bracket layer can lay out absolutely without per-render measurement
+// (a ResizeObserver pass adds complexity for a polish detail; if the
+// tree theme changes this constant moves with it).
+const ROW_HEIGHT_PX = 24;
+const GUTTER_WIDTH_PX = 16;
+
 export function EmitterTree({ bridge }: Props) {
   const [tree, setTree] = useState<EmitterTreeDto | null>(null);
   const selectedIds = useEmitterSelectionIds();
@@ -621,6 +741,40 @@ export function EmitterTree({ bridge }: Props) {
   // and so rows can read the dragged node's subtree for cycle checks.
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [indicator, setIndicator] = useState<DropIndicator>(null);
+
+  // Batch C — inline rename. Local component state because only the
+  // tree owns both the focus target (each row's button) and the input
+  // (mounted inside the row). One row at a time; null = no edit in
+  // progress.
+  const [editing, setEditing] = useState<RenameEditingState>(null);
+  const editingRef = useRef<RenameEditingState>(null);
+  useEffect(() => { editingRef.current = editing; }, [editing]);
+
+  const beginEdit = useCallback((id: number, currentName: string) => {
+    setEditing({ id, value: currentName, original: currentName });
+  }, []);
+  const setEditValue = useCallback((value: string) => {
+    setEditing((cur) => (cur === null ? null : { ...cur, value }));
+  }, []);
+  const cancelEdit = useCallback(() => { setEditing(null); }, []);
+  const commitEdit = useCallback(() => {
+    const cur = editingRef.current;
+    if (cur === null) return;
+    const trimmed = cur.value.trim();
+    // Empty name → silent revert (no bridge call). Matches legacy: an
+    // empty rename was rejected at the TreeView level.
+    // Unchanged name → still revert without firing the bridge call;
+    // saves a wire round-trip on a no-op commit (e.g. F2 → Enter).
+    if (trimmed.length === 0 || trimmed === cur.original) {
+      setEditing(null);
+      return;
+    }
+    void bridge.request({
+      kind: "emitters/rename",
+      params: { id: cur.id, name: trimmed },
+    });
+    setEditing(null);
+  }, [bridge]);
 
   // Fetch the full tree from the host. Pulled into a callback so the
   // tree-changed subscription can re-trigger it.
@@ -729,13 +883,144 @@ export function EmitterTree({ bridge }: Props) {
     return flatRows.find((r) => r.node.id === draggingId)?.node ?? null;
   }, [draggingId, flatRows]);
 
+  // Bracket descriptors for the right gutter. One entry per non-zero
+  // linkGroup; the renderer absolute-positions each as a vertical bar
+  // + top/bottom horizontal caps.
+  const brackets = useMemo(
+    () => computeLinkGroupBrackets(flatRows.map((r) => r.node)),
+    [flatRows],
+  );
+
+  // ── Batch C — keyboard handler ─────────────────────────────────
+  //
+  // Routes via the focused row's `data-emitter-id`. The tree container
+  // is `tabIndex={0}` so it can hold focus when no row is focused
+  // (initial-load case). Arrow/Home/End shift focus; Enter/F2/Delete/
+  // Ctrl+C/X/V fire actions. Keystrokes targeting an `<input>` are
+  // never intercepted — the inline-rename input stops propagation on
+  // its own onKeyDown anyway, but the tagName guard is the safety net.
+  //
+  // Focus is shifted by querying the rendered DOM for the target row's
+  // button and calling `.focus()` on it. The button is the actual
+  // focus target (the container's tabIndex just lets users tab INTO
+  // the tree); arrow nav within the tree always lands on a row button.
+  const treeContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const focusRowById = useCallback((id: number) => {
+    if (treeContainerRef.current === null) return;
+    const btn = treeContainerRef.current.querySelector(
+      `button[data-emitter-id="${id}"]`,
+    ) as HTMLButtonElement | null;
+    btn?.focus();
+  }, []);
+
+  const handleTreeKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Never steal keystrokes when the focus is in a text input
+      // (inline-rename, spinners, modal text fields that might bubble).
+      const target = e.target as HTMLElement | null;
+      if (target !== null && target.tagName === "INPUT") return;
+      // Editing mode disables the global keyboard nav so the input
+      // owns all keys. (The input's onKeyDown stops propagation too;
+      // belt + braces.)
+      if (editingRef.current !== null) return;
+
+      // Resolve the focused row id from the active element's
+      // `data-emitter-id`, falling back to the React-side primary so
+      // the first keypress lands somewhere sensible.
+      const active = document.activeElement as HTMLElement | null;
+      const activeIdStr = active?.getAttribute("data-emitter-id") ?? null;
+      const focusedId = activeIdStr !== null ? Number.parseInt(activeIdStr, 10) : primaryId;
+      const focusedIdx = focusedId !== null ? orderedIds.indexOf(focusedId) : -1;
+
+      // Helpers — used by multiple branches below.
+      const moveFocus = (nextIdx: number) => {
+        if (nextIdx < 0 || nextIdx >= orderedIds.length) return;
+        const nextId = orderedIds[nextIdx]!;
+        e.preventDefault();
+        useEmitterSelectionStore.getState().setSingle(nextId);
+        void bridge.request({
+          kind: "emitters/select",
+          params: { id: nextId },
+        });
+        focusRowById(nextId);
+      };
+
+      if (e.key === "ArrowDown") {
+        moveFocus(focusedIdx + 1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        moveFocus(focusedIdx - 1);
+        return;
+      }
+      if (e.key === "Home") {
+        moveFocus(0);
+        return;
+      }
+      if (e.key === "End") {
+        moveFocus(orderedIds.length - 1);
+        return;
+      }
+      if (e.key === "F2") {
+        if (focusedId === null) return;
+        const node = flatRows.find((r) => r.node.id === focusedId)?.node ?? null;
+        if (node === null) return;
+        e.preventDefault();
+        beginEdit(focusedId, node.name);
+        return;
+      }
+      if (e.key === "Delete") {
+        const cur = useEmitterSelectionStore.getState().ids;
+        if (cur.length === 0) return;
+        e.preventDefault();
+        // Descending id order — deleting in ascending order would
+        // invalidate higher indices mid-loop on the C++ side (the
+        // mock's id-based delete is robust, but the contract has to
+        // match the host).
+        const sorted = [...cur].sort((a, b) => b - a);
+        for (const id of sorted) {
+          void bridge.request({ kind: "emitters/delete", params: { id } });
+        }
+        return;
+      }
+      // Ctrl+C / Ctrl+X / Ctrl+V on the focused tree. Cmd+* on macOS
+      // routes through metaKey, same handler.
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === "c" || e.key === "C")) {
+        const cur = useEmitterSelectionStore.getState().ids;
+        if (cur.length === 0) return;
+        e.preventDefault();
+        void bridge.request({ kind: "emitters/copy", params: { ids: cur } });
+        return;
+      }
+      if (mod && (e.key === "x" || e.key === "X")) {
+        const cur = useEmitterSelectionStore.getState().ids;
+        if (cur.length === 0) return;
+        e.preventDefault();
+        void bridge.request({ kind: "emitters/cut", params: { ids: cur } });
+        return;
+      }
+      if (mod && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        void bridge.request({ kind: "emitters/paste", params: {} });
+        return;
+      }
+    },
+    [bridge, beginEdit, flatRows, focusRowById, orderedIds, primaryId],
+  );
+
   return (
     <div
+      ref={treeContainerRef}
       data-testid="emitter-tree"
       data-selected-count={selectedIds.length}
       data-primary-id={primaryId ?? ""}
       data-dragging-id={draggingId ?? ""}
-      className="flex h-full flex-col"
+      data-editing-id={editing?.id ?? ""}
+      tabIndex={0}
+      onKeyDown={handleTreeKeyDown}
+      className="flex h-full flex-col outline-none"
     >
       <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">
         Emitters
@@ -745,7 +1030,15 @@ export function EmitterTree({ bridge }: Props) {
       ) : rootChildren.length === 0 ? (
         <div className="text-neutral-600 text-sm">(no emitters)</div>
       ) : (
-        <ul role="tree" aria-label="Emitters" className="m-0 list-none p-0">
+        // Wrap the <ul> in a relative-positioned container so the
+        // bracket gutter (absolute, right-aligned) can stack alongside.
+        <div className="relative flex">
+          <ul
+            role="tree"
+            aria-label="Emitters"
+            className="m-0 flex-1 list-none p-0"
+            style={{ marginRight: GUTTER_WIDTH_PX }}
+          >
           {flatRows.map((row) => (
             <EmitterRow
               key={row.node.id}
@@ -762,9 +1055,75 @@ export function EmitterTree({ bridge }: Props) {
               setIndicator={setIndicator}
               rootChildren={rootChildren}
               tree={tree}
+              editing={editing}
+              beginEdit={beginEdit}
+              setEditValue={setEditValue}
+              commitEdit={commitEdit}
+              cancelEdit={cancelEdit}
             />
           ))}
-        </ul>
+          </ul>
+          {/* Bracket gutter — single-lane. Each non-zero linkGroup
+              gets a vertical bar spanning its first → last row in the
+              flat order, plus 4px-wide horizontal caps at top + bottom.
+              Multi-lane (overlapping group ranges) is a future polish;
+              overlapping brackets currently stack on top of each
+              other. Absolute-positioned within the relative wrapper. */}
+          <div
+            data-testid="link-group-bracket-gutter"
+            aria-hidden
+            className="pointer-events-none relative shrink-0"
+            style={{ width: GUTTER_WIDTH_PX }}
+          >
+            {brackets.map((b) => {
+              const top = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
+              const height = Math.max(
+                1,
+                (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX,
+              );
+              return (
+                <div
+                  key={b.groupId}
+                  data-testid={`link-group-bracket-${b.groupId}`}
+                  data-link-group={b.groupId}
+                  className="absolute"
+                  style={{
+                    top,
+                    left: 4,
+                    width: 2,
+                    height,
+                    background: b.color,
+                  }}
+                >
+                  {/* Top cap */}
+                  <div
+                    aria-hidden
+                    className="absolute"
+                    style={{
+                      top: 0,
+                      left: -2,
+                      width: 4,
+                      height: 2,
+                      background: b.color,
+                    }}
+                  />
+                  {/* Bottom cap */}
+                  <div
+                    aria-hidden
+                    className="absolute"
+                    style={{
+                      bottom: 0,
+                      left: -2,
+                      width: 4,
+                      height: 2,
+                      background: b.color,
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
     </div>
   );

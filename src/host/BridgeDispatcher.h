@@ -26,6 +26,7 @@
 #ifndef HOST_BRIDGE_DISPATCHER_H
 #define HOST_BRIDGE_DISPATCHER_H
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -240,6 +241,18 @@ private:
     // through BindHostState) because selection is a UI concern the host
     // window doesn't otherwise need.
     int m_selectedEmitterId = -1;
+
+    // Phase 3 Screen 4 Batch C — process-local emitter clipboard. One
+    // buffer per copied subtree, serialised via the same
+    // `MemoryFile` + `Emitter::write(writer, copy=true)` pattern as
+    // LT-3 import-from-file (BridgeDispatcher.cpp:1607). `emitters/
+    // copy` and `emitters/cut` replace the entire vector each call;
+    // `emitters/paste` reads it back. Empty vector = "clipboard is
+    // empty"; paste in that case is a silent no-op. Doesn't span
+    // process boundaries (matches legacy CF_PARTICLE_EMITTER, which
+    // is Win32-clipboard-bound but in practice nothing else
+    // recognises that format).
+    std::vector<std::vector<uint8_t>> m_emitterClipboard;
 };
 
 } // namespace host

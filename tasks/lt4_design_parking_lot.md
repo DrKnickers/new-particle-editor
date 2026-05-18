@@ -359,6 +359,159 @@ batches, each independently shippable:
 Each batch ends with all gates green and a commit. The full
 Screen 4 ✅ flips after Batch C.
 
+### Batch C — Link-group brackets + inline rename + keyboard nav + clipboard (locked 2026-05-17)
+
+The polish batch that closes Screen 4. Four sub-features:
+
+1. **Link-group bracket visualisation** (MT-9 port). Coloured
+   vertical brackets in the tree's right gutter spanning rows in
+   the same group. Single-lane simplification of the legacy's
+   multi-lane DPI-aware rendering (multi-lane = overlapping
+   group ranges; defer to a future polish batch if needed).
+2. **Inline rename**. F2 on focused row OR double-click → enter
+   rename mode (input replaces label). Enter commits via
+   `emitters/rename`; Esc cancels; blur commits. Replaces B1's
+   modal-based `RenameEmitterDialog`.
+3. **Keyboard navigation**. Arrow Up/Down moves focus through
+   flat tree order. Enter opens context menu (or activates
+   primary action). Delete fires `emitters/delete` on the
+   multi-selection. F2 starts inline rename. No Ctrl+A (defer).
+4. **Cut/Copy/Paste** (3 new bridge calls). Internal clipboard
+   on the C++ host serialises selected emitters + subtrees;
+   paste deserialises as new roots. Ctrl+C / Ctrl+X / Ctrl+V
+   keyboard shortcuts wired.
+
+**Schema additions (3 new bridge call kinds):**
+
+- `emitters/copy { ids: number[] }` → `Record<string, never>`.
+  Serialises the named emitters + their subtrees to the host's
+  internal clipboard. No tree mutation, no dirty flag.
+- `emitters/cut { ids: number[] }` → `Record<string, never>`.
+  Same serialise + then deletes the emitters. Captures undo,
+  emits `emitters/tree/changed` + `dirty/changed`.
+- `emitters/paste { afterId?: number }` → `{ newIds: number[] }`.
+  Deserialises clipboard contents as new roots. `afterId` is
+  optional — if provided, inserts after the named root; else
+  appends at the end of roots. Captures undo, emits tree-changed
+  + dirty.
+
+**Bracket visualisation:**
+
+- Per-render computation:
+  1. Walk the flattened tree (already maintained from B2).
+  2. For each unique `linkGroup > 0`, record `firstRowIndex`
+     and `lastRowIndex` (the position in the flat list).
+  3. Assign a colour per group from a small palette (8 colours
+     cycled — matches legacy's `kBracketPalette` shape).
+- Render in EmitterTree:
+  - The tree container gets a right-side gutter (16px).
+  - For each group, render a vertical `<div>` (or SVG line)
+    positioned at `top: firstRowIndex * rowHeight + rowHeight/2`,
+    `height: (lastRowIndex - firstRowIndex) * rowHeight`,
+    `width: 2px`, `background: groupColor`, plus 4px-wide top
+    + bottom caps (small horizontal stubs).
+  - Single-lane only: when two groups would overlap in row
+    range, all brackets render in the same lane (one will be
+    visually behind the other). Multi-lane = future polish.
+
+**Inline rename:**
+
+- State in EmitterTree: `editing: { id: number; value: string } | null`.
+- Triggers:
+  - F2 on focused row when `editing === null`.
+  - Double-click on a row's label (not the role glyph).
+  - Right-click context menu → Rename now sets `editing` instead
+    of opening the modal. **Remove `RenameEmitterDialog` from
+    App.tsx mount; remove the modal trigger from `tree-context`
+    atom's `open` union.** (Deletion of dead code.)
+- During editing: row renders an `<input>` instead of the label
+  span. Auto-focus + select-all on mount.
+- Commit on: Enter, blur, click outside. Fires
+  `emitters/rename { id, name: value }`.
+- Cancel on: Esc. No bridge call.
+- Validation: empty name → revert to original (no commit). No
+  uniqueness check (legacy doesn't enforce).
+
+**Keyboard navigation:**
+
+- Tree container is `tabIndex={0}` so it can receive focus.
+  Each row's button is the focus target.
+- On row button focus:
+  - Arrow Down → move focus to the next row in flat order.
+  - Arrow Up → previous row.
+  - Home → first row. End → last row.
+  - Enter → open context menu (or activate primary action; B3
+    of the legacy probably opens props panel — defer that to
+    Screens 5/6).
+  - F2 → enter rename mode.
+  - Delete → `emitters/delete` on the multi-selection (calls
+    delete for each id, OR a new bulk delete kind — subagent
+    decides; if single-emitter delete works, looping is fine).
+  - Ctrl+C / Ctrl+X / Ctrl+V → clipboard ops on selection.
+- Don't intercept keystrokes when an `<input>` is focused (so
+  inline rename and Spinners + text fields elsewhere work).
+  Detect via `event.target.tagName` check.
+
+**C++ host clipboard (`BridgeDispatcher` member):**
+
+- Add `std::vector<uint8_t> m_clipboard` (or `std::optional` of
+  a serialised buffer) to BridgeDispatcher.
+- `emitters/copy { ids }`: clear clipboard, then for each id,
+  serialise the emitter + its subtree to a buffer using the
+  same `MemoryFile` + `Emitter::write(writer, copy=true)` pattern
+  as LT-3's import-from-file. Store the resulting bytes.
+- `emitters/cut { ids }`: do `copy` semantics, then delete each
+  via the existing `ParticleSystem::deleteEmitter`. Capture undo
+  once at the start, emit tree-changed once at the end (single
+  atomic "cut" operation).
+- `emitters/paste { afterId? }`: deserialise the clipboard buffer
+  back into a temporary set of emitters via `Emitter(ChunkReader&)`
+  pattern from LT-3 import. Insert each as a new root, optionally
+  positioned via `moveEmitterToRootIndex` after the named
+  `afterId`. Capture undo, emit tree-changed.
+
+**MockBridge clipboard:**
+
+Internal `clipboard: EmitterTreeNode[]` array in `mock-state`.
+- `copy`: extract the named nodes from the tree, deep-clone, store.
+- `cut`: copy + delete from the tree.
+- `paste`: deep-clone the clipboard, splice into roots (or after `afterId`).
+
+**Test surface for Batch C:**
+
+- **Vitest** (+10 specs, target 109 → 119+):
+  - `bridge-contract.test.ts` (+3): one round-trip per clipboard kind.
+  - `EmitterTree.test.tsx` (+5): bracket renders for grouped rows;
+    F2 enters rename; Enter commits rename via emitters/rename;
+    Esc cancels rename; arrow-down moves focus.
+  - `clipboard` (+2 in a new spec or in EmitterTree.test.tsx):
+    Ctrl+C dispatches emitters/copy with selection ids; Ctrl+V
+    dispatches emitters/paste.
+- **Playwright** (+3 specs, target 59 → 62+):
+  - F2 on focused row opens inline editor (assert `<input>`
+    visible in the row); Enter commits + tree shows new name.
+  - Delete key fires emitters/delete on selection (assert tree
+    row count decreases).
+  - Copy + Paste round-trip via the bridge directly (Ctrl+C/V
+    in CDP can be flaky; bridge-driven is fine per B3 precedent).
+
+**Legacy delete:**
+
+NOT in Batch C. `EmitterList.cpp` polish features stay for
+`--legacy-ui` until Phase 4.2.
+
+**Open follow-ups** (Screen 4 fully ✅ after this batch):
+- *Multi-lane bracket rendering* — when two groups have
+  overlapping row ranges. Future polish.
+- *Slot-picker popup for reparent* — auto-pick suffices for
+  most cases; popup is a future polish.
+- *Paste-as-Lifetime / Paste-as-Death context-menu items* —
+  legacy has these (`ID_PASTEAS_LIFETIME` / `ID_PASTEAS_DEATH`
+  at [src/UI/EmitterList.cpp:3747-3748]). Bridge call could
+  extend `emitters/paste` with `asChildOf?: number; slot?:
+  "lifetime" | "death"` params later.
+- *Ctrl+A select all* — future polish.
+
 ### Batch B3 — Drag/drop reorder + reparent (locked 2026-05-17)
 
 Final structural Screen 4 batch. HTML5 drag-and-drop on tree rows

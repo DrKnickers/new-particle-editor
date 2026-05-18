@@ -306,6 +306,30 @@ export type Request =
         | { mode: "reparent"; id: number; targetId: number; slot: "lifetime" | "death" }
     }
 
+  // Emitter clipboard (Phase 3 Screen 4 Batch C)
+  //
+  // Process-local clipboard. The host serialises selected emitters
+  // (with their subtrees) into an in-memory byte buffer using the
+  // existing `MemoryFile` + `Emitter::write(writer, copy=true)` +
+  // `Emitter(ChunkReader&)` pattern (same as LT-3 import / Batch B1
+  // duplicate). The buffer survives across copy → paste calls on the
+  // same process — no cross-instance sharing (matches legacy).
+  //
+  //   - `emitters/copy { ids }`  serialises each named emitter (plus
+  //     its subtree) and stashes the result. No tree mutation, no
+  //     dirty flag.
+  //   - `emitters/cut { ids }`   copy semantics, then deletes each
+  //     emitter atomically (single undo capture + single tree-changed
+  //     event). Descending-id delete order keeps prior indices valid
+  //     during the loop.
+  //   - `emitters/paste { afterId? }` deserialises the clipboard
+  //     buffer as new root emitters. `afterId` (optional) names the
+  //     root to insert after; omitted/null = append at the end of
+  //     roots. Returns the new ids in insertion order.
+  | { kind: "emitters/copy";   params: { ids: number[] } }
+  | { kind: "emitters/cut";    params: { ids: number[] } }
+  | { kind: "emitters/paste";  params: { afterId?: number } }
+
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1 — Screen-8 sub-dialog)
   | { kind: "engine/action/rescale-emitter";  params: { id: number; durationScalePercent: number; sizeScalePercent: number } }
 
@@ -394,6 +418,11 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/drop" } ?
     | { ok: true }
     | { ok: false; error: string } :
+
+  // Emitter clipboard (Phase 3 Screen 4 Batch C)
+  R extends { kind: "emitters/copy" }  ? Record<string, never> :
+  R extends { kind: "emitters/cut" }   ? Record<string, never> :
+  R extends { kind: "emitters/paste" } ? { newIds: number[] } :
 
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1)
   R extends { kind: "engine/action/rescale-emitter" } ? Record<string, never> :
