@@ -22,7 +22,11 @@
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Check, ChevronRight } from "lucide-react";
-import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
+import type {
+  Bridge,
+  EngineStateDto,
+  ModDescriptor,
+} from "@particle-editor/bridge-schema";
 import { promptSaveChanges, useFileState } from "@/lib/file-state";
 import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
 import { useTreeContextStore } from "@/lib/tree-context";
@@ -127,6 +131,34 @@ export function MenuBar({
   const [state, setState] = useState<EngineStateDto | null>(null);
   // FD10 Group D: View → Reset View Settings prompt visibility.
   const [resetViewOpen, setResetViewOpen] = useState(false);
+
+  // LT-4 D6: list of discovered mods, fetched separately from the
+  // engine snapshot because it has a much lower change cadence (only
+  // shifts on Refresh or disk mutation). The *active* mod is on the
+  // snapshot so the menu's check mark stays reactive without a second
+  // round-trip after a select.
+  const [mods, setMods] = useState<ModDescriptor[]>([]);
+  const refreshModsList = async () => {
+    try {
+      const r = await bridge.request({ kind: "mods/list", params: {} });
+      // Defensive: a partial / mocked response that omits `mods`
+      // shouldn't crash the menu's filter step. Fall back to [].
+      setMods(Array.isArray(r?.mods) ? r.mods : []);
+    } catch (err) {
+      console.warn("[MenuBar] mods/list failed:", err);
+    }
+  };
+  const handleModSelect = (path: string | null) => {
+    void bridge.request({ kind: "mods/select", params: { path } });
+  };
+  const handleModRefresh = async () => {
+    try {
+      const r = await bridge.request({ kind: "mods/refresh", params: {} });
+      setMods(Array.isArray(r?.mods) ? r.mods : []);
+    } catch (err) {
+      console.warn("[MenuBar] mods/refresh failed:", err);
+    }
+  };
   const handleResetViewConfirm = async () => {
     setResetViewOpen(false);
     await bridge.request({
@@ -144,10 +176,15 @@ export function MenuBar({
       })
       .catch((err) => console.warn("[MenuBar] snapshot failed:", err));
     const off = bridge.on("engine/state/changed", (e) => setState(e.payload));
+    // LT-4 D6: prime the mods list at mount. Active mod arrives via
+    // snapshot; the list is a separate channel because it changes
+    // rarely.
+    void refreshModsList();
     return () => {
       cancelled = true;
       off();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge]);
 
   const ground = state?.ground ?? false;
@@ -469,7 +506,7 @@ export function MenuBar({
         </Menubar.Portal>
       </Menubar.Menu>
 
-      {/* ─── Mods (FD5: promoted from Tools submenu to top-level) ─── */}
+      {/* ─── Mods (LT-4 D6: dynamic detected-mod list) ─── */}
       <Menubar.Menu>
         <Menubar.Trigger className={TRIGGER}>Mods</Menubar.Trigger>
         <Menubar.Portal>
@@ -480,11 +517,61 @@ export function MenuBar({
             align="start"
             sideOffset={4}
           >
-            {/* TODO (Phase 4.1 follow-up): dynamic detected-mod list.
-                For now the placeholder stays identical to the pre-FD5
-                Tools > Mods submenu content. */}
-            <Menubar.Item className={ITEM} disabled>
-              (none)
+            {/* Unmodded is always first; selected when activeModPath is null. */}
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => handleModSelect(null)}
+            >
+              <CheckSlot active={state?.activeModPath == null} />
+              <span>Unmodded</span>
+            </Menubar.Item>
+
+            {(() => {
+              // Group mods by isFoC (FoC first, Base Game second), each
+              // group already alphabetised by the host. Render with a
+              // separator before each non-empty group. Display label
+              // prefers nickname when set, else folder name — matches
+              // the legacy owner-drawn entry's "folderName (nickname)"
+              // shape, minus the parenthetical (the Radix menu doesn't
+              // do owner-draw, so we collapse to a single label).
+              const fyi = mods.filter((m) => m.isFoC);
+              const baseGame = mods.filter((m) => !m.isFoC);
+              const groups: Array<{ label: string; items: ModDescriptor[] }> = [];
+              if (fyi.length > 0) groups.push({ label: "Forces of Corruption", items: fyi });
+              if (baseGame.length > 0) groups.push({ label: "Base Game", items: baseGame });
+              return groups.map((g) => (
+                <div key={g.label}>
+                  <Menubar.Separator className={SEPARATOR} />
+                  {/* Group header — a disabled item rendered subtly. */}
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-500 select-none">
+                    {g.label}
+                  </div>
+                  {g.items.map((m) => {
+                    const label = m.nickname || m.folderName;
+                    return (
+                      <Menubar.Item
+                        key={m.path}
+                        className={ITEM}
+                        onSelect={() => handleModSelect(m.path)}
+                      >
+                        <CheckSlot active={state?.activeModPath === m.path} />
+                        <span>{label}</span>
+                      </Menubar.Item>
+                    );
+                  })}
+                </div>
+              ));
+            })()}
+
+            <Menubar.Separator className={SEPARATOR} />
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => {
+                void handleModRefresh();
+              }}
+            >
+              <CheckSlot active={false} />
+              <span>Refresh Mod List</span>
             </Menubar.Item>
           </OccludingMenubarContent>
         </Menubar.Portal>

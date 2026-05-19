@@ -377,6 +377,30 @@ export class MockBridge implements Bridge {
       case "engine/query/bloom-available":
         return snapshotEngineState().bloomAvailable;
 
+      // ---------------- mods (LT-4 D6) -------------------------------
+      //
+      // Browser-mode MockBridge has no disk to scan, so `mods/list` /
+      // `mods/refresh` return a small synthetic fixture (one FoC + one
+      // Base Game entry) sufficient for React component tests and
+      // design iteration. `mods/select` mutates activeModPath on the
+      // store and fires engine/state/changed so subscribed components
+      // see the new active-path.
+      case "mods/list":
+      case "mods/refresh": {
+        const fixture = [
+          { path: "C:/mock/corruption/Mods/FoCMod",        folderName: "FoCMod",        nickname: "",         isFoC: true  },
+          { path: "C:/mock/GameData/Mods/BaseGameMod",     folderName: "BaseGameMod",   nickname: "Demo Mod", isFoC: false },
+        ];
+        return { mods: fixture, activePath: snapshotEngineState().activeModPath };
+      }
+
+      case "mods/select": {
+        const params = req.params as { path: string | null };
+        useMockEngineState.getState().applyPatch({ activeModPath: params.path });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { ok: true, activePath: params.path } as { ok: true; activePath: string | null };
+      }
+
       // ---------------- host plumbing: accepted no-ops ----------------
       case "register-accelerators":
         // Mock: nothing to register. Accelerator handling lives in the

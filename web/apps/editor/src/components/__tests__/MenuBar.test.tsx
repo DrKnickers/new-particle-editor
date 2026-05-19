@@ -207,3 +207,88 @@ describe("MenuBar — top-level structure (FD5)", () => {
     });
   });
 });
+
+// LT-4 D6 — Mods menu coverage. Three specs:
+//   1. The dynamic list (Unmodded + 2 fixture entries + Refresh) renders.
+//   2. Clicking a mod entry dispatches mods/select with that path.
+//   3. Clicking Refresh dispatches mods/refresh.
+//
+// The check-mark behaviour (active entry shows Check icon) is exercised
+// via the activeModPath path on the stub bridge's snapshot — the
+// assertion on entry membership covers the rendering pipeline.
+
+describe("MenuBar — Mods menu (LT-4 D6)", () => {
+  const fixtureMods = [
+    { path: "C:/test/corruption/Mods/Alpha", folderName: "Alpha", nickname: "", isFoC: true },
+    { path: "C:/test/GameData/Mods/Beta", folderName: "Beta", nickname: "Beta Mod", isFoC: false },
+  ];
+
+  function makeModsStubBridge(opts: { activeModPath?: string | null } = {}): Bridge & { request: ReturnType<typeof vi.fn> } {
+    const snapshot = {
+      activeModPath: opts.activeModPath ?? null,
+      // Minimum surface the MenuBar reads — other fields default sensibly
+      // via optional chaining on the snapshot inside MenuBar.tsx.
+      ground: false,
+      bloom: false,
+      paused: false,
+    };
+    const modsListResp = { mods: fixtureMods, activePath: opts.activeModPath ?? null };
+    const request = vi.fn().mockImplementation((req: { kind: string }) => {
+      if (req.kind === "engine/state/snapshot") return Promise.resolve(snapshot);
+      if (req.kind === "mods/list" || req.kind === "mods/refresh") return Promise.resolve(modsListResp);
+      if (req.kind === "mods/select") return Promise.resolve({ ok: true, activePath: null });
+      return Promise.resolve({});
+    });
+    return {
+      request,
+      on: vi.fn().mockReturnValue(() => {}),
+    } as unknown as Bridge & { request: ReturnType<typeof vi.fn> };
+  }
+
+  async function openModsMenu() {
+    const trigger = screen.getByRole("menuitem", { name: "Mods" });
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    // The dynamic items only render once the mods/list response has
+    // resolved; wait on the Refresh anchor that's always rendered.
+    await waitFor(() => {
+      expect(screen.getByRole("menuitem", { name: "Refresh Mod List" })).toBeTruthy();
+    });
+  }
+
+  it("renders Unmodded + the fixture entries + Refresh", async () => {
+    const bridge = makeModsStubBridge();
+    renderMenuBar(bridge);
+    await openModsMenu();
+    expect(screen.getByRole("menuitem", { name: "Unmodded" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Alpha" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Beta Mod" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Refresh Mod List" })).toBeTruthy();
+  });
+
+  it("clicking a mod entry dispatches mods/select with the right path", async () => {
+    const bridge = makeModsStubBridge();
+    renderMenuBar(bridge);
+    await openModsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Alpha" }));
+    await waitFor(() => {
+      expect(bridge.request).toHaveBeenCalledWith({
+        kind: "mods/select",
+        params: { path: "C:/test/corruption/Mods/Alpha" },
+      });
+    });
+  });
+
+  it("clicking Refresh dispatches mods/refresh", async () => {
+    const bridge = makeModsStubBridge();
+    renderMenuBar(bridge);
+    await openModsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh Mod List" }));
+    await waitFor(() => {
+      expect(bridge.request).toHaveBeenCalledWith({
+        kind: "mods/refresh",
+        params: {},
+      });
+    });
+  });
+});

@@ -8,6 +8,7 @@
 #include "../files.h"
 #include "../ChunkFile.h"
 #include "../LinkGroup.h"
+#include "../ModManager.h"
 #include "../ParticleSystem.h"
 #include "../ParticleSystemIO.h"
 #include "../Rescale.h"
@@ -495,7 +496,8 @@ json BuildEngineStateSnapshot(Engine* engine,
                               const std::wstring& currentFilePath,
                               bool dirty,
                               const json& spawnerConfig,
-                              int selectedEmitterId)
+                              int selectedEmitterId,
+                              const std::wstring& activeModPath)
 {
     if (!engine) return json::object();
 
@@ -583,6 +585,14 @@ json BuildEngineStateSnapshot(Engine* engine,
         {"selectedEmitterId",     selectedEmitterId < 0
                                       ? json(nullptr)
                                       : json(selectedEmitterId)},
+
+        // LT-4 D6 — active mod path. Empty wstring serialises as JSON
+        // null so the React side treats "Unmodded" and "no mod state
+        // yet" the same way. ModManager owns the canonical state;
+        // BridgeDispatcher reads through and serialises here.
+        {"activeModPath",         activeModPath.empty()
+                                      ? json(nullptr)
+                                      : json(WideToUtf8(activeModPath))},
     };
 }
 
@@ -800,6 +810,100 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- mods/list, mods/select, mods/refresh (LT-4 D6) --------
+    //
+    // Three thin wrappers around ModManager. ModManager owns the
+    // canonical state (mods vector + selectedModPath) and the
+    // side-effect chain on selection (FileManager swap, registry
+    // persist, palette swap, thumbnail cache clear, engine shader/
+    // texture reload). The dispatcher's job is JSON in / JSON out plus
+    // a single engine/state/changed emit on `select` so subscribed
+    // React components see the new activeModPath without a separate
+    // request.
+    //
+    // Helper closure for serialising a mods/list payload (used by both
+    // mods/list and mods/refresh — same response shape).
+    auto buildModsListPayload = [this]() -> json {
+        json arr = json::array();
+        const auto& mods = m_modManager->GetMods();
+        for (const auto& m : mods)
+        {
+            arr.push_back(json{
+                {"path",       WideToUtf8(m.path)},
+                {"folderName", WideToUtf8(m.folderName)},
+                {"nickname",   WideToUtf8(m.nickname)},
+                {"isFoC",      m.isFoC},
+            });
+        }
+        const std::wstring& sel = m_modManager->GetSelectedModPath();
+        return json{
+            {"mods",       arr},
+            {"activePath", sel.empty() ? json(nullptr) : json(WideToUtf8(sel))},
+        };
+    };
+
+    if (kind == "mods/list")
+    {
+        if (!m_modManager)
+        {
+            sendOk(json{
+                {"mods", json::array()},
+                {"activePath", json(nullptr)},
+            });
+            return res;
+        }
+        sendOk(buildModsListPayload());
+        return res;
+    }
+
+    if (kind == "mods/refresh")
+    {
+        if (!m_modManager)
+        {
+            sendOk(json{
+                {"mods", json::array()},
+                {"activePath", json(nullptr)},
+            });
+            return res;
+        }
+        m_modManager->DiscoverMods();
+        // ModManager keeps selectedModPath as-is on refresh; if the
+        // path no longer exists on disk the React UI will see a
+        // "ghost" selection until the user picks something else. This
+        // matches the legacy WM_COMMAND ID_MOD_REFRESH branch in
+        // main.cpp which has the same behaviour for symmetry.
+        sendOk(buildModsListPayload());
+        return res;
+    }
+
+    if (kind == "mods/select")
+    {
+        if (!m_modManager)
+        {
+            sendOk(json{{"ok", false}, {"error", "ModManager not bound"}});
+            return res;
+        }
+        // params.path is `string | null` — JSON null means Unmodded.
+        // Treat missing / non-string as Unmodded too (defensive).
+        std::wstring path;
+        auto pit = params.find("path");
+        if (pit != params.end() && pit->is_string())
+        {
+            path = Utf8ToWide(pit->get<std::string>());
+        }
+        bool ok = m_modManager->SelectMod(path);
+        // Whether shader-reload failed or not, the FileManager + registry
+        // + palette updates have rolled forward — broadcast the new
+        // active path so the menu re-ticks even if shaders complain.
+        EmitEngineStateChanged();
+        const std::wstring& sel = m_modManager->GetSelectedModPath();
+        sendOk(json{
+            {"ok",         ok},
+            {"activePath", sel.empty() ? json(nullptr) : json(WideToUtf8(sel))},
+        });
+        return res;
+    }
+
     // -------- engine/state/snapshot --------
     if (kind == "engine/state/snapshot")
     {
@@ -811,7 +915,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         json spawnerJson = m_spawnerDriver
             ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
             : m_spawnerConfig;
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId));
+        const std::wstring& activeModPath = m_modManager ? m_modManager->GetSelectedModPath() : std::wstring();
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath));
         return res;
     }
 
@@ -3210,10 +3315,11 @@ void BridgeDispatcher::EmitEngineStateChanged()
     json spawnerJson = m_spawnerDriver
         ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
         : m_spawnerConfig;
+    const std::wstring& activeModPath = m_modManager ? m_modManager->GetSelectedModPath() : std::wstring();
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath)},
     };
     m_emit(env.dump());
 }

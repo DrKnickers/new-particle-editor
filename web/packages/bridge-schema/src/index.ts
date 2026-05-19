@@ -183,6 +183,35 @@ export type EngineStateDto = {
   // (cheap) scalar selection rides here so React derives the selected
   // row styling from the snapshot without an extra round-trip.
   selectedEmitterId: number | null;
+
+  // LT-4 D6 — currently-active mod's full path on disk, or null when
+  // Unmodded. The full mod *list* is fetched separately via
+  // `mods/list` because it changes rarely (refresh / disk scan)
+  // compared to engine state. The path alone rides every snapshot so
+  // the Mods menu's check-mark stays in sync with FileManager's
+  // current mod basepath without a second round-trip after a select.
+  activeModPath: string | null;
+};
+
+// ─── Mods (LT-4 D6) ──────────────────────────────────────────────────
+//
+// One discovered mod under <gameRoot>/Mods/. Shape matches the legacy
+// C++ `ModEntry` struct (src/ModManager.h) minus `wstring → string`
+// conversion at the bridge boundary.
+//
+// `nickname` is the user-set display name from the registry under
+// HKCU\Software\AloParticleEditor\ModNicknames — empty string if no
+// nickname is set; the React menu falls back to `folderName` in that
+// case.
+//
+// `isFoC` discriminates Forces of Corruption (under corruption/Mods)
+// from Base Game (under GameData/Mods). The React menu groups by this
+// flag (FoC first, then Base Game) matching the legacy popup layout.
+export type ModDescriptor = {
+  path: string;
+  folderName: string;
+  nickname: string;
+  isFoC: boolean;
 };
 
 // ─── Track DTO (Phase 3 Screen 6 Batch A) ────────────────────────────
@@ -577,6 +606,17 @@ export type Request =
   // confirmation dialog lives React-side via Radix AlertDialog;
   // the dispatcher's job is purely to apply the defaults.
   | { kind: "engine/action/reset-view-settings"; params: Record<string, never> }
+  // LT-4 D6 — Mods menu surface. `mods/list` returns the discovered
+  // list + active path; the React menu calls it once at mount and
+  // again after `mods/refresh`. `mods/select` activates a mod (empty/
+  // null path = Unmodded), emits engine/state/changed so the menu's
+  // check mark updates, and persists to HKCU\Software\AloParticleEditor
+  // \LastMod for the next launch. `mods/refresh` re-scans the on-disk
+  // Mods\ directories — returns the same shape as `mods/list` so the
+  // caller can replace its local cache atomically.
+  | { kind: "mods/list";                  params: Record<string, never> }
+  | { kind: "mods/select";                params: { path: string | null } }
+  | { kind: "mods/refresh";               params: Record<string, never> }
   | { kind: "register-accelerators";      params: { combos: string[] } };
 
 // One response shape per Request kind.
@@ -587,6 +627,11 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "file/save" }                 ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/save-as" }              ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/recent/list" }          ? { paths: string[] } :
+
+  // Mods (LT-4 D6)
+  R extends { kind: "mods/list" }                 ? { mods: ModDescriptor[]; activePath: string | null } :
+  R extends { kind: "mods/select" }               ? { ok: true; activePath: string | null } | { ok: false; error: string } :
+  R extends { kind: "mods/refresh" }              ? { mods: ModDescriptor[]; activePath: string | null } :
 
   // Engine snapshot
   R extends { kind: "engine/state/snapshot" }     ? EngineStateDto :

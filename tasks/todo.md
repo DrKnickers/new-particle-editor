@@ -315,4 +315,68 @@ After Step 0 discovery returns:
 
 ## Review
 
-(filled in after work completes)
+**D6 shipped in two commits on `lt-4`:**
+
+- `ea0ed40` — refactor: extract ModManager (~700 LOC moved, no functional change).
+- (this commit, hash TBD) — feat: bridge surface + React MenuBar.
+
+All gates green:
+- `pnpm build`: 0 TS errors.
+- Vitest: **191 / 191** (+3 new MenuBar specs).
+- MSBuild Debug x64: clean (preexisting LIBCMTD warning only).
+- `pnpm test:native`: **80 / 80** (+3 new mods-contract specs).
+
+### Plan vs reality
+
+- Step 0 discovery confirmed option 3b (`ModManager` extraction)
+  required. Refactor came in at ~150 LOC new + ~85 LOC touched on the
+  legacy side — under the ~250 LOC budget set in the plan.
+- All three sub-decisions held after deeper analysis (atomic
+  ModManager, path-only DTO, separate `mods/list` request).
+
+### Surprises
+
+1. **Existing MenuBar tests broke** on the new code path because their
+   default stub returns `{}` for every request, including `mods/list`.
+   Fixed with `Array.isArray(r?.mods) ? r.mods : []` defensive
+   guard in MenuBar. Captures a useful pattern — defensive runtime
+   guards in components are cheaper than updating every test stub to
+   know about new schema fields.
+
+2. **Playwright harness has an allowlist, not a glob.** Adding a new
+   spec file to `tests/` isn't enough — `scripts/run-native-tests.mjs`
+   must also list it. Noticed when test count showed 77/77 instead of
+   80/80; fixed by adding `tests/mods-contract.spec.ts` to the
+   allowlist.
+
+3. **`TexturePalette::RefreshPopup()` is safely callable from --new-ui
+   mode.** It has an early-return `if (g_popup == NULL) return;` —
+   so the legacy Win32 popup not being constructed in --new-ui doesn't
+   cause issues. ModManager calls it unconditionally; the no-op path
+   is taken in --new-ui.
+
+### Lessons logged
+
+None new in `tasks/lessons.md`. The two issues above are too tactical
+to warrant a permanent rule.
+
+### What's now possible
+
+- Mods menu shows installed mods grouped (FoC + Base Game) with check
+  marks; click activates with full side-effect chain.
+- Active mod persists across launches via registry; both UI modes
+  agree on the active mod.
+- Refresh re-scans disk without restart.
+- All four "make a stub work" items from FD10 Group D are closed
+  (D1 Exit, D2 Reset Camera, D3 Reset View Settings, D4 Force Align
+  in earlier dispatch; D5 + D6 in this session).
+
+### Deferred (no follow-up needed yet)
+
+- Nickname editing — `ModNicknameDialog.tsx` exists but isn't wired
+  to a bridge call. Would need `mods/set-nickname` + dialog plumbing.
+  Small follow-up, not blocking.
+- Workshop/Steam mod auto-detection beyond `<gameRoot>/Mods/`.
+- Multi-mod stacks (`activeModPaths: string[]`) — not currently
+  requested.
+- Per-key context menu future entries — same as before.

@@ -109,6 +109,11 @@ export function makeDefaultEngineState(): EngineStateDto {
     // Screen 4 Batch A: nothing selected by default. Single-select only
     // in Batch A; multi-select is Batch B.
     selectedEmitterId: null,
+
+    // LT-4 D6: no active mod by default. Browser-mode MockBridge has
+    // no disk to scan; selecting a mock entry updates this field via
+    // mods/select for menu check-mark parity.
+    activeModPath: null,
   };
 }
 

@@ -16,6 +16,27 @@ Conventions:
 
 ## Changelog
 
+### Mods menu detection + selection (D6)
+
+*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+The new-UI Mods menu's `(none)` placeholder is replaced by a dynamic list of installed EaW / FoC mods scanned from `<gameRoot>/{corruption,GameData}/Mods` at startup. Entries are grouped (Forces of Corruption first, then Base Game) and alphabetised by folder name within each group, matching the legacy popup's ordering exactly. Clicking an entry hot-swaps the FileManager basepath, writes `HKCU\Software\AloParticleEditor\LastMod` for the next launch, refreshes the texture palette, clears the thumbnail cache, and reloads shaders + textures — all six legacy side effects, with no Win32-specific finalisation that doesn't apply in the React-rendered new UI. The active mod gets a check mark next to its entry; "Unmodded" gets the check when no mod is active. A "Refresh Mod List" item at the bottom re-scans disk without restarting. Cross-mode persistence is automatic: both legacy and new-UI read / write the same registry key, so flipping between `--legacy-ui` and `--new-ui` launches preserves which mod is active.
+
+**How we tackled it.** Two-step refactor + feature. Step 1 (commit `ea0ed40`) extracted `ModManager` from `src/main.cpp` into a standalone class at [`src/ModManager.{h,cpp}`](src/ModManager.h) — owns the mods vector, the active-mod path, the discovery code (`ScanModsDir` / `DiscoverMods`), the registry helpers (`ReadLastMod` / `WriteLastMod` / `ReadModNickname` / `WriteModNickname`), and the atomic `SelectMod` chain. The legacy `SelectMod()` in main.cpp shrank to a thin wrapper that adds Win32-only finalisation (HBITMAP rebuild, skydome picker `SendMessage`, HMENU rebuild, `InvalidateRect`). `IFileManager` gained `SetModPath` as virtual (non-pure, default no-op) so ModManager can call it through the interface; `host::Run` + `HostWindow` gained a `gameRoots` parameter so the host's ModManager can scan the same Mods directories. Step 2 (this commit) added the bridge surface: three new request kinds (`mods/list`, `mods/select`, `mods/refresh`) in [`web/packages/bridge-schema/src/index.ts`](web/packages/bridge-schema/src/index.ts), `activeModPath: string | null` on `EngineStateDto`, the corresponding dispatcher handlers in [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp), MockBridge stubs returning a 2-entry synthetic fixture, and a full menu rewrite in [`web/apps/editor/src/components/MenuBar.tsx`](web/apps/editor/src/components/MenuBar.tsx) that fetches the list at mount, subscribes to `engine/state/changed` for active-path reactivity, and dispatches `mods/select` + `mods/refresh` on user interaction.
+
+**Architectural decisions worth recording.** Three sub-decisions came up during planning, each with a non-obvious answer:
+
+1. **ModManager owns the engine refresh (atomic), not à la carte.** First instinct was to keep `ModManager::SelectMod` narrow (FileManager + registry + palette only) and let each caller drive `engine->Reload*` separately. Reversed during planning because that pattern makes silent staleness easy — a future caller forgets the engine refresh and the mod "activates" without visible effect. Atomic operation removes the failure mode entirely. Cost is one extra pointer + a two-step lifecycle (`SetEngine` after construction since Engine doesn't exist when ModManager is built in --new-ui).
+2. **DTO carries `activeModPath: string | null` (path-only), not a full ModDescriptor.** Standard `selectedId + items[]` pattern. Single source of identity. Avoids nickname-staleness if nickname editing ships later.
+3. **`mods/list` is a separate request, not part of `engine/state/snapshot`.** Data cadence separation — the mod list changes only on Refresh / disk mutation while snapshots fire on every engine mutation. Bundling them would pay deserialisation cost on every snapshot for data that almost never changes.
+
+**Issues encountered and resolutions.** Two worth recording.
+
+1. **Existing MenuBar tests broke because the default stub bridge returns `{}` for every request.** Every existing `MenuBar.test.tsx` spec creates a stub bridge via `vi.fn().mockResolvedValue({})` — generic, doesn't know about `mods/list`. With D6 in place, the new `mods/list` call's response is `{}` (no `mods` field), `setMods(r.mods)` writes `undefined`, and the menu's filter step crashes with `Cannot read properties of undefined (reading 'filter')`. The fix is a defensive `Array.isArray(r?.mods) ? r.mods : []` in MenuBar. Updating every existing stub to know about the new schema would have been overreach; runtime robustness in the component is the cheaper and more durable fix.
+2. **The Playwright harness has an explicit spec allowlist, not a glob.** New `mods-contract.spec.ts` was created in `tests/` but ran 77/77 instead of 80/80 — Playwright found my spec, but the harness script `scripts/run-native-tests.mjs` only forwards the named entries to the Playwright CLI. Added `tests/mods-contract.spec.ts` to that list. Worth noting as a pattern for any future Playwright spec — `tests/` glob discovery isn't enough; the harness allowlist also needs the entry.
+
+---
+
 ### Texture-aware `file/open` for skydome + ground custom slots (D5)
 
 *TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*

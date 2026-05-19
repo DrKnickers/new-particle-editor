@@ -28,8 +28,8 @@ If you are a fresh Claude session resuming this project:
 | **Working tree** | clean post-commit |
 | **Behind master** | check `git log --oneline master..HEAD` (master was `b28f624` at start of D5 session) |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (LIBCMTD warning is preexisting). Vitest **188/188**. Playwright **77/77**. |
-| **Phase status** | Phase 4.1 — FD9b, FD10 Group A, FD10 Group D, and D5 shipped + several follow-ups |
+| **Build status** | MSBuild Debug x64 clean (LIBCMTD warning is preexisting). Vitest **191/191**. Playwright **80/80**. |
+| **Phase status** | Phase 4.1 — FD9b, FD10 Group A, FD10 Group D, D5, and D6 shipped + several follow-ups. All "make a stub work" items closed. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `awesome-morse-5ea5c3` from the harness, replacing the previous `goofy-shtern-ded61e` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change. If you want to resume in a specific worktree directory rather than getting a fresh one each time, the CLI workflow `claude --continue` from inside the desired worktree path is the only way today (the desktop app has no equivalent setting). Documented in the conversation log for the D5 session.
 
@@ -84,19 +84,19 @@ Surfaced during normal use of the FD10-shipped build:
 
 ---
 
-## What landed in this session (D5)
+## What landed in this session (D5 + D6)
 
-**D5 — Texture-aware `file/open` for skydome + ground custom slots.** Replaces the hardcoded `*.alo` filter on the Background and Ground Texture custom-slot pickers with `*.dds;*.tga`. Skydome slots 9/10/11 used to silently misfilter (the chain was wired but `file/open` always returned an `.alo`-filtered dialog); ground texture slots 5/6/7 were genuine no-ops because no one wanted to ship them while the filter was wrong. Both surfaces now work cleanly. See the CHANGELOG entry "Texture-aware `file/open` for skydome + ground custom slots (D5)" for the full architecture and the one issue (post-pick `.alo` loader had to be gated on `filterId == "alo"` or it would treat texture paths as broken particle-system files).
+**D5 — Texture-aware `file/open` for skydome + ground custom slots.** Replaces the hardcoded `*.alo` filter on the Background and Ground Texture custom-slot pickers with `*.dds;*.tga`. Skydome slots 9/10/11 used to silently misfilter; ground texture slots 5/6/7 were genuine no-ops. Both surfaces now work. See CHANGELOG entry "Texture-aware `file/open` for skydome + ground custom slots (D5)".
 
-The handoff doc as-written (pre-D5) misframed D5 as "Background picker's Custom slots 9/10/11 are currently no-ops" — that was wrong. The slots were chained but mis-filtered. Ground texture was the actual no-op surface. Both got fixed in one motion via the `filter?: "alo" | "skydome" | "ground"` schema delta.
+**D6 — Mods menu detection + selection.** Two commits. Step 1 (`ea0ed40`) extracted `ModManager` from `src/main.cpp` into `src/ModManager.{h,cpp}` — single source of truth for mod discovery + active-mod state, shared between legacy and new-UI. Behaviour-preserving refactor with zero functional change. Step 2 added the `mods/list` / `mods/select` / `mods/refresh` bridge surface, the `activeModPath` DTO field, MockBridge stubs, and a full React MenuBar rewrite replacing the `(none)` placeholder. Cross-mode persistence via the existing `HKCU\Software\AloParticleEditor\LastMod` registry key — both UI modes read/write the same key and agree on the active mod across restarts. See CHANGELOG entry "Mods menu detection + selection (D6)" for the full design.
+
+This closes out **all four "make a stub work" items** from FD10 Group D (D1 Exit, D2 Reset Camera, D3 Reset View Settings, D4 Force Align in earlier dispatch; D5 + D6 in this session).
 
 ## What's left
 
 ### Phase 4.1 acceptance items still deferred
 
-D6 is the one remaining "make a stub work" item from Group D:
-
-- **D6 — Mods menu detection + selection.** Mods menu shows `(none)` placeholder. Needs C++-side detection (EaW/FoC mod directories via `FileManager`'s resolution chain) + bridge surface (`mods/list`, `mods/activate`) + React menu population. Sizable enough to be its own dispatch.
+None of the "make a stub work" items remain. The remaining LT-4 work is documented divergences from legacy (Group B / Group C) and Phase 4.2 cutover.
 
 ### Larger Group B / C work (design conversation first)
 
@@ -120,8 +120,8 @@ These are documented divergences from legacy that the user flagged as "the new U
 
 ### Recommended next moves
 
-1. **Triage Groups B/C with the user before touching either.** They're not bugs — they're design decisions Claude made and the user might or might not agree with. The Group A "tackle this first" pattern worked because the user explicitly listed Group A's items as parity gaps; Groups B/C need the same user-driven prioritization.
-2. **D6 is the last "make a stub work" item.** Mods menu detection — independent of Groups B/C, can ship anytime, broader workflow value than D5.
+1. **Triage Groups B/C with the user before touching either.** They're not bugs — they're design decisions Claude made and the user might or might not agree with. The Group A "tackle this first" pattern worked because the user explicitly listed Group A's items as parity gaps; Groups B/C need the same user-driven prioritization. This is now the highest-leverage open item.
+2. **Phase 4.2 cutover** — delete legacy chrome, ROADMAP + CHANGELOG ship entry, release zip update. Gated on the user signing off on parity acceptance (§17 of `tasks/lt4_phase_4_1_acceptance.md` is still empty).
 3. **Organic find-and-fix runs continue to be high-yield.** The most important fixes from prior sessions (FPS counter using QPC instead of GetTickCount, cursor inheritance on the viewport popup) came from "play with the editor and report what looks off" prompts, not from any tracked plan item.
 
 ---
@@ -281,7 +281,7 @@ If anything regressed, the most likely culprits in order:
 
 ## Open questions / deferrals (do *not* silently address)
 
-- **D6 — Mods menu detection.** Placeholder `(none)`. Needs registry/disk scan + bridge surface.
+(D5 + D6 both shipped this session. Force Align registry persistence remains noted in the FD10 entry; the per-key context-menu future entries are still natural follow-ups but no one's asked.)
 - **Group B / C divergences** — see "What's left" above. Each is a design conversation before code.
 - **Force Align registry persistence.** Currently `localStorage` only — doesn't sync with legacy `LightingForceFillAlignment` REG_DWORD. Cross-mode persistence needs a host registry helper + new bridge kind.
 - **Per-key context menu future entries.** Only Delete is wired. Snap-to-grid / Reset value / etc. are natural follow-ups but no one's asked for them yet.
