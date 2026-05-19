@@ -606,9 +606,16 @@ export function CurveEditor({
         // as a canvas click when the actual target is the SVG (i.e.
         // not a key circle). Child click handlers stopPropagation so
         // they never reach here.
-        if (e.target === e.currentTarget) {
-          onCanvasClick?.(e);
-        }
+        if (e.target !== e.currentTarget) return;
+        // FD10 (Group D follow-up): in Insert mode, pointer-down on
+        // the backdrop fires onCanvasAdd. If the bridge response
+        // renders a new key circle before pointer-up, the synthetic
+        // click event's target becomes the SVG (LCA of backdrop-down
+        // and circle-up), and without this guard onCanvasClick would
+        // fire → clear the selection we just established. Mirrors
+        // the same guard on the backdrop's onClick below.
+        if (insertMode) return;
+        onCanvasClick?.(e);
       }}
     >
       {/* Background rect so empty-area clicks are reliably caught by
