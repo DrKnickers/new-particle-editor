@@ -279,6 +279,68 @@ header wins.
 
 ---
 
+## Branch workflow
+
+The new-UI (LT-4) work lives on a long-lived integration branch
+separate from `master`:
+
+- **`master`** — stable, user-tested code. Merges happen only with
+  explicit user OK.
+- **`lt-4`** — long-lived integration branch for all LT-4 / new-UI
+  work. Tracks `origin/lt-4` (the canonical off-machine backup).
+  Default merge target for LT-4 dispatches.
+- **`claude/<random>`** — per-session branches the desktop app
+  auto-provisions on every new session. Throwaway containers for
+  in-flight work; not pushed to origin.
+
+### End-of-session flow for LT-4 dispatches
+
+Fast-forward the session branch into `lt-4` and push:
+
+```
+git switch lt-4
+git merge --ff-only claude/<session-name>
+git push
+```
+
+Fast-forward only — keeps history linear and matches the commit
+sequence the session branch already showed. If the FF fails, STOP and
+reconcile: it means `lt-4` has commits the session branch doesn't,
+which usually means the session was branched from a stale tip rather
+than the current `lt-4` HEAD. Don't paper over it with a merge commit
+or a rebase without understanding what diverged.
+
+After the FF, the old `claude/<random>` branch can stay (safety net)
+or be deleted; no rush.
+
+### When NOT to use `lt-4`
+
+- Small fixes to legacy code (anything not in `web/`, `src/host/`,
+  the React tests) — PR directly against `master`.
+- Docs-only changes that don't touch LT-4 architecture — `master` is
+  fine.
+- Out-of-scope items spawned during LT-4 work (the "spawn-a-task"
+  pattern) — those typically get their own branch and their own PR
+  against `master`.
+
+Default to `lt-4` only for LT-4 dispatches; everything else goes
+through the standard `master` PR flow.
+
+### Pre-flight lineage check for a fresh session
+
+Run this after the standard pre-flight (build + tests):
+
+```
+git log --oneline lt-4..HEAD   # 0 if fresh session branched cleanly from lt-4
+git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
+```
+
+Both should be 0 at session start. Non-zero means the harness
+branched from somewhere other than the current `lt-4` tip — reconcile
+before committing new work or you'll end up with a divergent stack.
+
+---
+
 ## Communication defaults
 
 - **Ask clarifying questions before starting non-trivial work.** A
@@ -371,3 +433,4 @@ These principles are not license to:
 | Simple fix                                 | Don't over-engineer; skip the elegance pass      |
 | Marking a task done                        | Quote proof. *"Would a staff engineer approve?"* |
 | Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `CHANGELOG.md` (description + how-we-tackled-it + issues) |
+| LT-4 / new-UI dispatch ready to integrate  | Fast-forward into `lt-4` and push; never to `master` without explicit OK |
