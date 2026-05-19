@@ -312,6 +312,29 @@ export class MockBridge implements Bridge {
       case "engine/action/step-frames":
         return {};
 
+      // FD10 Group D: cascade-reset background, ground, bloom,
+      // skydome, lighting back to engine defaults. The mock applies
+      // a patch of just the view-setting fields (background / ground
+      // / skydome / bloom) so editor state — currentFilePath, dirty
+      // flag — is preserved across the reset. Emits one
+      // engine/state/changed at the end.
+      case "engine/action/reset-view-settings": {
+        const defaults = makeDefaultEngineState();
+        useMockEngineState.getState().applyPatch({
+          background:    defaults.background,
+          ground:        defaults.ground,
+          groundZ:       defaults.groundZ,
+          groundTexture: defaults.groundTexture,
+          skydomeSlot:   defaults.skydomeSlot,
+          bloom:         defaults.bloom,
+          bloomStrength: defaults.bloomStrength,
+          bloomCutoff:   defaults.bloomCutoff,
+          bloomSize:     defaults.bloomSize,
+        });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
       // Rescale the whole particle system by a duration / size percentage.
       // MockBridge has no ParticleSystem to mutate; the handler logs the
       // call (so Vitest can assert on it via a spy) and emits the standard
@@ -359,6 +382,12 @@ export class MockBridge implements Bridge {
         // Mock: nothing to register. Accelerator handling lives in the
         // native host; in browser mode the design iteration doesn't need
         // a real hotkey system, so swallow the call.
+        return {};
+
+      case "app/quit":
+        // Mock: no host window to close. In browser mode the design
+        // iteration doesn't need a real "quit" — the dev server keeps
+        // running. Accept the request silently.
         return {};
 
       case "layout/viewport-rect":

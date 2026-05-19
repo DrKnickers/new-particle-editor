@@ -33,12 +33,17 @@
 // intensity re-multiplies the existing colour so the user's chosen hue
 // is preserved.
 //
-// Force Align: the legacy dialog has a "Force Align Fill Lights"
-// checkbox that snaps fill angles from the sun's Z value. No bridge
-// call exists for this in the schema; deferred for a future batch
-// when the schema gets a `engine/set/lighting-force-align` flag (or
-// when the panel grows enough geometry to compute it client-side and
-// push fill angles directly). Marked as TODO in the JSX below.
+// Force Align (FD10 Group D): the legacy "Force Align Fill Lights"
+// checkbox snaps fill1/fill2 azimuth from the sun's azimuth. The
+// constraint is purely UI-side (engine just consumes the final
+// engine/set/light dispatches); flag is session-only — legacy
+// persists it as a REG_DWORD, that's a follow-up polish. Constants
+// come from src/main.cpp:6238-6240: fill1 += 120°, fill2 += 210°,
+// both at -10° altitude. When the checkbox is ON, fill az/alt
+// spinners are disabled and the sun's az drives fill az.
+const FORCE_ALIGN_FILL1_AZ_OFFSET = 120;
+const FORCE_ALIGN_FILL2_AZ_OFFSET = 210;
+const FORCE_ALIGN_FILL_ALT        = -10;
 
 import { useEffect, useState } from "react";
 import type {
@@ -177,6 +182,10 @@ export function LightingPanel({ bridge, onClose }: Props) {
   // wiped — the engine has no notion of "intensity vs colour", only
   // the multiplied Vec4, so re-seeding would clobber the split.
   const [seeded, setSeeded] = useState(false);
+  // FD10 Group D: Force Align Fill Lights. Default ON to match legacy
+  // (kLightForceAlignDefault = true at src/main.cpp:6225). Session-
+  // only — registry persistence is a follow-up.
+  const [forceAlign, setForceAlign] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,10 +225,39 @@ export function LightingPanel({ bridge, onClose }: Props) {
     });
   };
 
+  // FD10 Group D: cascade helper. When forceAlign is ON, fill1/fill2
+  // azimuth follow sun.az with the canonical offsets; altitude is
+  // pinned to FORCE_ALIGN_FILL_ALT. Called from updateSun (when sun
+  // moves) and from handleForceAlignToggle (when the constraint
+  // first engages). Returns the next fill1/fill2 form states so the
+  // caller can also commit them to local state in one render.
+  const computeAlignedFills = (sunAz: number) => {
+    const nextFill1: LightFormState = {
+      ...fill1,
+      az: sunAz + FORCE_ALIGN_FILL1_AZ_OFFSET,
+      alt: FORCE_ALIGN_FILL_ALT,
+    };
+    const nextFill2: LightFormState = {
+      ...fill2,
+      az: sunAz + FORCE_ALIGN_FILL2_AZ_OFFSET,
+      alt: FORCE_ALIGN_FILL_ALT,
+    };
+    return { nextFill1, nextFill2 };
+  };
+
   const updateSun = (patch: Partial<LightFormState>) => {
     const next = { ...sun, ...patch };
     setSun(next);
     pushLight("sun", next);
+    // Cascade az → fills when forceAlign is engaged. Other patch
+    // fields (intensity, diffuse, specular) don't drive fills.
+    if (forceAlign && patch.az !== undefined) {
+      const { nextFill1, nextFill2 } = computeAlignedFills(next.az);
+      setFill1(nextFill1);
+      setFill2(nextFill2);
+      pushLight("fill1", nextFill1);
+      pushLight("fill2", nextFill2);
+    }
   };
   const updateFill1 = (patch: Partial<LightFormState>) => {
     const next = { ...fill1, ...patch };
@@ -230,6 +268,22 @@ export function LightingPanel({ bridge, onClose }: Props) {
     const next = { ...fill2, ...patch };
     setFill2(next);
     pushLight("fill2", next);
+  };
+
+  const handleForceAlignToggle = (enabled: boolean) => {
+    setForceAlign(enabled);
+    // Engaging the constraint snaps the fills immediately so the
+    // visible state matches the disabled spinners. Disengaging is
+    // non-destructive — fills keep whatever values force-align last
+    // forced them to (matching legacy: it doesn't restore prior
+    // edits, since edits were blocked while the flag was ON).
+    if (enabled) {
+      const { nextFill1, nextFill2 } = computeAlignedFills(sun.az);
+      setFill1(nextFill1);
+      setFill2(nextFill2);
+      pushLight("fill1", nextFill1);
+      pushLight("fill2", nextFill2);
+    }
   };
 
   const rgbToVec4 = (rgb: RgbColor): Vec4 =>
@@ -354,6 +408,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
             max={180}
             step={1}
             unit="°"
+            disabled={forceAlign}
             aria-label="Fill 1 azimuth"
           />
         </ToolPanel.Row>
@@ -365,6 +420,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
             max={90}
             step={1}
             unit="°"
+            disabled={forceAlign}
             aria-label="Fill 1 altitude"
           />
         </ToolPanel.Row>
@@ -396,6 +452,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
             max={180}
             step={1}
             unit="°"
+            disabled={forceAlign}
             aria-label="Fill 2 azimuth"
           />
         </ToolPanel.Row>
@@ -407,6 +464,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
             max={90}
             step={1}
             unit="°"
+            disabled={forceAlign}
             aria-label="Fill 2 altitude"
           />
         </ToolPanel.Row>
@@ -440,10 +498,22 @@ export function LightingPanel({ bridge, onClose }: Props) {
       </ToolPanel.Section>
 
       <ToolPanel.Footer>
+        <label className="flex select-none items-center gap-1.5 text-xs text-neutral-300">
+          <input
+            type="checkbox"
+            checked={forceAlign}
+            onChange={(e) => handleForceAlignToggle(e.target.checked)}
+            className="size-3.5 accent-sky-500"
+            aria-label="Force Align Fill Lights"
+          />
+          Force Align
+        </label>
         <button
           type="button"
           onClick={handleMirrorSun}
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
+          disabled={forceAlign}
+          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-800"
+          title={forceAlign ? "Disabled while Force Align is on" : undefined}
         >
           Mirror Sun
         </button>
@@ -454,10 +524,6 @@ export function LightingPanel({ bridge, onClose }: Props) {
         >
           Reset
         </button>
-        {/* TODO Batch 3+: Force Align checkbox. Requires a new bridge
-            call (`engine/set/lighting-force-align` or equivalent) plus
-            client-side cascade of sun-Z → fill angles. Deferred per
-            Batch 2 design lock #4. */}
       </ToolPanel.Footer>
     </ToolPanel>
   );

@@ -16,6 +16,21 @@ Conventions:
 
 ## Changelog
 
+### Close out the disabled-stub menu items (FD10 Group D polish)
+
+*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Four previously-disabled menu items now do something real. **File → Exit** routes through the existing save-prompt and then `PostMessage(WM_CLOSE)` on the host, matching legacy [`DoCheckChanges`](src/main.cpp:1395) → `DestroyWindow` semantics. **View → Reset Camera** snaps the camera to the legacy defaults `pos=(0,-250,125) target=(0,0,0) up=(0,0,1)` from [`src/main.cpp:1814`](src/main.cpp:1814) via a single existing `engine/set/camera` dispatch — no new bridge kind needed. **View → Reset View Settings** cascades background, ground (visibility/Z/texture), bloom, and skydome back to engine defaults after a Yes/No confirm dialog matching the legacy [`MessageBox`](src/main.cpp:1734) prompt. **Lighting panel → Force Align Fill Lights** restores the legacy checkbox: when ON, fill1/fill2 azimuth follow `sun.az + 120°` and `sun.az + 210°` respectively at -10° altitude (constants from [`src/main.cpp:6238-6240`](src/main.cpp:6238)), fill az/alt spinners and the Mirror Sun button disable to enforce the constraint.
+
+**How we tackled it.** New `app/quit` bridge request in [`web/packages/bridge-schema/src/index.ts`](web/packages/bridge-schema/src/index.ts) — host handler in [`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp) sends the response envelope first, then `PostMessage(m_hostHwnd, WM_CLOSE, 0, 0)` so the existing `DefWindowProc → DestroyWindow → WM_DESTROY` chain runs unchanged (compositor + engine teardown, WM_QUIT post). React's `handleExit` reuses `promptSaveChanges` so the dirty-prompt path is identical to `File → New / Open`. **Reset Camera** is a one-line MenuBar dispatch with constants inline. **Reset View Settings** also new — `engine/action/reset-view-settings` — host-side calls the 9 existing `Set*` engine methods in sequence and emits one `engine/state/changed`. Mock-side uses `applyPatch` to write only the view-setting fields (preserving `currentFilePath` / `dirty`). React renders a Radix-portal `Modal` with Cancel/Reset buttons; the prompt sits as a sibling of `Menubar.Root` so Radix's keyboard-nav child-list semantics aren't disturbed. **Force Align** is purely React-side — no engine state needed since the engine just consumes the final per-light direction vectors. New `useState` flag (default ON per legacy `kLightForceAlignDefault`), `computeAlignedFills(sunAz)` helper derives the constrained values, `updateSun` cascades fill dispatches when az changes with the flag on, and a `handleForceAlignToggle` snaps fills immediately when the constraint engages. Mirror Sun disables while Force Align is on (matches legacy [`UpdateForceAlignEnableState`](src/main.cpp:6499)).
+
+**Issues encountered and resolutions.** Two worth recording.
+
+1. **Mirror Sun unit test broke from the new Force Align disable.** The existing `LightingPanel.test.tsx > Mirror Sun button dispatches engine/set/light` spec clicked the button at default state and expected dispatches. With Force Align defaulting to ON, the button is now disabled and the click is a no-op — same behavior as the legacy `UpdateForceAlignEnableState` enforces. Fixed by toggling the Force Align checkbox off first in the test, then clicking Mirror Sun. Added a sibling spec asserting that changing `Sun azimuth` while Force Align is ON dispatches `engine/set/light` for fill1 + fill2 (proving the cascade fires).
+2. **Force Align persistence.** The legacy stores the flag as a `REG_DWORD` under `LightingForceFillAlignment` so it survives editor restarts. This dispatch keeps it session-only (just `useState`) — adding registry persistence would have required pulling the same registry helper the legacy uses into the host or designing a generic UI-prefs persistence layer. Noted as a follow-up; the muscle-memory parity comes from the checkbox + the constraint behavior, not from cross-restart memory.
+
+---
+
 ### EmitterTree panel toolbar + 3D cursor in status bar (FD10 Group A polish)
 
 *TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*

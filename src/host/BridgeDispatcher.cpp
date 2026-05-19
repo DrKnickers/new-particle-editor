@@ -782,6 +782,24 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- app/quit -----------------------------------------------
+    //
+    // FD10 (Group D): React File → Exit dispatches this after the
+    // dirty-prompt clears. PostMessage WM_CLOSE so the existing
+    // DefWindowProc → DestroyWindow → WM_DESTROY shutdown chain
+    // (compositor + engine teardown, WM_QUIT post) runs unchanged.
+    // Using PostMessage (not SendMessage) so the response envelope
+    // gets emitted before the message pump processes WM_CLOSE.
+    if (kind == "app/quit")
+    {
+        sendOk(json::object());
+        if (m_hostHwnd != nullptr)
+        {
+            PostMessage(m_hostHwnd, WM_CLOSE, 0, 0);
+        }
+        return res;
+    }
+
     // -------- engine/state/snapshot --------
     if (kind == "engine/state/snapshot")
     {
@@ -976,6 +994,38 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         SetPreviewPaused(params.value("paused", false));
         sendOk(json::object());
         // LT-4: paused is a view-only toggle (preview clock). Don't mark dirty.
+        EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- engine/action/reset-view-settings ----------------------
+    //
+    // FD10 (Group D): cascade reset for the View → Reset View Settings
+    // menu. Mirrors legacy main.cpp:1733-1808: pushes engine defaults
+    // for background, ground (visibility + Z + texture), bloom (off +
+    // canonical strength/cutoff/size), and skydome (Off slot). Lighting
+    // reset rides with D4 (separate handler around Force Align).
+    //
+    // Defaults match the Engine constructor (engine.cpp:1690-1715) —
+    // kept in sync by hand because there's only one canonical value
+    // each. Editor state (current path, dirty bit, selection) is left
+    // alone since it isn't a "view setting."
+    if (kind == "engine/action/reset-view-settings")
+    {
+        if (!requireEngine(kind.c_str())) return res;
+        m_engine->SetBackground(RGB(0x14, 0x08, 0x34));
+        m_engine->SetGround(true);
+        m_engine->SetGroundZ(0.0f);
+        m_engine->SetGroundTexture(0);
+        m_engine->SetBloom(false);
+        m_engine->SetBloomStrength(0.00f);
+        m_engine->SetBloomCutoff (0.90f);
+        m_engine->SetBloomSize   (0.10f);
+        m_engine->SetSkydomeSlot(0);  // "Off"
+        sendOk(json::object());
+        // No markDirty — these are view settings, not particle-system
+        // mutations. The user-visible cascade is communicated by a
+        // single state-changed broadcast.
         EmitEngineStateChanged();
         return res;
     }

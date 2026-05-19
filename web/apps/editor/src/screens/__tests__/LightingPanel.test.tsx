@@ -73,12 +73,38 @@ describe("LightingPanel", () => {
     expect(setLight).toBeDefined();
   });
 
-  it("Mirror Sun button dispatches engine/set/light for both fills", () => {
+  it("Mirror Sun button dispatches engine/set/light for both fills (with Force Align disabled)", () => {
     const bridge = makeStubBridge();
     render(<LightingPanel bridge={bridge} onClose={() => {}} />);
+    // FD10 Group D: Mirror Sun is disabled while Force Align is on
+    // (matches legacy — Mirror Sun is undefined while the fill angles
+    // are pinned to sun.az + offset). Toggle Force Align off first.
+    const forceAlign = screen.getByLabelText("Force Align Fill Lights") as HTMLInputElement;
+    expect(forceAlign.checked).toBe(true); // default ON per legacy
+    fireEvent.click(forceAlign);
+    expect(forceAlign.checked).toBe(false);
     const btn = screen.getByRole("button", { name: "Mirror Sun" });
     fireEvent.click(btn);
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const fill1Call = calls.find((c) => c.kind === "engine/set/light" && c.params.which === "fill1");
+    const fill2Call = calls.find((c) => c.kind === "engine/set/light" && c.params.which === "fill2");
+    expect(fill1Call).toBeDefined();
+    expect(fill2Call).toBeDefined();
+  });
+
+  it("Force Align ON cascades sun.az to fill1/fill2 azimuth (FD10)", () => {
+    const bridge = makeStubBridge();
+    render(<LightingPanel bridge={bridge} onClose={() => {}} />);
+    // Default state: Force Align is ON. Changing sun.az should
+    // dispatch fill1 + fill2 with the offset values.
+    const sunAz = screen.getByLabelText("Sun azimuth") as HTMLInputElement;
+    fireEvent.change(sunAz, { target: { value: "30" } });
+    fireEvent.blur(sunAz);
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    // The fill az values come through the LightDto's direction vector
+    // (not as raw az/alt) — so we verify a fill light call fired, not
+    // the exact azimuth. The az/alt → direction conversion is covered
+    // by the existing buildLightDto unit tests.
     const fill1Call = calls.find((c) => c.kind === "engine/set/light" && c.params.which === "fill1");
     const fill2Call = calls.find((c) => c.kind === "engine/set/light" && c.params.which === "fill2");
     expect(fill1Call).toBeDefined();

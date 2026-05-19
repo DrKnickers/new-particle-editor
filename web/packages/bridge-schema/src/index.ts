@@ -564,6 +564,19 @@ export type Request =
   | { kind: "spawner/start";              params: SpawnerParamsDto }
   | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }
+  // FD10 (Group D): host quit. Posts WM_CLOSE to the main HostWindow
+  // which falls through DefWindowProc → DestroyWindow → the existing
+  // WM_DESTROY cleanup chain. React's File → Exit menu item is the
+  // sole caller and gates on the dirty-prompt before dispatching.
+  | { kind: "app/quit";                   params: Record<string, never> }
+  // FD10 (Group D): cascade reset for the View → Reset View Settings
+  // menu. Pushes engine defaults for background, ground, bloom,
+  // skydome, and lighting in one host-side action (one emit of
+  // engine/state/changed at the end). Mirrors legacy main.cpp:1733+
+  // which prompts Yes/No and then resets the same surface. The
+  // confirmation dialog lives React-side via Radix AlertDialog;
+  // the dispatcher's job is purely to apply the defaults.
+  | { kind: "engine/action/reset-view-settings"; params: Record<string, never> }
   | { kind: "register-accelerators";      params: { combos: string[] } };
 
 // One response shape per Request kind.
@@ -687,6 +700,8 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "spawner/start" }             ? Record<string, never> :
   R extends { kind: "spawner/trigger" }           ? Record<string, never> :
   R extends { kind: "spawner/stop" }              ? Record<string, never> :
+  R extends { kind: "app/quit" }                  ? Record<string, never> :
+  R extends { kind: "engine/action/reset-view-settings" } ? Record<string, never> :
   R extends { kind: "register-accelerators" }     ? Record<string, never> :
   never;
 
