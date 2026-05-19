@@ -16,9 +16,19 @@ Conventions:
 
 ## Changelog
 
+> **Note on the LT-4 / new-UI entries below.** All entries from "Mods
+> menu detection + selection (D6)" down through "Playwright contract
+> tests unblocked via WebView2 host-object IPC" are in-flight work on
+> the `lt-4` integration branch (not yet merged to `master`). For these
+> entries, the short-hash link points at the **`lt-4` commit**, not a
+> merge-commit on `master`; the PR number stays `TODO` until merge.
+> When LT-4 eventually merges to `master`, both fields get rewritten
+> to point at the master merge-commit + PR per the standard convention
+> documented in `CLAUDE.md`.
+
 ### Mods menu detection + selection (D6)
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-19 · [`059395d`](https://github.com/DrKnickers/new-particle-editor/commit/059395d) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 The new-UI Mods menu's `(none)` placeholder is replaced by a dynamic list of installed EaW / FoC mods scanned from `<gameRoot>/{corruption,GameData}/Mods` at startup. Entries are grouped (Forces of Corruption first, then Base Game) and alphabetised by folder name within each group, matching the legacy popup's ordering exactly. Clicking an entry hot-swaps the FileManager basepath, writes `HKCU\Software\AloParticleEditor\LastMod` for the next launch, refreshes the texture palette, clears the thumbnail cache, and reloads shaders + textures — all six legacy side effects, with no Win32-specific finalisation that doesn't apply in the React-rendered new UI. The active mod gets a check mark next to its entry; "Unmodded" gets the check when no mod is active. A "Refresh Mod List" item at the bottom re-scans disk without restarting. Cross-mode persistence is automatic: both legacy and new-UI read / write the same registry key, so flipping between `--legacy-ui` and `--new-ui` launches preserves which mod is active.
 
@@ -39,7 +49,7 @@ The new-UI Mods menu's `(none)` placeholder is replaced by a dynamic list of ins
 
 ### Texture-aware `file/open` for skydome + ground custom slots (D5)
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-19 · [`9ad01d0`](https://github.com/DrKnickers/new-particle-editor/commit/9ad01d0) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 The native picker invoked from the Background panel's Custom slots (9/10/11) and the Ground Texture panel's Custom slots (5/6/7) now opens with `*.dds;*.tga` as the default filter and a title that names the surface ("Open skydome texture" / "Open ground texture"), instead of the `*.alo` filter inherited from File → Open. The Ground Texture custom-slot click is no longer a no-op — picking a file writes the path into the engine slot and activates it, mirroring the skydome flow that had been working through the wrong filter. File → Open / recents / drag-drop are unchanged: still `*.alo`, still load + commit as the current particle system. While we were in the dispatcher, every `lpstrFilter` was brought up to legacy label parity — the dropdown text now matches the legacy convention `"Particle Files (*.alo)"` / `"Texture Files (*.dds;*.tga)"` / `"All Files (*.*)"` (parenthesised pattern suffix, capitalised "Files"); previously the bridge's `.alo` filter read "Alo files" with no suffix and the texture filter read "Texture files" with no suffix.
 
@@ -53,7 +63,7 @@ The native picker invoked from the Background panel's Custom slots (9/10/11) and
 
 ### Close out the disabled-stub menu items (FD10 Group D polish)
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-19 · [`244b339`](https://github.com/DrKnickers/new-particle-editor/commit/244b339) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 Four previously-disabled menu items now do something real. **File → Exit** routes through the existing save-prompt and then `PostMessage(WM_CLOSE)` on the host, matching legacy [`DoCheckChanges`](src/main.cpp:1395) → `DestroyWindow` semantics. **View → Reset Camera** snaps the camera to the legacy defaults `pos=(0,-250,125) target=(0,0,0) up=(0,0,1)` from [`src/main.cpp:1814`](src/main.cpp:1814) via a single existing `engine/set/camera` dispatch — no new bridge kind needed. **View → Reset View Settings** cascades background, ground (visibility/Z/texture), bloom, and skydome back to engine defaults after a Yes/No confirm dialog matching the legacy [`MessageBox`](src/main.cpp:1734) prompt. **Lighting panel → Force Align Fill Lights** restores the legacy checkbox: when ON, fill1/fill2 azimuth follow `sun.az + 120°` and `sun.az + 210°` respectively at -10° altitude (constants from [`src/main.cpp:6238-6240`](src/main.cpp:6238)), fill az/alt spinners and the Mirror Sun button disable to enforce the constraint.
 
@@ -68,7 +78,7 @@ Four previously-disabled menu items now do something real. **File → Exit** rou
 
 ### EmitterTree panel toolbar + 3D cursor in status bar (FD10 Group A polish)
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-19 · [`af5b329`](https://github.com/DrKnickers/new-particle-editor/commit/af5b329) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 First wave of the legacy-parity polish sweep. The new-UI's EmitterTree sidebar now carries the same panel-header toolbar the legacy `EmitterList` panel had — `[New ▾] [Delete] [▲ Move Up] [▼ Move Down] · [👁] [Show All] [Hide All]` — matching the layout from [`src/UI/EmitterList.cpp:3016`](src/UI/EmitterList.cpp:3016). Adding emitters, deleting, reordering roots, and toggling per-emitter visibility no longer require the top menubar or right-click; the muscle-memory affordances live where the eye expects them. The status bar also picks up its fifth column from legacy — `Cursor: x, y, z` showing the 3D ground-plane intersection of the viewport mouse cursor, updated at ~30 Hz while the cursor is over the viewport.
 
@@ -82,7 +92,7 @@ First wave of the legacy-parity polish sweep. The new-UI's EmitterTree sidebar n
 
 ### Layered viewport with software alpha-stamp cut-outs (FD9b)
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-18 · [`11ab97c`](https://github.com/DrKnickers/new-particle-editor/commit/11ab97c) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 The new-UI viewport popup now composites with per-pixel alpha through `WS_EX_LAYERED` + `UpdateLayeredWindow(ULW_ALPHA)`, and the FD7/FD8 `SetWindowRgn` cut-out is gone. Chrome rectangles (menus, tool panels) still register themselves as occlusions via the existing `viewport/occlude` bridge call, but instead of building an HRGN with binary holes the host now stamps a smoothstep-feathered alpha hole into the readback DIB once per frame. Visible difference: the seam between the D3D9 viewport area and the WebView2 chrome behind it is soft-edged where there used to be a single pixel-hard step, and Tailwind's `shadow-xl` is restored on the Radix menu `CONTENT` class — the dropdown's own drop-shadow now blends through the alpha hole rather than getting lopped off at the cut-out boundary.
 
@@ -104,7 +114,7 @@ The new-UI viewport popup now composites with per-pixel alpha through `WS_EX_LAY
 
 ### Playwright contract tests unblocked via WebView2 host-object IPC
 
-*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-05-16 · [`6c55abd`](https://github.com/DrKnickers/new-particle-editor/commit/6c55abd) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 
 The four Playwright contract specs guarding the bridge schema between the React UI and the C++ host (`engine/state/snapshot`, `engine/set/ground-z` round-trip, `engine/set/background` COLORREF, `engine/query/ground-slot-empty` typing) now run live and pass against `ParticleEditor.exe --new-ui --test-host`. Previously they were committed as `test.fixme` because WebView2 silently drops `chrome.webview.postMessage` calls from page → host while a CDP debugger is attached (Task 2.2 self-review, captured in [`tasks/lessons.md`](tasks/lessons.md) L-003). With this change `pnpm --filter @particle-editor/editor test:native` exercises 5 specs (1 smoke + 4 contract) covering the request/response and event surfaces against the real C++ handlers; the 25 Vitest MockBridge specs continue to pass.
 
