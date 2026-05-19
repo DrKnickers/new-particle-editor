@@ -9,6 +9,7 @@
 #include "EmitterInstance.h"
 #include "SphericalHarmonics.h"
 #include "utils.h"     // MT-3 follow-up: WideToAnsi for custom-slot path bridging
+#include "host/AlphaCompositor.h"
 using namespace std;
 
 static const char* ShaderNames[Engine::NUM_SHADERS] = {
@@ -622,6 +623,17 @@ bool Engine::Render()
 	
 	m_pDevice->BeginScene();
 
+	// FD9b: when the layered-window compositor is installed, swap slot
+	// 0 from the swap-chain back buffer to the compositor's off-screen
+	// ARGB RT. The pScreenSurface capture immediately below then picks
+	// this RT up as the "screen" target for the full render chain
+	// (scene → bloom → distort → final composite), and Composite() at
+	// the bottom of Render pushes it via UpdateLayeredWindow.
+	if (m_pAlphaCompositor && m_pAlphaCompositor->GetRenderTarget())
+	{
+		m_pDevice->SetRenderTarget(0, m_pAlphaCompositor->GetRenderTarget());
+	}
+
 	IDirect3DSurface9* pScreenSurface;
 	IDirect3DSurface9* pDepthSurface;
 	m_pDevice->GetRenderTarget(0, &pScreenSurface);
@@ -873,7 +885,19 @@ bool Engine::Render()
     SAFE_RELEASE(pEffect);
 
 	m_pDevice->EndScene();
-	m_pDevice->Present(NULL, NULL, NULL, NULL);
+
+	// FD9b: route the final frame either through the layered-window
+	// compositor (UpdateLayeredWindow on the off-screen ARGB RT we
+	// targeted at the top of this function) or through the legacy
+	// swap-chain Present.
+	if (m_pAlphaCompositor)
+	{
+		m_pAlphaCompositor->Composite(m_presentationParameters.hDeviceWindow);
+	}
+	else
+	{
+		m_pDevice->Present(NULL, NULL, NULL, NULL);
+	}
 	return true;
 }
 
@@ -1230,6 +1254,19 @@ void Engine::Reset()
 	if (m_pBloomEffect != NULL) m_pBloomEffect->OnResetDevice();
 
 	ResetParameters();
+
+	// FD9b: the alpha compositor owns D3D9 resources (RT + sysmem
+	// surface) sized to the popup client area. Refresh them so the
+	// off-screen RT keeps pace with the swap-chain's back-buffer
+	// size, which the engine's render chain (m_pSceneTexture etc.)
+	// is already keyed off via BackBufferWidth/Height.
+	if (m_pAlphaCompositor && m_presentationParameters.BackBufferWidth > 0
+	    && m_presentationParameters.BackBufferHeight > 0)
+	{
+		m_pAlphaCompositor->Resize(
+		    static_cast<int>(m_presentationParameters.BackBufferWidth),
+		    static_cast<int>(m_presentationParameters.BackBufferHeight));
+	}
 }
 
 void Engine::ResetParameters()

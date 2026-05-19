@@ -8,6 +8,8 @@
 #include "utils.h"
 #include <memory>
 
+namespace host { class AlphaCompositor; }
+
 class Object3D
 {
     Object3D* m_parent;
@@ -119,6 +121,14 @@ public:
 	// create scratch textures via D3DXCreateTextureFromFile*Ex with
 	// width/height clamped to 64×64. Exposed read-only.
 	IDirect3DDevice9* GetDevice() const { return m_pDevice; }
+
+	// FD9b: install/clear the layered-window alpha compositor. When
+	// non-null, Render() redirects slot-0 RT to the compositor's
+	// off-screen ARGB surface and replaces Present() with
+	// Composite(viewport HWND). Pass nullptr to fall back to the
+	// legacy swap-chain Present path (used by viewport_poc and any
+	// host that doesn't enable the layered popup).
+	void SetAlphaCompositor(host::AlphaCompositor* c) { m_pAlphaCompositor = c; }
 	const std::wstring& GetGroundSlotCustomPath(int slot) const;
 	// Does the slot currently have a loadable texture (either bundled
 	// default or user-supplied custom path)? Used by the picker dialog
@@ -413,6 +423,12 @@ private:
 	D3DPRESENT_PARAMETERS			m_presentationParameters;
 	IDirect3DDevice9*				m_pDevice;
 	IDirect3DVertexDeclaration9*	m_pDeclaration;
+
+	// FD9b: non-owning. When non-null, Render targets its off-screen
+	// RT and Composite() replaces Present(). Lifetime managed by
+	// HostWindowImpl; detached via SetAlphaCompositor(nullptr) on
+	// WM_DESTROY before the compositor is destroyed.
+	host::AlphaCompositor*			m_pAlphaCompositor = nullptr;
 
 	static D3DVERTEXELEMENT9 ParticleElements[];
     
