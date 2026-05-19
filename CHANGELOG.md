@@ -16,6 +16,20 @@ Conventions:
 
 ## Changelog
 
+### Texture-aware `file/open` for skydome + ground custom slots (D5)
+
+*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+The native picker invoked from the Background panel's Custom slots (9/10/11) and the Ground Texture panel's Custom slots (5/6/7) now opens with `*.dds;*.tga` as the default filter and a title that names the surface ("Open skydome texture" / "Open ground texture"), instead of the `*.alo` filter inherited from File → Open. The Ground Texture custom-slot click is no longer a no-op — picking a file writes the path into the engine slot and activates it, mirroring the skydome flow that had been working through the wrong filter. File → Open / recents / drag-drop are unchanged: still `*.alo`, still load + commit as the current particle system. While we were in the dispatcher, every `lpstrFilter` was brought up to legacy label parity — the dropdown text now matches the legacy convention `"Particle Files (*.alo)"` / `"Texture Files (*.dds;*.tga)"` / `"All Files (*.*)"` (parenthesised pattern suffix, capitalised "Files"); previously the bridge's `.alo` filter read "Alo files" with no suffix and the texture filter read "Texture files" with no suffix.
+
+**How we tackled it.** Single schema delta: an optional `filter?: "alo" | "skydome" | "ground"` on the `file/open` request's params in [`web/packages/bridge-schema/src/index.ts`](web/packages/bridge-schema/src/index.ts:362), defaulting to `"alo"` so every existing caller (File → Open, recents, drag-drop) stays on the current path. The dispatcher case in [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1239) reads the field defensively, swaps `lpstrFilter` / `lpstrTitle` for the texture variants, and — critically — short-circuits to a `{ ok: true, path }` response *before* the existing `LoadParticleSystem` + `m_currentFilePath` + recents commit chain runs. Texture filter ⇒ "return the picked path, nothing else." The React side then routes the result through the already-existing `engine/set/skydome-custom-path` + `engine/set/skydome-slot` chain (skydome) or the newly-wired `engine/set/ground-slot-custom-path` + `engine/set/ground-texture` chain (ground). Orchestration stays React-owned; the host gains one defaulted field and one short-circuit branch.
+
+**Issues encountered and resolutions.** One worth recording.
+
+1. **Naive schema parameterisation would have routed texture paths through the .alo loader.** The first cut of the dispatcher edit only changed `lpstrFilter` / `lpstrTitle` and left the post-pick load chain untouched. That would have taken a picked `.dds` and tried to `LoadParticleSystem(L"C:/.../sky.dds")` against it, surfacing `{ ok: false, error: "load failed" }` to the React side and looking to the user like a broken picker. Caught in pre-handoff code review (the dispatcher case's invariant is "everything below the picker assumes a loadable .alo," which the schema delta silently violated). Fix: pull the filter resolution above the `if (path.empty())` block and add a `if (filterId != "alo") { sendOk(path); return; }` gate immediately after the pick. The gate also protects future callers that pass `path` explicitly with a non-`"alo"` filter — the load chain is now strictly opt-in to the `"alo"` semantic.
+
+---
+
 ### Close out the disabled-stub menu items (FD10 Group D polish)
 
 *TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*

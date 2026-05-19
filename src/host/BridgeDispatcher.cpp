@@ -1243,17 +1243,41 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             path = Utf8ToWide(pit->get<std::string>());
         }
+        // Resolve optional filter discriminator. Default "alo" keeps
+        // File→Open / recents / drag-drop behaviour unchanged; the
+        // picker panels pass "skydome" / "ground" so the dialog
+        // defaults to the texture filter the user actually needs AND
+        // the post-pick load path is skipped (textures aren't .alo
+        // files).
+        std::string filterId = "alo";
+        if (auto fit = params.find("filter"); fit != params.end() && fit->is_string())
+        {
+            filterId = fit->get<std::string>();
+        }
+
         if (path.empty())
         {
+            const wchar_t* lpstrFilter = L"Particle Files (*.alo)\0*.alo\0All Files (*.*)\0*.*\0\0";
+            const wchar_t* lpstrTitle  = L"Open particle system";
+            if (filterId == "skydome")
+            {
+                lpstrFilter = L"Texture Files (*.dds;*.tga)\0*.dds;*.tga\0All Files (*.*)\0*.*\0\0";
+                lpstrTitle  = L"Open skydome texture";
+            }
+            else if (filterId == "ground")
+            {
+                lpstrFilter = L"Texture Files (*.dds;*.tga)\0*.dds;*.tga\0All Files (*.*)\0*.*\0\0";
+                lpstrTitle  = L"Open ground texture";
+            }
+
             wchar_t buf[MAX_PATH] = {};
             OPENFILENAMEW ofn = {};
             ofn.lStructSize = sizeof(ofn);
             ofn.hwndOwner   = m_hostHwnd;
             ofn.lpstrFile   = buf;
             ofn.nMaxFile    = MAX_PATH;
-            ofn.lpstrFilter =
-                L"Alo files\0*.alo\0All files\0*.*\0";
-            ofn.lpstrTitle  = L"Open particle system";
+            ofn.lpstrFilter = lpstrFilter;
+            ofn.lpstrTitle  = lpstrTitle;
             ofn.Flags       = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
             if (!GetOpenFileNameW(&ofn))
@@ -1263,6 +1287,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
                 return res;
             }
             path = buf;
+        }
+
+        // Texture-picker variants short-circuit here: just return the
+        // path so the React side can route it through the appropriate
+        // engine setter (engine/set/skydome-custom-path or
+        // engine/set/ground-slot-custom-path). Don't touch
+        // m_currentFilePath / recents / engine state — those belong to
+        // the "open particle system" semantics of the .alo path below.
+        if (filterId != "alo")
+        {
+            sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
+            return res;
         }
 
         // LT-4: actually load the .alo into the host-owned slot.
@@ -1328,7 +1364,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             ofn.hwndOwner   = m_hostHwnd;
             ofn.lpstrFile   = buf;
             ofn.nMaxFile    = MAX_PATH;
-            ofn.lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0";
+            ofn.lpstrFilter = L"Particle Files (*.alo)\0*.alo\0All Files (*.*)\0*.*\0\0";
             ofn.lpstrDefExt = L"alo";
             ofn.lpstrTitle  = L"Save particle system";
             ofn.Flags       = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
@@ -1382,7 +1418,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         ofn.hwndOwner   = m_hostHwnd;
         ofn.lpstrFile   = buf;
         ofn.nMaxFile    = MAX_PATH;
-        ofn.lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0";
+        ofn.lpstrFilter = L"Particle Files (*.alo)\0*.alo\0All Files (*.*)\0*.*\0\0";
         ofn.lpstrDefExt = L"alo";
         ofn.lpstrTitle  = L"Save particle system as";
         ofn.Flags       = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;

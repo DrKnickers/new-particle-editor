@@ -9,20 +9,25 @@
 //   - Slot 2: Sand   (bundled)
 //   - Slot 3: Snow   (bundled)
 //   - Slot 4: Solid colour — wide tile + ColorButton popover
-//   - Slot 5: Custom 1 (browse → file picker, deferred per Batch 2 locks)
+//   - Slot 5: Custom 1 (user-picked DDS/TGA texture)
 //   - Slot 6: Custom 2
 //   - Slot 7: Custom 3
 //
-// Bridge surface (existing — zero schema additions):
-//   - engine/set/ground             { enabled }
-//   - engine/set/ground-texture     { slot }
-//   - engine/set/ground-solid-color { rgb }
+// Bridge surface:
+//   - engine/set/ground                  { enabled }
+//   - engine/set/ground-texture          { slot }
+//   - engine/set/ground-solid-color      { rgb }
+//   - engine/set/ground-slot-custom-path { slot, path }   (custom slots)
+//   - file/open with `filter: "ground"`                   (native picker)
 //
-// Custom-slot behaviour. Click on an empty custom slot is a no-op in
-// browser mode; the file picker requires native host wiring (matches
-// BackgroundPicker's deferred custom-slot path until Task 2.4 lands a
-// reusable `file/open` request handler in both bridges). Populated
-// custom slots switch via `engine/set/ground-texture { slot }`.
+// Custom-slot behaviour. Click on an empty custom slot chains the
+// native picker (`file/open` with `filter: "ground"`, defaulting to
+// `*.dds;*.tga`) through `engine/set/ground-slot-custom-path` +
+// `engine/set/ground-texture { slot }`. Mirrors BackgroundPicker's
+// custom-skydome flow. In browser mode the picker resolves to
+// `{ ok: false }` so the chain aborts silently — there's no native
+// picker to invoke without the host. Populated custom slots just
+// switch via `engine/set/ground-texture { slot }`.
 
 import { useEffect, useState } from "react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
@@ -124,11 +129,24 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
   };
   const handleCustomClick = (slot: number, isEmpty: boolean) => {
     if (isEmpty) {
-      // Deferred per Batch 2 locks (matches BackgroundPicker's deferred
-      // custom-slot behaviour). The file picker is a native-host
-      // capability; until it's wired here, an empty custom-slot click
-      // is a no-op. TODO: lift this once Task 2.4's `file/open` reaches
-      // both bridges with a uniform interface.
+      // Chain: native picker (DDS/TGA filter) → write the chosen path
+      // into the slot → activate the slot. Aborts silently on cancel
+      // or failure. Mirrors BackgroundPicker's custom-skydome flow.
+      void (async () => {
+        const r = await bridge.request({
+          kind: "file/open",
+          params: { filter: "ground" },
+        });
+        if (!r.ok || !r.path) return;
+        await bridge.request({
+          kind: "engine/set/ground-slot-custom-path",
+          params: { slot, path: r.path },
+        });
+        await bridge.request({
+          kind: "engine/set/ground-texture",
+          params: { slot },
+        });
+      })();
       return;
     }
     handleSelectSlot(slot);

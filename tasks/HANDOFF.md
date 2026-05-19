@@ -1,7 +1,7 @@
-# Session Handoff — AloParticleEditor / LT-4 UI overhaul (post-FD10)
+# Session Handoff — AloParticleEditor / LT-4 UI overhaul (post-D5)
 
-**Last updated:** 2026-05-19
-**Last conversation context:** Single session focused on Phase 4.1 polish dispatches. Picked up mid-FD9 (the plan was committed but no code shipped), pivoted to FD9b (software alpha-stamp instead of full pipeline rework), then ran FD10 Group A (legacy parity polish) + FD10 Group D (close out disabled-stub menu items) + several organically-discovered bug fixes.
+**Last updated:** 2026-05-19 (post-D5 dispatch)
+**Last conversation context:** Resumed in a fresh worktree (`awesome-morse-5ea5c3`) on the same commit lineage as the prior session's `goofy-shtern-ded61e`. Ran the pre-flight, surfaced the desktop-app auto-worktree behaviour as a separate workflow issue (no fix attempted), then shipped **D5** — texture-aware `file/open` for skydome + ground custom slots. The previous session had focused on FD9b / FD10 Group A / FD10 Group D + organic find-and-fix runs; see the post-FD10 section below and CHANGELOG entries for that detail.
 
 ---
 
@@ -22,16 +22,25 @@ If you are a fresh Claude session resuming this project:
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\goofy-shtern-ded61e` |
-| **Branch** | `claude/goofy-shtern-ded61e` |
-| **HEAD** | `14f1fe0` — `fix(LT-4): set IDC_ARROW on the viewport popup's window class` |
-| **Working tree** | clean |
-| **Behind master** | unknown — check with `git log --oneline master..HEAD` |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\awesome-morse-5ea5c3` |
+| **Branch** | `claude/awesome-morse-5ea5c3` |
+| **HEAD** | unknown until D5 commit lands — check `git log --oneline -1` |
+| **Working tree** | clean post-commit |
+| **Behind master** | check `git log --oneline master..HEAD` (master was `b28f624` at start of D5 session) |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (LIBCMTD warning is preexisting). Vitest 183/183. Playwright 77/77. |
-| **Phase status** | Phase 4.1 — FD9b shipped, FD10 Group A shipped, FD10 Group D shipped + several follow-ups |
+| **Build status** | MSBuild Debug x64 clean (LIBCMTD warning is preexisting). Vitest **188/188**. Playwright **77/77**. |
+| **Phase status** | Phase 4.1 — FD9b, FD10 Group A, FD10 Group D, and D5 shipped + several follow-ups |
 
-`git worktree list` shows multiple worktrees. The other one (`laughing-tereshkova-32e22a`) is an older parallel investigation — DO NOT confuse it for this one. The cursor-access tooling caches paths and may try to send input to the wrong exe; if visual-gate tests fail to open the right window, check the running PID.
+**Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `awesome-morse-5ea5c3` from the harness, replacing the previous `goofy-shtern-ded61e` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change. If you want to resume in a specific worktree directory rather than getting a fresh one each time, the CLI workflow `claude --continue` from inside the desired worktree path is the only way today (the desktop app has no equivalent setting). Documented in the conversation log for the D5 session.
+
+**NuGet pre-flight (fresh worktrees only).** `.gitignore` excludes `packages/`, so the first MSBuild in a fresh worktree fails with *"missing Microsoft.Web.WebView2.targets"*. Restore explicitly before the first build:
+
+```bash
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" \
+  "ParticleEditor.sln" //t:Restore //v:m
+```
+
+Then the standard Debug x64 build works. Skip this step on a worktree that's already been built in once.
 
 ---
 
@@ -75,13 +84,17 @@ Surfaced during normal use of the FD10-shipped build:
 
 ---
 
+## What landed in this session (D5)
+
+**D5 — Texture-aware `file/open` for skydome + ground custom slots.** Replaces the hardcoded `*.alo` filter on the Background and Ground Texture custom-slot pickers with `*.dds;*.tga`. Skydome slots 9/10/11 used to silently misfilter (the chain was wired but `file/open` always returned an `.alo`-filtered dialog); ground texture slots 5/6/7 were genuine no-ops because no one wanted to ship them while the filter was wrong. Both surfaces now work cleanly. See the CHANGELOG entry "Texture-aware `file/open` for skydome + ground custom slots (D5)" for the full architecture and the one issue (post-pick `.alo` loader had to be gated on `filterId == "alo"` or it would treat texture paths as broken particle-system files).
+
+The handoff doc as-written (pre-D5) misframed D5 as "Background picker's Custom slots 9/10/11 are currently no-ops" — that was wrong. The slots were chained but mis-filtered. Ground texture was the actual no-op surface. Both got fixed in one motion via the `filter?: "alo" | "skydome" | "ground"` schema delta.
+
 ## What's left
 
 ### Phase 4.1 acceptance items still deferred
 
-D5 and D6 are the two remaining "make a stub work" items from Group D:
-
-- **D5 — Skydome custom-slot file picker.** Background picker's Custom slots 9/10/11 are currently no-ops. Needs a new `engine/skydome/pick-custom-slot { slot }` bridge call that opens `GetOpenFileName` host-side, filtered to `*.dds;*.tga`. Pattern parallel to `file/open`'s native picker. Medium scope.
+D6 is the one remaining "make a stub work" item from Group D:
 
 - **D6 — Mods menu detection + selection.** Mods menu shows `(none)` placeholder. Needs C++-side detection (EaW/FoC mod directories via `FileManager`'s resolution chain) + bridge surface (`mods/list`, `mods/activate`) + React menu population. Sizable enough to be its own dispatch.
 
@@ -108,8 +121,8 @@ These are documented divergences from legacy that the user flagged as "the new U
 ### Recommended next moves
 
 1. **Triage Groups B/C with the user before touching either.** They're not bugs — they're design decisions Claude made and the user might or might not agree with. The Group A "tackle this first" pattern worked because the user explicitly listed Group A's items as parity gaps; Groups B/C need the same user-driven prioritization.
-2. **D5 and D6 are independently small enough to ship anytime** without unblocking anything. Pick whichever feels more useful to the user — D5 is faster, D6 has broader workflow value.
-3. **Organic find-and-fix runs continue to be high-yield.** Two of this session's most important fixes (FPS, cursor) came from "play with the editor and report what looks off" prompts, not from any tracked plan item.
+2. **D6 is the last "make a stub work" item.** Mods menu detection — independent of Groups B/C, can ship anytime, broader workflow value than D5.
+3. **Organic find-and-fix runs continue to be high-yield.** The most important fixes from prior sessions (FPS counter using QPC instead of GetTickCount, cursor inheritance on the viewport popup) came from "play with the editor and report what looks off" prompts, not from any tracked plan item.
 
 ---
 
@@ -237,19 +250,24 @@ Playwright runs specs alphabetically and shares a browser context across tests w
 Run these in order before touching code:
 
 ```bash
-# 1. Confirm worktree is current.
-cd "/c/Modding/Particle Editor/.claude/worktrees/goofy-shtern-ded61e"
+# 1. Confirm worktree is current. (The path may be different — the
+#    desktop app provisions a fresh worktree each session.)
+cd "/c/Modding/Particle Editor/.claude/worktrees/$WORKTREE_NAME"
 git worktree list
-git log --oneline -5    # HEAD should be 14f1fe0 if nothing's changed
+git log --oneline -5    # HEAD should be the latest D5 / FD10 commit
 git status              # clean
 
-# 2. Confirm builds and tests are still green.
+# 2. Restore NuGet (ONLY needed on a fresh worktree — see header note).
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" \
+  "ParticleEditor.sln" //t:Restore //v:m
+
+# 3. Confirm builds and tests are still green.
 "/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" \
   "ParticleEditor.sln" //p:Configuration=Debug //p:Platform=x64 //v:m 2>&1 | tail -10
 cd web/apps/editor
 pnpm install     # may re-inject the allowBuilds block — see L-005
 pnpm build       # 0 errors expected
-pnpm test        # 183/183 expected
+pnpm test        # 188/188 expected
 pnpm test:native # 77/77 expected
 ```
 
@@ -263,7 +281,6 @@ If anything regressed, the most likely culprits in order:
 
 ## Open questions / deferrals (do *not* silently address)
 
-- **D5 — Skydome custom-slot file picker.** Background picker's Custom slots 9/10/11 are no-ops. Needs `engine/skydome/pick-custom-slot` bridge + host `GetOpenFileName`.
 - **D6 — Mods menu detection.** Placeholder `(none)`. Needs registry/disk scan + bridge surface.
 - **Group B / C divergences** — see "What's left" above. Each is a design conversation before code.
 - **Force Align registry persistence.** Currently `localStorage` only — doesn't sync with legacy `LightingForceFillAlignment` REG_DWORD. Cross-mode persistence needs a host registry helper + new bridge kind.

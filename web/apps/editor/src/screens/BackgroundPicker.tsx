@@ -2,8 +2,11 @@
 // `SkydomePickerProc` modal. Picks the engine background:
 //   - Slot 0: solid colour (drives `engine/set/background`)
 //   - Slots 1-8: bundled skydome textures (drives `engine/set/skydome-slot`)
-//   - Slots 9-11: user-supplied custom skydomes (Task 2.4 wires the file
-//                 picker; for now the empty-state click just alerts)
+//   - Slots 9-11: user-supplied custom skydomes. An empty-slot click
+//     chains the native picker (`file/open` with `filter: "skydome"`,
+//     defaulting to `*.dds;*.tga`) through
+//     `engine/set/skydome-custom-path` + `engine/set/skydome-slot`.
+//     Populated slots just re-activate the existing path.
 //
 // State subscription:
 //   - One-shot `engine/state/snapshot` at mount for the initial DTO.
@@ -14,7 +17,8 @@
 // Browser-mode only: the bundled-tile gradients are static CSS swatches,
 // not real skydome thumbnails. The native host will eventually serve
 // real previews; until then this is enough to validate selection state +
-// dispatch surface against the schema.
+// dispatch surface against the schema. Custom-slot clicks resolve to
+// `{ ok: false }` in MockBridge (no native picker in the browser).
 
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -106,9 +110,14 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
       // Chain native picker → write the chosen path into the slot →
       // activate the slot. Each step awaits the previous; abort on
       // cancellation or failure (MockBridge returns ok:false in browser
-      // mode, native returns ok:false on user-cancel).
+      // mode, native returns ok:false on user-cancel). `filter: "skydome"`
+      // pops the dialog with `*.dds;*.tga` as the default filter so the
+      // user isn't fighting an `.alo`-by-default dropdown.
       void (async () => {
-        const r = await bridge.request({ kind: "file/open", params: {} });
+        const r = await bridge.request({
+          kind: "file/open",
+          params: { filter: "skydome" },
+        });
         if (!r.ok || !r.path) return;
         await bridge.request({
           kind: "engine/set/skydome-custom-path",

@@ -359,7 +359,7 @@ export type EmitterTreeDto = { root: EmitterTreeNode };
 export type Request =
   // File / recents
   | { kind: "file/new";                   params: Record<string, never> }
-  | { kind: "file/open";                  params: { path?: string } }   // path undef = native picker
+  | { kind: "file/open";                  params: { path?: string; filter?: "alo" | "skydome" | "ground" } }   // path undef = native picker; filter selects lpstrFilter (default "alo")
   | { kind: "file/save";                  params: { path?: string } }   // path undef = native picker
   | { kind: "file/save-as";               params: Record<string, never> } // always opens native picker
   | { kind: "file/recent/list";           params: Record<string, never> }

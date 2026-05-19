@@ -432,6 +432,10 @@ export class MockBridge implements Bridge {
         // Otherwise we simulate a cancelled native picker — the picker
         // doesn't exist in browser mode. The contract callers branch on
         // `ok` so this is the cleanest signal of "no path acquired".
+        // `req.params.filter` ("alo" | "skydome" | "ground") is accepted
+        // for type-compat but ignored here: there's no native dialog to
+        // re-filter, and the browser-mode return value is the same
+        // regardless of which surface invoked the picker.
         const explicit = req.params?.path;
         if (!explicit) {
           return { ok: false, error: "browser-mode" };

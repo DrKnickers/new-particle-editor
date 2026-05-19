@@ -1,18 +1,27 @@
-// Vitest unit tests for the GroundTexturePanel.
-// Verifies that clicking a bundled slot tile dispatches
-// engine/set/ground-texture with the correct slot index.
+// Vitest unit tests for the GroundTexturePanel:
+//   1. Bundled slot click → engine/set/ground-texture.
+//   2. Empty Custom slot → file/open with filter:"ground" (the host
+//      pops the DDS/TGA picker, not the .alo one).
+//   3. On a resolved path, the chain dispatches set-ground-slot-custom-path
+//      then set-ground-texture in order.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { GroundTexturePanel } from "../GroundTexturePanel";
 import type { Bridge } from "@particle-editor/bridge-schema";
 
-function makeStubBridge(): Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> } {
+type RequestFn = (req: { kind: string; params?: Record<string, unknown> }) => Promise<unknown>;
+
+function makeStubBridge(
+  opts: { fileOpen?: { ok: true; path: string } | { ok: false; error: string } } = {},
+): Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> } {
   const snapshot = {
     ground: true,
     groundZ: 0,
     groundTexture: 0,
     groundSolidColor: 0x00888888,
+    // All 8 slots empty so the custom slots (5..7) render in their
+    // Browse... empty state.
     groundSlotCustomPaths: ["", "", "", "", "", "", "", ""],
     skydomeSlot: 0,
     skydomeCustomPaths: ["", "", ""],
@@ -35,11 +44,15 @@ function makeStubBridge(): Bridge & { request: ReturnType<typeof vi.fn>; on: Ret
     wind: [0, 0, 0],
     gravity: [0, 0, 0],
   };
+  const request: RequestFn = vi.fn().mockImplementation((req) => {
+    if (req.kind === "engine/state/snapshot") return Promise.resolve(snapshot);
+    if (req.kind === "file/open") {
+      return Promise.resolve(opts.fileOpen ?? { ok: false, error: "browser-mode" });
+    }
+    return Promise.resolve({});
+  });
   return {
-    request: vi.fn().mockImplementation((req: { kind: string }) => {
-      if (req.kind === "engine/state/snapshot") return Promise.resolve(snapshot);
-      return Promise.resolve({});
-    }),
+    request,
     on: vi.fn().mockReturnValue(() => {}),
   } as unknown as Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
 }
@@ -55,5 +68,45 @@ describe("GroundTexturePanel", () => {
     const setSlot = calls.find((c) => c.kind === "engine/set/ground-texture");
     expect(setSlot).toBeDefined();
     expect(setSlot.params.slot).toBe(1);
+  });
+
+  it("clicking an empty Custom slot dispatches file/open with filter:\"ground\"", async () => {
+    const bridge = makeStubBridge({ fileOpen: { ok: false, error: "browser-mode" } });
+    render(<GroundTexturePanel bridge={bridge} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Custom slot 1 \(empty\)/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Custom slot 1 \(empty\)/ }));
+    await waitFor(() => {
+      const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      const open = calls.find((c) => c.kind === "file/open");
+      expect(open).toBeDefined();
+      expect(open.params).toEqual({ filter: "ground" });
+    });
+  });
+
+  it("on a resolved path the chain dispatches set-ground-slot-custom-path then set-ground-texture", async () => {
+    const bridge = makeStubBridge({ fileOpen: { ok: true, path: "C:/textures/dirt.dds" } });
+    render(<GroundTexturePanel bridge={bridge} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Custom slot 1 \(empty\)/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Custom slot 1 \(empty\)/ }));
+    await waitFor(() => {
+      const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0].kind);
+      expect(calls).toContain("engine/set/ground-slot-custom-path");
+      // The bundled-slot test's set-ground-texture dispatch (slot 0
+      // on snapshot mount? no — snapshot only) shouldn't pollute, but
+      // we explicitly look for the post-pick activation dispatch.
+      const customPathIdx = calls.indexOf("engine/set/ground-slot-custom-path");
+      const lastTextureIdx = calls.lastIndexOf("engine/set/ground-texture");
+      expect(lastTextureIdx).toBeGreaterThan(customPathIdx);
+    });
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const setPath = calls.find((c) => c.kind === "engine/set/ground-slot-custom-path");
+    expect(setPath.params).toEqual({ slot: 5, path: "C:/textures/dirt.dds" });
+    const activateCalls = calls.filter((c) => c.kind === "engine/set/ground-texture");
+    const lastActivate = activateCalls[activateCalls.length - 1];
+    expect(lastActivate.params).toEqual({ slot: 5 });
   });
 });
