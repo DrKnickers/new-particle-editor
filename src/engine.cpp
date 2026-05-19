@@ -855,7 +855,17 @@ bool Engine::Render()
 
 	// Now render to the screen
 	m_pDevice->SetRenderTarget(0, pScreenSurface);
-    m_pDevice->SetDepthStencilSurface(pDepthSurface);
+	// FD9b: in alpha-compositor mode the slot-0 RT is our off-screen
+	// D3DMULTISAMPLE_NONE surface. The auto-depth-stencil captured at
+	// the top of Render is multisampled (matches the swap chain), so
+	// restoring it here pairs an MS_NONE RT with an MSAA depth — D3D9
+	// silently drops the next draw on that mismatch. Keep the engine's
+	// own MS_NONE depth (m_pDepthStencilSurface) bound instead; the
+	// legacy Present path still wants the auto-depth restored.
+	if (!m_pAlphaCompositor)
+	{
+		m_pDevice->SetDepthStencilSurface(pDepthSurface);
+	}
 	SAFE_RELEASE(pScreenSurface);
     SAFE_RELEASE(pDepthSurface);
 	m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0,0,0), 0.0f, 0);
