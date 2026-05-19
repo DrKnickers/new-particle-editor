@@ -213,13 +213,21 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
     setOptimisticSelected(null);
   };
 
-  // FD10 (Group D follow-up): clear the optimistic override whenever
-  // fresh tracks arrive from the host. After the clear, `current.keys`
-  // is the source of truth and `singleSelected` falls back to its
-  // normal find() path.
-  useEffect(() => {
-    setOptimisticSelected(null);
-  }, [tracks]);
+  // FD10 (Group D follow-up): the optimistic override is STICKY —
+  // we deliberately do NOT clear it on every `tracks` refresh.
+  // Matches the legacy behavior the user described: after an insert
+  // the new key stays selected with its Time/Value populated until
+  // they explicitly pick something else. The override is replaced
+  // in handleCanvasAdd / handleKeyDragEnd / spinner handlers (so
+  // each mutation keeps the latest values surfaced), and cleared
+  // in the selection-change paths (handleKeyClick on a different
+  // key, handleCanvasClick clearing in Select mode, marquee, track
+  // switch). Clearing on tracks refresh would have caused a "flash
+  // correct → grey out" symptom because current.keys.find() can't
+  // always re-match the new key (float-precision around dedupe
+  // bumps, ordering with the tree/changed event, etc.) — and even
+  // when it would match, sticking on the override avoids the
+  // pointless re-render churn.
 
   // Click handler routed from CurveEditor. Plain click → replace
   // selection with the clicked key. Ctrl/Cmd+click → toggle. Shift+
@@ -228,6 +236,10 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   const handleKeyClick = useCallback(
     (time: number, event: React.MouseEvent | React.PointerEvent) => {
       const additive = event.ctrlKey || event.metaKey;
+      // Picking a key clears any sticky insert/drag override — the
+      // spinners should reflect the clicked key's stored value, not
+      // the leftover post-mutation cache.
+      setOptimisticSelected(null);
       setSelectedKeyTimes((prev) => {
         if (additive) {
           const next = new Set(prev);
@@ -242,6 +254,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   );
 
   const handleCanvasClick = useCallback(() => {
+    setOptimisticSelected(null);
     setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
   }, []);
 
@@ -252,6 +265,8 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   // clear selection" semantics most curve editors converge on.
   const handleCanvasMarqueeSelect = useCallback(
     (times: number[], shift: boolean) => {
+      // Marquee changes the selection set; drop any sticky override.
+      setOptimisticSelected(null);
       setSelectedKeyTimes((prev) => {
         if (shift) {
           if (times.length === 0) return prev;
@@ -352,6 +367,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
       })
       .then(() => {
         setSelectedKeyTimes(new Set());
+        setOptimisticSelected(null);
       })
       .catch(() => {
         // Silent — the panel will re-fetch on the next tree/changed
