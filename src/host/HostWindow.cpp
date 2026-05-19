@@ -1368,6 +1368,12 @@ int HostWindowImpl::Run(int nCmdShow)
     vc.hInstance     = hInstance;
     vc.lpszClassName = kHostViewportClassName;
     vc.hbrBackground = nullptr;  // D3D9 owns the surface
+    // Without an explicit hCursor on the popup's class, Windows
+    // leaves whatever cursor was active when the pointer left the
+    // previous window — so the main HWND's resize-edge cursor
+    // would persist while hovering inside the viewport popup if
+    // the user crossed in from the right border.
+    vc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     RegisterClassExW(&vc);
 
     hMain = CreateWindowExW(
