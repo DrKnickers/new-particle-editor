@@ -57,10 +57,18 @@
 // `afterId` — not surfaced through the keyboard path; only the future
 // "Paste below selection" menu would supply it).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Menubar from "@radix-ui/react-menubar";
 import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 import type {
   Bridge,
   EmitterTreeDto,
@@ -172,6 +180,36 @@ type RowProps = {
   commitEdit: () => void;
   cancelEdit: () => void;
 };
+
+// FD10 (Group A): mirror of MenuBar's OccludingMenubarContent for
+// ContextMenu. When the row's context menu mounts, we register its
+// bounding rect as a viewport occlusion so the AlphaCompositor's
+// alpha stamp opens a hole in the layered viewport popup at that
+// location — without it the right side of the menu gets overpainted
+// by the popup wherever it crosses the viewport rect.
+function OccludingContextMenuContent({
+  bridge,
+  occlusionId,
+  children,
+  ...rest
+}: ComponentProps<typeof ContextMenu.Content> & {
+  bridge: Bridge;
+  occlusionId: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  // pad=24, feather=24 — matches the menubar dropdown's shadow-xl ring
+  // so the popup alpha smoothly transitions from full-viewport at the
+  // padded outer edge to full-cut at the menu's actual outline.
+  useViewportOcclusion(bridge, occlusionId, ref, 24, 24);
+  return (
+    <ContextMenu.Content
+      className="z-50 min-w-[220px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+      {...rest}
+    >
+      <div ref={ref}>{children}</div>
+    </ContextMenu.Content>
+  );
+}
 
 function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
@@ -645,9 +683,10 @@ function EmitterRow({
           </button>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
-          <ContextMenu.Content
+          <OccludingContextMenuContent
+            bridge={bridge}
+            occlusionId="context-menu:emitter-tree"
             data-testid={`emitter-context-menu-${node.id}`}
-            className="z-50 min-w-[220px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
           >
             <ContextMenu.Item onSelect={handleRename} className={menuItemClass}>
               Rename
@@ -718,7 +757,7 @@ function EmitterRow({
             >
               Leave Link Group
             </ContextMenu.Item>
-          </ContextMenu.Content>
+          </OccludingContextMenuContent>
         </ContextMenu.Portal>
       </ContextMenu.Root>
     </li>
