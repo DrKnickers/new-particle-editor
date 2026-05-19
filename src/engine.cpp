@@ -1242,6 +1242,13 @@ void Engine::Reset()
         m_pShaders[i]->OnLostDevice();
     }
 	if (m_pBloomEffect != NULL) m_pBloomEffect->OnLostDevice();
+	// FD9b: the compositor's off-screen RT is D3DPOOL_DEFAULT, so
+	// it must be released before m_pDevice->Reset — otherwise Reset
+	// fails with D3DERR_INVALIDCALL and the engine is left in a
+	// half-broken state (textures null, shaders OnLost'd but device
+	// never reset). The Resize() call at the end of this function
+	// recreates the RT against the new back-buffer size.
+	if (m_pAlphaCompositor) m_pAlphaCompositor->ReleaseGpuResources();
 	if (FAILED(m_pDevice->Reset(&m_presentationParameters)))
 	{
 		throw wruntime_error(LoadString(IDS_ERROR_RENDERER_RESET));

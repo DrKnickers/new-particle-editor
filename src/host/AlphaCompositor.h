@@ -55,6 +55,14 @@ public:
     // std::runtime_error on allocation failure.
     void Resize(int width, int height);
 
+    // Release the D3DPOOL_DEFAULT render target (and friends) so
+    // IDirect3DDevice9::Reset can succeed — Reset returns
+    // D3DERR_INVALIDCALL if any POOL_DEFAULT resource is still
+    // outstanding. Engine::Reset must call this BEFORE m_pDevice->Reset,
+    // and the post-Reset Resize() recreates everything at the new
+    // back-buffer size.
+    void ReleaseGpuResources();
+
     // The off-screen ARGB render target Engine should set on slot 0
     // at the start of Render(). Returns nullptr until Resize() has
     // been called with a non-degenerate size.

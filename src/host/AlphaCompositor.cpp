@@ -117,6 +117,20 @@ void AlphaCompositor::Resize(int w, int h)
     m_impl->width  = w;
     m_impl->height = h;
 }
+void AlphaCompositor::ReleaseGpuResources()
+{
+    m_impl->offscreenRT.Reset();
+    m_impl->sysMemSurface.Reset();
+    if (m_impl->dibBitmap) { DeleteObject(m_impl->dibBitmap); m_impl->dibBitmap = nullptr; }
+    if (m_impl->memDC)     { DeleteDC(m_impl->memDC);         m_impl->memDC     = nullptr; }
+    m_impl->dibPixels = nullptr;
+    // Clear cached size so the next Resize doesn't short-circuit on
+    // "(w,h) unchanged" — width and height stay 0 until the next
+    // successful allocation.
+    m_impl->width  = 0;
+    m_impl->height = 0;
+}
+
 IDirect3DSurface9* AlphaCompositor::GetRenderTarget() const { return m_impl->offscreenRT.Get(); }
 void AlphaCompositor::SetOcclusion(std::string id, RECT rectClient, int feather)
 {
