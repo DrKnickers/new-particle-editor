@@ -18,6 +18,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <string>
+#include <vector>
+
 class ITextureManager;
 class IShaderManager;
 class IFileManager;
@@ -36,6 +39,7 @@ public:
                ITextureManager& textureManager,
                IShaderManager&  shaderManager,
                IFileManager&    fileManager,
+               const std::vector<std::wstring>& gameRoots,
                bool useDevUi   = false,
                bool useTestHost = false);
     ~HostWindow();

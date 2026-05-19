@@ -1,15 +1,15 @@
-# D5 — Parameterise `file/open` with a filter discriminator
+# D6 — Mods menu detection, activation, and persistence
 
-**Status:** in-progress
+**Status:** planning — awaiting user sign-off before implementation
 **Started:** 2026-05-19
-**Approach:** Option A from the design walkthrough — add
-`filter?: "alo" | "skydome" | "ground"` to the existing `file/open`
-request rather than introducing new bridge kinds. Fixes the skydome
-custom-slot UX and unblocks ground-texture custom slots in one motion.
+**Approach:** Reuse the legacy C++ mod-discovery code (battle-tested in
+`src/main.cpp:420-7124`); expose it through a new `mods/*` bridge
+namespace; replace the React placeholder at
+[MenuBar.tsx:472-491](web/apps/editor/src/components/MenuBar.tsx:472)
+with a dynamic list.
 
-(Previous plan content for FD10 Group A is preserved in the git
-history of this file — the FD10 work shipped and is documented in
-CHANGELOG.md.)
+(D5 plan + review preserved in this file's git history; D5 shipped on
+`lt-4` at commit `9ad01d0`.)
 
 ---
 
@@ -17,350 +17,302 @@ CHANGELOG.md.)
 
 ### Goal
 
-When a user clicks an empty Custom slot in the Background picker or the
-Ground Texture panel, the native `GetOpenFileNameW` dialog opens
-defaulting to a `*.dds;*.tga` filter (and a relevant title bar), so the
-user can immediately browse to a texture file without manually flipping
-the filter dropdown to "All files." File → Open is unchanged: it
-continues to default to `*.alo` and the existing recents/load chain.
-
-A successful pick on a Ground Texture custom slot now writes the path
-into the engine and activates the slot (previously a no-op).
+The Mods menu in the new-UI menubar replaces its single disabled
+`(none)` item with a dynamic list of installed mods grouped by engine
+(FoC first, then Base Game / EaW), sorted alphabetically within each
+group, just like legacy. The user can click an entry to activate that
+mod; a check mark indicates the current active mod. "Unmodded" is
+always at the top of the list. A "Refresh Mod List" item at the bottom
+forces a disk rescan. The active-mod selection persists across launches
+via the existing `HKCU\Software\AloParticleEditor\LastMod` registry key
+(legacy parity — no new registry key).
 
 ### In
 
-1. Add `filter?: "alo" | "skydome" | "ground"` to `file/open` request
-   params in `web/packages/bridge-schema/src/index.ts`. Default `"alo"`
-   for back-compat — every existing caller continues to behave
-   identically with zero changes.
-2. C++ dispatcher reads the field and switches `lpstrFilter` +
-   `lpstrTitle` accordingly. Both `"skydome"` and `"ground"` use the
-   same `*.dds;*.tga` filter (only the title differs).
-3. `BackgroundPicker` passes `filter: "skydome"` when invoking the
-   picker for slots 9/10/11. Stale header comment refreshed.
-4. `GroundTexturePanel` wires the full pick → `set/ground-slot-custom-path`
-   → `set/ground-texture { slot }` chain (mirrors BackgroundPicker)
-   with `filter: "ground"`. Stale TODO refreshed.
-5. New vitest specs cover both panels' chain behaviour.
-6. Mock + bridge-contract comments refreshed; mock behaviour
-   intentionally unchanged.
-7. CHANGELOG entry + HANDOFF refresh.
+1. New bridge surface (`web/packages/bridge-schema/src/index.ts`):
+   - `mods/list` — query, returns `{ mods: ModDescriptor[]; activePath: string | null }`.
+   - `mods/select` — `{ path: string | null }` (null = Unmodded). Activates the mod, persists to registry, triggers the engine-side hot-swap.
+   - `mods/refresh` — re-scans the on-disk Mods directories. Returns the same shape as `mods/list`.
+   - `ModDescriptor` type: `{ path: string; folderName: string; nickname: string; isFoC: boolean }`.
+2. `EngineStateDto` gains optional `activeModPath: string | null`. Snapshots and `engine/state/changed` events now carry the active mod so subscribed components react without explicit re-fetch.
+3. C++ dispatcher handlers in `src/host/BridgeDispatcher.cpp` for the three new kinds. Implementation strategy decided after the discovery step below.
+4. MockBridge + TestHostBridge stubs for the new kinds + the new DTO field.
+5. React MenuBar populates the mods menu from a `mods/list` fetch at mount; subscribes to `engine/state/changed` to update the check mark; calls `mods/select` on click; calls `mods/refresh` from the Refresh item.
+6. Vitest specs for the React side (menu renders the grouped list, click dispatches the right call, check mark tracks `activeModPath`).
+7. Playwright contract spec asserting `mods/list` returns the expected shape against the live host (real content depends on what's installed on the dev machine — spec verifies shape, not specific mods).
+8. CHANGELOG entry + HANDOFF refresh + ROADMAP update closing out D6 (the last "make a stub work" item from FD10 Group D).
 
 ### Out
 
-- New bridge kinds (Option B was rejected for surface-area + lost
-  composability).
-- A separate `file/open-texture` primitive (Option C was rejected as
-  near-duplicate of `file/open` with no current filter divergence).
-- Persisting last-used directory across pickers — future polish.
-- Force Align registry parity, mods menu (D6), or any other handoff
-  backlog item — explicitly deferred.
+- **Nickname editing.** `ModNicknameDialog.tsx` already exists in the React app but is currently UI-only (no bridge call wired). The Mods menu can *display* nicknames if the legacy registry already has them, but editing nicknames is a separate (small) follow-up — `mods/set-nickname` and wiring the dialog. Not in this dispatch.
+- **Multi-mod stacks.** Legacy supports a single active mod path at a time. Same here. No "load mod A then mod B as overlay."
+- **Workshop / Steam mod detection.** Legacy may or may not handle `Documents/Petroglyph/...` paths (recon was unclear; discovery step will confirm). If legacy doesn't, D6 doesn't either — parity is the rule.
+- **Hot-swap correctness audit.** The legacy `SelectMod()` does six things (FileManager swap, registry write, palette refresh, thumbnail cache clear, menu rebuild, in-engine texture/shader hot-swap). D6 will call the legacy's side-effect chain wholesale (via refactor — see Architecture). Auditing whether each step is still correct in --new-ui mode is out of scope; we assume legacy parity == correct.
+- **Test fixtures for offline mod-discovery.** The contract test runs against the live exe; whatever mods the dev machine has, that's what shows. Synthesising test mod directories is overkill.
 
 ---
 
 ## 2. What the codebase already gives us
 
-- **`file/open` schema** declared at
-  [bridge-schema/src/index.ts:362](web/packages/bridge-schema/src/index.ts:362),
-  response shape at line 586.
-- **C++ dispatcher case** at
-  [BridgeDispatcher.cpp:1239-1266](src/host/BridgeDispatcher.cpp:1239) —
-  parses `params.path`, falls through to `GetOpenFileNameW` if absent.
-- **`GetOpenFileNameW` invocation** at
-  [BridgeDispatcher.cpp:1259](src/host/BridgeDispatcher.cpp:1259) with
-  hardcoded `lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0"`.
-- **MockBridge handler** at
-  [mock.ts:430-442](web/apps/editor/src/bridge/mock.ts:430) — returns
-  `{ ok: false, error: "browser-mode" }` when no path is supplied.
-- **BackgroundPicker chain** already in place at
-  [BackgroundPicker.tsx:104-122](web/apps/editor/src/screens/BackgroundPicker.tsx:104).
-  Stale "deferred" header comment at lines 5–6.
-- **GroundTexturePanel no-op handler** at
-  [GroundTexturePanel.tsx:125-135](web/apps/editor/src/screens/GroundTexturePanel.tsx:125)
-  with TODO comment at lines 21–25.
-- **Engine setters** for ground custom paths declared at
-  [bridge-schema/src/index.ts:375](web/packages/bridge-schema/src/index.ts:375)
-  (`engine/set/ground-slot-custom-path`) — already exists, just unused
-  from React today.
-- **Existing GroundTexturePanel test** at
-  [GroundTexturePanel.test.tsx](web/apps/editor/src/screens/__tests__/GroundTexturePanel.test.tsx) —
-  one spec for bundled slot dispatch; we'll extend.
-- **Mock contract test** at
-  [bridge-contract.test.ts:328](web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts:328) —
-  asserts `file/open` with no path resolves to `{ ok: false, error: "browser-mode" }`.
-  Still passes; we'll add filter-aware cousins if needed.
+### Legacy C++ (battle-tested, ~700 LOC in `src/main.cpp`)
+
+- **`ModEntry` struct** at [`src/main.cpp:420-427`](src/main.cpp:420) — `{ path, folderName, nickname, isFoC }`. Identical to what the bridge will return.
+- **`ScanModsDir()`** at [`src/main.cpp:6872-6900`](src/main.cpp:6872) — walks one Mods directory via `FindFirstFile`, filters dot/hidden/system entries.
+- **`DiscoverMods()`** at [`src/main.cpp:6902-6938`](src/main.cpp:6902) — scans both FoC (`corruption\Mods`) and EaW (`GameData\Mods`); sorts FoC-first then alphabetically.
+- **`RebuildModsMenu()`** at [`src/main.cpp:6966-7068`](src/main.cpp:6966) — legacy popup-menu builder; not directly reusable (it's Win32 menu construction) but the *grouping logic* is the spec for the React side.
+- **`SelectMod()`** at [`src/main.cpp:7077-7124`](src/main.cpp:7077) — the six-step side-effect chain. Calls `fileManager->SetModPath`, `WriteLastMod`, updates texture palette, clears thumbnail cache, rebuilds menu, hot-swaps in-engine.
+- **`ReadLastMod()` / `WriteLastMod()`** at [`src/main.cpp:7763`](src/main.cpp:7763) and [`src/main.cpp:3192-3203`](src/main.cpp:3192) — registry persistence under `HKCU\Software\AloParticleEditor\LastMod` (REG_SZ).
+- **`APPLICATION_INFO::selectedModPath`** at [`src/main.cpp:575`](src/main.cpp:575) — current active mod (empty = unmodded).
+- **`APPLICATION_INFO::mods`** at [`src/main.cpp:574`](src/main.cpp:574) — full vector of discovered ModEntry.
+
+### `FileManager` API
+
+[`src/managers.h:36-52`](src/managers.h:36) — `SetModPath(const std::wstring&)`, `GetModPath() const`. The actual loose-file resolution priority handling is internal.
+
+### Existing React surface
+
+- **Mods menu placeholder** at [`web/apps/editor/src/components/MenuBar.tsx:472-491`](web/apps/editor/src/components/MenuBar.tsx:472) — single disabled `(none)` Menubar.Item with a "Phase 4.1 follow-up" TODO comment.
+- **MenuBar already subscribes to snapshot** for File menu state (dirty flag, current path). Reading `activeModPath` off the DTO will use the same pattern.
+- **`ModNicknameDialog.tsx`** exists but isn't called from anywhere currently — out of scope for D6 but worth noting it's already in the React tree.
+- **Radix Menubar.Item** has built-in close-on-select; no custom event-handling needed for the menu UX.
+
+### Nothing on the bridge schema yet
+
+Grep confirmed: zero `mods/`, `modNickname`, or `activeMod` declarations in `bridge-schema/src/index.ts`. D6 builds the namespace from scratch.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-### Schema delta (one optional field, fully back-compatible)
+### Schema delta (additive only)
 
 ```ts
-| {
-    kind: "file/open";
-    params: {
-      path?: string;
-      filter?: "alo" | "skydome" | "ground";
-    };
-  }
+// New named type:
+export type ModDescriptor = {
+  path: string;
+  folderName: string;
+  nickname: string;   // empty if no user nickname set
+  isFoC: boolean;
+};
+
+// EngineStateDto adds (after currentFilePath):
+activeModPath: string | null;  // null = Unmodded
+
+// New Request kinds:
+| { kind: "mods/list";    params: Record<string, never> }
+| { kind: "mods/select";  params: { path: string | null } }
+| { kind: "mods/refresh"; params: Record<string, never> }
+
+// ResponseFor:
+R extends { kind: "mods/list" }    ? { mods: ModDescriptor[]; activePath: string | null } :
+R extends { kind: "mods/select" }  ? { ok: true; activePath: string | null } | { ok: false; error: string } :
+R extends { kind: "mods/refresh" } ? { mods: ModDescriptor[]; activePath: string | null } :
 ```
 
-Response shape unchanged. Existing TypeScript callers without `filter`
-type-check cleanly — `filter` is optional.
+### C++ host side — three steps, in this order
 
-### Dispatcher delta
+**Step 0 outcome (completed 2026-05-19 — pre-implementation discovery):**
+
+`APPLICATION_INFO` is allocated as a local in legacy `WinMain` at
+[`src/main.cpp:8245`](src/main.cpp:8245), **unreachable when `--new-ui`
+is passed** because WinMain returns early at line 8233 after dispatching
+to `host::Run()`. The new-UI host literally never sees it. So:
+
+- 3a (pass APPLICATION_INFO pointer to dispatcher) — **impossible**, nothing to pass.
+- 3b (extract `ModManager` class shared between legacy + new-UI) — **required**.
+- 3c (duplicate discovery code) — rejected.
+
+Adopting **3b**. Refactor budget: ~150 LOC new + ~85 LOC touched, inside
+the ~250 LOC cap set earlier.
+
+**Sub-decisions resolved (after design discussion):**
+
+1. **ModManager owns the engine hot-swap (atomic).** `ModManager::SelectMod(path)`
+   handles the whole side-effect chain: FileManager swap → registry write →
+   palette swap → thumbnail cache clear → engine `ReloadShaders` +
+   `ReloadTextures`. Callers do one call, no checklist. Rejected the
+   alternative (à la carte) because forgetting a step produces silent
+   staleness — the worst kind of bug. The legacy `RebuildBackgroundPreviewBitmap`,
+   skydome-picker `SendMessage`, and `InvalidateRect(hRenderWnd)` stay
+   in the legacy SelectMod *wrapper* (they're Win32-specific and don't
+   apply to --new-ui).
+2. **DTO carries `activeModPath: string | null` (path-only).** Standard
+   `selectedId + items[]` pattern. Single source of identity. Rejected
+   full-descriptor variant because it would duplicate data and create
+   nickname-staleness risk if nickname editing ships later.
+3. **`mods/list` is a separate request.** Data cadence separation —
+   the mod list changes rarely, snapshots fire constantly. Active path
+   rides snapshot for React reactivity; full list comes via a one-shot
+   `mods/list` fetched once at MenuBar mount and refetched on Refresh.
+
+**Step 1 — Extract `ModManager` from legacy `SelectMod()`.** New class in
+`src/host/ModManager.{h,cpp}`:
 
 ```cpp
-std::string filterId = "alo";
-if (auto fit = params.find("filter"); fit != params.end() && fit->is_string()) {
-    filterId = fit->get<std::string>();
-}
+class ModManager {
+public:
+  ModManager(IFileManager* fileManager);
 
-const wchar_t* lpstrFilter = L"Alo files\0*.alo\0All files\0*.*\0";
-const wchar_t* lpstrTitle  = L"Open particle system";
-if (filterId == "skydome") {
-    lpstrFilter = L"Texture files\0*.dds;*.tga\0All files\0*.*\0";
-    lpstrTitle  = L"Open skydome texture";
-} else if (filterId == "ground") {
-    lpstrFilter = L"Texture files\0*.dds;*.tga\0All files\0*.*\0";
-    lpstrTitle  = L"Open ground texture";
-}
-ofn.lpstrFilter = lpstrFilter;
-ofn.lpstrTitle  = lpstrTitle;
-```
+  // Two-step engine setup — engine pointer is not available at construction
+  // time in --new-ui mode (BridgeDispatcher is constructed before Engine).
+  void SetEngine(Engine* engine);
 
-Defensive parse (default `"alo"` on missing or non-string field) keeps
-existing callers safe.
+  // Discovery + restoration.
+  void DiscoverMods(const std::vector<std::wstring>& gameRoots);
+  void RestoreLastSelectedMod();  // reads HKCU\...\LastMod, falls back to empty if path no longer exists
 
-### BackgroundPicker delta
+  // Atomic side-effect chain: FileManager → registry → palette → cache → engine reload.
+  // Returns false if any step fails; partial-success states recoverable by retrying SelectMod.
+  bool SelectMod(const std::wstring& modPath);
 
-```ts
-const r = await bridge.request({
-  kind: "file/open",
-  params: { filter: "skydome" },
-});
-```
+  // Read-only accessors.
+  const std::vector<ModEntry>& GetMods() const { return mods; }
+  const std::wstring& GetSelectedModPath() const { return selectedModPath; }
 
-Single-field addition. Rest of the chain unchanged.
-
-### GroundTexturePanel delta
-
-Replace the current no-op:
-
-```ts
-const handleCustomClick = (slot: number, isEmpty: boolean) => {
-  if (isEmpty) {
-    void (async () => {
-      const r = await bridge.request({
-        kind: "file/open",
-        params: { filter: "ground" },
-      });
-      if (!r.ok || !r.path) return;
-      await bridge.request({
-        kind: "engine/set/ground-slot-custom-path",
-        params: { slot, path: r.path },
-      });
-      await bridge.request({
-        kind: "engine/set/ground-texture",
-        params: { slot },
-      });
-    })();
-    return;
-  }
-  handleSelectSlot(slot);
+private:
+  IFileManager* fileManager;
+  Engine*       engine = nullptr;
+  std::vector<ModEntry> mods;
+  std::wstring  selectedModPath;
 };
 ```
 
-Mirrors BackgroundPicker's chain shape exactly. Engine setters already
-exist on the bridge.
+`ModEntry` moves from a `src/main.cpp`-private struct into a public
+struct in `ModManager.h` (or a small dedicated `ModEntry.h`).
 
-### Mock + comment refresh
+Legacy `SelectMod()` becomes a thin wrapper:
 
-MockBridge behaviour unchanged. Comment at
-[mock.ts:432-434](web/apps/editor/src/bridge/mock.ts:432) refreshed to
-note that `filter` is accepted but ignored (browser mode has no native
-picker).
+```cpp
+static void SelectMod(APPLICATION_INFO* info, const wstring& modPath) {
+  if (!info->modManager->SelectMod(modPath)) return;
+  // Win32-only finalisation steps:
+  RebuildBackgroundPreviewBitmap(info);
+  if (info->hSkydomePicker && IsWindowVisible(info->hSkydomePicker))
+    SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
+  RebuildModsMenu(info);
+  if (info->hRenderWnd)
+    InvalidateRect(info->hRenderWnd, NULL, TRUE);
+}
+```
 
-Stale header comments in both screens rewritten to describe what the
-code actually does.
+New-UI bridge handlers don't need any of the Win32 finalisation; React
+re-renders from the DTO once `engine/state/changed` fires.
+
+**Step 2 — Dispatcher handlers in `src/host/BridgeDispatcher.cpp`:**
+
+- `mods/list` — return `m_appInfo->mods` and `m_appInfo->selectedModPath` (or the ModManager equivalent), JSON-encoded.
+- `mods/select` — call the refactored `SelectMod(path)`. Emit `engine/state/changed` (snapshot now carries the new `activeModPath`).
+- `mods/refresh` — call `DiscoverMods()` to repopulate; return the new list. Active path stays; if it's no longer present on disk, fall back to Unmodded (matching legacy `ReadLastMod` startup behaviour).
+
+**Step 3 — DTO build site.** Wherever `BuildEngineStateSnapshot` lives in `BridgeDispatcher.cpp`, add `activeModPath` to the JSON. Source: `m_appInfo->selectedModPath` (UTF-16 → UTF-8 via existing `WideToUtf8` helper).
+
+### React side
+
+In [`MenuBar.tsx`](web/apps/editor/src/components/MenuBar.tsx):
+
+1. New `useEffect` to fetch `mods/list` at mount, store in component state. Re-fetch on `mods/refresh` activation.
+2. Read `activeModPath` from the snapshot store (already subscribed for File menu state).
+3. Replace the `(none)` Menubar.Item block with:
+   - `<Menubar.Item>Unmodded</Menubar.Item>` (with check if `activeModPath == null`).
+   - `<Menubar.Separator />`
+   - For each FoC mod: `<Menubar.Item>{nickname || folderName}</Menubar.Item>` (grouped, separator between FoC and Base Game).
+   - For each Base Game mod: same.
+   - `<Menubar.Separator />`
+   - `<Menubar.Item>Refresh Mod List</Menubar.Item>`
+4. Click handler on each item dispatches `mods/select { path }` (or `mods/refresh` for the last item).
+5. The check mark uses the same `Check` Lucide icon the File menu already imports.
+
+### MockBridge
+
+Stubs return a synthetic 2-element mod list (one FoC, one Base Game) and a defaulted `activePath: null`. `mods/select` updates the in-memory state and fires `engine/state/changed` so the rest of the React tree sees it. No real disk scan.
 
 ---
 
 ## 4. Risks & mitigations
 
-1. **Existing callers without `filter`.** Risk: any existing call that
-   doesn't pass `filter` could regress to a non-default behaviour.
-   *Mitigation:* `filter` is optional with default `"alo"` on both sides
-   (TypeScript optional + C++ defaults to `"alo"` when the field is
-   absent or non-string). Grep verifies only BackgroundPicker, the
-   MenuBar's File → Open, and the recents/drag-drop paths invoke
-   `file/open`; only BackgroundPicker is touched.
+1. **Step 0 discovery returns "APPLICATION_INFO not available in --new-ui mode."** Most likely outcome based on the dispatcher's `m_currentFilePath` pattern. *Mitigation:* fall through to option 3b (extract `ModManager`). Adds maybe 200 LOC of refactor but keeps both UI modes correct. If the refactor blows scope, STOP and re-plan with the user — the alternative of duplicating discovery (3c) is unacceptable.
 
-2. **`lpstrDefExt` not set for texture pickers.** Risk: GetOpenFileName
-   without `lpstrDefExt` might surprise users typing a bare filename.
-   *Mitigation:* this is an *open* dialog (`OFN_FILEMUSTEXIST`),
-   not a save dialog — `lpstrDefExt` only affects save dialogs per the
-   Win32 OPENFILENAME docs. Existing `file/open` for `.alo` also doesn't
-   set it. No-op.
+2. **`SelectMod()` has side effects that don't translate to --new-ui.** E.g., a Win32 menu rebuild step. *Mitigation:* the refactor in Step 1 explicitly removes Win32-menu work from the shared core; that work stays in the legacy `WM_COMMAND` handler and is a no-op from the bridge path (React re-renders from DTO instead).
 
-3. **Test coverage gap for the dispatcher's filter switch.** Risk: the
-   C++ filter switch could regress to `.alo` for skydome/ground.
-   *Mitigation:* the modal can't be driven from Playwright (no DOM
-   surface). Accept the gap; cover by (a) a vitest spec asserting the
-   React side sends `filter: "skydome"` / `"ground"`, and (b) a manual
-   smoke pass in the verification checklist below. The dispatcher
-   change is small and code-review-grade.
+3. **Active-mod path stored in registry as wide string; bridge transmits UTF-8.** Path string round-trips need to use the existing `Utf8ToWide` / `WideToUtf8` helpers. *Mitigation:* convention is consistent in the dispatcher (every other path field does this); follow the same pattern. Catch encoding bugs in the Playwright contract spec by asserting `mods/select` → `mods/list` round-trips a non-ASCII path if one is available.
 
-4. **Stale comments still claim the work is deferred.** Risk: future
-   contributors trust the header text and pursue a phantom fix.
-   *Mitigation:* refresh both screens' header comments + the mock case
-   comment in the same diff. Update HANDOFF.md to reflect D5 closure.
+4. **Legacy and new-UI menus disagree on which mod is active.** If a user runs legacy and new-UI alternately, both read `HKCU\...\LastMod` at startup; both write on selection. Cross-mode consistency is automatic because the registry is the single source of truth. *Mitigation:* none needed; this just works by construction. (Force-Align lighting had the same shape and shipped on registry parity.)
 
-5. **MockBridge browser-mode UX change.** Risk: a dev clicking an empty
-   Custom slot in browser mode now still sees nothing happen (mock
-   returns ok:false). Previously: in BackgroundPicker, same. In
-   GroundTexturePanel, an actual no-op. The new behaviour is "silently
-   no-op in browser mode," which matches the existing Background flow.
-   *Mitigation:* documented as intentional in the GroundTexturePanel
-   header comment. Browser mode is not for end users.
+5. **A `mods/select` against a no-longer-existing path.** User selects mod X, deletes mod X on disk, opens the editor again. *Mitigation:* legacy's `ReadLastMod` startup path already falls back to Unmodded if the path is gone. New-UI host runs the same check at startup, so the DTO comes up with `activeModPath: null` and the menu shows Unmodded checked.
+
+6. **Mock fixtures don't reflect real installed mods.** Browser-mode dev experience shows fake mods. *Mitigation:* document in MockBridge comment, matches the pattern of mock fixtures elsewhere (e.g., the bundled skydome gradients are static CSS, not real textures).
+
+7. **Playwright spec brittleness on missing mod-state-changed events.** Contract spec dispatches `mods/select` and checks the snapshot reflects the new active path. If the host doesn't emit `engine/state/changed` after the swap, the spec falls back to polling a fresh snapshot. *Mitigation:* matches existing pattern (e.g., `engine/set/skydome-slot` in `background-picker.spec.ts`).
 
 ---
 
 ## 5. Testing & verification
 
-### Vitest (new specs target +4, taking 183 → 187)
+### Vitest (target +4 to +6 specs; 188 → 192+)
 
-**BackgroundPicker** (`web/apps/editor/src/screens/__tests__/BackgroundPicker.test.tsx`, new file):
+**MenuBar mods menu** (extend `web/apps/editor/src/components/__tests__/MenuBar.test.tsx`):
 
-- [ ] Clicking an empty Custom slot dispatches `file/open` with
-      `params.filter === "skydome"`.
-- [ ] When `file/open` resolves `{ ok: true, path: "C:/x.dds" }`, the
-      handler dispatches `engine/set/skydome-custom-path` (with slot +
-      path) then `engine/set/skydome-slot` (with slot), in order.
-- [ ] When `file/open` resolves `{ ok: false, ... }`, the chain
-      aborts — no follow-up dispatches.
+- [ ] Mods menu renders "Unmodded" + the mock fixture's 2 entries + "Refresh Mod List", in that order.
+- [ ] Clicking a mod entry dispatches `mods/select` with the right path.
+- [ ] Clicking Unmodded dispatches `mods/select` with `path: null`.
+- [ ] Clicking Refresh dispatches `mods/refresh`.
+- [ ] Check mark renders next to the entry whose path matches `snapshot.activeModPath`.
 
-**GroundTexturePanel** (extend
-`web/apps/editor/src/screens/__tests__/GroundTexturePanel.test.tsx`):
+### Playwright (target +2 contract specs; 77 → 79)
 
-- [ ] Clicking an empty Custom slot (e.g. slot 5) dispatches `file/open`
-      with `params.filter === "ground"`.
-- [ ] When `file/open` resolves with a path, the chain dispatches
-      `engine/set/ground-slot-custom-path` then `engine/set/ground-texture`.
+**`mods-contract.spec.ts`** (new file):
 
-### Manual native smoke (post-build)
+- [ ] `mods/list` resolves to an object with `mods: array` and `activePath: string|null` — shape only, content depends on dev machine.
+- [ ] `mods/select` with `path: null` succeeds; subsequent snapshot has `activeModPath: null`.
 
-- [ ] `ParticleEditor.exe --new-ui`, open Background → click empty
-      Custom slot. Dialog title reads "Open skydome texture", filter
-      dropdown defaults to "Texture files (\*.dds;\*.tga)". Cancel.
-- [ ] Pick a real `.dds` from `Data/Art/Skydomes/` or similar — verify
-      the slot tile updates with the basename and the skydome renders.
-- [ ] View → Ground Texture → click empty Custom slot. Dialog title
-      reads "Open ground texture", same filter default.
-- [ ] Pick a `.dds` — slot tile updates, ground plane renders with the
-      texture.
-- [ ] File → Open (menu or `Ctrl+O`) — dialog title still reads "Open
-      particle system", filter defaults to "Alo files (\*.alo)".
-      Regression check.
+### Manual native smoke
+
+- [ ] Launch `--new-ui`. Open Mods menu. If you have mods installed under `<EaW>/GameData/Mods/` or `<EaW>/corruption/Mods/`, they appear grouped and alphabetised. If not, only "Unmodded" + "Refresh".
+- [ ] Click a mod. Check mark moves. Active mod path persists across launch (close + relaunch, check mark is still there).
+- [ ] Click Unmodded. Check mark moves to Unmodded. Persists.
+- [ ] Click Refresh. Menu re-fetches without visible UI thrash. (If you add a new mod folder mid-session and then click Refresh, it appears.)
+- [ ] Regression: legacy mode (`--legacy-ui`, no `--new-ui`) Mods menu still works exactly as before. Both modes agree on the active mod after restart.
 
 ### Gate counts
 
 - [ ] `pnpm build` clean (0 TS errors).
-- [ ] Vitest **187 / 187**.
-- [ ] `pnpm test:native` **77 / 77**.
-- [ ] MSBuild Debug x64 clean (preexisting LIBCMTD warning OK).
+- [ ] Vitest **192+ / 192+**.
+- [ ] `pnpm test:native` **79 / 79**.
+- [ ] MSBuild Debug x64 clean.
 
-### Debug instrumentation
+---
 
-None planned — the filter switch is small and easily code-reviewable.
+## 6. Pre-implementation investigations (Step 0)
+
+Before writing any new code, answer these in order:
+
+1. Does `APPLICATION_INFO` exist in `--new-ui` mode, or only in legacy WinMain? Look at `src/main.cpp`'s WinMain to see who allocates APPLICATION_INFO and whether `useNewUi`/`useDevUi` skips that path.
+2. If APPLICATION_INFO exists in --new-ui, where is `BridgeDispatcher` constructed and can we pass an APPLICATION_INFO pointer in? Look at `src/host/HostWindow.cpp` near the `BridgeDispatcher` construction.
+3. Read `SelectMod()` in full (lines 7077-7124). Identify which steps are Win32-specific and which are state mutations. Sketch the refactor.
+
+These answers determine whether option 3a (pass pointer) or 3b (extract ModManager) is the right architecture. The plan caps the refactor budget: if 3b looks like > ~250 LOC of touched code, STOP and discuss with the user before continuing.
 
 ---
 
 ## Implementation steps (mirrored in TaskList)
 
-1. Schema: add `filter?` to `file/open`.
-2. Dispatcher: parse `filter`, switch `lpstrFilter` + `lpstrTitle`.
-3. BackgroundPicker: pass `filter: "skydome"`; refresh header comment.
-4. GroundTexturePanel: wire chain; refresh header comment.
-5. Mock + bridge-contract: refresh comment (no behaviour change).
-6. New BackgroundPicker.test.tsx with 3 specs.
-7. Extend GroundTexturePanel.test.tsx with 2 specs.
-8. Verify gates (`pnpm build` → `pnpm test` → MSBuild → `pnpm test:native`).
+After Step 0 discovery returns:
+
+1. Refactor `SelectMod()` into a callable core (Step 1).
+2. Bridge schema: add `ModDescriptor`, three new request kinds, `activeModPath` on DTO.
+3. C++ dispatcher: implement `mods/list`, `mods/select`, `mods/refresh`; extend snapshot builder.
+4. MockBridge + TestHostBridge: stub the three kinds + DTO field.
+5. React MenuBar: replace placeholder, wire fetch + dispatch + check mark.
+6. Vitest specs for MenuBar mods interactions.
+7. Playwright contract spec for `mods/list` + `mods/select` round-trip.
+8. Build, vitest, MSBuild, test:native.
 9. CHANGELOG entry.
-10. HANDOFF.md refresh (close out D5 from "What's left").
-11. Commit.
+10. HANDOFF refresh (remove D6 from "What's left"; this closes out FD10 Group D's "make a stub work" items entirely).
+11. ROADMAP update if D6 is the last item gating any [LT-4] milestone.
+12. Commit + FF into `lt-4`.
 
 ---
 
 ## Review
 
-**Shipped as designed.** Option A (parameterised filter) implemented in
-~50 LOC delta across schema, dispatcher, two React panels, mock, and
-two test files. All gates green:
-
-- `pnpm build`: 0 TS errors, vite bundle rebuilt clean.
-- Vitest: **188 / 188** (+5 from baseline 183 — plan target was 187 but
-  BackgroundPicker landed 3 specs not 2; the third covers the
-  cancel-path abort, which is worth keeping).
-- MSBuild Debug x64: clean (preexisting LIBCMTD warning only).
-- `pnpm test:native`: **77 / 77** (no regression).
-
-### Surprises
-
-1. **The handoff doc was stale about what D5 even was.** It described
-   skydome Custom slots as "no-ops" — in reality they were chained but
-   mis-filtered. The actual no-op surface was the ground-texture
-   custom slots. Option A turned out to solve both surfaces with one
-   schema delta. This is exactly the "trust but verify" pattern in
-   CLAUDE.md — the code shape disagreed with the documentation.
-
-2. **The post-pick `.alo` loader was load-bearing.** The first cut of
-   the dispatcher edit only changed `lpstrFilter` / `lpstrTitle` and
-   left the load chain intact, which would have routed picked `.dds`
-   paths through `LoadParticleSystem` and surfaced "load failed."
-   Caught mid-implementation via mental walk-through of the dispatcher
-   case before testing. Fix: pull filter resolution above the
-   `if (path.empty())` block, add a `if (filterId != "alo") { return
-   path; }` gate immediately after the pick. The gate is defensive
-   beyond the immediate need — it protects future callers that pass
-   `path` + non-`"alo"` filter explicitly.
-
-3. **Test count went +5, not +4 as planned.** The BackgroundPicker
-   test added a third spec covering the cancellation path
-   (`{ ok: false }` aborts the chain with no follow-ups). Worth
-   keeping — symmetric with the resolved-path spec.
-
-### Lessons logged
-
-None new. L-006 (sticky optimistic state) wasn't relevant here. The
-"verify dispatcher invariants before extending the schema" pattern is
-already implicit in CLAUDE.md's pre-handoff walk-through discipline
-and was caught by it.
-
-### What's now possible
-
-- File → Open still does the right thing (default `.alo` filter,
-  loads and commits as the current file).
-- Background panel custom slots open the texture picker with the
-  right filter and chain through cleanly.
-- Ground texture custom slots WORK for the first time (previously
-  no-op).
-- Future texture-pick surfaces (particle textures, decals, etc.) can
-  add a new value to the `filter` enum without growing the bridge
-  surface. The schema is genuinely extensible.
-
-### Deferred (deliberately, no follow-up needed yet)
-
-- Persisting last-used directory across pickers — small UX polish; ask
-  if anyone trips over it.
-- A separate `file/open-texture` primitive — re-evaluate only if
-  skydome and ground filters need to diverge (e.g., skydome supports
-  `.hdr`, ground supports `.png`).
-- Force Align registry parity, D6 mods menu — separate items.
-
-### Manual native smoke
-
-Not yet run by Claude — the picker is a native modal that needs human
-verification of the dialog title + default filter. Listed in the
-testing checklist for the user to confirm on next launch.
+(filled in after work completes)

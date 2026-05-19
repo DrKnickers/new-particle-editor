@@ -46,6 +46,7 @@
 
 #include "../engine.h"
 #include "../managers.h"
+#include "../ModManager.h"
 #include "../MouseCursor.h"
 #include "../ParticleSystem.h"
 #include "../ParticleSystemInstance.h"
@@ -324,6 +325,12 @@ struct HostWindowImpl
     std::unique_ptr<BridgeDispatcher>  dispatcher;
     FPSMeasurer                        fpsMeasurer;
 
+    // LT-4 D6: mod state shared with React. ModManager constructed in
+    // the impl ctor (DiscoverMods + RestoreLastSelectedMod run before
+    // any UI shows); SetEngine called in WM_CREATE once the Engine
+    // exists. Passed to BridgeDispatcher via SetModManager.
+    std::unique_ptr<::ModManager>      modManager;
+
     // LT-4 render loop bookkeeping. m_lastRenderTime drives dt for the
     // per-frame SpawnerDriver::Tick — matches the legacy
     // `g_spawnerLastFrameTime` flow in src/main.cpp:1572. First frame
@@ -390,6 +397,7 @@ struct HostWindowImpl
                    ITextureManager& tex,
                    IShaderManager&  shd,
                    IFileManager&    fil,
+                   const std::vector<std::wstring>& gameRoots_,
                    bool devUi    = false,
                    bool testHost = false)
         : hInstance(inst)
@@ -400,7 +408,14 @@ struct HostWindowImpl
         , useTestHost(testHost)
         , layout(nullptr)
         , accelerator()
+        , modManager(std::make_unique<ModManager>(&fil, gameRoots_))
     {
+        // LT-4 D6: discover installed mods and restore the
+        // previously-active one from the registry before any UI shows.
+        // Both calls are quick; they don't touch GPU / WebView2 state.
+        // Engine pointer is bound later via SetEngine() in WM_CREATE.
+        modManager->DiscoverMods();
+        modManager->RestoreLastSelectedMod();
     }
 
     void Log(const char* fmt, ...);
@@ -842,6 +857,9 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 hwnd, hViewport, textureManager, shaderManager, fileManager);
             if (dispatcher) dispatcher->SetEngine(engine.get());
             layout.SetEngine(engine.get());
+            // LT-4 D6: bind engine to ModManager so subsequent
+            // SelectMod() calls can hot-swap shaders + textures.
+            if (modManager) modManager->SetEngine(engine.get());
             Log("[host] Engine constructed OK\n");
         }
         catch (const std::exception& e)
@@ -1402,6 +1420,11 @@ int HostWindowImpl::Run(int nCmdShow)
     dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, accelerator, emitFn);
     dispatcher->SetUndoStack(&undoStack);
     dispatcher->SetHostHwnd(hMain);
+    // LT-4 D6: ModManager is already discovered + restored in the impl
+    // ctor. Bind it so the dispatcher can service `mods/list`,
+    // `mods/select`, `mods/refresh` and include `activeModPath` in
+    // snapshots.
+    dispatcher->SetModManager(modManager.get());
 
     // WM_CREATE fired during CreateWindowEx; viewport + engine now exist.
     // Wire the engine into the dispatcher (it was null when we constructed
@@ -1504,10 +1527,11 @@ HostWindow::HostWindow(HINSTANCE hInstance,
                        ITextureManager& textureManager,
                        IShaderManager&  shaderManager,
                        IFileManager&    fileManager,
+                       const std::vector<std::wstring>& gameRoots,
                        bool useDevUi,
                        bool useTestHost)
     : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager,
-                                useDevUi, useTestHost))
+                                gameRoots, useDevUi, useTestHost))
 {
 }
 
@@ -1531,11 +1555,12 @@ int Run(HINSTANCE hInstance,
         ITextureManager& textureManager,
         IShaderManager&  shaderManager,
         IFileManager&    fileManager,
+        const std::vector<std::wstring>& gameRoots,
         bool useDevUi,
         bool useTestHost)
 {
     HostWindow host(hInstance, textureManager, shaderManager, fileManager,
-                    useDevUi, useTestHost);
+                    gameRoots, useDevUi, useTestHost);
     return host.Run(nCmdShow);
 }
 

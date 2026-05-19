@@ -212,6 +212,7 @@
     <ClCompile Include="LinkGroup.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="managers.cpp" />
+    <ClCompile Include="ModManager.cpp" />
     <ClCompile Include="MegaFiles.cpp" />
     <ClCompile Include="ParticleSystem.cpp" />
     <ClCompile Include="ParticleSystemInstance.cpp" />

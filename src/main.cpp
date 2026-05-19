@@ -23,6 +23,7 @@
 #include "ParticleSystemInstance.h"
 #include "Rescale.h"
 #include "ParticleSystemIO.h"
+#include "ModManager.h"
 #include "resource.h"
 
 // LT-4 Task 1.3: --new-ui flag dispatches to the WebView2 + D3D9 host
@@ -417,14 +418,9 @@ void ShowAboutDialog(HWND hWndParent)
     DialogBox(NULL, MAKEINTRESOURCE(IDD_ABOUT), hWndParent, AboutProc);
 }
 
-// Mod selection
-struct ModEntry
-{
-	wstring path;          // full path, e.g. D:\...\corruption\Mods\Chelmod
-	wstring folderName;    // "Chelmod"
-	wstring nickname;      // user-set, may be empty
-	bool    isFoC;         // true if under corruption\Mods, false if under GameData\Mods
-};
+// Mod selection — `ModEntry` and the discovery / activation logic
+// moved to src/ModManager.{h,cpp} in LT-4 D6 so the same code can be
+// reached by the new-UI bridge dispatcher.
 
 // Reserved WM_COMMAND IDs for the dynamically-built Mods menu.
 // Picked above the standard MFC range (0xE100+) and below 0xF000.
@@ -448,12 +444,12 @@ static const UINT ID_BACKGROUND_PREVIEW       = 0x5002;   // MT-3 unified backgr
 static const UINT WM_APP_SHOW_NICKNAME = WM_APP + 1;
 
 // Forward declarations for the Mods support code (defined later).
+// Discovery / activation / nickname-registry are now in ModManager
+// (src/ModManager.h); these are legacy-Win32-menu-only.
 struct APPLICATION_INFO;
-static vector<ModEntry> DiscoverMods(const vector<wstring>& gameRoots);
 static void             RebuildModsMenu(APPLICATION_INFO* info);
 static void             SelectMod(APPLICATION_INFO* info, const wstring& modPath);
 static ModEntry*        FindModById(APPLICATION_INFO* info, UINT id);
-static void             WriteModNickname(const wstring& modPath, const wstring& nickname);
 static bool             ShowNicknameDialog(HWND hParent, const ModEntry& mod, wstring& outNickname);
 static const wstring&   ModDisplayLabel(const ModEntry& m);
 static void             EnsureMenuFonts(APPLICATION_INFO* info);
@@ -566,13 +562,15 @@ struct APPLICATION_INFO
 	wstring   filename;
 	bool      changed;
 
-	// Mod state — set up after createFileManager and used by the Mods menu
+	// Mod state — set up after createFileManager and used by the Mods menu.
+	// LT-4 D6: `mods` and `selectedModPath` moved into ModManager (single
+	// source of truth shared with the new-UI bridge). The pointer below is
+	// borrowed from a stack-local in WinMain; lifetime is the editor session.
 	FileManager*    fileManager;     // non-owning; owned by main()
 	TextureManager* textureManager;  // non-owning; owned by main()
 	ShaderManager*  shaderManager;   // non-owning; owned by main()
 	vector<wstring> gameRoots;       // the EmpireAtWarPaths used to construct fileManager
-	vector<ModEntry> mods;
-	wstring         selectedModPath; // empty = unmodded
+	ModManager*     modManager;      // non-owning; owned by main() stack
 	HMENU           hModsMenu;       // top-level "Mods" submenu (HMENU of the popup)
 	HFONT           hMenuFont;       // cached for owner-drawn mod entries
 	HFONT           hMenuItalicFont; // italic variant for the nickname parenthetical
@@ -2263,8 +2261,10 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			if (mis->itemID < ID_MOD_FIRST || mis->itemID > ID_MOD_LAST) break;
 
 			size_t idx = (size_t)mis->itemData;
-			if (idx >= info->mods.size()) break;
-			const ModEntry& m = info->mods[idx];
+			if (!info->modManager) break;
+			const auto& mods = info->modManager->GetMods();
+			if (idx >= mods.size()) break;
+			const ModEntry& m = mods[idx];
 
 			EnsureMenuFonts(info);
 			HDC hdc = GetDC(hWnd);
@@ -2397,8 +2397,10 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			if (dis->itemID < ID_MOD_FIRST || dis->itemID > ID_MOD_LAST) break;
 
 			size_t idx = (size_t)dis->itemData;
-			if (idx >= info->mods.size()) break;
-			const ModEntry& m = info->mods[idx];
+			if (!info->modManager) break;
+			const auto& mods = info->modManager->GetMods();
+			if (idx >= mods.size()) break;
+			const ModEntry& m = mods[idx];
 
 			EnsureMenuFonts(info);
 
@@ -2510,15 +2512,19 @@ static LRESULT CALLBACK MainWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
                     }
                     else if (id == ID_MOD_REFRESH)
                     {
-                        info->mods = DiscoverMods(info->gameRoots);
+                        if (info->modManager) info->modManager->DiscoverMods();
                         // If our currently-selected mod no longer exists, fall back to Unmodded
-                        bool stillExists = info->selectedModPath.empty();
-                        for (const ModEntry& m : info->mods)
+                        const std::wstring& sel = info->modManager ? info->modManager->GetSelectedModPath() : std::wstring();
+                        bool stillExists = sel.empty();
+                        if (info->modManager)
                         {
-                            if (_wcsicmp(m.path.c_str(), info->selectedModPath.c_str()) == 0)
+                            for (const ModEntry& m : info->modManager->GetMods())
                             {
-                                stillExists = true;
-                                break;
+                                if (_wcsicmp(m.path.c_str(), sel.c_str()) == 0)
+                                {
+                                    stillExists = true;
+                                    break;
+                                }
                             }
                         }
                         if (!stillExists) SelectMod(info, L"");
@@ -3128,79 +3134,13 @@ static void AddSiblingGamePath(vector<wstring>& paths, const wstring& picked)
 }
 
 //
-// Mods support
+// Mods support — registry helpers (ReadModNickname / WriteModNickname /
+// ReadLastMod / WriteLastMod) and disk scanning (ScanModsDir /
+// DiscoverMods) moved to ModManager (src/ModManager.{h,cpp}) in LT-4 D6.
+// The nickname helpers are exposed via ModManager.h so the legacy
+// nickname dialog WM_COMMAND can still write them directly without
+// going through a ModManager method.
 //
-
-// Read the user-set nickname for a given mod path from the registry.
-// Returns empty string if no nickname is set.
-static wstring ReadModNickname(const wstring& modPath)
-{
-	wstring nickname;
-	HKEY hKey;
-	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor\\ModNicknames", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
-	{
-		TCHAR  buf[256] = {0};
-		DWORD  type;
-		DWORD  size = sizeof(buf);
-		if (RegQueryValueEx(hKey, modPath.c_str(), NULL, &type, (LPBYTE)buf, &size) == ERROR_SUCCESS && type == REG_SZ)
-		{
-			nickname = buf;
-		}
-		RegCloseKey(hKey);
-	}
-	return nickname;
-}
-
-static void WriteModNickname(const wstring& modPath, const wstring& nickname)
-{
-	HKEY hKey;
-	if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor\\ModNicknames", 0, NULL,
-	                   REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
-	{
-		if (nickname.empty())
-		{
-			RegDeleteValue(hKey, modPath.c_str());
-		}
-		else
-		{
-			RegSetValueEx(hKey, modPath.c_str(), 0, REG_SZ,
-			              (const BYTE*)nickname.c_str(),
-			              (DWORD)((nickname.size() + 1) * sizeof(TCHAR)));
-		}
-		RegCloseKey(hKey);
-	}
-}
-
-static wstring ReadLastMod()
-{
-	wstring path;
-	HKEY hKey;
-	if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
-	{
-		TCHAR  buf[MAX_PATH] = {0};
-		DWORD  type;
-		DWORD  size = sizeof(buf);
-		if (RegQueryValueEx(hKey, L"LastMod", NULL, &type, (LPBYTE)buf, &size) == ERROR_SUCCESS && type == REG_SZ)
-		{
-			path = buf;
-		}
-		RegCloseKey(hKey);
-	}
-	return path;
-}
-
-static void WriteLastMod(const wstring& modPath)
-{
-	HKEY hKey;
-	if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\AloParticleEditor", 0, NULL,
-	                   REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
-	{
-		RegSetValueEx(hKey, L"LastMod", 0, REG_SZ,
-		              (const BYTE*)modPath.c_str(),
-		              (DWORD)((modPath.size() + 1) * sizeof(TCHAR)));
-		RegCloseKey(hKey);
-	}
-}
 
 // View-state persistence. Registry layout under
 // HKCU\Software\AloParticleEditor:
@@ -6868,74 +6808,9 @@ static const wstring& ModDisplayLabel(const ModEntry& m)
 	return m.nickname.empty() ? m.folderName : m.nickname;
 }
 
-// Scan a single Mods\ directory for subfolders and append entries.
-static void ScanModsDir(const wstring& modsRoot, bool isFoC, vector<ModEntry>& out)
-{
-	wstring search = modsRoot;
-	if (!search.empty() && search.back() != L'\\') search += L'\\';
-	search += L"*";
-
-	WIN32_FIND_DATA fd;
-	HANDLE hFind = FindFirstFile(search.c_str(), &fd);
-	if (hFind == INVALID_HANDLE_VALUE) return;
-
-	do
-	{
-		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-		if (fd.cFileName[0] == L'.') continue;
-		if (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) continue;
-
-		ModEntry e;
-		e.folderName = fd.cFileName;
-		e.path       = modsRoot;
-		if (!e.path.empty() && e.path.back() != L'\\') e.path += L'\\';
-		e.path      += e.folderName;
-		e.isFoC      = isFoC;
-		e.nickname   = ReadModNickname(e.path);
-		out.push_back(e);
-	}
-	while (FindNextFile(hFind, &fd));
-
-	FindClose(hFind);
-}
-
-// Discover mods under the given game roots (corruption\Mods and GameData\Mods),
-// sorted alphabetically by display label within each category (FoC first, then base).
-static vector<ModEntry> DiscoverMods(const vector<wstring>& gameRoots)
-{
-	vector<ModEntry> mods;
-	for (const wstring& root : gameRoots)
-	{
-		wstring trimmed = root;
-		while (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'/')) trimmed.pop_back();
-
-		// Determine flavor by leaf folder name
-		size_t sep  = trimmed.find_last_of(L"\\/");
-		wstring leaf = (sep == wstring::npos) ? trimmed : trimmed.substr(sep + 1);
-
-		bool isFoC;
-		if (_wcsicmp(leaf.c_str(), L"corruption") == 0) isFoC = true;
-		else if (_wcsicmp(leaf.c_str(), L"GameData") == 0) isFoC = false;
-		else continue;
-
-		wstring modsDir = trimmed + L"\\Mods";
-		if (PathIsDirectory(modsDir.c_str()))
-		{
-			ScanModsDir(modsDir, isFoC, mods);
-		}
-	}
-
-	// Sort: FoC mods first, then base game; within each, alphabetical by folder
-	// name (which is what's displayed first; nicknames are a parenthetical).
-	std::sort(mods.begin(), mods.end(), [](const ModEntry& a, const ModEntry& b) {
-		if (a.isFoC != b.isFoC) return a.isFoC && !b.isFoC;
-		return _wcsicmp(a.folderName.c_str(), b.folderName.c_str()) < 0;
-	});
-
-	printf("[Mods] DiscoverMods: scanned %zu game roots, found %zu mods\n",
-	       gameRoots.size(), mods.size()); fflush(stdout);
-	return mods;
-}
+// ScanModsDir / DiscoverMods moved to ModManager (src/ModManager.cpp)
+// in LT-4 D6 so both the legacy menu and the new-UI bridge dispatcher
+// share the same disk-scanning code.
 
 // Lazily create (and cache) the menu fonts used to draw mod entries.
 // Owner-drawn items need to know which font to render with — we use the system
@@ -7002,8 +6877,12 @@ static void RebuildModsMenu(APPLICATION_INFO* info)
 		InsertMenuItem(hMenuBar, helpPos >= 0 ? helpPos : GetMenuItemCount(hMenuBar), TRUE, &mii);
 	}
 
+	// Read mod state from ModManager (single source of truth post-D6).
+	const std::vector<ModEntry>& mods = info->modManager ? info->modManager->GetMods() : std::vector<ModEntry>{};
+	const std::wstring& selectedPath = info->modManager ? info->modManager->GetSelectedModPath() : std::wstring{};
+
 	// Top: Unmodded radio item
-	UINT noneFlags = MF_STRING | (info->selectedModPath.empty() ? MF_CHECKED : MF_UNCHECKED);
+	UINT noneFlags = MF_STRING | (selectedPath.empty() ? MF_CHECKED : MF_UNCHECKED);
 	AppendMenu(info->hModsMenu, noneFlags, ID_MOD_NONE, L"&Unmodded");
 	AppendMenu(info->hModsMenu, MF_SEPARATOR, 0, NULL);
 
@@ -7016,11 +6895,11 @@ static void RebuildModsMenu(APPLICATION_INFO* info)
 	HMENU hFoCMenu  = CreatePopupMenu();
 	HMENU hBaseMenu = CreatePopupMenu();
 	int   nFoC = 0, nBase = 0;
-	for (size_t i = 0; i < info->mods.size(); i++)
+	for (size_t i = 0; i < mods.size(); i++)
 	{
-		const ModEntry& m = info->mods[i];
+		const ModEntry& m = mods[i];
 		UINT id      = ID_MOD_FIRST + (UINT)i;
-		bool checked = (_wcsicmp(m.path.c_str(), info->selectedModPath.c_str()) == 0);
+		bool checked = (_wcsicmp(m.path.c_str(), selectedPath.c_str()) == 0);
 
 		MENUITEMINFO mii = {};
 		mii.cbSize     = sizeof(mii);
@@ -7072,51 +6951,36 @@ static void RebuildModsMenu(APPLICATION_INFO* info)
 	DrawMenuBar(info->hMainWnd);
 }
 
-// Apply a mod selection: update FileManager, clear caches, persist,
-// rebuild menu, redraw render area.
+// Apply a mod selection. LT-4 D6: the cross-mode core (FileManager
+// swap, registry persist, palette swap, thumbnail cache clear, engine
+// shader/texture reload) lives in ModManager::SelectMod so the new-UI
+// bridge can call it. The legacy wrapper below adds the Win32-only
+// finalisation (status bar text on shader-reload failure, HBITMAP
+// preview rebuild, modeless skydome picker refresh, render-window
+// invalidate, HMENU rebuild).
 static void SelectMod(APPLICATION_INFO* info, const wstring& modPath)
 {
-	info->selectedModPath = modPath;
+	bool ok = info->modManager ? info->modManager->SelectMod(modPath) : false;
+	if (!ok && info->engine != NULL && info->hStatusBar != NULL)
+	{
+		SendMessage(info->hStatusBar, SB_SETTEXT, 4,
+		            (LPARAM)L"Mod shader reload failed — keeping previous shaders");
+	}
 
-	if (info->fileManager) info->fileManager->SetModPath(modPath);
-
-	WriteLastMod(modPath);
-	// MT-1 — swap the texture-palette to the new mod. SetActiveMod
-	// flushes any dirty state from the previous mod and lazy-loads the
-	// new mod's INI section. Empty `modPath` (unmodded) clears.
-	// Then drop the in-memory thumbnail cache (cache is keyed by
-	// filename, so a same-named file in a different mod would
-	// otherwise show the old mod's thumbnail) and refresh the popup
-	// content if visible.
-	TexturePalette::Store::Instance().SetActiveMod(modPath);
-	TexturePalette::ClearThumbnailCache();
-	TexturePalette::RefreshPopup();
-	RebuildModsMenu(info);
-
-	printf("[Mods] Selected: %S\n", modPath.empty() ? L"(unmodded)" : modPath.c_str()); fflush(stdout);
-
-	// Hot-swap shaders + textures so the new mod folder takes effect without
-	// restart. Shader reload may fail on a malformed mod shader; in that case
-	// we keep the previous set and surface the failure on the status bar.
+	// MT-3 follow-up: skydome texture was re-resolved inside the engine
+	// ReloadTextures call, but the toolbar preview's cached HBITMAP and
+	// the (possibly open) picker's image list still point at the
+	// previous mod's bytes. Rebuild both so the UI matches what the
+	// engine just loaded.
 	if (info->engine != NULL)
 	{
-		if (!info->engine->ReloadShaders())
-		{
-			SendMessage(info->hStatusBar, SB_SETTEXT, 4,
-			            (LPARAM)L"Mod shader reload failed — keeping previous shaders");
-		}
-		info->engine->ReloadTextures();
-		// MT-3 follow-up: skydome texture was re-resolved inside
-		// ReloadTextures, but the toolbar preview's cached HBITMAP and the
-		// (possibly open) picker's image list still point at the previous
-		// mod's bytes. Rebuild both so the UI matches what the engine just
-		// loaded.
 		RebuildBackgroundPreviewBitmap(info);
 		if (info->hSkydomePicker != NULL && IsWindowVisible(info->hSkydomePicker))
 		{
 			SendMessage(info->hSkydomePicker, WM_USER, 0, 0);
 		}
 	}
+	RebuildModsMenu(info);
 	if (info->hRenderWnd != NULL)
 	{
 		InvalidateRect(info->hRenderWnd, NULL, TRUE);
@@ -7124,12 +6988,24 @@ static void SelectMod(APPLICATION_INFO* info, const wstring& modPath)
 }
 
 // Find the mod entry corresponding to a given menu command ID, or NULL.
+// Const-correct: returns a pointer into ModManager's internal vector;
+// caller must not retain the pointer across mod-list mutations
+// (DiscoverMods will reallocate). Used by the nickname dialog
+// WM_COMMAND handler, which acts on the returned entry's path
+// immediately and doesn't cache it.
 static ModEntry* FindModById(APPLICATION_INFO* info, UINT id)
 {
 	if (id < ID_MOD_FIRST || id > ID_MOD_LAST) return NULL;
+	if (!info->modManager) return NULL;
 	UINT idx = id - ID_MOD_FIRST;
-	if (idx >= info->mods.size()) return NULL;
-	return &info->mods[idx];
+	const auto& mods = info->modManager->GetMods();
+	if (idx >= mods.size()) return NULL;
+	// const_cast is safe here: WriteModNickname (the only caller via
+	// WM_APP_SHOW_NICKNAME) writes the user-edited nickname BACK into
+	// the entry, and the entry's storage lives inside ModManager's
+	// mods vector. Future refactor: route nickname writes through a
+	// ModManager method so the cast goes away.
+	return const_cast<ModEntry*>(&mods[idx]);
 }
 
 // Backing data for the IDD_MOD_NICKNAME dialog
@@ -7757,35 +7633,28 @@ void main( APPLICATION_INFO* info, const vector<wstring>& argv )
 		info->textureManager = &textureManager;
 		info->shaderManager  = &shaderManager;
 		info->gameRoots      = gameRoots;
-		info->mods           = DiscoverMods(gameRoots);
 
-		// Restore the previously-selected mod, if any (and it still exists)
-		wstring savedMod = ReadLastMod();
-		if (!savedMod.empty() && PathIsDirectory(savedMod.c_str()))
-		{
-			info->selectedModPath = savedMod;
-			fileManager->SetModPath(savedMod);
-			printf("[Mods] Restored from registry: %S\n", savedMod.c_str()); fflush(stdout);
-		}
-		else
-		{
-			info->selectedModPath = L"";
-			if (!savedMod.empty())
-			{
-				printf("[Mods] Saved mod path no longer exists, falling back to unmodded: %S\n", savedMod.c_str()); fflush(stdout);
-			}
-		}
-		// MT-1 — initialize the texture-palette to whichever mod we just
-		// settled on (may be empty if no mod is active). Must run after
-		// the LastMod restore so the palette and FileManager agree on
-		// which mod is current.
-		TexturePalette::Store::Instance().SetActiveMod(info->selectedModPath);
+		// LT-4 D6: ModManager owns mod discovery + active-mod state for
+		// both UI modes. Stack-local lifetime matches textureManager /
+		// shaderManager (live until main() returns). Setting m_engine
+		// happens AFTER `info->engine = new Engine(...)` below.
+		// RestoreLastSelectedMod() applies the registry path to
+		// FileManager + TexturePalette internally so this block no
+		// longer needs the inline ReadLastMod / SetActiveMod chain.
+		ModManager modManager(fileManager, gameRoots);
+		info->modManager = &modManager;
+		modManager.DiscoverMods();
+		modManager.RestoreLastSelectedMod();
 		RebuildModsMenu(info);
 
 		// Create the rendering engine
         try
         {
 		    info->engine = new Engine(info->hMainWnd, info->hRenderWnd, textureManager, shaderManager, *info->fileManager);
+
+		    // LT-4 D6: now that the Engine exists, give it to ModManager
+		    // so future SelectMod() calls can hot-swap shaders / textures.
+		    modManager.SetEngine(info->engine);
 
 		    // MT-1 — give the texture-palette its services now that the
 		    // engine has a D3D device. Both pointers must outlive the
@@ -8214,7 +8083,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		if (newUi)
 		{
 #ifdef _WIN64
-			FileManager* fileManager = createFileManager(NULL, argv);
+			// LT-4 D6: capture gameRoots so the host can build its
+			// ModManager. createFileManager already discovers them
+			// internally; pass &gameRoots to extract.
+			std::vector<std::wstring> gameRoots;
+			FileManager* fileManager = createFileManager(NULL, argv, &gameRoots);
 			if (fileManager == NULL)
 			{
 				// Same semantics as legacy: user cancelled the data-path
@@ -8225,6 +8098,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			ShaderManager  shaderManager (fileManager, "Data\\Art\\Shaders\\");
 			int hostResult = host::Run(hInstance, SW_SHOWDEFAULT,
 			                           textureManager, shaderManager, *fileManager,
+			                           gameRoots,
 			                           devUi, testHost);
 			delete fileManager;
 #ifndef NDEBUG
@@ -8254,6 +8128,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	info.fileManager			= NULL;
 	info.textureManager			= NULL;
 	info.shaderManager			= NULL;
+	info.modManager				= NULL;
 	info.hModsMenu				= NULL;
 	info.hMenuFont				= NULL;
 	info.hMenuItalicFont		= NULL;

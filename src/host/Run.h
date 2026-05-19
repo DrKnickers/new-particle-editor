@@ -20,17 +20,25 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <string>
+#include <vector>
+
 class ITextureManager;
 class IShaderManager;
 class IFileManager;
 
 namespace host {
 
+// LT-4 D6: `gameRoots` is the EmpireAtWarPaths vector that was used
+// to build `fileManager`. Threaded through so the host's ModManager
+// can scan their Mods\ subdirectories on startup. Legacy mode reads
+// the same vector inside `main(APPLICATION_INFO*, argv)`.
 int Run(HINSTANCE hInstance,
         int nCmdShow,
         ITextureManager& textureManager,
         IShaderManager&  shaderManager,
         IFileManager&    fileManager,
+        const std::vector<std::wstring>& gameRoots,
         bool useDevUi   = false,
         bool useTestHost = false);
 

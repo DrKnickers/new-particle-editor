@@ -43,6 +43,7 @@ class ParticleSystem;
 class ParticleSystemInstance;
 class SpawnerDriver;
 class IFileManager;
+class ModManager;
 
 namespace host {
 
@@ -76,6 +77,15 @@ public:
     // picker will run unparented (works, but doesn't block input on the
     // main window — set this in HostWindow once hMain exists).
     void SetHostHwnd(HWND hwnd) { m_hostHwnd = hwnd; }
+
+    // LT-4 D6: inject the ModManager that owns mod discovery + active-
+    // mod state. The dispatcher routes `mods/list`, `mods/select`, and
+    // `mods/refresh` requests through it, and includes the active path
+    // in the engine-state snapshot via `activeModPath`. Null is
+    // tolerated (the three mods/* handlers will return ok:false; the
+    // snapshot's activeModPath will be null), but production launches
+    // bind this in HostWindow before the WebView2 navigates.
+    void SetModManager(::ModManager* mm) { m_modManager = mm; }
 
     // Bind the editor's host-owned state pointers used by the
     // forward-deferred handlers activated in LT-4 host-state plumbing
@@ -208,6 +218,7 @@ private:
     EmitFn             m_emit;
     UndoStack*         m_undo     = nullptr;
     HWND               m_hostHwnd = nullptr;
+    ::ModManager*      m_modManager = nullptr;  // LT-4 D6: mods/* surface
 
     // LT-4 host-state plumbing — pointers borrowed from HostWindow.
     // `m_pParticleSystem` is a pointer-to-unique_ptr so file/new and

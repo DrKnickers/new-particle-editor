@@ -14,6 +14,11 @@ class IFileManager
 {
 public:
 	virtual IFile* getFile(const std::string& path) = 0;
+
+	// Hot-swap the priority basepath for active-mod loose-file lookups.
+	// Default is a no-op so simple test mocks don't have to implement
+	// it; FileManager overrides with the real basepath swap.
+	virtual void SetModPath(const std::wstring& /*path*/) {}
 };
 
 class ITextureManager
@@ -44,7 +49,7 @@ public:
 
 	// Hot-swap a "mod" base path that's checked before the regular basepaths
 	// during loose-file lookups. Pass an empty string to clear (Unmodded).
-	void SetModPath(const std::wstring& path);
+	void SetModPath(const std::wstring& path) override;
 	const std::wstring& GetModPath() const { return modpath; }
 
 	FileManager(const std::vector<std::wstring>& basepaths);
