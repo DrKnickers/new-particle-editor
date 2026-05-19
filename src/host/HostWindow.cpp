@@ -66,40 +66,51 @@ constexpr wchar_t kVirtualHostName[]         = L"app.local";
 constexpr INTERNET_PORT kDevServerPort       = 5174;
 constexpr UINT_PTR    kStatsTimerId          = 0x100;  // 4 Hz stats broadcast
 
-// FPSMeasurer — ring-buffer of the last 32 frame timestamps. Ported from
-// the legacy src/main.cpp `FPSMeasurer` (lines 56-99) so the host emits
-// the same measurement window as the legacy status bar.
+// FPSMeasurer — ring-buffer of the last 32 frame timestamps. Originally
+// ported from the legacy src/main.cpp `FPSMeasurer` (lines 56-99), but
+// FD10 swapped GetTickCount() for QueryPerformanceCounter so the math
+// stays meaningful in FD9b's uncapped (no-vsync) UpdateLayeredWindow
+// rendering regime. GetTickCount's ~15.6 ms resolution is too coarse
+// when the renderer pegs at hundreds of FPS: 32 frames can fit inside
+// 0–2 ticks, producing fps readings that snap between 0 (zero-diff
+// guard) and 1024 (32 frames / 0.03 s). QPC has sub-microsecond
+// resolution and is free.
 class FPSMeasurer
 {
     static const int MAX_FRAMES = 32;
-    float  m_frames[MAX_FRAMES];
-    size_t m_iFrame;
-    size_t m_nFrames;
-    size_t m_lastFrame;
-    size_t m_firstFrame;
+    LONGLONG m_frames[MAX_FRAMES];   // QPC tick values
+    LONGLONG m_qpcFrequency;          // ticks per second
+    size_t   m_iFrame;
+    size_t   m_nFrames;
+    size_t   m_lastFrame;
+    size_t   m_firstFrame;
 public:
     float getFPS()
     {
-        if (m_nFrames > 0)
+        if (m_nFrames > 0 && m_qpcFrequency > 0)
         {
-            float diff = m_frames[m_lastFrame] - m_frames[m_firstFrame];
-            if (diff > 0.0f)
-                return static_cast<float>(m_nFrames) / diff;
+            const LONGLONG diff = m_frames[m_lastFrame] - m_frames[m_firstFrame];
+            if (diff > 0)
+                return static_cast<float>(m_nFrames) * static_cast<float>(m_qpcFrequency) / static_cast<float>(diff);
         }
         return 0.0f;
     }
     void measure()
     {
-        m_lastFrame      = m_iFrame;
-        m_frames[m_iFrame] = GetTickCount() / 1000.0f;
-        m_nFrames        = m_nFrames < MAX_FRAMES ? m_nFrames + 1 : MAX_FRAMES;
-        m_iFrame         = (m_iFrame + 1) % MAX_FRAMES;
+        LARGE_INTEGER t;
+        QueryPerformanceCounter(&t);
+        m_lastFrame        = m_iFrame;
+        m_frames[m_iFrame] = t.QuadPart;
+        m_nFrames          = m_nFrames < MAX_FRAMES ? m_nFrames + 1 : MAX_FRAMES;
+        m_iFrame           = (m_iFrame + 1) % MAX_FRAMES;
         if (m_iFrame == m_firstFrame)
             m_firstFrame = (m_firstFrame + 1) % MAX_FRAMES;
     }
-    FPSMeasurer() : m_iFrame(0), m_nFrames(0), m_lastFrame(0), m_firstFrame(0)
+    FPSMeasurer() : m_qpcFrequency(0), m_iFrame(0), m_nFrames(0), m_lastFrame(0), m_firstFrame(0)
     {
         memset(m_frames, 0, sizeof(m_frames));
+        LARGE_INTEGER freq;
+        if (QueryPerformanceFrequency(&freq)) m_qpcFrequency = freq.QuadPart;
     }
 };
 
