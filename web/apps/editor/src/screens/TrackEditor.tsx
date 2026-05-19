@@ -746,6 +746,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           onCanvasClick={handleCanvasClick}
           insertMode={mode === "insert"}
           onCanvasAdd={handleCanvasAdd}
+          onCanvasContextMenu={() => setMode("select")}
           onKeyDragEnd={handleKeyDragEnd}
           onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
         />

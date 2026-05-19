@@ -98,6 +98,13 @@ type Props = {
    *  `emitters/add-track-key` and (typically) auto-select the new
    *  key. */
   onCanvasAdd?: (time: number, value: number) => void;
+  /** Right-click on the empty canvas — convention is "drop back to
+   *  Select mode" (legacy parity; matches Photoshop/Blender pen-mode
+   *  right-click escape). Called on empty backdrop only — right-click
+   *  on a key is reserved for a future per-key context menu and
+   *  doesn't fire this. The browser context menu is suppressed
+   *  (preventDefault) when this is wired. */
+  onCanvasContextMenu?: () => void;
   /** Drag-end handler. Fires after pointer-up when a drag actually
    *  produced a position change. The parent fires
    *  `emitters/set-track-key { oldTime: keyTime, newTime, newValue }`.
@@ -217,6 +224,7 @@ export function CurveEditor({
   onCanvasClick,
   insertMode,
   onCanvasAdd,
+  onCanvasContextMenu,
   onKeyDragEnd,
   onCanvasMarqueeSelect,
 }: Props) {
@@ -631,6 +639,17 @@ export function CurveEditor({
         height={height}
         fill="transparent"
         onPointerDown={onCanvasPointerDown}
+        onContextMenu={(e) => {
+          // FD10 (Group D follow-up): right-click on empty canvas
+          // drops the parent back to Select mode. preventDefault to
+          // suppress the browser's native context menu, since we
+          // own the gesture.
+          if (onCanvasContextMenu) {
+            e.preventDefault();
+            e.stopPropagation();
+            onCanvasContextMenu();
+          }
+        }}
         onClick={(e) => {
           e.stopPropagation();
           // In Insert mode the pointer-down branch already fired
