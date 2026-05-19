@@ -78,8 +78,11 @@ public:
     // Register an occlusion rect (in main-client coords) from React.
     // `id` is a stable handle the React side uses (e.g.
     // "tool-panel:background", "menu:file"). Passing a null rect
-    // (w<=0 or h<=0) removes the occlusion for that id.
-    void SetOcclusion(const std::string& id, int x, int y, int w, int h);
+    // (w<=0 or h<=0) removes the occlusion for that id. `feather` is
+    // the AlphaCompositor smoothstep band width (in physical pixels)
+    // at the rect's unclipped edges — 0 for a hard cut, ~padding-px
+    // when the React caller padded the rect to absorb a shadow.
+    void SetOcclusion(const std::string& id, int x, int y, int w, int h, int feather = 0);
     void RemoveOcclusion(const std::string& id);
 
 private:
@@ -95,7 +98,7 @@ private:
     AlphaCompositor* m_compositor = nullptr;
     // Occlusion rects from React (main-client coords). Each id maps
     // to one rect; null/zero-size removes the entry.
-    struct Occlusion { int x, y, w, h; };
+    struct Occlusion { int x, y, w, h; int feather; };
     std::unordered_map<std::string, Occlusion> m_occlusions;
     // Track the last applied size so we only fire a (relatively
     // expensive) D3D9 device Reset when the size actually changed.

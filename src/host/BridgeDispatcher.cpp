@@ -760,7 +760,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             int y = r.value("y", 0);
             int w = r.value("w", 0);
             int h = r.value("h", 0);
-            m_layout.SetOcclusion(id, x, y, w, h);
+            int feather = params.value("feather", 0);
+            m_layout.SetOcclusion(id, x, y, w, h, feather);
         }
         else
         {

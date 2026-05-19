@@ -543,13 +543,16 @@ export type Request =
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
-  // FD8 follow-up: tell the host that a chrome region overlaps the
-  // viewport rect (a menu, tool panel, dialog…). The host applies a
-  // SetWindowRgn cut-out on the viewport popup so the chrome HTML
-  // shows through. `rect: null` removes the occlusion for that id.
-  // Rect is in MAIN-HWND-CLIENT coords, same convention as
-  // layout/viewport-rect.
-  | { kind: "viewport/occlude";           params: { id: string; rect: { x: number; y: number; w: number; h: number } | null } }
+  // Tell the host that a chrome region overlaps the viewport rect (a
+  // menu, tool panel, dialog…). FD9b: the host's AlphaCompositor stamps
+  // alpha into the popup's DIB in this rect, with a `feather` px
+  // smoothstep falloff at the rect's unclipped edges (so the chrome's
+  // drop shadow blends naturally into the viewport instead of producing
+  // a hard cut). `rect: null` removes the occlusion for that id. Rect
+  // is in MAIN-HWND-CLIENT coords, same convention as
+  // layout/viewport-rect. `feather` defaults to 0 (hard cut) when
+  // omitted — match it to the chrome's shadow extent.
+  | { kind: "viewport/occlude";           params: { id: string; rect: { x: number; y: number; w: number; h: number } | null; feather?: number } }
   | { kind: "spawner/start";              params: SpawnerParamsDto }
   | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }

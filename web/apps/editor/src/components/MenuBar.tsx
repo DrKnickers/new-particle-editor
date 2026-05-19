@@ -47,10 +47,14 @@ function OccludingMenubarContent({
   ...rest
 }: MenuContentProps) {
   const ref = useRef<HTMLDivElement | null>(null);
-  useViewportOcclusion(bridge, occlusionId, ref);
-  // Wrap children in a measuring div so we capture the bounding rect
-  // regardless of whether Radix's ref forwarding lands on the DOM
-  // element we expect. The wrapper inherits the layout of its child.
+  // FD9b: pad the occlusion rect outward by ~24 CSS px to enclose
+  // the menu's shadow-xl drop shadow + rounded-md corners, AND set
+  // the compositor's smoothstep feather to the same 24 px. The popup
+  // alpha then ramps from full-viewport at the padded outer edge to
+  // full-cut at the menu's actual outline — no purple halo where
+  // alpha=0 would otherwise expose the parent HWND brush past where
+  // the WebView shadow has faded.
+  useViewportOcclusion(bridge, occlusionId, ref, 24, 24);
   return (
     <Menubar.Content {...rest}>
       <div ref={ref}>{children}</div>

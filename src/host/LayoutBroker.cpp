@@ -142,14 +142,14 @@ void LayoutBroker::RefreshScreenPosition()
     // are unchanged either. Skip re-emit.
 }
 
-void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int h)
+void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int h, int feather)
 {
     if (w <= 0 || h <= 0)
     {
         RemoveOcclusion(id);
         return;
     }
-    m_occlusions[id] = { x, y, w, h };
+    m_occlusions[id] = { x, y, w, h, feather };
 
     if (m_compositor && m_lastW > 0 && m_lastH > 0)
     {
@@ -159,7 +159,7 @@ void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int 
             x - m_lastX + w,
             y - m_lastY + h
         };
-        m_compositor->SetOcclusion(id, popupRect);
+        m_compositor->SetOcclusion(id, popupRect, feather);
     }
 }
 
@@ -191,7 +191,7 @@ void LayoutBroker::ReemitOcclusions()
             occ.x - m_lastX + occ.w,
             occ.y - m_lastY + occ.h
         };
-        m_compositor->SetOcclusion(id, popupRect);
+        m_compositor->SetOcclusion(id, popupRect, occ.feather);
     }
 }
 

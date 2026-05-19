@@ -33,13 +33,16 @@ export function useViewportOcclusion(
   id: string,
   ref: RefObject<HTMLElement | null>,
   /** Extra CSS pixels added on each side of the bounding rect before
-   *  sending. Padding here punches a larger hole in the popup; the
-   *  WebView2 region behind only fills the actual element rect, so
-   *  any padding beyond that exposes the parent HWND brush (dark
-   *  purple) as a visible halo. Default 0 — pass a small value
-   *  only if you genuinely need to absorb a drop-shadow whose
-   *  visible-alpha pixels extend beyond the element's bounding rect. */
+   *  sending. FD9b: pair this with the matching `featherPx` so the
+   *  AlphaCompositor's smoothstep transitions across the padded ring
+   *  (rather than leaving a region where alpha=0 exposes the parent
+   *  HWND brush past the chrome's shadow extent). Default 0. */
   padPx: number = 0,
+  /** Smoothstep feather width (CSS px) at the unclipped edges of the
+   *  reported rect. Should typically equal `padPx` so the alpha
+   *  smoothly transitions from viewport-opaque at the outer ring to
+   *  full-cut at the chrome's actual outline. Default 0 (hard cut). */
+  featherPx: number = 0,
 ) {
   useEffect(() => {
     const el = ref.current;
@@ -59,6 +62,7 @@ export function useViewportOcclusion(
               w: Math.round((r.width  + padPx * 2) * dpr),
               h: Math.round((r.height + padPx * 2) * dpr),
             },
+            feather: Math.round(featherPx * dpr),
           },
         })
         .catch(() => {
@@ -85,5 +89,5 @@ export function useViewportOcclusion(
         })
         .catch(() => { /* ignore */ });
     };
-  }, [bridge, id, ref, padPx]);
+  }, [bridge, id, ref, padPx, featherPx]);
 }
