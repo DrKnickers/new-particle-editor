@@ -7,7 +7,6 @@
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
@@ -163,47 +162,48 @@ inline float smoothstep01(float x)
 void ApplyOcclusion(uint8_t* dib, int dibW, int dibH,
                     const RECT& rect, int feather)
 {
-    // Clip to DIB bounds.
+    // Clip the iteration range to DIB bounds, but compute the
+    // feather distance from the ORIGINAL rect edges. When the rect
+    // extends past the popup (e.g. a menu whose top is above the
+    // viewport), the distance from popup-edge pixels to the
+    // original rect edge is already > feather, so weight=0 falls
+    // out naturally — no purple halo at the popup edge. When the
+    // rect is fully inside, distance == clipped distance, so this
+    // also matches the inside-popup case.
     const int x0 = (std::max)(static_cast<int>(rect.left),   0);
     const int y0 = (std::max)(static_cast<int>(rect.top),    0);
     const int x1 = (std::min)(static_cast<int>(rect.right),  dibW);
     const int y1 = (std::min)(static_cast<int>(rect.bottom), dibH);
     if (x1 <= x0 || y1 <= y0) return;
 
-    // Track which edges represent the chrome's real boundary (vs an
-    // edge that got clipped because the chrome extends past the popup).
-    // Clipped edges are NOT feathered — the chrome continues into the
-    // unlayered region where the WebView2 paints normally, so any
-    // soft falloff there would create a visible viewport→chrome fade
-    // band along the popup's interior edge.
-    const bool featherTop    = (rect.top    >= 0)    && feather > 0;
-    const bool featherBottom = (rect.bottom <= dibH) && feather > 0;
-    const bool featherLeft   = (rect.left   >= 0)    && feather > 0;
-    const bool featherRight  = (rect.right  <= dibW) && feather > 0;
+    const int rectLeft   = static_cast<int>(rect.left);
+    const int rectTop    = static_cast<int>(rect.top);
+    const int rectRight  = static_cast<int>(rect.right);
+    const int rectBottom = static_cast<int>(rect.bottom);
 
     const int rowBytes = dibW * 4;
 
     for (int y = y0; y < y1; ++y)
     {
-        // Per-edge distance; INT_MAX disables feathering on that side.
-        const int dyTop = featherTop    ? (y - y0)        : INT_MAX;
-        const int dyBot = featherBottom ? ((y1 - 1) - y)  : INT_MAX;
+        const int dyTop = y - rectTop;             // ≥ 0 inside, larger near popup edge
+        const int dyBot = (rectBottom - 1) - y;
         const int dy    = (dyTop < dyBot) ? dyTop : dyBot;
 
         uint8_t* row = dib + y * rowBytes;
         for (int x = x0; x < x1; ++x)
         {
-            const int dxLeft  = featherLeft  ? (x - x0)       : INT_MAX;
-            const int dxRight = featherRight ? ((x1 - 1) - x) : INT_MAX;
+            const int dxLeft  = x - rectLeft;
+            const int dxRight = (rectRight - 1) - x;
             const int dx      = (dxLeft < dxRight) ? dxLeft : dxRight;
 
-            // Chebyshev distance from the rect's NEAREST UNCLIPPED edge.
+            // Chebyshev distance to the rect's nearest outer edge.
             const int d = (dx < dy) ? dx : dy;
 
-            // d=0 at an unclipped outer edge → keep pixel mostly
-            // opaque. d=feather → fully cut. Between: smoothstep.
-            // Pixels with no unclipped edge in range (d == INT_MAX)
-            // get weight=0 → full cut.
+            // d=0 at the rect's outer edge → keep pixel mostly opaque.
+            // d=feather → fully cut (weight 0). Pixels beyond the
+            // feather band (deeper inside the rect, or in a region
+            // where the nearest rect edge sits outside the popup) get
+            // weight=0 → full alpha cut.
             float weight = 0.0f;
             if (feather > 0 && d < feather)
             {
