@@ -170,6 +170,14 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
     { time: number; value: number } | null
   >(null);
 
+  // FD10 (Group D follow-up): per-key right-click context menu.
+  // Holds the right-clicked key's metadata + screen coordinates of
+  // the click. null = closed. The popup is a small floating <div>
+  // positioned at (x, y); click-outside / Escape closes.
+  const [keyContextMenu, setKeyContextMenu] = useState<
+    { time: number; isBorder: boolean; x: number; y: number } | null
+  >(null);
+
   const current = useMemo<TrackDto>(() => {
     const found = tracks.find((t) => t.name === activeTrack);
     // Guard: if the wire response was malformed (wrong order), fall
@@ -747,10 +755,112 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           insertMode={mode === "insert"}
           onCanvasAdd={handleCanvasAdd}
           onCanvasContextMenu={() => setMode("select")}
+          onKeyContextMenu={(time, isBorder, x, y) =>
+            setKeyContextMenu({ time, isBorder, x, y })
+          }
           onKeyDragEnd={handleKeyDragEnd}
           onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
         />
       </div>
+      {/* FD10 (Group D follow-up): per-key right-click menu. Fixed-
+          position div anchored at the click coords; click-outside +
+          Escape close it. Single Delete entry for now (disabled for
+          border keys per the host's filter rule); the structure is
+          easy to extend with future entries (Snap to grid, Reset
+          value, etc.). */}
+      {keyContextMenu !== null && (
+        <KeyContextMenu
+          time={keyContextMenu.time}
+          isBorder={keyContextMenu.isBorder}
+          x={keyContextMenu.x}
+          y={keyContextMenu.y}
+          onClose={() => setKeyContextMenu(null)}
+          onDelete={() => {
+            const t = keyContextMenu.time;
+            setKeyContextMenu(null);
+            if (bridge === undefined || emitterId === undefined) return;
+            if (borderKeyTimes.has(t)) return;
+            void bridge.request({
+              kind: "emitters/delete-track-keys",
+              params: { id: emitterId, track: activeTrack, times: [t] },
+            }).then(() => {
+              // If the deleted key was the optimistic selection,
+              // drop the override so the spinners revert cleanly.
+              setOptimisticSelected((prev) =>
+                prev !== null && prev.time === t ? null : prev,
+              );
+              setSelectedKeyTimes((prev) => {
+                if (!prev.has(t)) return prev;
+                const next = new Set(prev);
+                next.delete(t);
+                return next;
+              });
+            }).catch(() => { /* silent — re-fetch on tree/changed */ });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// FD10 (Group D follow-up): the floating per-key right-click menu.
+// Tiny enough to inline; if more curve-editor menus appear in the
+// future this can graduate to its own file.
+function KeyContextMenu({
+  time,
+  isBorder,
+  x,
+  y,
+  onClose,
+  onDelete,
+}: {
+  time: number;
+  isBorder: boolean;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
+  void time; // surfaced for future entries (Snap to grid uses it).
+  // Esc-to-close + click-outside-to-close. Attached to document so
+  // the listener catches clicks on viewport-popup pixels too.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      // Anything inside our menu has data-key-menu="true"; everything
+      // else closes the menu.
+      if (el && el.closest("[data-key-menu]")) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onMouseDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      data-key-menu="true"
+      role="menu"
+      aria-label="Curve key actions"
+      className="fixed z-50 min-w-[140px] rounded-md border border-neutral-700 bg-neutral-900 p-1 text-xs text-neutral-200 shadow-xl"
+      style={{ left: x, top: y }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onDelete}
+        disabled={isBorder}
+        title={isBorder ? "Border keys cannot be deleted" : undefined}
+        className="block w-full rounded px-2 py-1 text-left hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent outline-none"
+      >
+        Delete
+      </button>
     </div>
   );
 }

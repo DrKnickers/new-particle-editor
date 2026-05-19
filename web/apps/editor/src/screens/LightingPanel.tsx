@@ -183,9 +183,24 @@ export function LightingPanel({ bridge, onClose }: Props) {
   // the multiplied Vec4, so re-seeding would clobber the split.
   const [seeded, setSeeded] = useState(false);
   // FD10 Group D: Force Align Fill Lights. Default ON to match legacy
-  // (kLightForceAlignDefault = true at src/main.cpp:6225). Session-
-  // only — registry persistence is a follow-up.
-  const [forceAlign, setForceAlign] = useState(true);
+  // (kLightForceAlignDefault = true at src/main.cpp:6225). Persisted
+  // to localStorage so the flag survives editor restart — legacy
+  // stores it as a REG_DWORD under LightingForceFillAlignment, but
+  // a host-side registry bridge would cost a new request kind +
+  // C++ wiring; localStorage is enough for new-UI standalone use.
+  // Cross-mode sync with legacy is a deferred polish.
+  const FORCE_ALIGN_LS_KEY = "alo:lighting:force-align";
+  const [forceAlign, setForceAlign] = useState<boolean>(() => {
+    try {
+      const stored = window.localStorage.getItem(FORCE_ALIGN_LS_KEY);
+      if (stored === "false") return false;
+      if (stored === "true")  return true;
+    } catch {
+      // localStorage can throw (private mode, exhausted quota, etc.) —
+      // fall through to the legacy default.
+    }
+    return true;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +287,12 @@ export function LightingPanel({ bridge, onClose }: Props) {
 
   const handleForceAlignToggle = (enabled: boolean) => {
     setForceAlign(enabled);
+    try {
+      window.localStorage.setItem(FORCE_ALIGN_LS_KEY, enabled ? "true" : "false");
+    } catch {
+      // Persistence is best-effort; the in-memory state is the
+      // source of truth for the rest of the session.
+    }
     // Engaging the constraint snaps the fills immediately so the
     // visible state matches the disabled spinners. Disengaging is
     // non-destructive — fills keep whatever values force-align last

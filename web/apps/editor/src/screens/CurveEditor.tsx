@@ -101,10 +101,21 @@ type Props = {
   /** Right-click on the empty canvas — convention is "drop back to
    *  Select mode" (legacy parity; matches Photoshop/Blender pen-mode
    *  right-click escape). Called on empty backdrop only — right-click
-   *  on a key is reserved for a future per-key context menu and
-   *  doesn't fire this. The browser context menu is suppressed
-   *  (preventDefault) when this is wired. */
+   *  on a key fires onKeyContextMenu instead. The browser context
+   *  menu is suppressed (preventDefault) when this is wired. */
   onCanvasContextMenu?: () => void;
+  /** Right-click on a key circle. The parent typically opens a small
+   *  popup at (clientX, clientY) with per-key actions (Delete, …).
+   *  `isBorder` is true for the first/last key in time order; border
+   *  keys can't be deleted (the host filters them out), so the
+   *  parent should disable destructive entries accordingly. The
+   *  browser context menu is suppressed when this is wired. */
+  onKeyContextMenu?: (
+    time: number,
+    isBorder: boolean,
+    clientX: number,
+    clientY: number,
+  ) => void;
   /** Drag-end handler. Fires after pointer-up when a drag actually
    *  produced a position change. The parent fires
    *  `emitters/set-track-key { oldTime: keyTime, newTime, newValue }`.
@@ -225,6 +236,7 @@ export function CurveEditor({
   insertMode,
   onCanvasAdd,
   onCanvasContextMenu,
+  onKeyContextMenu,
   onKeyDragEnd,
   onCanvasMarqueeSelect,
 }: Props) {
@@ -754,6 +766,12 @@ export function CurveEditor({
             strokeWidth={strokeWidth}
             style={{ cursor: onKeyClick ? "pointer" : undefined }}
             onPointerDown={(e) => startDrag(e, p.time, p.value)}
+            onContextMenu={(e) => {
+              if (!onKeyContextMenu) return;
+              e.preventDefault();
+              e.stopPropagation();
+              onKeyContextMenu(p.time, isBorder, e.clientX, e.clientY);
+            }}
             onClick={(e) => {
               // The pointer-up handler on the SVG handles drag-end +
               // click-vs-drag detection. The plain click handler is

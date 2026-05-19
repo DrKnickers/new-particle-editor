@@ -240,3 +240,57 @@ worked transiently but pnpm re-injected the block on the next install
 per-package value to `true`; pnpm then leaves the field alone. The
 sharpened rule supersedes the strip-it guidance in the prior handoff's
 "Pattern-level things worth knowing" section.
+
+---
+
+## L-006 — Don't clear React optimistic state on every host-data refresh
+
+**Rule.** When a React component holds an optimistic local override
+that bridges a host-async-mutation gap (e.g. "the just-inserted
+key's Time/Value while the bridge round-trip lands"), clear it only
+on **explicit user actions that change the selection / target**, not
+on every arrival of fresh host data. The naive
+`useEffect([hostProp]) → clearOverride()` pattern produces a "flash
+correct → revert to stale zero" symptom whenever the host data
+doesn't perfectly match the override (float-precision in
+serialization, event ordering between bridge response and
+state-changed events, dedupe bumps, etc.). Sticky overrides cleared
+only on user-action are both more robust AND more predictable for
+the user.
+
+**Trigger.** Any time a React component has the shape:
+```ts
+const [optimistic, setOptimistic] = useState(...);
+useEffect(() => setOptimistic(null), [hostProp]);
+```
+where `hostProp` arrives async from the host after a mutation.
+
+**How to apply.**
+- The override should be **replaced** in each mutation handler (drag-
+  end / insert / spinner-edit) with the newly-committed values.
+- The override should be **cleared** in selection-change handlers
+  (click another row/key, click empty area in select mode, marquee,
+  switch tab/track, delete the targeted item).
+- Never blanket-clear on `hostProp` change — the host data is a
+  belt-and-suspenders backstop, not the override authority.
+
+**Source incident (2026-05-19, FD10 Group D polish).** The
+TrackEditor's Time/Value spinners showed 0/disabled after an Insert-
+mode key insertion. First fix added `optimisticSelected` with
+`useEffect([tracks]) → setOptimisticSelected(null)`. User reported:
+"flashes correct then greys out as soon as I release the mouse
+button." Two interacting causes: (a) the CurveEditor SVG's onClick
+fired when the synthetic click event's target became the LCA of
+backdrop-down and circle-up (the new key circle had appeared
+mid-click), clearing selection — fixed with `if (insertMode)
+return;` on the SVG's onClick; (b) even without that, the optimistic
+clear on `tracks` change left a window where the spinners read from
+`current.keys.find()` which sometimes returned undefined due to the
+host's dedupe-bump float-precision corner. The durable fix was
+making the override sticky — clear only in `handleKeyClick`,
+`handleCanvasClick`, `handleCanvasMarqueeSelect`, `handleDelete`,
+`handleTrackChange`. Same pattern already in use elsewhere in this
+codebase (FD9b LayoutBroker re-emits occlusions in popup-client
+coords on popup move, not on every React rect update). Filed as a
+recurring shape because it's the third time the React⇄host async-
+mutation gap has bitten us in subtly different surfaces.
