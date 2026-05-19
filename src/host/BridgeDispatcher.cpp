@@ -739,9 +739,12 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     }
 
     // -------- viewport/occlude --------
-    // FD8 follow-up: register/clear a chrome-rectangle that overlaps
-    // the viewport popup. The host applies a SetWindowRgn cut-out so
-    // chrome HTML behind the popup shows through.
+    // Register/clear a chrome-rectangle that overlaps the viewport
+    // popup. FD9b: LayoutBroker translates the main-client rect to
+    // popup-client coords and forwards to AlphaCompositor, which
+    // per-frame stamps a smoothstep-feathered alpha hole into the
+    // layered popup's DIB before UpdateLayeredWindow. Chrome HTML
+    // (menus, panels) underneath shows through with soft edges.
     if (kind == "viewport/occlude")
     {
         const std::string id = params.value("id", std::string{});

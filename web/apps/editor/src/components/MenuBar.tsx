@@ -74,13 +74,13 @@ type Props = {
 // class strings don't drift between menus.
 const TRIGGER =
   "px-2 py-1 text-xs font-medium text-neutral-300 hover:bg-neutral-900 rounded data-[state=open]:bg-neutral-900 data-[state=open]:text-neutral-100 outline-none select-none cursor-default";
-// FD8 follow-up: no drop-shadow. The viewport-occlude cut-out can't
-// match a soft shadow without leaving a visible dark halo where the
-// shadow fades — so we drop the shadow entirely and rely on the
-// border + dark surface against the lighter WebView2 chrome for
-// the floating effect.
+// FD9b restores the drop shadow. The layered viewport now stamps a
+// smoothstep-feathered alpha hole at each occlusion rect (with
+// FD8's edge padding sized to enclose the shadow), so shadow-xl
+// blends naturally against the D3D9 scene instead of leaving the
+// dark halo the prior HRGN cut produced.
 const CONTENT =
-  "min-w-[200px] bg-neutral-900 border border-neutral-800 rounded-md p-1 z-50";
+  "min-w-[200px] bg-neutral-900 border border-neutral-800 rounded-md shadow-xl p-1 z-50";
 const ITEM =
   "flex items-center gap-2 px-2 py-1 text-xs text-neutral-200 rounded hover:bg-neutral-800 focus:bg-neutral-800 outline-none cursor-pointer data-[disabled]:text-neutral-600 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent select-none";
 const SEPARATOR = "my-1 h-px bg-neutral-800";
