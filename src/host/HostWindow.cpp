@@ -39,6 +39,7 @@
 #include "Run.h"
 
 #include "AcceleratorBridge.h"
+#include "AlphaCompositor.h"
 #include "BridgeDispatcher.h"
 #include "HostBridgeProxy.h"
 #include "LayoutBroker.h"
@@ -279,6 +280,11 @@ struct HostWindowImpl
     IShaderManager&  shaderManager;
     IFileManager&    fileManager;
     std::unique_ptr<Engine> engine;
+
+    // FD9b: layered-window alpha compositor. Constructed after the
+    // Engine (needs its D3D9 device), torn down before the Engine in
+    // WM_DESTROY so Engine never dereferences a freed compositor.
+    std::unique_ptr<host::AlphaCompositor> alphaCompositor;
 
     // LT-4 host-state plumbing — the new-UI host owns the live
     // ParticleSystem (replaced on file/new and file/open) and a single
@@ -789,8 +795,13 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // destroyed, and stays z-ordered above the owner. Position
         // is in SCREEN coords; LayoutBroker translates from main-
         // client coords via ClientToScreen.
+        // FD9b: WS_EX_LAYERED + UpdateLayeredWindow(ULW_ALPHA) replaces
+        // FD7/FD8's SetWindowRgn cut-out. The AlphaCompositor pushes a
+        // pre-multiplied ARGB bitmap each tick, the OS composites the
+        // popup onto the WebView2 underneath, and software alpha stamps
+        // (T4) carve soft-edged holes for chrome occlusion rects.
         hViewport = CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
             kHostViewportClassName, L"",
             WS_POPUP | WS_VISIBLE,
             16, 16, 320, 240, hwnd /* owner */, nullptr,
@@ -825,6 +836,30 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             Log("[host] Engine construction threw unknown exception\n");
             // Continue without engine; snapshot will return ok:false.
+        }
+
+        // FD9b: stand up the alpha compositor against the Engine's D3D9
+        // device. The Engine's Reset() resizes the off-screen RT on
+        // layout changes; we still bootstrap a non-degenerate size now
+        // so the very first Render finds a valid RT to target.
+        if (engine && engine->GetDevice())
+        {
+            try
+            {
+                alphaCompositor = std::make_unique<host::AlphaCompositor>(engine->GetDevice());
+                RECT vrc{};
+                GetClientRect(hViewport, &vrc);
+                alphaCompositor->Resize(vrc.right - vrc.left, vrc.bottom - vrc.top);
+                engine->SetAlphaCompositor(alphaCompositor.get());
+                // LayoutBroker is wired in T7 (occlusion forwarding).
+                Log("[host] AlphaCompositor up (%ldx%ld)\n",
+                    vrc.right - vrc.left, vrc.bottom - vrc.top);
+            }
+            catch (const std::exception& e)
+            {
+                Log("[host] AlphaCompositor init failed: %s — falling back to legacy Present\n", e.what());
+                alphaCompositor.reset();
+            }
         }
 
         // Seed the first paint (suppresses white-flash on startup; see
@@ -907,6 +942,13 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             webController.Reset();
         }
         webView.Reset();
+        // FD9b: detach the compositor from Engine BEFORE either is
+        // destroyed so Render() (if scheduled before WM_QUIT drains
+        // the queue) can't dereference a freed compositor. Drop the
+        // compositor first since Engine owns the D3D9 device the
+        // compositor's resources are bound to.
+        if (engine) engine->SetAlphaCompositor(nullptr);
+        alphaCompositor.reset();
         // LT-4: engine owns its D3D9 device; just drop the engine and it
         // tears the device down in its destructor.
         engine.reset();
