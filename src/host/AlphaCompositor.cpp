@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
@@ -169,28 +170,40 @@ void ApplyOcclusion(uint8_t* dib, int dibW, int dibH,
     const int y1 = (std::min)(static_cast<int>(rect.bottom), dibH);
     if (x1 <= x0 || y1 <= y0) return;
 
+    // Track which edges represent the chrome's real boundary (vs an
+    // edge that got clipped because the chrome extends past the popup).
+    // Clipped edges are NOT feathered — the chrome continues into the
+    // unlayered region where the WebView2 paints normally, so any
+    // soft falloff there would create a visible viewport→chrome fade
+    // band along the popup's interior edge.
+    const bool featherTop    = (rect.top    >= 0)    && feather > 0;
+    const bool featherBottom = (rect.bottom <= dibH) && feather > 0;
+    const bool featherLeft   = (rect.left   >= 0)    && feather > 0;
+    const bool featherRight  = (rect.right  <= dibW) && feather > 0;
+
     const int rowBytes = dibW * 4;
 
     for (int y = y0; y < y1; ++y)
     {
-        // Distance from the nearest horizontal edge of the rect.
-        const int dyTop = y - y0;
-        const int dyBot = (y1 - 1) - y;
+        // Per-edge distance; INT_MAX disables feathering on that side.
+        const int dyTop = featherTop    ? (y - y0)        : INT_MAX;
+        const int dyBot = featherBottom ? ((y1 - 1) - y)  : INT_MAX;
         const int dy    = (dyTop < dyBot) ? dyTop : dyBot;
 
         uint8_t* row = dib + y * rowBytes;
         for (int x = x0; x < x1; ++x)
         {
-            const int dxLeft = x - x0;
-            const int dxRight = (x1 - 1) - x;
+            const int dxLeft  = featherLeft  ? (x - x0)       : INT_MAX;
+            const int dxRight = featherRight ? ((x1 - 1) - x) : INT_MAX;
             const int dx      = (dxLeft < dxRight) ? dxLeft : dxRight;
 
-            // Chebyshev distance from the rect's outer edge (so the
-            // closer we are to the boundary, the smaller this is).
+            // Chebyshev distance from the rect's NEAREST UNCLIPPED edge.
             const int d = (dx < dy) ? dx : dy;
 
-            // d=0 at the rect's outer edge → keep pixel mostly opaque.
-            // d=feather → fully cut (weight 0). Between: smoothstep.
+            // d=0 at an unclipped outer edge → keep pixel mostly
+            // opaque. d=feather → fully cut. Between: smoothstep.
+            // Pixels with no unclipped edge in range (d == INT_MAX)
+            // get weight=0 → full cut.
             float weight = 0.0f;
             if (feather > 0 && d < feather)
             {
