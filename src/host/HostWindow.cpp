@@ -851,7 +851,7 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 GetClientRect(hViewport, &vrc);
                 alphaCompositor->Resize(vrc.right - vrc.left, vrc.bottom - vrc.top);
                 engine->SetAlphaCompositor(alphaCompositor.get());
-                // LayoutBroker is wired in T7 (occlusion forwarding).
+                layout.SetAlphaCompositor(alphaCompositor.get());
                 Log("[host] AlphaCompositor up (%ldx%ld)\n",
                     vrc.right - vrc.left, vrc.bottom - vrc.top);
             }
@@ -948,6 +948,7 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // compositor first since Engine owns the D3D9 device the
         // compositor's resources are bound to.
         if (engine) engine->SetAlphaCompositor(nullptr);
+        layout.SetAlphaCompositor(nullptr);
         alphaCompositor.reset();
         // LT-4: engine owns its D3D9 device; just drop the engine and it
         // tears the device down in its destructor.

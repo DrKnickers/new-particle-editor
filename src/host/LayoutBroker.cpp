@@ -1,16 +1,22 @@
 #include "LayoutBroker.h"
 
 #include "../engine.h"
+#include "AlphaCompositor.h"
 
 namespace host {
+
+void LayoutBroker::SetAlphaCompositor(AlphaCompositor* compositor)
+{
+    m_compositor = compositor;
+    // If we acquired a compositor and already have occlusions cached,
+    // replay them so the first paint after attach is correct.
+    if (m_compositor) ReemitOcclusions();
+}
 
 void LayoutBroker::Apply(int x, int y, int w, int h)
 {
     if (!m_viewport) return;
 
-    // FD8: the viewport is a top-level WS_POPUP owned by main HWND.
-    // React's coords are in main-client; convert to screen for the
-    // popup via ClientToScreen(owner, …).
     HWND owner = GetWindow(m_viewport, GW_OWNER);
     POINT screenPt = { x, y };
     if (owner) ClientToScreen(owner, &screenPt);
@@ -25,7 +31,7 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
         m_lastY = y;
         m_lastW = 0;
         m_lastH = 0;
-        RebuildPopupRegion();
+        ReemitOcclusions();
         return;
     }
 
@@ -54,8 +60,6 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
     m_lastW = w;
     m_lastH = h;
 
-    // Cache main client size at this Apply so PredictAndApply can
-    // derive constant L/T/R/B offsets later.
     if (owner)
     {
         RECT mc{};
@@ -64,13 +68,13 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
         m_lastClientH = mc.bottom - mc.top;
     }
 
-    RebuildPopupRegion();
+    ReemitOcclusions();
 }
 
 void LayoutBroker::PredictAndApply()
 {
     if (!m_viewport) return;
-    if (m_lastClientW <= 0 || m_lastClientH <= 0) return;  // nothing cached yet
+    if (m_lastClientW <= 0 || m_lastClientH <= 0) return;
 
     HWND owner = GetWindow(m_viewport, GW_OWNER);
     if (!owner) return;
@@ -80,7 +84,6 @@ void LayoutBroker::PredictAndApply()
     const int curH = mc.bottom - mc.top;
     if (curW <= 0 || curH <= 0) return;
 
-    // Constant edge offsets derived from the cached state.
     const int leftOff   = m_lastX;
     const int topOff    = m_lastY;
     const int rightOff  = m_lastClientW - (m_lastX + m_lastW);
@@ -93,14 +96,10 @@ void LayoutBroker::PredictAndApply()
     if (newW < 1) newW = 1;
     if (newH < 1) newH = 1;
 
-    // No-op when nothing actually changed — avoid Engine::Reset spam
-    // (WM_WINDOWPOSCHANGED fires on every focus / activate / move
-    // too, not just real resizes).
     if (newX == m_lastX && newY == m_lastY &&
         newW == m_lastW && newH == m_lastH &&
         curW == m_lastClientW && curH == m_lastClientH)
     {
-        // Just refresh screen position in case owner moved.
         RefreshScreenPosition();
         return;
     }
@@ -120,14 +119,12 @@ void LayoutBroker::PredictAndApply()
     m_lastClientW = curW;
     m_lastClientH = curH;
 
-    // Only Reset the D3D9 swap chain when SIZE actually changed —
-    // pure moves don't need it and Reset is expensive.
     if (m_engine && sizeChanged)
     {
         try { m_engine->Reset(); } catch (...) {}
     }
 
-    RebuildPopupRegion();
+    ReemitOcclusions();
 }
 
 void LayoutBroker::RefreshScreenPosition()
@@ -140,7 +137,9 @@ void LayoutBroker::RefreshScreenPosition()
     SetWindowPos(m_viewport, nullptr, screenPt.x, screenPt.y, m_lastW, m_lastH,
                  SWP_NOACTIVATE | SWP_NOZORDER);
 
-    RebuildPopupRegion();
+    // Popup origin in main-client coords hasn't changed (m_lastX/Y
+    // unchanged), so the popup-client coords of cached occlusions
+    // are unchanged either. Skip re-emit.
 }
 
 void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int h)
@@ -151,60 +150,49 @@ void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int 
         return;
     }
     m_occlusions[id] = { x, y, w, h };
-    RebuildPopupRegion();
+
+    if (m_compositor && m_lastW > 0 && m_lastH > 0)
+    {
+        const RECT popupRect = {
+            x - m_lastX,
+            y - m_lastY,
+            x - m_lastX + w,
+            y - m_lastY + h
+        };
+        m_compositor->SetOcclusion(id, popupRect);
+    }
 }
 
 void LayoutBroker::RemoveOcclusion(const std::string& id)
 {
-    if (m_occlusions.erase(id) > 0)
-        RebuildPopupRegion();
+    m_occlusions.erase(id);
+    if (m_compositor) m_compositor->RemoveOcclusion(id);
 }
 
-void LayoutBroker::RebuildPopupRegion()
+void LayoutBroker::ReemitOcclusions()
 {
-    if (!m_viewport) return;
+    if (!m_compositor) return;
     if (m_lastW <= 0 || m_lastH <= 0)
     {
-        // Viewport collapsed — no popup region needed.
-        SetWindowRgn(m_viewport, nullptr, TRUE);
+        // Viewport collapsed — nothing to stamp; clear them so a
+        // stale set doesn't persist into the next non-degenerate
+        // Apply. The compositor's own per-frame loop is a no-op
+        // when the map is empty.
+        for (const auto& kv : m_occlusions)
+            m_compositor->RemoveOcclusion(kv.first);
         return;
     }
 
-    // Region in popup-CLIENT coords. Popup-client origin is (0,0) at
-    // the popup's top-left; React's occlusion rects are in main-client
-    // coords. The popup itself is positioned at (m_lastX, m_lastY) in
-    // main-client coords. So:
-    //   holeX_popup = occlusionX_mainClient - m_lastX
-    //   holeY_popup = occlusionY_mainClient - m_lastY
-    HRGN full = CreateRectRgn(0, 0, m_lastW, m_lastH);
-    if (!full) return;
-
     for (const auto& [id, occ] : m_occlusions)
     {
-        int hx = occ.x - m_lastX;
-        int hy = occ.y - m_lastY;
-        int hr = hx + occ.w;
-        int hb = hy + occ.h;
-        // Clip to popup bounds (CombineRgn would tolerate
-        // out-of-range, but a clean clip avoids accidentally creating
-        // a region with negative dims).
-        if (hr <= 0 || hb <= 0 || hx >= m_lastW || hy >= m_lastH) continue;
-        if (hx < 0) hx = 0;
-        if (hy < 0) hy = 0;
-        if (hr > m_lastW) hr = m_lastW;
-        if (hb > m_lastH) hb = m_lastH;
-
-        HRGN hole = CreateRectRgn(hx, hy, hr, hb);
-        if (hole)
-        {
-            CombineRgn(full, full, hole, RGN_DIFF);
-            DeleteObject(hole);
-        }
+        const RECT popupRect = {
+            occ.x - m_lastX,
+            occ.y - m_lastY,
+            occ.x - m_lastX + occ.w,
+            occ.y - m_lastY + occ.h
+        };
+        m_compositor->SetOcclusion(id, popupRect);
     }
-
-    // SetWindowRgn takes ownership of the region on success.
-    if (!SetWindowRgn(m_viewport, full, TRUE))
-        DeleteObject(full);
 }
 
 } // namespace host

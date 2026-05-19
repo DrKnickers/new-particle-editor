@@ -1,17 +1,21 @@
 // LayoutBroker — applies the React-side `layout/viewport-rect` message
 // to the D3D9 viewport HWND.
 //
-// FD8 (May 2026): the viewport is now a top-level WS_POPUP owned by
-// the main HWND, not a WS_CHILD. React still reports the viewport
-// quadrant rect in main-client coordinates; LayoutBroker converts to
-// screen coordinates for SetWindowPos on the popup. The popup is
-// composited by DWM as its own layer, above any child HWND including
-// WebView2 — that's what makes the viewport visible.
+// FD8 (May 2026): the viewport is a top-level WS_POPUP owned by the
+// main HWND, not a WS_CHILD. React reports the viewport quadrant rect
+// in main-client coordinates; LayoutBroker converts to screen
+// coordinates for SetWindowPos on the popup. The popup is composited
+// by DWM as its own layer, above any child HWND including WebView2 —
+// that's what makes the viewport visible.
 //
-// FD8 follow-up: also accepts `viewport/occlude` updates from React
-// to punch holes in the POPUP's window region wherever chrome HTML
-// (menus, tool panels, dialogs) overlaps the viewport rect. With
-// holes in the popup, the HTML pixels behind it become visible.
+// FD9b (May 2026): the popup is also WS_EX_LAYERED. Occlusion updates
+// from React (`viewport/occlude`) used to drive a SetWindowRgn HRGN
+// cut-out; they now translate the occlusion rect into popup-client
+// coords and forward to AlphaCompositor::SetOcclusion, which
+// per-frame stamps alpha (with a smoothstep feather) into the
+// readback DIB before UpdateLayeredWindow. LayoutBroker keeps the
+// main-client-coord map so it can re-emit translated rects whenever
+// the popup moves or resizes.
 #ifndef HOST_LAYOUT_BROKER_H
 #define HOST_LAYOUT_BROKER_H
 
@@ -25,6 +29,8 @@ class Engine;
 
 namespace host {
 
+class AlphaCompositor;
+
 class LayoutBroker
 {
 public:
@@ -37,6 +43,13 @@ public:
     // ready"; Apply still performs the SetWindowPos so layout works,
     // but skips the D3D9 swap-chain reset.
     void SetEngine(Engine* engine) { m_engine = engine; }
+
+    // FD9b: inject the layered-window compositor. SetOcclusion /
+    // RemoveOcclusion forward to it after translating the rect from
+    // main-client coords to popup-client coords. Null is treated as
+    // "compositor not installed" — occlusion updates are recorded
+    // (so a later attach can replay them) but no stamping happens.
+    void SetAlphaCompositor(AlphaCompositor* compositor);
 
     // x/y/w/h are device pixels in the OWNER MAIN HWND'S client
     // coordinates, exactly what React's ViewportSlot sends from
@@ -59,56 +72,39 @@ public:
     // size + the layout offsets cached at the last Apply. Used by
     // HostWindow's WM_SIZE handler so the popup tracks main's resize
     // synchronously, before React's ResizeObserver fires the next
-    // authoritative layout/viewport-rect. Without this, the popup
-    // stays at its cached size during resize and exposes a strip of
-    // the parent HWND brush along the bottom/right edge.
-    //
-    // The layout offsets (distance from main client's L/T/R/B edges
-    // to the viewport quadrant edges) are cached at every Apply().
-    // Predicted rect = (leftOff, topOff,
-    //                    newClientW - leftOff - rightOff,
-    //                    newClientH - topOff - bottomOff). React's
-    // App.tsx layout is currently flex-based with a fixed left
-    // sidebar, header, status bar, and track editor — so these
-    // offsets remain constant under window resize.
+    // authoritative layout/viewport-rect.
     void PredictAndApply();
 
-    // FD8 follow-up: register an occlusion rect (in main-client
-    // coords) from React. `id` is a stable handle the React side
-    // uses to refer to its own occluding component
-    // (e.g. "tool-panel:background", "menu:file"). Passing a null
-    // rect (w<=0 or h<=0) removes the occlusion for that id.
-    // Triggers a popup region rebuild.
+    // Register an occlusion rect (in main-client coords) from React.
+    // `id` is a stable handle the React side uses (e.g.
+    // "tool-panel:background", "menu:file"). Passing a null rect
+    // (w<=0 or h<=0) removes the occlusion for that id.
     void SetOcclusion(const std::string& id, int x, int y, int w, int h);
     void RemoveOcclusion(const std::string& id);
 
 private:
-    // FD8 follow-up: rebuild the popup window region from the cached
-    // viewport rect + current occlusion map. Called from Apply,
-    // RefreshScreenPosition, SetOcclusion, RemoveOcclusion.
-    void RebuildPopupRegion();
+    // FD9b: forward all currently-registered occlusions to the
+    // compositor, translated to popup-client coords using the current
+    // popup origin (m_lastX, m_lastY). Called after Apply /
+    // PredictAndApply / RefreshScreenPosition because moving the
+    // popup changes the popup-client coord of every occlusion.
+    void ReemitOcclusions();
 
     HWND    m_viewport;
     Engine* m_engine;
+    AlphaCompositor* m_compositor = nullptr;
     // Occlusion rects from React (main-client coords). Each id maps
-    // to one rect; null/zero-size removes the entry. Order doesn't
-    // matter — we union them all to build the popup region.
+    // to one rect; null/zero-size removes the entry.
     struct Occlusion { int x, y, w, h; };
     std::unordered_map<std::string, Occlusion> m_occlusions;
     // Track the last applied size so we only fire a (relatively
     // expensive) D3D9 device Reset when the size actually changed.
-    // Move-only updates (sidebar collapse/expand at fixed viewport size
-    // still report new x/y) don't churn the swap chain.
     int     m_lastW;
     int     m_lastH;
-    // FD8: cache the last viewport rect (in main-client coords) so
-    // RefreshScreenPosition can rebuild the screen-coord rect on
-    // owner move.
+    // FD8: last viewport rect (in main-client coords).
     int     m_lastX = 0;
     int     m_lastY = 0;
-    // FD8 polish: cache main's client size at the moment of the last
-    // Apply, so PredictAndApply can derive the edge-offsets (L/T/R/B)
-    // and reapply them against the new client size on WM_SIZE.
+    // FD8 polish: main's client size at the last Apply.
     int     m_lastClientW = 0;
     int     m_lastClientH = 0;
 };
