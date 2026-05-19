@@ -157,6 +157,19 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   // clicks always do their normal thing (select / drag).
   const [mode, setMode] = useState<EditMode>("select");
 
+  // FD10 (Group D follow-up): optimistic override for the Time/Value
+  // spinners. handleKeyDragEnd + handleCanvasAdd update
+  // `selectedKeyTimes` synchronously to the new time, but `current.keys`
+  // doesn't refresh until the bridge round-trips and the parent re-
+  // fetches via emitters/get-tracks. During that gap the spinners
+  // would read from the stale `current.keys` and find no match for the
+  // new time → singleSelected null → boxes show 0 disabled. The
+  // override stores the just-committed (time, value) so the spinners
+  // populate immediately; the next `tracks` prop change clears it.
+  const [optimisticSelected, setOptimisticSelected] = useState<
+    { time: number; value: number } | null
+  >(null);
+
   const current = useMemo<TrackDto>(() => {
     const found = tracks.find((t) => t.name === activeTrack);
     // Guard: if the wire response was malformed (wrong order), fall
@@ -197,7 +210,16 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
     setActiveTrack(next);
     setLockTo("None");
     setSelectedKeyTimes(new Set());
+    setOptimisticSelected(null);
   };
+
+  // FD10 (Group D follow-up): clear the optimistic override whenever
+  // fresh tracks arrive from the host. After the clear, `current.keys`
+  // is the source of truth and `singleSelected` falls back to its
+  // normal find() path.
+  useEffect(() => {
+    setOptimisticSelected(null);
+  }, [tracks]);
 
   // Click handler routed from CurveEditor. Plain click → replace
   // selection with the clicked key. Ctrl/Cmd+click → toggle. Shift+
@@ -262,6 +284,10 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
         next.add(newTime);
         return next;
       });
+      // FD10 (Group D follow-up): seed the override so the Time/Value
+      // spinners populate immediately. Cleared when the next `tracks`
+      // refresh arrives via the useEffect on `tracks`.
+      setOptimisticSelected({ time: newTime, value: newValue });
       void bridge.request({
         kind: "emitters/set-track-key",
         params: {
@@ -295,6 +321,11 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
         // host bumped to dedupe).
         const insertedTime = res.time ?? time;
         setSelectedKeyTimes(new Set([insertedTime]));
+        // FD10 (Group D follow-up): seed the override with the
+        // requested (insertedTime, value) so the Time/Value spinners
+        // populate immediately, even if the user clicks-and-drags
+        // before the tracks-refresh round-trip completes.
+        setOptimisticSelected({ time: insertedTime, value });
       }).catch(() => {
         /* silent — same as handleKeyDragEnd */
       });
@@ -376,6 +407,17 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
   const singleSelected = useMemo<{ time: number; value: number; isBorder: boolean } | null>(() => {
     if (selectedKeyTimes.size !== 1) return null;
     const onlyTime = selectedKeyTimes.values().next().value as number;
+    // FD10 (Group D follow-up): optimistic override wins when the
+    // selected time matches a just-committed value that the parent's
+    // `tracks` re-fetch hasn't caught up to yet. Without this the
+    // spinners would briefly show 0/disabled after every drag/insert.
+    if (optimisticSelected !== null && optimisticSelected.time === onlyTime) {
+      return {
+        time: optimisticSelected.time,
+        value: optimisticSelected.value,
+        isBorder: borderKeyTimes.has(optimisticSelected.time),
+      };
+    }
     const key = current.keys.find((k) => k.time === onlyTime);
     if (key === undefined) return null;
     return {
@@ -383,7 +425,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
       value: key.value,
       isBorder: borderKeyTimes.has(key.time),
     };
-  }, [selectedKeyTimes, current.keys, borderKeyTimes]);
+  }, [selectedKeyTimes, current.keys, borderKeyTimes, optimisticSelected]);
 
   const spinnerDisabled = singleSelected === null
     || bridge === undefined
@@ -416,6 +458,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
         );
       }
       setSelectedKeyTimes(new Set([clampedTime]));
+      setOptimisticSelected({ time: clampedTime, value: singleSelected.value });
       void bridge.request({
         kind: "emitters/set-track-key",
         params: {
@@ -436,6 +479,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
       if (bridge === undefined || emitterId === undefined) return;
       if (nextValue === singleSelected.value) return;
       const clamped = Math.max(valueRange.min, Math.min(valueRange.max, nextValue));
+      setOptimisticSelected({ time: singleSelected.time, value: clamped });
       void bridge.request({
         kind: "emitters/set-track-key",
         params: {
