@@ -18,6 +18,7 @@ import {
 } from "../mock-state";
 import type {
   EmitterTreeDto,
+  EmitterTreeNode,
   EngineStateDto,
   Event,
 } from "@particle-editor/bridge-schema";
@@ -668,6 +669,48 @@ describe("MockBridge contract", () => {
     expect(lastTree).not.toBeNull();
     const names = lastTree!.root.children.map((c) => c.name);
     expect(names).toEqual(["Sparks", "Smoke", "Flash"]);
+    off();
+  });
+
+  it("emitters/set-visible flips a single emitter's visible flag (FD10)", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    await b.request({
+      kind: "emitters/set-visible",
+      params: { id: 0, visible: false },
+    });
+    expect(lastTree).not.toBeNull();
+    const smoke = lastTree!.root.children.find((c) => c.id === 0)!;
+    expect(smoke.visible).toBe(false);
+    // Siblings unchanged.
+    const sparks = lastTree!.root.children.find((c) => c.id === 3)!;
+    expect(sparks.visible).toBe(true);
+    off();
+  });
+
+  it("emitters/set-all-visible recurses through the tree (FD10)", async () => {
+    const b = new MockBridge();
+    let lastTree: EmitterTreeDto | null = null;
+    const off = b.on("emitters/tree/changed", (e) => { lastTree = e.payload; });
+    await b.request({
+      kind: "emitters/set-all-visible",
+      params: { visible: false },
+    });
+    expect(lastTree).not.toBeNull();
+    // Every emitter — roots + children of every depth — should be hidden.
+    const allHidden = (n: EmitterTreeNode): boolean =>
+      n.visible === false && n.children.every(allHidden);
+    expect(lastTree!.root.children.every(allHidden)).toBe(true);
+
+    // Bulk-show puts them all back.
+    await b.request({
+      kind: "emitters/set-all-visible",
+      params: { visible: true },
+    });
+    const allVisible = (n: EmitterTreeNode): boolean =>
+      n.visible === true && n.children.every(allVisible);
+    expect(lastTree!.root.children.every(allVisible)).toBe(true);
     off();
   });
 

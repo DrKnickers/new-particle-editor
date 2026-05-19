@@ -178,6 +178,12 @@ public:
     // handler after AcceleratorBridge::TryDispatch returns true.
     void EmitAcceleratorPressed(const std::string& combo);
 
+    // FD10 (Group A): push the 3D ground-plane intersection of the
+    // viewport mouse cursor (world-space). Called from the viewport
+    // popup's WM_MOUSEMOVE — throttled host-side to ~30 Hz so the
+    // WebView2 message channel isn't saturated.
+    void EmitCursorPosition3D(float x, float y, float z);
+
 private:
     // Builds the response envelope for one parsed `req` envelope. Single
     // source of truth for the kind-string ladder — both the async

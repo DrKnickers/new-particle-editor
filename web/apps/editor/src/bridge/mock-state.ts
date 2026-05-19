@@ -556,6 +556,42 @@ export function moveEmitterInTree(
   return { root: { ...tree.root, children: next } };
 }
 
+/** Flip a single emitter's `visible` flag. Returns the new tree on
+ *  success or null when the id isn't found. Matches the legacy
+ *  `EmitterList_ToggleEmitterVisibility` which flips the selected
+ *  emitter only — children are untouched. */
+export function setEmitterVisibleMock(
+  tree: EmitterTreeDto,
+  id: number,
+  visible: boolean,
+): EmitterTreeDto | null {
+  let found = false;
+  const walk = (n: EmitterTreeNode): EmitterTreeNode => {
+    if (n.id === id) {
+      found = true;
+      return { ...n, visible };
+    }
+    return { ...n, children: n.children.map(walk) };
+  };
+  const next: EmitterTreeDto = { root: walk(tree.root) };
+  return found ? next : null;
+}
+
+/** Recursively set `visible` on every non-virtual emitter in the tree
+ *  (excludes the synthetic root). Matches the legacy
+ *  `EmitterList_SetAllEmitterVisibility`. */
+export function setAllEmittersVisibleMock(
+  tree: EmitterTreeDto,
+  visible: boolean,
+): EmitterTreeDto {
+  const walk = (n: EmitterTreeNode): EmitterTreeNode => ({
+    ...n,
+    visible,
+    children: n.children.map(walk),
+  });
+  return { root: { ...tree.root, children: tree.root.children.map(walk) } };
+}
+
 /** Find the smallest unused positive linkGroup id in the tree. Starts
  *  at 1; matches the host's "smallest unused positive uint32_t" rule. */
 export function findUnusedLinkGroupId(tree: EmitterTreeDto): number {

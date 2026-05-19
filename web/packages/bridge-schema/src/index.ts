@@ -489,6 +489,14 @@ export type Request =
   // practice).
   | { kind: "emitters/add-root";            params: Record<string, never> }
   | { kind: "emitters/move";                params: { id: number; direction: "up" | "down" } }
+  // FD10 (Group A polish): visibility ops for the EmitterTree panel
+  // toolbar. `set-visible` flips a single emitter's `visible` flag
+  // without touching its children (matches legacy
+  // `EmitterList_ToggleEmitterVisibility`). `set-all-visible` walks
+  // the whole tree (matches legacy `EmitterList_SetAllEmitterVisibility`).
+  // Both emit `emitters/tree/changed` + `engine/state/changed`.
+  | { kind: "emitters/set-visible";         params: { id: number; visible: boolean } }
+  | { kind: "emitters/set-all-visible";     params: { visible: boolean } }
   | { kind: "linkGroups/set-membership";    params: { ids: number[]; groupId: number | null } }
 
   // Emitter drag/drop (Phase 3 Screen 4 Batch B3)
@@ -650,6 +658,8 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/add-death-child" }    ? { newId: number } :
   R extends { kind: "emitters/add-root" }           ? { newId: number } :
   R extends { kind: "emitters/move" }               ? Record<string, never> :
+  R extends { kind: "emitters/set-visible" }        ? Record<string, never> :
+  R extends { kind: "emitters/set-all-visible" }    ? Record<string, never> :
   R extends { kind: "linkGroups/set-membership" }   ? Record<string, never> :
 
   // Emitter drag/drop (Phase 3 Screen 4 Batch B3)
@@ -693,7 +703,11 @@ export type Event =
   | { kind: "recent/changed";         payload: { paths: string[] } }
   | { kind: "undo/changed";           payload: { canUndo: boolean; canRedo: boolean; label?: string } }
   | { kind: "accelerator/pressed";    payload: { combo: string } }
-  | { kind: "spawner/active-count";   payload: { count: number } };
+  | { kind: "spawner/active-count";   payload: { count: number } }
+  // FD10 (Group A): viewport mouse cursor's intersection with the
+  // ground plane in world coords. Host throttles to ~30 Hz so the
+  // status bar update doesn't saturate the bridge.
+  | { kind: "cursor/position-3d";     payload: { x: number; y: number; z: number } };
 
 export type EventKind = Event["kind"];
 export type EventOf<K extends EventKind> = Extract<Event, { kind: K }>;

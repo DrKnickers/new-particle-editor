@@ -16,6 +16,20 @@ Conventions:
 
 ## Changelog
 
+### EmitterTree panel toolbar + 3D cursor in status bar (FD10 Group A polish)
+
+*TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+First wave of the legacy-parity polish sweep. The new-UI's EmitterTree sidebar now carries the same panel-header toolbar the legacy `EmitterList` panel had — `[New ▾] [Delete] [▲ Move Up] [▼ Move Down] · [👁] [Show All] [Hide All]` — matching the layout from [`src/UI/EmitterList.cpp:3016`](src/UI/EmitterList.cpp:3016). Adding emitters, deleting, reordering roots, and toggling per-emitter visibility no longer require the top menubar or right-click; the muscle-memory affordances live where the eye expects them. The status bar also picks up its fifth column from legacy — `Cursor: x, y, z` showing the 3D ground-plane intersection of the viewport mouse cursor, updated at ~30 Hz while the cursor is over the viewport.
+
+**How we tackled it.** New `EmitterTreeToolbar` sub-component at the top of [`web/apps/editor/src/screens/EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx) replaces the prior "Emitters" heading. Disabled-state gating reads the primary-selection node + the live tree:  New ▾ submenu items for Lifetime/Death gate on the parent already having a child of that role; Delete gates on primary; Move Up/Down keep the existing context-menu's root-only + edge rule (`isRoot && indexInSiblings > 0/<siblings.length-1`). New `[👁]` button reads the primary's `visible` flag and renders `Eye` vs `EyeOff` (Lucide) — click dispatches `emitters/set-visible` with the negated value. Show All / Hide All are pure bulk dispatches. The bridge gains two new requests: `emitters/set-visible { id, visible }` (single emitter, leaves children alone — matches legacy `EmitterList_ToggleEmitterVisibility`) and `emitters/set-all-visible { visible }` (walks every emitter — matches `EmitterList_SetAllEmitterVisibility`). Both emit `emitters/tree/changed` + `engine/state/changed`; neither touches the dirty bit because `Emitter::visible` is `// Not stored, for use in editor only` per [`src/ParticleSystem.h:131`](src/ParticleSystem.h:131). Cursor coords ride a new `cursor/position-3d` event emitted from the viewport popup's WM_MOUSEMOVE in [`src/host/HostWindow.cpp`](src/host/HostWindow.cpp), throttled to ~30 Hz via a `GetTickCount()` interval check; the host reuses the existing `GetCursorPos3D` helper from `src/MouseCursor.h` (already shared between legacy and new-UI). React's `StatusBar` adds a fifth cell that formats `(x, y, z)` to 1 decimal.
+
+**Issues encountered and resolutions.** One worth recording.
+
+1. **Per-row visibility eye vs. panel-toolbar `[👁]`.** The original FD5 deferred-item list called for a "per-row eye affordance" — clickable Eye/EyeOff icons inside each tree row. Re-reading the legacy ([`src/UI/EmitterList.cpp:3029`](src/UI/EmitterList.cpp:3029)) shows that's not actually parity: legacy has a single Toggle Visibility button in the panel toolbar that operates on the selected emitter, no per-row icons. The per-row idea was a new-UI invention. Sticking with the legacy shape: a single panel-toolbar button that reads/writes the primary selection's `visible` flag, plus the bulk Show All / Hide All buttons. If a per-row affordance becomes desirable later it's purely additive.
+
+---
+
 ### Layered viewport with software alpha-stamp cut-outs (FD9b)
 
 *TODO · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*

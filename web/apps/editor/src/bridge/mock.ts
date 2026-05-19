@@ -42,6 +42,8 @@ import {
   renameEmitter,
   reorderRootEmitter,
   reparentEmitterInTree,
+  setAllEmittersVisibleMock,
+  setEmitterVisibleMock,
   setLinkGroupMembership,
   setTrackInterpolationInOverlay,
   setTrackKeyInOverlay,
@@ -812,6 +814,25 @@ export class MockBridge implements Bridge {
           this.emit({ kind: "emitters/tree/changed", payload: cur });
           return {};
         }
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      case "emitters/set-visible": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = setEmitterVisibleMock(cur, req.params.id, req.params.visible);
+        if (next === null) return {};
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return {};
+      }
+
+      case "emitters/set-all-visible": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = setAllEmittersVisibleMock(cur, req.params.visible);
         useMockEmitterTree.getState().setTree(next);
         this.emit({ kind: "emitters/tree/changed", payload: next });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });

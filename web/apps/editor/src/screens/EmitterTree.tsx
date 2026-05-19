@@ -59,6 +59,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import * as Menubar from "@radix-ui/react-menubar";
+import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import type {
   Bridge,
   EmitterTreeDto,
@@ -731,6 +733,229 @@ function EmitterRow({
 const ROW_HEIGHT_PX = 24;
 const GUTTER_WIDTH_PX = 16;
 
+// ─── Panel-header toolbar ────────────────────────────────────────────
+// FD10 (Group A polish): restore the legacy panel toolbar from
+// src/UI/EmitterList.cpp:3016. Layout matches legacy ordering:
+//   [New ▾] [Delete] [▲ Move Up] [▼ Move Down]   (this batch)
+//   [👁]    [Show All] [Hide All]                (next batch, T2/T3)
+// All four buttons here use bridge calls that already exist in the
+// schema — no host-side work needed.
+
+const TOOLBAR_BTN =
+  "flex h-6 w-6 items-center justify-center rounded text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent outline-none";
+
+const NEW_EMITTER_MENU_ITEM =
+  "flex select-none items-center gap-2 rounded px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-800 focus:bg-neutral-800 outline-none cursor-pointer data-[disabled]:text-neutral-600 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent";
+
+function findNodeInTree(
+  tree: EmitterTreeDto | null,
+  id: number | null,
+): { node: EmitterTreeNode; siblings: EmitterTreeNode[]; indexInSiblings: number } | null {
+  if (tree === null || id === null) return null;
+  const walk = (
+    siblings: EmitterTreeNode[],
+  ): ReturnType<typeof findNodeInTree> => {
+    for (let i = 0; i < siblings.length; i++) {
+      const n = siblings[i];
+      if (n.id === id) return { node: n, siblings, indexInSiblings: i };
+      const hit = walk(n.children);
+      if (hit !== null) return hit;
+    }
+    return null;
+  };
+  return walk(tree.root.children);
+}
+
+type ToolbarProps = {
+  bridge: Bridge;
+  tree: EmitterTreeDto | null;
+  primaryId: number | null;
+};
+
+function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
+  const primary = findNodeInTree(tree, primaryId);
+  const hasPrimary = primary !== null;
+  // Lifetime/Death child adds require both a primary AND a free slot
+  // (parents can hold at most one of each role).
+  const canAddLifetime =
+    hasPrimary && !primary!.node.children.some((c) => c.role === "lifetime");
+  const canAddDeath =
+    hasPrimary && !primary!.node.children.some((c) => c.role === "death");
+  // Move is a root-only operation — same gate as the per-row context
+  // menu. Sibling reordering at lifetime/death depth is a separate
+  // capability not exposed by the legacy panel toolbar either.
+  const isRootPrimary = hasPrimary && primary!.node.role === "root";
+  const canMoveUp =
+    isRootPrimary && primary!.indexInSiblings > 0;
+  const canMoveDown =
+    isRootPrimary &&
+    primary!.indexInSiblings < primary!.siblings.length - 1;
+
+  const addRoot = () =>
+    void bridge.request({ kind: "emitters/add-root", params: {} });
+  const addLifetime = () => {
+    if (primaryId === null) return;
+    void bridge.request({
+      kind: "emitters/add-lifetime-child",
+      params: { parentId: primaryId },
+    });
+  };
+  const addDeath = () => {
+    if (primaryId === null) return;
+    void bridge.request({
+      kind: "emitters/add-death-child",
+      params: { parentId: primaryId },
+    });
+  };
+  const del = () => {
+    if (primaryId === null) return;
+    void bridge.request({ kind: "emitters/delete", params: { id: primaryId } });
+  };
+  const moveUp = () => {
+    if (primaryId === null) return;
+    void bridge.request({
+      kind: "emitters/move",
+      params: { id: primaryId, direction: "up" },
+    });
+  };
+  const moveDown = () => {
+    if (primaryId === null) return;
+    void bridge.request({
+      kind: "emitters/move",
+      params: { id: primaryId, direction: "down" },
+    });
+  };
+  const toggleVisibility = () => {
+    if (primaryId === null || !hasPrimary) return;
+    void bridge.request({
+      kind: "emitters/set-visible",
+      params: { id: primaryId, visible: !primary!.node.visible },
+    });
+  };
+  const showAll = () =>
+    void bridge.request({
+      kind: "emitters/set-all-visible",
+      params: { visible: true },
+    });
+  const hideAll = () =>
+    void bridge.request({
+      kind: "emitters/set-all-visible",
+      params: { visible: false },
+    });
+
+  // Eye glyph: open eye when the primary is currently visible (click
+  // → hide); closed eye when hidden (click → show). No primary → use
+  // open eye disabled.
+  const primaryVisible = hasPrimary && primary!.node.visible;
+  const EyeGlyph = primaryVisible ? Eye : EyeOff;
+
+  return (
+    <div
+      data-testid="emitter-tree-toolbar"
+      className="mb-1 flex items-center gap-0.5 border-b border-neutral-800 pb-1"
+    >
+      <Menubar.Root>
+        <Menubar.Menu>
+          <Menubar.Trigger
+            className={TOOLBAR_BTN}
+            title="New Emitter"
+            aria-label="New Emitter"
+          >
+            <Plus className="size-4" />
+          </Menubar.Trigger>
+          <Menubar.Portal>
+            <Menubar.Content
+              className="min-w-[160px] rounded-md border border-neutral-800 bg-neutral-900 p-1 shadow-xl z-50"
+              align="start"
+              sideOffset={4}
+            >
+              <Menubar.Item
+                onSelect={addRoot}
+                className={NEW_EMITTER_MENU_ITEM}
+              >
+                Root Emitter
+              </Menubar.Item>
+              <Menubar.Item
+                onSelect={addLifetime}
+                disabled={!canAddLifetime}
+                className={NEW_EMITTER_MENU_ITEM}
+              >
+                Lifetime Child
+              </Menubar.Item>
+              <Menubar.Item
+                onSelect={addDeath}
+                disabled={!canAddDeath}
+                className={NEW_EMITTER_MENU_ITEM}
+              >
+                Death Child
+              </Menubar.Item>
+            </Menubar.Content>
+          </Menubar.Portal>
+        </Menubar.Menu>
+      </Menubar.Root>
+      <button
+        type="button"
+        className={TOOLBAR_BTN}
+        title="Delete"
+        aria-label="Delete emitter"
+        disabled={!hasPrimary}
+        onClick={del}
+      >
+        <Trash2 className="size-4" />
+      </button>
+      <button
+        type="button"
+        className={TOOLBAR_BTN}
+        title="Move Up"
+        aria-label="Move emitter up"
+        disabled={!canMoveUp}
+        onClick={moveUp}
+      >
+        <ChevronUp className="size-4" />
+      </button>
+      <button
+        type="button"
+        className={TOOLBAR_BTN}
+        title="Move Down"
+        aria-label="Move emitter down"
+        disabled={!canMoveDown}
+        onClick={moveDown}
+      >
+        <ChevronDown className="size-4" />
+      </button>
+      <span className="mx-0.5 h-4 w-px bg-neutral-800" aria-hidden />
+      <button
+        type="button"
+        className={TOOLBAR_BTN}
+        title={primaryVisible ? "Hide" : "Show"}
+        aria-label="Toggle emitter visibility"
+        disabled={!hasPrimary}
+        onClick={toggleVisibility}
+      >
+        <EyeGlyph className="size-4" />
+      </button>
+      <button
+        type="button"
+        className="ml-0.5 h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 outline-none"
+        title="Show All Emitters"
+        aria-label="Show all emitters"
+        onClick={showAll}
+      >
+        Show All
+      </button>
+      <button
+        type="button"
+        className="h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 outline-none"
+        title="Hide All Emitters"
+        aria-label="Hide all emitters"
+        onClick={hideAll}
+      >
+        Hide All
+      </button>
+    </div>
+  );
+}
+
 export function EmitterTree({ bridge }: Props) {
   const [tree, setTree] = useState<EmitterTreeDto | null>(null);
   const selectedIds = useEmitterSelectionIds();
@@ -1038,9 +1263,7 @@ export function EmitterTree({ bridge }: Props) {
       onKeyDown={handleTreeKeyDown}
       className="flex h-full flex-col outline-none"
     >
-      <div className="mb-1 text-xs uppercase tracking-wide text-neutral-500">
-        Emitters
-      </div>
+      <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
       {tree === null ? (
         <div className="text-neutral-600 text-sm">(loading…)</div>
       ) : rootChildren.length === 0 ? (

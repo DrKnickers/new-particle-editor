@@ -2680,6 +2680,57 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/set-visible -----------------------------------
+    //
+    // FD10 (Group A): per-emitter visibility toggle for the EmitterTree
+    // panel toolbar's [👁] button. Sets `Emitter::visible` for the
+    // target only — children are untouched. `visible` is editor-only
+    // state (not persisted to the .alo file), so this handler does NOT
+    // markDirty. Still emits tree-changed + state-changed so the engine
+    // re-renders and any open inspector reflects the new flag.
+    if (kind == "emitters/set-visible")
+    {
+        int  id      = params.value("id", -1);
+        bool visible = params.value("visible", true);
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendOk(json::object());
+            return res;
+        }
+        target->visible = visible;
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
+    // -------- emitters/set-all-visible -------------------------------
+    //
+    // FD10 (Group A): bulk Show All / Hide All from the EmitterTree
+    // panel toolbar. Walks the entire emitter array (the engine stores
+    // all emitters flat with parent pointers — no recursion needed)
+    // and sets `visible` uniformly. Same editor-only semantic as
+    // set-visible above; no markDirty.
+    if (kind == "emitters/set-all-visible")
+    {
+        bool visible = params.value("visible", true);
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json::object());
+            return res;
+        }
+        const auto& emitters = (*m_pParticleSystem)->getEmitters();
+        for (ParticleSystem::Emitter* e : emitters)
+        {
+            if (e != nullptr) e->visible = visible;
+        }
+        sendOk(json::object());
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- linkGroups/set-membership ------------------------------
     //
     // Walk `ids` and assign each emitter's `linkGroup` to the resolved
@@ -3018,6 +3069,17 @@ void BridgeDispatcher::EmitAcceleratorPressed(const std::string& combo)
         {"type",    "evt"},
         {"kind",    "accelerator/pressed"},
         {"payload", {{"combo", combo}}},
+    };
+    m_emit(env.dump());
+}
+
+void BridgeDispatcher::EmitCursorPosition3D(float x, float y, float z)
+{
+    if (!m_emit) return;
+    json env = {
+        {"type",    "evt"},
+        {"kind",    "cursor/position-3d"},
+        {"payload", {{"x", x}, {"y", y}, {"z", z}}},
     };
     m_emit(env.dump());
 }

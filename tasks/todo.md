@@ -1,281 +1,120 @@
-# LT-4 Phase 4.1 FD9b — Layered viewport with software alpha-stamp cut-outs
+# LT-4 Phase 4.1 FD10 — Group A legacy parity polish
 
 ## Goal & scope
 
-Replace FD7/FD8's `SetWindowRgn(hViewport, HRGN)` binary cut-out with
-`WS_EX_LAYERED` + `UpdateLayeredWindow(ULW_ALPHA)` on the viewport popup,
-plus software alpha-stamping inside `AlphaCompositor::Composite` so the
-occluded chrome rects get a *soft-edged* alpha falloff instead of a hard
-pixel boundary. Keep the existing occlusion bridge plumbing — the
-chrome still reports rect updates via `viewport/occlude`, only the
-mechanism downstream changes.
+Restore the legacy `EmitterList` panel-header toolbar (6 buttons) and
+the 5-column status bar's cursor-coordinates column. Closes the most
+visible muscle-memory gaps between new-UI and legacy. Per-row eye
+toggle is NOT pursued — legacy doesn't have one either; the panel
+toolbar's [👁] button operates on the selected emitter and that's the
+parity target.
 
 **In**
-- New `host::AlphaCompositor` module: off-screen `D3DFMT_A8R8G8B8` RT,
-  `D3DPOOL_SYSTEMMEM` readback surface, `CreateDIBSection` bitmap +
-  memDC, `UpdateLayeredWindow(ULW_ALPHA)` per-frame.
-- `Engine::SetAlphaCompositor` injection; `Render` swaps slot-0 RT to
-  the compositor's off-screen RT, replaces `Present` with `Composite`.
-- `WS_EX_LAYERED` style on the viewport popup; revert parent-class
-  brush to `nullptr`.
-- `AlphaCompositor::SetOcclusion(id, rect, feather)` /
-  `RemoveOcclusion(id)` — owns the occlusion map; stamps alpha to 0
-  inside the rect, smoothstep-ramps from 0 → 0xFF over a configurable
-  feather band at the rect's outer edge (default 3 px).
-- `LayoutBroker` forwards `SetOcclusion`/`RemoveOcclusion` to
-  `AlphaCompositor`; the old HRGN-building path
-  (`RebuildPopupRegion` + `SetWindowRgn`) is deleted.
-- `MenuBar`'s `CONTENT` class regains `shadow-xl` — the layered popup
-  composites it cleanly inside occluded regions.
+- EmitterTree panel-header toolbar with: `[New ▾] [Delete] [▲][▼]
+  [👁] [Show All][Hide All]` matching the legacy ordering from
+  [`src/UI/EmitterList.cpp:3016`](src/UI/EmitterList.cpp:3016).
+- Bridge surface for visibility: `emitters/set-visible { id, visible }`
+  and `emitters/set-all-visible { visible }` (host + mock + tests).
+- StatusBar cursor-coords column. The host emits `cursor/position-3d`
+  on viewport mouse-move, the React side renders the values in a new
+  5th column.
 
 **Out**
-- Engine pipeline alpha rework (FD9 option a). Engine still renders
-  fully opaque pixels inside the viewport; transparency comes from
-  the alpha-stamp at occluded chrome rects.
-- Removing `viewport/occlude` from the bridge schema (FD9 option a's
-  original cleanup) — we still need this protocol.
-- Throttling readback to 60 FPS / async readback / front-buffer
-  alternatives — performance follow-up if FPS regresses below 60.
+- Per-row eye-icon affordance (not legacy parity).
+- Bulk-select panel toolbar variations.
+- Re-doing the legacy's `IDR_NEW_EMITTER_MENU` exact submenu — Radix
+  DropdownMenu is the right idiom in React.
 
 ## What the codebase gives us
 
-- `src/engine.cpp:567` `Engine::Render`: captures slot-0 RT into
-  `pScreenSurface` at line 627, restores it at line 845, calls
-  `Present` at line 876. Inserting a `SetRenderTarget(0, off-screen)`
-  before line 627 redirects the captured pScreenSurface, so the
-  whole composite chain flows through our RT without other edits.
-- `src/engine.h:121` `Engine::GetDevice()` — public accessor for
-  `IDirect3DDevice9*`. No new accessor needed.
-- `src/host/HostWindow.cpp:792` viewport popup CreateWindowExW —
-  the spot where `WS_EX_LAYERED` is added.
-- `src/host/HostWindow.cpp:1281` `wc.hbrBackground = CreateSolidBrush
-  (RGB(40, 22, 56))` — FD8 polish under-paint; can revert.
-- `src/host/LayoutBroker.{h,cpp}` already has `SetOcclusion`,
-  `RemoveOcclusion`, `RebuildPopupRegion`, `m_occlusions`. The first
-  two stay (forwarding); the third is deleted and the map moves to
-  `AlphaCompositor`.
-- `src/ParticleEditor.vcxproj` host ItemGroups at lines 195–252 are
-  the pattern for adding a new host TU with `Win32` exclusion.
-
-## Architecture / implementation approach
-
-### Pipeline per frame
-
-```
-Engine::Render
-├── SetRenderTarget(0, alphaCompositor->GetRenderTarget())   [new preamble]
-├── (existing render passes: scene → bloom → distort → final)
-└── alphaCompositor->Composite(hViewport)                    [replaces Present]
-        ├── device->GetRenderTargetData(offscreenRT, sysMem)
-        ├── lock sysMem, memcpy into DIB (matching pitch)
-        ├── stampOcclusions(dib, occlusionMap)               [NEW]
-        └── UpdateLayeredWindow(hViewport, …, dib, ULW_ALPHA)
-```
-
-### `AlphaCompositor` interface
-
-```cpp
-namespace host {
-
-class AlphaCompositor {
-public:
-    explicit AlphaCompositor(IDirect3DDevice9* device);
-    ~AlphaCompositor();
-
-    AlphaCompositor(const AlphaCompositor&) = delete;
-    AlphaCompositor& operator=(const AlphaCompositor&) = delete;
-
-    void Resize(int width, int height);
-    IDirect3DSurface9* GetRenderTarget() const;
-
-    // Stamp the layered alpha to 0 inside `rectClient` with a
-    // `feather` px smoothstep falloff at the boundary. `rectClient`
-    // is in popup-client coords (same coords as the DIB). Replaces
-    // any prior occlusion with the same id. Thread-safe? — single
-    // thread (UI), no locking.
-    void SetOcclusion(std::string id, RECT rectClient, int feather = 3);
-    void RemoveOcclusion(const std::string& id);
-
-    // Per-frame: GPU readback + alpha stamp + UpdateLayeredWindow.
-    void Composite(HWND layeredHwnd);
-
-private:
-    struct Impl;
-    std::unique_ptr<Impl> m_impl;
-};
-
-} // namespace host
-```
-
-### Alpha stamp math
-
-For each occlusion rect `R` (inset by the feather band on the outer
-edge):
-- For pixels inside `R` strictly: write `alpha = 0`.
-- For pixels in the `feather`-pixel ring outside `R`: write
-  `alpha = lerp(0, currentAlpha, smoothstep(0, feather, d))` where
-  `d` is the Chebyshev distance from the rect's outer edge.
-
-Implementation: for each scanline that intersects `R`'s feather
-zone, walk columns once and either zero the pixel's A byte or
-multiply it by a precomputed smoothstep weight (LUT of size
-`feather + 1`). The DIB byte order is `BGRA` little-endian =
-`B G R A` in memory; A is the 4th byte. Direct `dst[x*4 + 3] = α`.
-
-### `Engine::Render` changes
-
-Preamble (top of function, after the cooperative-level check):
-
-```cpp
-if (m_pAlphaCompositor && m_pAlphaCompositor->GetRenderTarget()) {
-    m_pDevice->SetRenderTarget(0, m_pAlphaCompositor->GetRenderTarget());
-}
-```
-
-Replace `m_pDevice->Present(NULL, NULL, NULL, NULL);` with:
-
-```cpp
-if (m_pAlphaCompositor) {
-    m_pAlphaCompositor->Composite(m_presentationParameters.hDeviceWindow);
-} else {
-    m_pDevice->Present(NULL, NULL, NULL, NULL);
-}
-```
-
-`Engine::Reset` end-of-function:
-
-```cpp
-if (m_pAlphaCompositor) {
-    RECT rc{};
-    if (GetClientRect(m_presentationParameters.hDeviceWindow, &rc)) {
-        m_pAlphaCompositor->Resize(rc.right - rc.left, rc.bottom - rc.top);
-    }
-}
-```
-
-### `LayoutBroker` changes
-
-- Keep `SetOcclusion(id, rect)` / `RemoveOcclusion(id)` signatures.
-- Delete `m_occlusions` map (moves to `AlphaCompositor`).
-- Delete `RebuildPopupRegion` (and the calls to it in `Apply`,
-  `RefreshScreenPosition`, `PredictAndApply`).
-- Add `void SetAlphaCompositor(host::AlphaCompositor*)`.
-- `SetOcclusion` / `RemoveOcclusion` forward to the compositor (when
-  installed). When `m_compositor == nullptr` (viewport_poc / pre-init),
-  silently no-op — matches today's behaviour where occlusion calls
-  before viewport-rect arrival are also harmless.
-
-### `HostWindow` integration
-
-After `engine = std::make_unique<Engine>(...)`:
-
-```cpp
-try {
-    alphaCompositor = std::make_unique<host::AlphaCompositor>(engine->GetDevice());
-    RECT vrc{};
-    GetClientRect(hViewport, &vrc);
-    alphaCompositor->Resize(vrc.right - vrc.left, vrc.bottom - vrc.top);
-    engine->SetAlphaCompositor(alphaCompositor.get());
-    layout.SetAlphaCompositor(alphaCompositor.get());
-    Log("[host] AlphaCompositor up\n");
-} catch (const std::exception& e) {
-    Log("[host] AlphaCompositor init failed: %s — falling back\n", e.what());
-    alphaCompositor.reset();
-}
-```
-
-`hViewport = CreateWindowExW(…)` gets `WS_EX_LAYERED` added.
-
-`wc.hbrBackground = nullptr` (revert the FD8 polish under-paint).
-
-Shutdown ordering (WM_DESTROY): detach Engine + LayoutBroker pointers
-to compositor BEFORE destroying compositor:
-
-```cpp
-if (engine) engine->SetAlphaCompositor(nullptr);
-layout.SetAlphaCompositor(nullptr);
-alphaCompositor.reset();
-engine.reset();
-```
-
-## Risks named up front
-
-1. **Engine alpha = 0xFF everywhere, so the popup is fully opaque
-   outside occlusion rects.** *Mitigation*: that's by design — the
-   viewport pixels SHOULD be opaque against the WebView. Occlusion
-   rects are the only places where we want WebView to show through.
-2. **Composite-shader writes alpha differently than expected.** Risk:
-   the final composite quad at engine.cpp:851–873 runs the distort
-   shader which writes RGBA. If the shader writes alpha=0 somewhere,
-   we'd accidentally cut out a hole in the viewport. *Mitigation*:
-   verify visually at task 5 step 6 (viewport should look like a
-   fully-opaque rectangle, no random transparent patches).
-3. **Modal sizemove resize storm.** Risk: continuous resize triggers
-   `Engine::Reset` → `AlphaCompositor::Resize` → reallocate RT/DIB
-   every frame. Could be slow or cause flicker. *Mitigation*:
-   `Resize` is idempotent on unchanged (w, h). For continuous resize,
-   the resize-per-event cost is dominated by the device Reset anyway.
-4. **Performance: full-frame readback every tick.** ~944×337×4 ≈
-   1.3 MB/frame; readback ~1–4 ms. Current FPS 200+; expected 80–150.
-   *Mitigation*: acceptable for a particle editor at 60 FPS floor;
-   step 8 measures. If FPS < 60 with the default scene, defer to a
-   follow-up (throttle / async).
-5. **Occlusion map race.** Risk: `SetOcclusion` could be called from
-   a non-render thread. *Mitigation*: today's `LayoutBroker` is only
-   touched from the UI thread; `BridgeDispatcher` runs requests on
-   that thread via WebView2 message routing. Document with a comment;
-   single-thread invariant.
-6. **`engine->GetDevice()` returns nullptr if Engine init failed.**
-   The HostWindow already wraps Engine construction in try/catch; if
-   it fails, `engine` is reset. *Mitigation*: also guard the
-   compositor construction — only attempt if `engine && engine->GetDevice()`.
-
-## Testing & verification
-
-**Per-task build:** MSBuild x64 Debug clean, 0 warnings, 0 errors,
-after each task's commit.
-
-**Final visual gate (at task 6):**
-- Launch `x64/Debug/ParticleEditor.exe --new-ui`.
-- Open each top-level menu in turn — File / Edit / Emitters / Mods
-  / View / Help. The dropdown should appear with `shadow-xl` soft
-  shadow visible, and the edges where the dropdown overlaps the
-  viewport should blend smoothly (no hard pixel seam).
-- Open each tool panel (Lighting, Bloom, Background, Ground Texture,
-  Spawner). The panel sits over the viewport with smooth edges.
-- Resize the editor by dragging — viewport tracks, no flash.
-- Status-bar FPS — record the value with the default empty scene
-  (ground plane + skybox). Acceptance: ≥ 60.
-- Camera drag in the viewport for ~30 s — smooth, no stutter.
-
-**Native test gate (at task 8):**
-- `pnpm test:native` — current count 76 passing. Expect 76 still
-  passing; no test specifically targets the cut-out mechanism so
-  the change should be invisible.
+- `emitters/add-root` / `emitters/add-lifetime-child` /
+  `emitters/add-death-child` / `emitters/delete` /
+  `emitters/move { direction: "up" | "down" }` — all exist in the
+  schema and are tested.
+- `useEmitterSelectionStore` — primary + multi-select state.
+- `ParticleSystem::Emitter::visible` field exists; legacy
+  `EmitterList_ToggleEmitterVisibility` /
+  `EmitterList_SetAllEmitterVisibility` show the recursion pattern
+  for "Show All/Hide All" (cascade through children).
+- Legacy `GetCursorPos3D(engine, screenX, screenY, &outPos)` exists
+  in `src/main.cpp` — same helper can be lifted into the host for
+  the viewport popup's WndProc.
+- `HostViewportWndProc` in `src/host/HostWindow.cpp` already handles
+  the viewport popup's mouse events for camera drag — adding a
+  WM_MOUSEMOVE → emit-event branch is a small extension.
 
 ## Tasks
 
-- [ ] **T1.** Create `AlphaCompositor.{h,cpp}` skeleton + vcxproj
-  entries (Win32-excluded mirror of other host TUs). Builds.
-- [ ] **T2.** Implement `AlphaCompositor::Resize` — RT, SysMem
-  surface, DIB section + memDC. Idempotent on unchanged size.
-- [ ] **T3.** Implement `AlphaCompositor::Composite` (readback +
-  memcpy + `UpdateLayeredWindow`). No occlusion stamp yet.
-- [ ] **T4.** Implement `AlphaCompositor::SetOcclusion` /
-  `RemoveOcclusion` + the stamp pass in `Composite` with
-  smoothstep feather.
-- [ ] **T5.** Hook into `Engine` — `SetAlphaCompositor`, Render RT
-  swap + Composite, Reset re-resize.
-- [ ] **T6.** Wire `HostWindow`: `WS_EX_LAYERED`, compositor
-  construction, attach to Engine + LayoutBroker, shutdown order.
-  Revert parent-class brush. **Visual gate here.**
-- [ ] **T7.** Strip `LayoutBroker::RebuildPopupRegion` +
-  `m_occlusions`; forward `SetOcclusion`/`RemoveOcclusion` to
-  `AlphaCompositor`. Add `SetAlphaCompositor`.
-- [ ] **T8.** Restore `shadow-xl` on `MenuBar` `CONTENT` class.
-- [ ] **T9.** Final native-test pass + visual recheck. Commit a
-  polish patch if anything surfaced. Update `CHANGELOG.md` +
-  `ROADMAP.md` (LT-4 Phase 4.1 closer commit).
+- [ ] **T1.** EmitterTree panel-header toolbar with the 4 existing-
+      bridge buttons: `[New ▾] [Delete] [▲][▼]`. Pure React.
+      Disabled states match legacy: New ▾ Lifetime/Death gray when
+      no primary; Delete gray when no primary; Move gray when not a
+      root or no neighbour in the move direction.
+- [ ] **T2.** Visibility bridge surface — schema + mock + C++ host
+      + vitest contract specs:
+      - `emitters/set-visible { id: number; visible: boolean }`
+        — sets `Emitter::visible` for that emitter only (not its
+        children). Matches legacy `ToggleEmitterVisibility` which
+        flips the selected node only.
+      - `emitters/set-all-visible { visible: boolean }` — recurses
+        through the entire tree. Matches legacy
+        `SetAllEmitterVisibility`.
+      - Both emit `engine/state/changed` so the engine re-renders.
+- [ ] **T3.** Panel-toolbar visibility buttons: `[👁] [Show All]
+      [Hide All]`. The eye-icon button uses the selected emitter's
+      current visible state to render Eye vs EyeOff and dispatches
+      `emitters/set-visible` with the negated value.
+- [ ] **T4.** Cursor-coords status bar column:
+      - Add `cursor/position-3d { x: number; y: number; z: number }`
+        event to the bridge schema.
+      - Lift `GetCursorPos3D` from `main.cpp` to a host helper.
+      - Hook `HostViewportWndProc`'s WM_MOUSEMOVE; throttle to
+        ~30 Hz to avoid spamming React; emit the event.
+      - React StatusBar: 5-column layout (currently 4); fifth column
+        formats `(x, y, z)` to 1 decimal.
+- [ ] **T5.** Verification gates: `pnpm build` + `pnpm test`
+      (vitest) + MSBuild Debug x64 + `pnpm test:native`.
+- [ ] **T6.** CHANGELOG entry for FD10. Single subsection capturing
+      "panel toolbar restored + cursor coords + 2 new bridge
+      requests."
+
+## Risks named up front
+
+1. **Move Up/Down on non-root emitters.** EmitterTree's existing
+   context-menu Move Up/Down gates on `isRoot && …`. The bridge
+   `emitters/move` likely accepts any emitter; legacy would too —
+   reordering siblings within a parent's lifetime-children list.
+   *Mitigation*: keep the same gate as the context menu for now;
+   if the parity target needs sibling reordering at lifetime/death
+   level, that's a separate follow-up.
+2. **Cursor-coords event spam.** WM_MOUSEMOVE fires on every pixel
+   of mouse motion (potentially hundreds of times per second). A
+   raw bridge event would saturate the WebView2 message channel.
+   *Mitigation*: throttle to ~30 Hz via QPC timing in the host;
+   the user's eye can't read coordinates faster than that anyway.
+3. **GetCursorPos3D wants the engine's camera + viewport.** The
+   host already has both via `engine->GetCamera()` and the popup
+   HWND's client rect. *Mitigation*: write the helper as a free
+   function that takes `(engine, screenX, screenY)` and returns
+   the world-space ground-plane intersection. Same shape as
+   legacy.
+4. **`emitters/set-all-visible` recursion.** The legacy walks the
+   tree via TreeView APIs; the host has the live `ParticleSystem`
+   model. *Mitigation*: simple recursion through
+   `ParticleSystem::Emitter::lifetimeChildren / deathChildren`
+   matches the legacy's intent.
+
+## Testing & verification
+
+- **Vitest target +6**: 4 new contract specs for the 2 new bridge
+  kinds (request + state-changed event) and 2 specs for the panel
+  toolbar's selection-driven disabled state.
+- **Playwright target +1**: end-to-end "click [New ▾] → Root →
+  emitter added" against the live host.
+- **MSBuild Debug x64**: 0 errors, 0 warnings (the LIBCMTD
+  preexisting warning stays).
+- **Visual smoke**: launch editor, open the EMITTERS panel,
+  exercise each toolbar button against a known-state file.
 
 ## Review
 

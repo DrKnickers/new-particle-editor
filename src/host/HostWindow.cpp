@@ -362,6 +362,13 @@ struct HostWindowImpl
     ParticleSystemInstance* m_attachedParticleSystem = nullptr;
     int                     m_lastCursorX = 0;
     int                     m_lastCursorY = 0;
+    // FD10 (Group A): last GetTickCount() at which we pushed a
+    // `cursor/position-3d` event. Throttled to ~30 Hz so the
+    // WebView2 message channel isn't saturated by WM_MOUSEMOVE
+    // (which fires per-pixel). The legacy status bar updates per
+    // WM_MOUSEMOVE since SendMessage is free in-process; over the
+    // bridge a 33 ms minimum interval is a good compromise.
+    DWORD                   m_lastCursorEmitTick = 0;
 
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
@@ -1051,10 +1058,18 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         int my = (short)HIWORD(lp);
         m_lastCursorX = mx;
         m_lastCursorY = my;
+        D3DXVECTOR3 cursorWorld;
+        GetCursorPos3D(engine.get(), (short)mx, (short)my, cursorWorld);
+        m_mouseCursor.SetPosition(cursorWorld);
+
+        // FD10 (Group A): push the world-space cursor to the React
+        // status bar, throttled. 33 ms ≈ 30 Hz — fast enough to read,
+        // slow enough that the bridge channel doesn't bottleneck.
+        const DWORD now = GetTickCount();
+        if (dispatcher && (now - m_lastCursorEmitTick) >= 33u)
         {
-            D3DXVECTOR3 cursorWorld;
-            GetCursorPos3D(engine.get(), (short)mx, (short)my, cursorWorld);
-            m_mouseCursor.SetPosition(cursorWorld);
+            m_lastCursorEmitTick = now;
+            dispatcher->EmitCursorPosition3D(cursorWorld.x, cursorWorld.y, cursorWorld.z);
         }
 
         if (m_dragMode == DragMode::NONE) return 0;
