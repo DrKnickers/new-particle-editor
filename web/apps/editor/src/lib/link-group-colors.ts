@@ -36,22 +36,22 @@ export function colorForGroup(group: number): string | null {
   return BRACKET_PALETTE[idx] ?? null;
 }
 
-/** Walks a flattened tree row list and returns one bracket descriptor
- *  per unique non-zero `linkGroup` WITH AT LEAST 2 MEMBERS. Single-
- *  member groups are filtered out (B1 invariant — every rendered
- *  bracket spans ≥ 2 rows). `firstRowIndex` + `lastRowIndex` are
- *  0-based positions in `flatRows`. Single-lane (no overlap handling
- *  yet — see Task 2 for the lane assignment pass). */
+/** A bracket descriptor produced by `computeLinkGroupBrackets`.
+ *  `lane` is 0-based and assigned by the greedy first-fit pass at
+ *  the end of that function — bracket renderers use `lane` to
+ *  compute the horizontal offset within the gutter. */
 export type LinkGroupBracket = {
   groupId: number;
   color: string;
   firstRowIndex: number;
   lastRowIndex: number;
+  lane: number;
 };
 
 export function computeLinkGroupBrackets<T extends { linkGroup: number }>(
   rows: ReadonlyArray<T>,
 ): LinkGroupBracket[] {
+  // Pass 1: collect ranges + member counts per group.
   const ranges = new Map<number, { first: number; last: number; count: number }>();
   rows.forEach((row, idx) => {
     const g = row.linkGroup;
@@ -64,22 +64,51 @@ export function computeLinkGroupBrackets<T extends { linkGroup: number }>(
       existing.count += 1;
     }
   });
-  const out: LinkGroupBracket[] = [];
+
+  // Pass 2: emit descriptors for groups with ≥ 2 members.
+  const descriptors: Omit<LinkGroupBracket, "lane">[] = [];
   ranges.forEach((range, groupId) => {
-    // B1 invariant: never render single-member groups. Bracket renderer
-    // can safely assume firstRowIndex < lastRowIndex throughout.
     if (range.count < 2) return;
     const color = colorForGroup(groupId);
     if (color === null) return;
-    out.push({
+    descriptors.push({
       groupId,
       color,
       firstRowIndex: range.first,
       lastRowIndex: range.last,
     });
   });
+
+  // Pass 3: greedy first-fit lane assignment (aggressive reuse).
+  // Sort by firstRowIndex (ties broken by lastRowIndex) so earlier-
+  // starting brackets claim lanes first. `laneLastEnd[i]` tracks the
+  // lastRowIndex of the most recent bracket assigned to lane i.
+  const sorted = [...descriptors].sort(
+    (a, b) =>
+      a.firstRowIndex - b.firstRowIndex ||
+      a.lastRowIndex  - b.lastRowIndex,
+  );
+  const laneLastEnd: number[] = [];
+  const withLanes: LinkGroupBracket[] = sorted.map((d) => {
+    let lane = -1;
+    for (let i = 0; i < laneLastEnd.length; i++) {
+      if (laneLastEnd[i] < d.firstRowIndex) {
+        lane = i;
+        break;
+      }
+    }
+    if (lane === -1) {
+      lane = laneLastEnd.length;
+      laneLastEnd.push(d.lastRowIndex);
+    } else {
+      laneLastEnd[lane] = d.lastRowIndex;
+    }
+    return { ...d, lane };
+  });
+
   // Stable ordering by groupId so two renders with the same input
-  // produce the same draw order.
-  out.sort((a, b) => a.groupId - b.groupId);
-  return out;
+  // produce the same draw order (lane assignments still match —
+  // they're attached to each bracket descriptor).
+  withLanes.sort((a, b) => a.groupId - b.groupId);
+  return withLanes;
 }
