@@ -1,12 +1,14 @@
-// Task 2.6 Playwright specs for the CurveEditorPanel.
+// Playwright specs for the CurveEditorPanel (Task 2.6 + hybrid
+// focus-channel restore).
 //
 // The lower-right quadrant's per-emitter EmitterPropertyPanel +
-// TrackEditor surfaces have been replaced by an always-on
-// CurveEditorPanel at the bottom of the centre column. The
-// per-channel curve overlay is view-only; interactive features
-// (drag-to-move, marquee, insert mode, Time/Value spinners,
-// interpolation toggle) live in this batch's deferred-work list and
-// will be restored in a future polish task.
+// TrackEditor surfaces were replaced in Task 2.6 by an always-on
+// CurveEditorPanel at the bottom of the centre column. The hybrid
+// focus-channel restore re-introduces the edit affordances (mode
+// toggle, interpolation toggle, lock-to combo, Time/Value spinners,
+// per-key context menu, Delete keyboard handler) and the focus-
+// channel concept (clicking a channel row sets it as the edit focus;
+// only the focus channel renders interactive key circles).
 //
 // What this spec covers end-to-end:
 //   1. The CurveEditorPanel is always mounted at app startup,
@@ -16,11 +18,15 @@
 //      channel CurveEditor SVG.
 //   3. The 7 channel checkboxes are present with the documented
 //      defaults: Index OFF, Scale / R / G / B / Alpha / Rotation ON.
-//   4. emitters/add-track-key + set-track-key continue to round-trip
-//      through the bridge (host-side handlers unchanged by this task).
-//
-// Mutation flows (drag-to-move, Spinner edit) are deferred; the
-// corresponding Vitest specs were removed alongside TrackEditor.tsx.
+//   4. The .ce-toolbar surfaces Select / Insert mode buttons,
+//      Linear/Smooth/Step interpolation buttons, a Lock-to combo, and
+//      Time / Value spinners.
+//   5. Clicking a channel ROW (not the checkbox) flips the focus —
+//      `data-focus-channel` on the panel updates and the row gets
+//      `data-focus="true"`.
+//   6. emitters/add-track-key + set-track-key + delete-track-keys +
+//      set-track-interpolation continue to round-trip through the
+//      bridge (host-side handlers unchanged).
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
@@ -217,6 +223,115 @@ test("emitters/set-track-key via the bridge moves a key (host round-trip unchang
     expect(moved!.value).toBeCloseTo(0.75, 2);
   }
 
+  await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    await bridge!.request({ kind: "emitters/select", params: { id: null } });
+  });
+});
+
+// ─── Hybrid focus-channel restore ─────────────────────────────────
+
+test("edit toolbar surfaces Select/Insert + Linear/Smooth/Step + Lock-to + spinners", async () => {
+  const panel = page.locator('[data-testid="curve-editor-panel"]');
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  await expect(panel.locator('[data-testid="curve-editor-toolbar"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-tool-select"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-tool-insert"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-interp-linear"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-interp-smooth"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-interp-step"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-lock-to-trigger"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-spinner-time-wrapper"]')).toBeVisible();
+  await expect(panel.locator('[data-testid="ce-spinner-value-wrapper"]')).toBeVisible();
+});
+
+test("clicking a channel row sets focus + only that channel renders interactive key circles", async () => {
+  // Pick an emitter so the curve canvas mounts.
+  await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+    const list = await bridge.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { id: number }[] };
+    };
+    const firstId = list.root.children[0]?.id;
+    if (firstId === undefined) throw new Error("no emitters in tree");
+    await bridge.request({ kind: "emitters/select", params: { id: firstId } });
+  });
+
+  const panel = page.locator('[data-testid="curve-editor-panel"]');
+  await expect(panel).toHaveAttribute("data-focus-channel", "scale", { timeout: 5_000 });
+  await expect(panel.locator('[data-testid="curve-channel-row-scale"]'))
+    .toHaveAttribute("data-focus", "true");
+
+  // Click Red row — focus moves; data-focus-channel updates.
+  await panel.locator('[data-testid="curve-channel-row-red"]').click();
+  await expect(panel).toHaveAttribute("data-focus-channel", "red", { timeout: 5_000 });
+  await expect(panel.locator('[data-testid="curve-channel-row-red"]'))
+    .toHaveAttribute("data-focus", "true");
+
+  // Tear down.
+  await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    await bridge!.request({ kind: "emitters/select", params: { id: null } });
+  });
+});
+
+test("Insert mode toggle flips data-mode on the panel", async () => {
+  const panel = page.locator('[data-testid="curve-editor-panel"]');
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  await expect(panel).toHaveAttribute("data-mode", "select", { timeout: 5_000 });
+
+  await panel.locator('[data-testid="ce-tool-insert"]').click();
+  await expect(panel).toHaveAttribute("data-mode", "insert", { timeout: 5_000 });
+
+  await panel.locator('[data-testid="ce-tool-select"]').click();
+  await expect(panel).toHaveAttribute("data-mode", "select", { timeout: 5_000 });
+});
+
+test("clicking the Smooth interpolation button fires set-track-interpolation via bridge", async () => {
+  // Pick an emitter.
+  const selectedId = await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    const list = await bridge!.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { id: number }[] };
+    };
+    const firstId = list.root.children[0]?.id;
+    if (firstId === undefined) throw new Error("no emitters in tree");
+    await bridge!.request({ kind: "emitters/select", params: { id: firstId } });
+    return firstId;
+  });
+
+  // Focus on Red so set-track-interpolation targets a non-Scale track.
+  const panel = page.locator('[data-testid="curve-editor-panel"]');
+  await expect(panel).toBeVisible({ timeout: 5_000 });
+  await panel.locator('[data-testid="curve-channel-row-red"]').click();
+  await expect(panel).toHaveAttribute("data-focus-channel", "red", { timeout: 5_000 });
+
+  // Click Smooth — wait for the host to apply, then read tracks to
+  // confirm the round-trip landed.
+  await panel.locator('[data-testid="ce-interp-smooth"]').click();
+  await page.waitForTimeout(200);
+  const interp = await page.evaluate(async (id) => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    const tracks = await bridge!.request({
+      kind: "emitters/get-tracks",
+      params: { id },
+    }) as { tracks: { name: string; interpolation: string }[] };
+    return tracks.tracks.find((t) => t.name === "red")?.interpolation;
+  }, selectedId);
+  expect(interp).toBe("smooth");
+
+  // Tear down.
   await page.evaluate(async () => {
     const bridge = (window as Window & { bridge?: {
       request: (req: { kind: string; params: unknown }) => Promise<unknown>;
