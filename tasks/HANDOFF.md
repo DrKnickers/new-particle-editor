@@ -1,11 +1,9 @@
-# Session Handoff — AloParticleEditor / LT-4 (curve editor polish + lock-to + spawner bg fix)
+# Session Handoff — AloParticleEditor / LT-4 (left-pane realignment B1)
 
-**Last updated:** 2026-05-20 (end-of-session — curve editor is now production-quality: lock-to wired, axis labels, theme-aware grid, robust spinners, panel chrome opaque)
-**Last conversation context:** Long session that started with the user testing the editor manually and reporting what looked off, then iterating until each surface was solid. Two dispatches in flight:
-- **First dispatch (already shipped to `origin/lt-4` at commit `92ed1db`):** Root-caused + fixed the `tools.spec.ts:192` ground-texture lockup — a missing `m_pSkydomeEffect->OnLostDevice()` / `OnResetDevice()` pair in `Engine::Reset`. Native suite back to 83/83. Full detail in the previous changelog entry.
-- **Second dispatch (uncommitted at top of this branch — needs commit + FF + push):** A round of curve-editor + UI polish that emerged from interactive smoke-testing. Spawner panel bg-leak fix, curve editor strip layout (scrollbar, height, padding), lock-to feature wired end-to-end (schema + C++ handler + React UI + label), per-channel value-range rules redone (Scale/Index auto-grow, Rotation auto-grow both ways with no caps, RGBA fixed 0..1), separated spinner-bounds from display-range, integer step for Index, toolbar text→icons, HTML axis labels (Y per focus channel, X 0/25/50/75/100), theme-aware grid colours (dimmer in light), endpoint key circle clipping fix (`overflow="visible"`), slightly thicker curves and bigger markers, spinner up/down arrows always visible, native wheel listener bypassing React's passive-default, wheel works over the whole spinner including arrows. See the new CHANGELOG entry for the full breakdown.
+**Last updated:** 2026-05-20 (end-of-session — B1 left-pane realignment shipped: tree toolbar at bottom, per-row eye, multi-lane bracket gutter, single-member groups filtered)
+**Last conversation context:** Single dispatch executing the B1 plan (left-pane realignment against the design source). All 8 implementation tasks (P1–P8) landed plus brainstorm spec + plan + this docs commit. Tree toolbar moves from above the `<ul>` to below it and restyles to `.tree-actions`; every row gains a per-row 👁 eye (the toolbar's primary-only eye toggle is gone as redundant); per-row sky-blue link-group dot drops in favour of gutter brackets alone; bracket gutter gains aggressive-reuse multi-lane support via greedy first-fit; single-member link groups filter at the render layer so no group appears as a single-row stub; hard `border-t` between tree region and inspector is gone. Cumulative vitest delta 221 → **239** (+18); Playwright stable at 83/83. Next dispatch is B2 — Appearance + Physics tab wiring against the live model.
 
-Test counts: vitest **219 / 219**, Playwright **83 / 83**, MSBuild Debug x64 clean.
+Test counts: vitest **239 / 239**, Playwright **83 / 83**, MSBuild Debug x64 clean (no C++ change this dispatch).
 
 ---
 
@@ -15,8 +13,8 @@ If you are a fresh Claude session resuming this project:
 
 1. **This file** — top to bottom.
 2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline. The `## Branch workflow` section is load-bearing: `lt-4` is the integration branch; new sessions land on `claude/<random>` and FF into `lt-4` at session end.
-3. **[CHANGELOG.md](../CHANGELOG.md)** — the top three entries (Phase 2.8 focus-channel restore, Phase 2.1–2.7 structural moves, Phase 1 tokens + theme) cover everything this session shipped.
-4. **If picking up Phase 3** (most likely next step):
+3. **[CHANGELOG.md](../CHANGELOG.md)** — the top entry (B1 left-pane realignment) covers what just shipped; the entries below (curve editor polish, Phase 2.8 focus-channel restore, Phase 2.1–2.7 structural moves, Phase 1 tokens + theme) cover the architectural foundation B1 sits on.
+4. **If picking up B2 / Phase 3** (most likely next step):
    - **[docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)** — full design spec.
    - **[docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)** — step-by-step plan. **Phase 3 still references `tailwind.config.ts` in a few places — those need the same Tailwind v4 / `globals.css` translation Phase 1 got** (see the re-plan note at the top of Phase 1 for the pattern).
 5. **[tasks/lessons.md](lessons.md)** — L-001 through L-006. **L-006 (don't clear React optimistic state on every host-data refresh) is now load-bearing in `CurveEditorPanel.tsx` — the spinners' optimistic override comes from that pattern.**
@@ -29,18 +27,17 @@ If you are a fresh Claude session resuming this project:
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\charming-williams-0efd47` (this session's; next session gets a fresh `claude/<random>` path) |
-| **Branch** | `claude/charming-williams-0efd47` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | `92ed1db` on `origin/lt-4` (`fix(LT-4): add m_pSkydomeEffect OnLost/OnReset…`) |
-| **HEAD (working tree)** | Uncommitted curve-editor polish dispatch — 12 files modified. Needs commit + FF + push at the start of next session OR end of this one. |
-| **Working tree** | dirty: 12 files (1 C++, 11 web/) — see `git diff --stat`. |
-| **Ahead of origin/lt-4** | 0 commits at HEAD; 12-file dispatch pending in worktree. |
-| **Behind master** | `lt-4` is ~353 commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\sweet-vaughan-dc78c1` (this session's; next session gets a fresh `claude/<random>` path) |
+| **Branch** | `claude/sweet-vaughan-dc78c1` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
+| **HEAD (committed)** | This docs commit at the top of the session branch (P9). Top non-docs commit is `9b6326b` (`feat(LT-4): drop hard border between tree region and inspector`). |
+| **Working tree** | clean. |
+| **Ahead of origin/lt-4** | 11 commits — the prior session's curve-editor polish (`df1bba7`) + B1 brainstorm + plan + P1–P8 implementation commits + this P9 docs commit. Needs FF + push at end of this session OR start of next. |
+| **Behind master** | `lt-4` is ~353+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). Vitest **219 / 219**. Playwright **83 / 83**. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 shipped + curve editor polished to production quality. Phase 3 not started.** Legacy `--legacy-ui` mode is untouched throughout. |
+| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning; no C++ change this dispatch). Vitest **239 / 239**. Playwright **83 / 83**. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment shipped. Phase 3 not started; next dispatch is B2 (Appearance + Physics tab wiring).** Legacy `--legacy-ui` mode is untouched throughout. |
 
-**Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `great-varahamihira-b66cf4`, replacing the previous `awesome-morse-5ea5c3` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
+**Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session is in `sweet-vaughan-dc78c1`, succeeding `charming-williams-0efd47`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 
 **NuGet pre-flight (fresh worktrees only).** `.gitignore` excludes `packages/`, so the first MSBuild in a fresh worktree fails with *"missing Microsoft.Web.WebView2.targets"*. Restore explicitly before the first build:
 
@@ -53,9 +50,32 @@ Then the standard Debug x64 build works. Skip this step on a worktree that's alr
 
 ---
 
-## What landed this session (11 commits on lt-4 + 1 docs commit)
+## What landed this session — B1 left-pane realignment (11 commits ahead of `origin/lt-4`)
 
 In execution order (oldest → newest):
+
+| Commit | What |
+|---|---|
+| `df1bba7` | **feat(LT-4): curve editor — unified range, scale solo, drag UX, layout robustness** — prior session's curve-editor polish that hadn't been FF'd to `lt-4` yet. Carried into this session at the base of the branch. |
+| `160fffe` | **docs(LT-4): brainstorm spec — left-pane realignment (B1)** — captured intent + scope + alternative paths considered for the B1 work before any plan was written. |
+| `0c61139` | **docs(LT-4): implementation plan — left-pane realignment (B1)** — 9-task plan (P1 single-member filter → P9 docs). Goal + scope, codebase-survey, architecture, risks, testing checklist per CLAUDE.md plan structure. |
+| `7133709` | **feat(LT-4): filter single-member link groups in computeLinkGroupBrackets** (P1) — `count < 2` skip at the render layer so no group renders as a single-row stub. Existing test fixture rewritten to assert the new behaviour. |
+| `ad90459` | **feat(LT-4): multi-lane bracket gutter via greedy first-fit lane assignment** (P2) — `LinkGroupBracket` gains a `lane: number` field; a third pass in `computeLinkGroupBrackets` sorts by `firstRowIndex` and assigns the lowest free lane (aggressive reuse). |
+| `c03df1d` | **feat(LT-4): add laneCount helper for gutter width derivation** (P3) — companion `laneCount` export so the renderer can size the gutter container without inline reduces. |
+| `212bcd6` | **feat(LT-4): render multi-lane bracket gutter in EmitterTree** (P4) — `EmitterTree.tsx` gutter renderer sized by `laneCount * 10 + 4px` (or `4px` minimum) with each bracket positioned at `left = 4 + lane * 10`. |
+| `49f6a39` | **feat(LT-4): per-row visibility eye on each tree row** (P5 initial) — per-row 👁 eye added to every row. *Was* implemented as a nested `<button>` per the plan, which Task 6 below corrects. |
+| `e6ffbdc` | **fix(LT-4): per-row eye is a span, not a nested button** (P5 fix) — caught in self-review: nested `<button>` is invalid HTML and browsers hoist the inner button out at parse time. Switched to `<span role="button" tabIndex={0}>` with explicit `onClick` + `onKeyDown` (Enter/Space). |
+| `46dba1b` | **feat(LT-4): row layout becomes 3-column grid, per-row link-group dot dropped** (P6) — row container converted from flex to a 3-column CSS grid `[12px glyph] [1fr name] [18px eye]` so eyes column-align across all rows. The per-row sky-blue link-group dot is removed in favour of the gutter brackets alone (legacy parity). |
+| `6a804b0` | **feat(LT-4): tree toolbar moves below the `<ul>`, restyles to .tree-actions, drops eye** (P7) — `<EmitterTreeToolbar>` moves from above the tree to after it; outer container restyled to `.tree-actions` (banded hairlines top + bottom); the toolbar's primary-only eye-toggle button + its `primaryVisible` / `EyeGlyph` / `toggleVisibility` helpers (now unused) are removed. |
+| `9b6326b` | **feat(LT-4): drop hard border between tree region and inspector** (P8) — one-line edit removing `border-t border-border` on the inspector wrapper in `App.tsx`. The tab strip's underline carries the transition naturally. |
+
+Plus this P9 docs commit refreshing ROADMAP + CHANGELOG + HANDOFF.
+
+---
+
+## Previously landed (kept for context)
+
+The earlier Phase 1 + Phase 2 + curve-editor-polish dispatches are still the structural foundation under B1. In execution order (oldest → newest):
 
 | Commit | What |
 |---|---|
@@ -71,12 +91,15 @@ In execution order (oldest → newest):
 | `329c595` | **feat(LT-4): Phase 2.6 — curve editor moves to always-on bottom 260px** — new `CurveEditorPanel.tsx` in the centre column's bottom row; 7-channel curve-list (Scale / R / G / B / A / Rotation / Index — Index defaults off); multi-channel SVG overlay rendering one `<g data-testid="curve-layer-${id}">` per visible channel. **This commit deleted `TrackEditor.tsx` (866 lines) and `EmitterPropertyPanel.tsx` (176 lines) entirely**, losing the entire curve edit surface (Time/Value spinners, marquee, drag, Insert mode, interpolation toggle, lock-to combo, per-key context menu, panel-level Delete handler). Phase 2.8 restores them on top of this rendering substrate. |
 | `83ee7a5` | **feat(LT-4): Phase 2.7 — viewport pill + engine/set/leave-particles bridge** — new top-left vertical pill in the viewport with three engine toggles (Show ground / Toggle bloom / Leave particles after instance death). The leave-particles bridge surface is new end-to-end (schema + MockBridge + C++ dispatcher), wired to ParticleSystem's existing `getLeaveParticles()` / `setLeaveParticles()` methods — the runtime path was already chunk-serialised + honoured at `Engine::KillParticleSystem`. |
 | `3cd840a` | **feat(LT-4): hybrid focus-channel curve editor — restore edit surface** — restores everything Task 2.6 deleted on top of the multi-channel overlay using a focus-channel model. Clicking a channel row sets that channel as the edit focus (visible indicator: `data-focus="true"` + `bg-accent-soft`); the focus channel's curve renders thick + opaque + interactive while the other visible channels render thin + dimmed + non-interactive as background context. New `.ce-toolbar` row above the canvas with Select / Insert mode toggle, Linear / Smooth / Step interpolation, Lock-to combo, Time / Value spinners (L-006 sticky optimistic override). Window-scoped Delete keyboard handler with `TYPING_TAGS` guard. Vitest +19 (200 → 219); Playwright +4 (78 → 82 passing). |
-
-Plus this docs commit refreshing HANDOFF + CHANGELOG.
+| `339ab95` | **feat(LT-4): curve editor polish — lock-to, axis labels, theme grid, robust spinners, spawner bg fix** — the dispatch immediately preceding B1, FF'd to `origin/lt-4`. Lock-to wired end-to-end (`emitters/set-track-lock`), HTML axis labels, theme-aware grid via CSS variables, native-wheel-listener spinners, Spawner panel bg opacity. Vitest 219 → 221. |
 
 ---
 
 ## Open items (load-bearing — read before resuming)
+
+### 0. B2 — Appearance + Physics tab wiring (next dispatch)
+
+The next move. B1 finished the left pane's structural realignment; B2 wires the Appearance and Physics inspector tabs to the live model so the form-row controls actually drive engine state through the bridge instead of being placeholder visuals. Specifics will be defined in a separate brainstorm + plan pair; the spec source is the design bundle's `appearance.html` + `physics.html`. Standard CLAUDE.md plan structure expected.
 
 ### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20 (commit `92ed1db`)
 
@@ -84,7 +107,7 @@ The ground-texture lockup is fixed. Root cause: `m_pSkydomeEffect` (added in MT-
 
 **`abort()` dialog (user-reported, prior handoff).** Not reproduced. Probably a separate code path; could have been a stale capture. Worth checking if it resurfaces.
 
-### 1b. ~~Curve editor polish~~ ✅ READY FOR COMMIT (this session, uncommitted)
+### 1b. ~~Curve editor polish~~ ✅ SHIPPED 2026-05-20 (commit `339ab95` FF'd to `origin/lt-4`)
 
 A round of interactive smoke-testing through the curve editor surfaced a stack of issues the user wanted addressed. All fixed and verified through `pnpm build` + `pnpm test` + MSBuild + `pnpm test:native` (83/83). See top-of-CHANGELOG entry for the full breakdown; high-level summary:
 
@@ -99,7 +122,16 @@ A round of interactive smoke-testing through the curve editor surfaced a stack o
 - **Theme-aware grid colours** via `--curve-grid` / `--curve-axis` CSS variables (dimmer in light theme).
 - **`overflow="visible"` on the SVG** so endpoint key circles draw their full body even when their centre is on the grid edge.
 
-**Pending: commit + FF into `lt-4` + push.** 12 files modified. Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK.
+**Status:** FF'd to `origin/lt-4` at the start of this session as `339ab95`. No outstanding work.
+
+### 1c. ~~B1 left-pane realignment~~ ✅ SHIPPED this session (uncommitted FF — needs FF into `lt-4` + push)
+
+P1–P8 implementation + brainstorm + plan + this docs commit. 11 commits ahead of `origin/lt-4`. Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK. Full breakdown in the "What landed this session" table above and the top CHANGELOG entry.
+
+Two ROADMAP follow-ups filed for B1 work that's worth doing later but deliberately out-of-scope for this dispatch:
+
+- **[NT-5] Engine-side single-member link-group enforcement.** B1 ships a render-layer filter; the data layer can still carry single-member groups. NT-5 makes the data layer match the rendered view end-to-end across the three C++ mutation paths.
+- **[NT-6] Visual-stability lane assignment for bracket gutter (option).** B1 uses aggressive-reuse greedy first-fit; a setting that opts the user into `lane = (groupId - 1) % maxLanes` would keep lanes stable across renders. Only worth doing if the bouncing turns out to be a real ergonomic issue.
 
 ### 2. Phase 2 / 3 references to `tailwind.config.ts` in the plan still need v4 translation
 
@@ -173,9 +205,9 @@ Run these in order before touching code:
 #    desktop app provisions a fresh worktree each session.)
 cd "/c/Modding/Particle Editor/.claude/worktrees/$WORKTREE_NAME"
 git worktree list
-git log --oneline -5    # HEAD should be 3cd840a or this docs commit
+git log --oneline -5    # HEAD should be the B1 P9 docs commit (this one) or the next dispatch's
 git status              # clean
-git log --oneline lt-4..HEAD   # 0 if session branched cleanly from lt-4
+git log --oneline lt-4..HEAD   # 0 if session branched cleanly from lt-4 (assuming B1 FF'd)
 git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
 
 # 2. Restore NuGet (ONLY needed on a fresh worktree — see header note).
@@ -188,11 +220,11 @@ git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
 cd web/apps/editor
 pnpm install     # may re-inject the allowBuilds block — see L-005
 pnpm build       # 0 errors expected
-pnpm test        # 219/219 expected
-pnpm test:native # 82/83 expected (one known failure on tools.spec.ts:192 — see Open Items)
+pnpm test        # 239/239 expected
+pnpm test:native # 83/83 expected
 ```
 
-If anything regressed beyond the known `tools.spec.ts:192` failure, the most likely culprits in order:
+If anything regressed (no known failing specs at session end), the most likely culprits in order:
 
 - pnpm-workspace.yaml `allowBuilds:` block malformed (L-005 — edit yaml, set per-package to `true`).
 - WebView2 runtime unavailable (Edge dependency on the host machine).
@@ -243,11 +275,13 @@ If anything regressed beyond the known `tools.spec.ts:192` failure, the most lik
 
 ## Recommended next moves
 
-0. **Commit + FF + push the uncommitted curve-editor polish dispatch.** 12 files modified in the working tree. See "Open items §1b" above. Standard CLAUDE.md flow: commit on session branch, fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
-1. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Suite is at 83/83 with no open blockers.
-2. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
-3. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's curve-editor polish is a good example of the shape.
-4. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
+0. **FF + push the B1 dispatch.** 11 commits ahead of `origin/lt-4` (P1–P8 + brainstorm + plan + this docs commit). Standard CLAUDE.md flow: fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
+1. **Execute B2 — Appearance + Physics tab wiring** (next dispatch). The form rows are in place from Phase 2.5; B2 makes them drive engine state through the bridge. Specifics defined in a separate brainstorm + plan pair; spec source is the design bundle's `appearance.html` + `physics.html`.
+2. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Can run in parallel with B2 if helpful.
+3. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
+4. **ROADMAP follow-ups from B1 (NT-5, NT-6).** Engine-side single-member link-group enforcement (NT-5) and the visual-stability lane assignment option (NT-6). Both small. NT-6 only worth doing if the bouncing-gutter turns out to be a real ergonomic issue in daily use.
+5. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's B1 dispatch is a good example of the shape.
+6. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
 
 ---
 

@@ -24,9 +24,47 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-*(No items currently queued. NT-1 through NT-4 have all shipped —
-see [Shipped](#5-shipped). When the next near-term idea lands, it
-takes position `1.1` and the next vacated `NT-N` tag.)*
+### 1.1 [NT-5] Engine-side single-member link-group enforcement
+
+*Estimate: small.*
+
+Three C++ mutation paths can leave a link group with exactly one
+member: `linkGroups/set-membership` (when leaving a 2-member group
+OR joining a different one that shrinks the previous group),
+`emitters/delete` (when one of a 2-member group's members is
+deleted), and `linkGroups/set-membership` with `groupId: -1` and
+a single-id input list (creating a new group with one member).
+
+Each path should auto-demote orphaned members to `linkGroup = 0`
+before the operation returns. B1 ships a render-layer filter
+(in `computeLinkGroupBrackets`) that hides single-member groups
+from the gutter — but the data layer still carries them, so the
+Inspector's "Link Group: N" field on an orphaned emitter reads
+honestly-but-confusingly.
+
+Engine enforcement makes the data layer match the rendered view
+end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
+named handlers + the corresponding mock cases + their playwright
+contract specs.
+
+### 1.2 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+
+*Estimate: small.*
+
+B1's multi-lane gutter uses greedy first-fit (aggressive reuse)
+for lane assignment. A bracket's `lane` field can change between
+renders when surrounding groups change — semantically OK (the
+bracket's colour identifies the group; lane is just an x-offset),
+but visually a bouncing gutter may annoy daily users with many
+link groups.
+
+Add a setting that opts the user into stability-by-groupId:
+`lane = (groupId - 1) % maxLanes`. Same group always lands in
+the same lane. Modest collision risk between groups whose IDs
+share a modulus — rare in practice.
+
+Only worth doing if real use reveals the bouncing as a real
+ergonomic issue.
 
 ---
 

@@ -16,6 +16,78 @@ Conventions:
 
 ## Changelog
 
+### Left-pane realignment (B1) — tree toolbar at bottom, per-row eye, multi-lane bracket gutter
+
+*TODO-DATE · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Realigns the left pane against the design source's structural
+intent. Specifically: the tree toolbar moves from above the
+`<ul>` to below it and restyles to match `.tree-actions` (banded
+hairlines top + bottom); each tree row gains a per-row 👁
+visibility eye, and the toolbar's primary-only eye toggle goes
+away as redundant; the per-row sky-blue link-group dot is
+removed in favour of the gutter brackets alone (legacy parity);
+the hard `border-t` between tree region and inspector is gone,
+with the tab strip's underline as the natural transition. Each
+row is now a 3-column CSS grid `[12px glyph] [1fr name] [18px
+eye]` so eyes column-align automatically across all rows. The
+bracket gutter gains aggressive-reuse multi-lane support — when
+groups interleave, brackets pack into multiple lanes via greedy
+first-fit and the gutter widens accordingly; when groups are
+sparse, all brackets reuse lane 0 and the gutter stays narrow.
+Single-member link groups are now filtered at the render layer
+so no group ever appears as a single-row stub.
+
+**How we tackled it.** Two layers, both small. Layer 1:
+[`link-group-colors.ts`](src/lib/link-group-colors.ts) extends
+`LinkGroupBracket` with a `lane: number` field and adds a third
+pass to `computeLinkGroupBrackets` that assigns lanes via greedy
+first-fit (sort by `firstRowIndex`; for each bracket pick the
+lowest lane whose `lastEnd` is strictly less than the bracket's
+`firstRowIndex`; push a new lane if none free). The same
+function gains a `count < 2` skip so single-member groups never
+emit a descriptor. Companion `laneCount` export lets the
+renderer compute the gutter's container width without an inline
+reduce. Layer 2:
+[`EmitterTree.tsx`](src/screens/EmitterTree.tsx) converts the
+per-row container from flex to a 3-column CSS grid, adds the
+per-row eye as a `<span role="button" tabIndex={0}>` (with
+`stopPropagation` to keep visibility-toggling from re-selecting
+the row, plus `onKeyDown` for Enter/Space activation — using a
+nested `<button>` would have been invalid HTML), removes the
+per-row link-group dot span, moves the `<EmitterTreeToolbar>`
+from above the `<ul>` to after it, restyles its outer container
+to `.tree-actions`, drops the eye-toggle button + its helpers,
+and rewrites the gutter renderer to size by `laneCount * 10 +
+4px` (or `4px` minimum) and position each bracket by `left =
+4 + lane * 10`. The hard `border-t border-border` on the
+inspector wrapper in [`App.tsx`](src/App.tsx) goes away as a
+one-line edit.
+
+**Issues encountered and resolutions.** *Nested `<button>` HTML
+invalidity.* The plan literally specified `<button>` for the
+per-row eye, which would nest inside the row's outer `<button>`.
+Real browsers hoist the inner button out during parsing,
+scrambling layout and event order. Caught in self-review during
+Task 5; fixed in a follow-up commit by switching to
+`<span role="button" tabIndex={0}>` with explicit
+`onClick`/`onKeyDown` handlers. *Existing test fixture broken by
+the single-member filter.* The original
+[`link-group-colors.test.ts:30`](src/lib/__tests__/link-group-colors.test.ts:30)
+asserted that a single-row group produced a bracket — now
+filtered out. Fixture rewritten with a 2-member group plus a new
+single-row group that the filter rejects, asserting the new
+behaviour end-to-end. *Unused helpers after dropping the toolbar
+eye-toggle.* Removing the toolbar's eye button left
+`primaryVisible`, `EyeGlyph`, and `toggleVisibility` unused;
+TS strict mode catches this and refuses to build. Cleanup
+landed as part of Task 7.
+
+Test count: vitest **239 / 239** (was 221; +18 across all the new
+specs), Playwright unchanged at **83 / 83**.
+
+---
+
 ### Curve editor polish: lock-to feature, axis labels, theme-aware grid, spinner improvements, Spawner panel bleed-through fix
 
 *2026-05-20 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
