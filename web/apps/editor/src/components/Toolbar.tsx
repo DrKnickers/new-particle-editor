@@ -7,10 +7,9 @@
 //   spacer
 // Group 4 (environment):        Ground dropdown · Background dropdown · ThemeToggle
 //
-// Ground and Background dropdown slots are empty placeholders for now;
-// Tasks 2.2 and 2.3 fill them in. Stop and Restart removed per design
-// chat. Bloom toggle moves to the viewport pill in Task 2.7. Undo/Redo
-// and Reload Shaders/Textures live in the menubar only.
+// Stop and Restart removed per design chat. Bloom toggle moves to the
+// viewport pill in Task 2.7. Undo/Redo and Reload Shaders/Textures live
+// in the menubar only.
 //
 // Uses the design's semantic CSS classes from components.css:
 //   .toolbar, .tb-group, .tb-btn, .tb-divider, .tb-spacer
@@ -23,6 +22,7 @@ import {
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { BackgroundDropdown } from "@/components/BackgroundDropdown";
+import { GroundDropdown } from "@/components/GroundDropdown";
 import { useSpawnerVisibility } from "@/lib/spawner-visibility";
 
 type Props = { bridge: Bridge };
@@ -116,7 +116,8 @@ export function Toolbar({ bridge }: Props) {
 
       <span className="tb-spacer" />
 
-      {/* Group 4: environment + theme — Ground dropdown lands in Task 2.3 */}
+      {/* Group 4: environment + theme */}
+      <GroundDropdown bridge={bridge} />
       <BackgroundDropdown bridge={bridge} />
       <ThemeToggle />
     </div>

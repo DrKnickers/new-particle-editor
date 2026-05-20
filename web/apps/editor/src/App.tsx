@@ -10,7 +10,6 @@ import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
 import { BloomPanel } from "@/screens/BloomPanel";
-import { GroundTexturePanel } from "@/screens/GroundTexturePanel";
 import { SpawnerPanel } from "@/screens/SpawnerPanel";
 import { ImportEmittersDialog } from "@/screens/ImportEmittersDialog";
 import { ModNicknameDialog } from "@/screens/ModNicknameDialog";
@@ -243,9 +242,6 @@ function AppShell() {
             )}
             {openPanel === "bloom" && (
               <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-            )}
-            {openPanel === "ground" && (
-              <GroundTexturePanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
             )}
             {openPanel === "spawner" && (
               <SpawnerPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />

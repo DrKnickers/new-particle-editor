@@ -4,15 +4,17 @@
 // CDP-attach harness as sibling specs.
 //
 // What the six specs cover:
-//   1. Tools → Lighting opens the panel.
-//   2. Opening Background closes Lighting (mutual exclusion via the
-//      Zustand atom — single-open semantics).
+//   1. View → Lighting opens the panel.
+//   2. Opening the Background popover does NOT close Lighting (the two
+//      surfaces are orthogonal post-Task-2.2).
 //   3. View → Bloom Settings… opens the panel.
 //   4. Toggling Enable in the Bloom panel fires engine/set/bloom,
 //      observed via the engine/state/changed event.
-//   5. View → Ground Texture… opens the panel.
-//   6. Clicking a bundled ground slot updates the snapshot's
-//      groundTexture.
+//   5. The Ground popover opens from the toolbar dropdown trigger
+//      (Task 2.3: View → Ground Texture… became a popover on the
+//      Toolbar).
+//   6. Clicking a bundled ground slot in the popover updates the
+//      snapshot's groundTexture.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
@@ -51,9 +53,9 @@ async function openMenuItem(p: Page, menu: string, item: string) {
 }
 
 // Helper — wait for a ToolPanel with the given title to mount. ToolPanel
-// uses role="dialog" with the title as aria-label; the BackgroundPicker
-// uses "Background picker" as its title, the new panels use "Lighting",
-// "Bloom Settings", and "Ground Texture".
+// uses role="dialog" with the title as aria-label; the remaining ToolPanel
+// titles after Tasks 2.2/2.3 are "Lighting" and "Bloom Settings"
+// (Background and Ground moved to toolbar popovers).
 async function waitForPanel(p: Page, title: string) {
   await p.waitForSelector(`[role="dialog"][aria-label="${title}"]`, {
     timeout: 2000,
@@ -161,16 +163,34 @@ test("Toggling Enable Bloom fires engine/set/bloom (observed via state/changed)"
   await closeAnyPanel(page);
 });
 
-test("View → Ground Texture… opens the Ground Texture panel", async () => {
+test("Ground popover opens from the toolbar dropdown trigger", async () => {
+  // Task 2.3: the GroundTexturePanel slide-in ToolPanel was replaced by
+  // a Radix Popover triggered from the Toolbar's Group 4 dropdown. The
+  // dropdown button carries aria-label="Ground"; the mounted content is
+  // a popover wrapper (data-radix-popper-content-wrapper) rather than
+  // role="dialog". Mirrors the Task 2.2 Background popover spec.
   await closeAnyPanel(page);
-  await openMenuItem(page, "View", "Ground Texture");
-  await waitForPanel(page, "Ground Texture");
+  const probe = await page.evaluate(async () => {
+    const btn = document.querySelector<HTMLButtonElement>('button[aria-label="Ground"]');
+    if (!btn) return { clicked: false, popover: false, slots: 0 };
+    btn.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const popover = document.querySelector('[data-radix-popper-content-wrapper]');
+    const slots = popover?.querySelectorAll("button[aria-pressed]").length ?? 0;
+    return { clicked: true, popover: !!popover, slots };
+  });
+  expect(probe.clicked).toBe(true);
+  expect(probe.popover).toBe(true);
+  // GroundTexturePanelBody renders 8 aria-pressed slot buttons:
+  //   solid colour (1) + bundled 0..3 (4) + custom 5..7 (3) = 8.
+  expect(probe.slots).toBe(8);
+
+  // Cleanup: dismiss the Radix popover so the next test starts clean.
+  await page.keyboard.press("Escape");
 });
 
-test("Clicking a bundled ground slot updates groundTexture in the snapshot", async () => {
+test("Clicking a bundled ground slot in the popover updates groundTexture", async () => {
   await closeAnyPanel(page);
-  await openMenuItem(page, "View", "Ground Texture");
-  await waitForPanel(page, "Ground Texture");
 
   const before = await page.evaluate(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,8 +205,13 @@ test("Clicking a bundled ground slot updates groundTexture in the snapshot", asy
   const targetName = before === 1 ? "Sand" : "Grass";
   const targetSlot = targetName === "Grass" ? 1 : 2;
 
+  // Open the Ground popover from the toolbar.
+  await page.locator('button[aria-label="Ground"]').first().click();
+  await page.waitForSelector('[data-radix-popper-content-wrapper]', { timeout: 2000 });
+
+  // Slot buttons live inside the popover wrapper now.
   await page
-    .locator(`[role="dialog"][aria-label="Ground Texture"] button[aria-label="${targetName}"]`)
+    .locator(`[data-radix-popper-content-wrapper] button[aria-label="${targetName}"]`)
     .click();
 
   await page.waitForTimeout(300);
@@ -206,5 +231,6 @@ test("Clicking a bundled ground slot updates groundTexture in the snapshot", asy
     await b.request({ kind: "engine/set/ground-texture", params: { slot: orig } });
   }, before);
 
-  await closeAnyPanel(page);
+  // Dismiss popover.
+  await page.keyboard.press("Escape");
 });

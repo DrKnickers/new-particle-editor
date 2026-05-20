@@ -41,6 +41,10 @@ type Props = {
   onClose: () => void;
 };
 
+type BodyProps = {
+  bridge: Bridge;
+};
+
 type BundledSlot = {
   readonly slot: number;
   readonly name: string;
@@ -79,7 +83,14 @@ function rgbColorToHex(rgb: RgbColor): string {
   return `#${h(rgb.r)}${h(rgb.g)}${h(rgb.b)}`;
 }
 
-export function GroundTexturePanel({ bridge, onClose }: Props) {
+/**
+ * GroundTexturePanelBody — the slot-grid + solid-colour-picker markup
+ * that used to live inside <ToolPanel>. Extracted so both the legacy
+ * default-export wrapper and the new GroundDropdown popover can mount
+ * the same content. No onClose: the host (popover or ToolPanel) handles
+ * its own dismissal.
+ */
+export function GroundTexturePanelBody({ bridge }: BodyProps) {
   const [snapshot, setSnapshot] = useState<EngineStateDto | null>(null);
 
   useEffect(() => {
@@ -153,7 +164,7 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Ground Texture" onClose={onClose} bridge={bridge} occlusionId="tool-panel:ground">
+    <>
       <label className="mb-3 flex items-center gap-2 text-xs text-text">
         <input
           type="checkbox"
@@ -272,6 +283,27 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
           );
         })}
       </div>
+    </>
+  );
+}
+
+/**
+ * GroundTexturePanel — thin <ToolPanel> wrapper around
+ * GroundTexturePanelBody. Kept as the default export so the existing
+ * vitest spec (GroundTexturePanel.test.tsx) and any remaining slide-in
+ * callsite still compile. The new toolbar dropdown (GroundDropdown)
+ * mounts GroundTexturePanelBody directly inside a Radix Popover and
+ * never reaches this wrapper.
+ */
+export function GroundTexturePanel({ bridge, onClose }: Props) {
+  return (
+    <ToolPanel
+      title="Ground Texture"
+      onClose={onClose}
+      bridge={bridge}
+      occlusionId="tool-panel:ground"
+    >
+      <GroundTexturePanelBody bridge={bridge} />
     </ToolPanel>
   );
 }
