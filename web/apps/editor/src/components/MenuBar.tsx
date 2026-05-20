@@ -658,6 +658,7 @@ export function MenuBar({
                 params: { frames: 1 },
               })}
             >
+              <CheckSlot active={false} />
               Step Forward
             </Menubar.Item>
             {/* FD10 Group D: dispatches engine/set/camera with the
@@ -676,6 +677,7 @@ export function MenuBar({
                 },
               })}
             >
+              <CheckSlot active={false} />
               Reset Camera
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
@@ -686,6 +688,7 @@ export function MenuBar({
                 params: {},
               })}
             >
+              <CheckSlot active={false} />
               Reload Shaders
             </Menubar.Item>
             <Menubar.Item
@@ -695,6 +698,7 @@ export function MenuBar({
                 params: {},
               })}
             >
+              <CheckSlot active={false} />
               Reload Textures
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
@@ -717,6 +721,7 @@ export function MenuBar({
               className={ITEM}
               onSelect={() => setResetViewOpen(true)}
             >
+              <CheckSlot active={false} />
               Reset View Settings
             </Menubar.Item>
           </OccludingMenubarContent>
