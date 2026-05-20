@@ -47,15 +47,17 @@ test("selecting an emitter shows property tabs (lower-left) + track editor (lowe
   await expect(page.locator('[data-testid="tab-trigger-appearance"]')).toBeVisible();
   await expect(page.locator('[data-testid="tab-trigger-physics"]')).toBeVisible();
 
-  // Track editor (lower-right quadrant) visible simultaneously.
-  const trackPanel = page.locator('[data-testid="emitter-property-panel"]');
-  await expect(trackPanel).toBeVisible({ timeout: 5_000 });
+  // Curve editor (always-on bottom row, Task 2.6) visible
+  // simultaneously. The new CurveEditorPanel replaced the per-emitter
+  // EmitterPropertyPanel that used to live in the lower-right quadrant.
+  const curvePanel = page.locator('[data-testid="curve-editor-panel"]');
+  await expect(curvePanel).toBeVisible({ timeout: 5_000 });
 
   // Quadrant containers all present in the DOM.
   await expect(page.locator('[data-testid="quadrant-emitter-tree"]')).toBeVisible();
   await expect(page.locator('[data-testid="quadrant-property-tabs"]')).toBeVisible();
   await expect(page.locator('[data-testid="quadrant-viewport"]')).toBeVisible();
-  await expect(page.locator('[data-testid="quadrant-track-editor"]')).toBeVisible();
+  await expect(page.locator('[data-testid="quadrant-curve-editor"]')).toBeVisible();
 });
 
 test("editing the Lifetime spinner in the Basic tab fires emitters/set-properties and round-trips via get-properties", async () => {

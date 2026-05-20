@@ -5,7 +5,7 @@ import { ViewportSlot } from "@/components/ViewportSlot";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
-import { EmitterPropertyPanel } from "@/screens/EmitterPropertyPanel";
+import { CurveEditorPanel } from "@/components/CurveEditorPanel";
 import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
@@ -56,13 +56,11 @@ function AppShell() {
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
 
-  // Phase 3 Screen 6 Batch A — track the selected emitter id at the
-  // shell level so the EmitterPropertyPanel can be conditionally
-  // mounted on the RIGHT side of the main row (collapsing to "viewport
-  // claims the full right" when nothing is selected). The panel's own
-  // subscription is independent — this scalar exists only to gate the
-  // mount.
-  const [selectedEmitterId, setSelectedEmitterId] = useState<number | null>(null);
+  // Task 2.6 (Phase 2): the bottom row is now an always-on
+  // CurveEditorPanel that owns its own selection subscription, so the
+  // app-shell no longer needs to track `selectedEmitterId` to gate the
+  // lower-right pane. The previously-mounted EmitterPropertyPanel +
+  // its snapshot/event wiring have been removed from this shell.
 
   // Particle Editor 2026 redesign: apply persisted theme (or OS preference)
   // before any panel renders so the first paint is correctly themed.
@@ -75,24 +73,6 @@ function AppShell() {
         : "light";
     document.documentElement.dataset.theme = theme;
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    bridge
-      .request({ kind: "engine/state/snapshot", params: {} })
-      .then((snap) => {
-        if (cancelled) return;
-        setSelectedEmitterId(snap.selectedEmitterId);
-      })
-      .catch(() => { /* ignore — defaults to null */ });
-    return () => { cancelled = true; };
-  }, [bridge]);
-  useEffect(() => {
-    const off = bridge.on("emitters/selected", (e) => {
-      setSelectedEmitterId(e.payload.id);
-    });
-    return off;
-  }, [bridge]);
 
   // Screen 8 Batch 3: subscribe to file-state events (dirty/changed,
   // recent/changed, engine/state/changed) and seed from snapshot +
@@ -188,20 +168,20 @@ function AppShell() {
       {/* Toolbar — 4 groups (File · Edit · View · Render) */}
       <Toolbar bridge={bridge} />
 
-      {/* Main row — Phase 4.1 Fix dispatch 1 four-quadrant layout:
-            ┌──────────────┬───────────────────┐
-            │ Emitter tree │ Viewport          │
-            │ (upper-left) │ (upper-right)     │
-            ├──────────────┼───────────────────┤
-            │ Property     │ Track + Curve     │
-            │ tabs         │ editor            │
-            │ (lower-left) │ (lower-right)     │
-            └──────────────┴───────────────────┘
-            Mirrors legacy `WM_SIZE` layout at
-            [src/main.cpp:2712-2780]. Left column fixed `w-80` (~320px);
-            right column flex. Within each column, bottom pane fixed
-            height (`h-72` / `h-80`); top pane fills the remaining
-            space via `flex-1 min-h-0`. */}
+      {/* Main row — Task 2.6 layout:
+            ┌──────────────┬───────────────────┬─────────┐
+            │ Emitter tree │ Viewport          │ Spawner │
+            │ (upper-left) │                   │ (right, │
+            ├──────────────┼───────────────────┤ toggle) │
+            │ Property     │ Curve editor      │         │
+            │ tabs         │ (always-on, 260px)│         │
+            │ (lower-left) │                   │         │
+            └──────────────┴───────────────────┴─────────┘
+            Phase 2.6 (LT-4): the curve editor moved from a per-emitter
+            gated lower-right pane to an always-on 260px row at the
+            bottom of the center column. The CurveEditorPanel itself
+            handles the "no emitter selected" placeholder so the row
+            is mounted unconditionally. */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left column — Task 2.5: wrapped in the design's `.panel`
             chrome (header "Particle System" + body) housing both the
@@ -251,19 +231,15 @@ function AppShell() {
               <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
             )}
           </div>
-          {/* Lower-right — Track + Curve editor. Mounted only when an
-              emitter is selected; placeholder otherwise. */}
+          {/* Lower — always-on Curve editor panel (Task 2.6). The
+              panel itself handles the "no emitter selected" placeholder
+              at the canvas level, so this row is always mounted at a
+              fixed 260px height. */}
           <div
-            data-testid="quadrant-track-editor"
-            className="h-80 shrink-0 border-t border-border bg-bg"
+            data-testid="quadrant-curve-editor"
+            className="h-[260px] shrink-0 border-t border-border"
           >
-            {selectedEmitterId !== null ? (
-              <EmitterPropertyPanel bridge={bridge} />
-            ) : (
-              <div className="flex h-full items-center justify-center text-xs text-text-3">
-                Select an emitter to edit its tracks
-              </div>
-            )}
+            <CurveEditorPanel bridge={bridge} />
           </div>
         </div>
 

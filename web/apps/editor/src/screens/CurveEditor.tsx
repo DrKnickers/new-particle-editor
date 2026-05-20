@@ -56,17 +56,42 @@
 //     `onCanvasAdd` and marquee is suppressed.
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { TrackDto } from "@particle-editor/bridge-schema";
+import type { TrackDto, TrackName } from "@particle-editor/bridge-schema";
+
+/** Channel definition for the multi-channel overlay branch (Task 2.6).
+ *  `id` is the UI-facing identifier (e.g. "rotation"); `trackName` is
+ *  the wire-level TrackName (e.g. "rotationSpeed") used to look up the
+ *  track in the `tracks` array. `color` is a CSS colour string (token
+ *  ref like `var(--warning)` or raw hex). */
+export type ChannelDef = {
+  id: string;
+  label: string;
+  color: string;
+  defaultOn: boolean;
+  trackName: TrackName;
+};
 
 type Props = {
-  /** The track to render. `keys` are expected sorted ascending by
-   *  time but the component doesn't re-sort — it trusts the wire
-   *  contract. */
-  track: TrackDto;
-  /** Y-axis range, derived from the track + per-track value-range
-   *  mapping (see TrackEditor). Min defaults to 0 and max to 1 so an
-   *  uninitialised range still renders something sensible. */
-  valueRange: { min: number; max: number };
+  /** The track to render in single-track mode. `keys` are expected
+   *  sorted ascending by time but the component doesn't re-sort — it
+   *  trusts the wire contract. Optional only because the multi-
+   *  channel branch (when `tracks` + `channels` are passed) doesn't
+   *  need it. */
+  track?: TrackDto;
+  /** Multi-channel overlay branch (Task 2.6): when `tracks` +
+   *  `channels` + `visibleChannels` are all passed, the renderer
+   *  ignores `track` / `valueRange` and instead draws one curve per
+   *  visible channel in the channel's colour. Multi-channel mode is
+   *  view-only — selection / drag / marquee paths are no-ops because
+   *  no parent owns selection state across channels. */
+  tracks?: TrackDto[] | null;
+  channels?: readonly ChannelDef[];
+  visibleChannels?: Record<string, boolean>;
+  /** Y-axis range for single-track mode. Min defaults to 0 and max to
+   *  1 so an uninitialised range still renders something sensible.
+   *  Ignored in multi-channel mode — each channel uses its own
+   *  per-track range (see `valueRangeForTrack` below). */
+  valueRange?: { min: number; max: number };
   /** SVG drawable area in viewBox units. Defaults to 600×300; tests
    *  pin these to deterministic numbers when asserting positions. */
   width?: number;
@@ -223,9 +248,45 @@ function eventToViewBox(
   return { x, y };
 }
 
+/** Per-channel y-axis range used by the multi-channel overlay branch.
+ *  Mirrors the legacy + Phase 3 conventions: colour channels lock to
+ *  [0, 1]; Scale/Index auto-range with 1.2× headroom and a minimum max
+ *  of 100; RotationSpeed auto-ranges symmetrically around 0. Each
+ *  channel's curve is normalised to fill the panel height — comparing
+ *  absolute values across channels isn't the goal of the overlay. */
+function valueRangeForTrack(track: TrackDto): { min: number; max: number } {
+  switch (track.name) {
+    case "red":
+    case "green":
+    case "blue":
+    case "alpha":
+      return { min: 0, max: 1 };
+    case "scale":
+    case "index": {
+      let max = 0;
+      for (const k of track.keys) {
+        if (k.value > max) max = k.value;
+      }
+      return { min: 0, max: Math.max(max * 1.2, 100) };
+    }
+    case "rotationSpeed": {
+      let mag = 0;
+      for (const k of track.keys) {
+        const m = Math.abs(k.value);
+        if (m > mag) mag = m;
+      }
+      const bound = Math.max(mag * 1.2, 1);
+      return { min: -bound, max: bound };
+    }
+  }
+}
+
 export function CurveEditor({
   track,
   valueRange,
+  tracks,
+  channels,
+  visibleChannels,
   width = DEFAULT_WIDTH,
   height = DEFAULT_HEIGHT,
   timeMin = DEFAULT_TIME_MIN,
@@ -240,6 +301,32 @@ export function CurveEditor({
   onKeyDragEnd,
   onCanvasMarqueeSelect,
 }: Props) {
+  // Multi-channel overlay branch (Task 2.6). Triggered when the
+  // caller provides `tracks` + `channels` + `visibleChannels`. View-
+  // only: no selection, drag, marquee, insert mode, or context-menu
+  // handlers in this branch — those are deferred to a future polish
+  // task.
+  if (tracks !== undefined && channels !== undefined && visibleChannels !== undefined) {
+    return (
+      <MultiChannelCurves
+        tracks={tracks}
+        channels={channels}
+        visibleChannels={visibleChannels}
+        width={width}
+        height={height}
+        timeMin={timeMin}
+        timeMax={timeMax}
+      />
+    );
+  }
+
+  // Single-track legacy branch (unchanged). Requires `track` +
+  // `valueRange`; the type system can't enforce the exclusive-or
+  // shape via TypeScript discriminated unions without rewriting all
+  // callers, so we guard with a runtime null-render instead.
+  if (track === undefined || valueRange === undefined) {
+    return null;
+  }
   const { min: vMin, max: vMax } = valueRange;
 
   // Pre-compute the projected positions once so the curve and the
@@ -812,3 +899,149 @@ export function CurveEditor({
   );
 }
 
+// ─── Multi-channel overlay (Task 2.6) ────────────────────────────────
+//
+// Renders a single SVG with one curve + key-circle group per visible
+// channel. Each channel uses its own per-track y-axis range so colour
+// channels (0..1) and Scale (0..100+) both fill the panel height; the
+// overlay is a comparison-of-shape, not a comparison-of-absolute-values.
+//
+// View-only: no selection, drag, marquee, or context-menu wiring. A
+// future polish pass can layer those back on top by picking a "focus
+// channel" — the obvious extension point is to add a per-row radio in
+// the channel list and route hit-testing to the focused channel only.
+
+type MultiProps = {
+  tracks: TrackDto[] | null;
+  channels: readonly ChannelDef[];
+  visibleChannels: Record<string, boolean>;
+  width: number;
+  height: number;
+  timeMin: number;
+  timeMax: number;
+};
+
+function MultiChannelCurves({
+  tracks,
+  channels,
+  visibleChannels,
+  width,
+  height,
+  timeMin,
+  timeMax,
+}: MultiProps) {
+  // Grid: same layout as the single-track renderer so the visual
+  // matches the design lock. 10 evenly-spaced cells per axis.
+  const gridCells = 10;
+  const verticalLines: number[] = [];
+  for (let i = 0; i <= gridCells; i++) {
+    verticalLines.push((i / gridCells) * width);
+  }
+  const horizontalLines: number[] = [];
+  for (let i = 0; i <= gridCells; i++) {
+    horizontalLines.push((i / gridCells) * height);
+  }
+
+  // For each visible channel, find the track by name + project its
+  // keys. Tracks may be null (no emitter selected) — render the grid
+  // only.
+  const layers = (tracks ?? []).flatMap((t) => {
+    const channel = channels.find((c) => c.trackName === t.name);
+    if (channel === undefined) return [];
+    if (!(visibleChannels[channel.id] ?? channel.defaultOn)) return [];
+    const range = valueRangeForTrack(t);
+    const points = t.keys.map((k) => ({
+      x: project(k.time, timeMin, timeMax, width),
+      y: height - project(k.value, range.min, range.max, height),
+      time: k.time,
+    }));
+    return [{ channel, track: t, points }];
+  });
+
+  return (
+    <svg
+      data-testid="curve-editor-svg"
+      data-multi-channel="true"
+      data-visible-count={layers.length}
+      role="img"
+      aria-label={`Multi-channel curve overlay, ${layers.length} channels`}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className="h-full w-full select-none"
+    >
+      {/* Grid */}
+      <g data-testid="curve-grid" stroke="#262626" strokeWidth={1} pointerEvents="none">
+        {verticalLines.map((x, i) => (
+          <line key={`v${i}`} x1={x} y1={0} x2={x} y2={height} />
+        ))}
+        {horizontalLines.map((y, i) => (
+          <line key={`h${i}`} x1={0} y1={y} x2={width} y2={y} />
+        ))}
+      </g>
+
+      {/* Outer axes (left + bottom darker for orientation) */}
+      <g data-testid="curve-axes" stroke="#525252" strokeWidth={1.5} pointerEvents="none">
+        <line x1={0} y1={0} x2={0} y2={height} />
+        <line x1={0} y1={height} x2={width} y2={height} />
+      </g>
+
+      {/* One layer (curve + circles) per visible channel. The curve
+          path-shape follows the track's interpolation; key circles
+          render at the per-key (x, y) in the channel's colour. */}
+      {layers.map(({ channel, track, points }) => {
+        const interp = track.interpolation;
+        return (
+          <g
+            key={channel.id}
+            data-testid={`curve-layer-${channel.id}`}
+            data-channel-id={channel.id}
+            data-key-count={points.length}
+          >
+            {points.length >= 2 && interp === "smooth" && (
+              <path
+                fill="none"
+                stroke={channel.color}
+                strokeWidth={1.5}
+                d={buildSmoothPath(points)}
+                pointerEvents="none"
+              />
+            )}
+            {points.length >= 2 && interp === "step" && (
+              <polyline
+                fill="none"
+                stroke={channel.color}
+                strokeWidth={1.5}
+                points={buildStepPolyline(points)}
+                pointerEvents="none"
+              />
+            )}
+            {points.length >= 2 && interp === "linear" && (
+              <polyline
+                fill="none"
+                stroke={channel.color}
+                strokeWidth={1.5}
+                points={points.map((p) => `${p.x},${p.y}`).join(" ")}
+                pointerEvents="none"
+              />
+            )}
+            {points.map((p, i) => (
+              <circle
+                key={i}
+                data-testid="curve-key"
+                data-channel-id={channel.id}
+                data-key-time={p.time}
+                cx={p.x}
+                cy={p.y}
+                r={3}
+                fill={channel.color}
+                stroke="#0a0a0a"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+            ))}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
