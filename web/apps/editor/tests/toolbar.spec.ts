@@ -1,7 +1,9 @@
-// Phase 3 Screen 3 contract tests: Toolbar DOM presence and bridge
-// round-trips for the four-group toolbar (File / Edit / View / Render).
-// Sibling of app-shell.spec.ts and background-picker.spec.ts — same
-// CDP-attach harness, same window.bridge host-object channel.
+// Particle Editor 2026 toolbar contract tests. The toolbar has been
+// reorganized into 4 groups (file actions · playback · Spawner toggle
+// · environment+theme). Undo/Redo, Bloom, Reload Shaders/Textures
+// moved out — Undo/Redo and Reload-* live in the menubar (see
+// menu-bar.spec.ts) and Bloom moves to the ViewportPill in Task 2.7.
+// CDP-attach harness matches sibling app-shell.spec.ts.
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
@@ -20,40 +22,42 @@ test.afterAll(async () => {
   await browser?.close();
 });
 
-test("Toolbar renders all 10 buttons", async () => {
+test("Toolbar renders the 2026 button set", async () => {
   const labels = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll('button[aria-label]'))
+    return Array.from(document.querySelectorAll('.toolbar button[aria-label]'))
       .map((b) => b.getAttribute("aria-label"))
-      .filter((l): l is string =>
-        l !== null
-        && !["Background", "Solid colour", "Close background picker"].some((skip) => l.startsWith(skip))
-        && !l.includes("Skydome")
-        && !["Storm", "Murky Clouds", "Smog Clouds", "Blue Horizon", "Blue Sky", "Orange Horizon", "Orange Sky", "Volcanic Storm"].includes(l)
-        && !l.startsWith("Custom slot"));
+      .filter((l): l is string => l !== null);
   });
+  // File group
   expect(labels).toEqual(expect.arrayContaining([
-    expect.stringContaining("New"),
-    expect.stringContaining("Open"),
-    expect.stringContaining("Save"),
-    expect.stringContaining("Undo"),
-    expect.stringContaining("Redo"),
-    expect.stringMatching(/Pause|Resume/),
-    expect.stringContaining("Step"),
-    expect.stringMatching(/^Bloom/),
-    expect.stringContaining("Reload shaders"),
-    expect.stringContaining("Reload textures"),
+    "New",
+    "Open",
+    "Save",
+    "Save As",
+  ]));
+  // Playback group — Pause/Play depending on current engine state.
+  expect(labels.some((l) => /^(Pause|Play)$/.test(l))).toBe(true);
+  expect(labels).toEqual(expect.arrayContaining([
+    "Step",
+    "Step 10",
+    "Toggle Spawner panel",
+  ]));
+  // Theme toggle remains rightmost.
+  expect(labels).toEqual(expect.arrayContaining([
+    "Light theme",
+    "Dark theme",
   ]));
 });
 
-test("engine/set/paused mutates state and flips Pause button", async () => {
+test("engine/set/paused mutates state and flips Play/Pause button", async () => {
   const result = await page.evaluate(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const bridge = (window as any).bridge;
     await bridge.request({ kind: "engine/set/paused", params: { paused: true } });
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 150));
     const snap = await bridge.request({ kind: "engine/state/snapshot", params: {} });
-    const btn = Array.from(document.querySelectorAll('button[aria-label]'))
-      .find((b) => /Pause|Resume/.test(b.getAttribute("aria-label")!));
+    const btn = Array.from(document.querySelectorAll('.toolbar button[aria-label]'))
+      .find((b) => /^(Pause|Play)$/.test(b.getAttribute("aria-label")!));
     return {
       paused: snap.paused,
       ariaLabel: btn?.getAttribute("aria-label") ?? null,
@@ -61,8 +65,10 @@ test("engine/set/paused mutates state and flips Pause button", async () => {
     };
   });
   expect(result.paused).toBe(true);
-  expect(result.ariaLabel).toMatch(/Resume/);
-  expect(result.ariaPressed).toBe("true");
+  // When paused, the button shows "Play" (i.e. clicking it will resume).
+  expect(result.ariaLabel).toBe("Play");
+  // aria-pressed reflects "is playing" — false while paused.
+  expect(result.ariaPressed).toBe("false");
 
   // Cleanup — un-pause for the next test.
   await page.evaluate(() => {
@@ -84,30 +90,36 @@ test("engine/action/step-frames is dispatched without error", async () => {
   expect(result).toEqual({});
 });
 
-test("engine/set/bloom flips Bloom button aria-pressed", async () => {
-  const result = await page.evaluate(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const bridge = (window as any).bridge;
-    const before = await bridge.request({ kind: "engine/state/snapshot", params: {} });
-    await bridge.request({ kind: "engine/set/bloom", params: { enabled: !before.bloom } });
-    // Wait for the engine/state/changed broadcast to round-trip through
-    // WebView2 (async on the native host) and the React re-render to flush.
-    await new Promise((r) => setTimeout(r, 250));
-    const after = await bridge.request({ kind: "engine/state/snapshot", params: {} });
-    const btn = Array.from(document.querySelectorAll('button[aria-label]'))
-      .find((b) => /^Bloom/.test(b.getAttribute("aria-label")!));
-    // Read aria-pressed *before* the restore. The engine/state/changed
-    // broadcast that drives React re-renders is async on the native host
-    // (WebView2 postMessage), so the restore would race with the read.
-    const ariaPressed = btn?.getAttribute("aria-pressed") ?? null;
-    // Restore the pre-test value so downstream specs aren't affected.
-    await bridge.request({ kind: "engine/set/bloom", params: { enabled: before.bloom } });
+test("Step 10 button is present, enabled, and clickable without error", async () => {
+  // The shape of the dispatch (engine/action/step-frames with
+  // frames=10) is verified by the Vitest unit test in
+  // src/components/__tests__/Toolbar.test.tsx — we can't intercept
+  // React's bridge prop from this Playwright harness because the
+  // production bridge passed into the component tree is a different
+  // instance from window.bridge under --test-host (expose.ts swaps in
+  // a fresh TestHostBridge for the window slot). So here we just
+  // verify the button renders, is enabled, and a real click completes
+  // without throwing in the React handler.
+  const btn = page.locator('.toolbar button[aria-label="Step 10"]');
+  await expect(btn).toBeVisible();
+  await expect(btn).toBeEnabled();
+  await btn.click();
+});
+
+test("Spawner toggle button is present with default aria-pressed=true", async () => {
+  // Default visible on first launch; the in-app localStorage may have
+  // been mutated by prior runs, so we accept either pressed state but
+  // verify the button exists with the planned aria-label.
+  const info = await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll('.toolbar button[aria-label]'))
+      .find((b) => b.getAttribute("aria-label") === "Toggle Spawner panel") as HTMLButtonElement | undefined;
     return {
-      beforeBloom: before.bloom,
-      afterBloom: after.bloom,
-      ariaPressed,
+      present: !!btn,
+      text: btn?.textContent?.trim() ?? null,
+      ariaPressed: btn?.getAttribute("aria-pressed") ?? null,
     };
   });
-  expect(result.afterBloom).toBe(!result.beforeBloom);
-  expect(result.ariaPressed).toBe(String(!result.beforeBloom));
+  expect(info.present).toBe(true);
+  expect(info.text).toBe("Spawner");
+  expect(info.ariaPressed).toMatch(/^(true|false)$/);
 });

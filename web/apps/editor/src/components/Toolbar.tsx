@@ -1,60 +1,38 @@
-// Toolbar — horizontal action bar below the app header. Four groups
-// (File · Edit · View · Render) wired to the bridge. File buttons
-// (New/Open/Save) are scaffolds; the real file ops land in Phase 3
-// Screen 8 — clicking them logs a TODO for now. Edit dispatches
-// undo/perform, View drives the preview clock (paused / step), Render
-// toggles bloom and fires the reload-shaders / reload-textures actions.
+// Toolbar — Particle Editor 2026 layout. 4 grouped sections with
+// dividers, spacer to the right, theme toggle at the rightmost edge.
 //
-// Subscribes to engine/state/changed so the stateful buttons (Pause,
-// Bloom) reflect engine truth even when the state changes externally
-// (e.g. via DevTools or a keyboard accelerator).
+// Group 1 (file actions):       New · Open · Save · Save As
+// Group 2 (playback):           Play|Pause · Step · Step 10
+// Group 3 (panels):             Spawner toggle
+//   spacer
+// Group 4 (environment):        Ground dropdown · Background dropdown · ThemeToggle
+//
+// Ground and Background dropdown slots are empty placeholders for now;
+// Tasks 2.2 and 2.3 fill them in. Stop and Restart removed per design
+// chat. Bloom toggle moves to the viewport pill in Task 2.7. Undo/Redo
+// and Reload Shaders/Textures live in the menubar only.
+//
+// Uses the design's semantic CSS classes from components.css:
+//   .toolbar, .tb-group, .tb-btn, .tb-divider, .tb-spacer
+
 import { useEffect, useState } from "react";
 import {
-  FilePlus, FolderOpen, Save,
-  Undo, Redo,
-  Pause, Play, StepForward,
-  Sparkles, RefreshCw,
+  FilePlus, FolderOpen, Save, SaveAll,
+  Play, Pause, ChevronRight, ChevronsRight,
 } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { useSpawnerVisibility } from "@/lib/spawner-visibility";
 
 type Props = { bridge: Bridge };
 
-type ButtonProps = {
-  icon: React.ReactNode;
-  title: string;
-  onClick: () => void;
-  active?: boolean;
-  disabled?: boolean;
+const ICON = { className: "size-3.5" } as const;
+
+// File ops are scaffolds until Phase 3 wires them — keep the legacy
+// behaviour of logging a TODO for now (matches the current shape).
+const todoFile = (action: string) => () => {
+  console.log(`[Toolbar] ${action} — file ops land in Phase 3 Screen 8`);
 };
-
-function TbBtn({ icon, title, onClick, active = false, disabled = false }: ButtonProps) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      aria-pressed={active}
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex size-7 items-center justify-center rounded-md transition ${
-        disabled
-          ? "cursor-not-allowed text-text-3"
-          : active
-            ? "bg-accent-soft text-accent hover:bg-accent-soft"
-            : "text-text-2 hover:bg-panel-2 hover:text-text"
-      }`}
-    >
-      {icon}
-    </button>
-  );
-}
-
-function Divider() {
-  return <span className="mx-1 h-5 w-px bg-panel-2" aria-hidden="true" />;
-}
-
-const ICON = { className: "size-4" } as const;
 
 export function Toolbar({ bridge }: Props) {
   const [state, setState] = useState<EngineStateDto | null>(null);
@@ -69,75 +47,76 @@ export function Toolbar({ bridge }: Props) {
   }, [bridge]);
 
   const paused = state?.paused ?? false;
-  const bloom = state?.bloom ?? false;
-  const bloomAvailable = state?.bloomAvailable ?? false;
-
-  // File group — placeholder dispatches until Screen 8 wires real file ops.
-  const todoFile = (action: string) => {
-    console.log(`[Toolbar] ${action} — file ops land in Phase 3 Screen 8`);
-  };
+  const { visible: spawnerVisible, toggle: toggleSpawner } = useSpawnerVisibility();
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border bg-bg px-2">
-      {/* File */}
-      <TbBtn icon={<FilePlus {...ICON} />}   title="New (Ctrl+N)"   onClick={() => todoFile("New")} />
-      <TbBtn icon={<FolderOpen {...ICON} />} title="Open (Ctrl+O)"  onClick={() => todoFile("Open")} />
-      <TbBtn icon={<Save {...ICON} />}       title="Save (Ctrl+S)"  onClick={() => todoFile("Save")} />
+    <div className="toolbar">
+      {/* Group 1: file actions */}
+      <div className="tb-group">
+        <button type="button" className="tb-btn" aria-label="New" onClick={todoFile("New")}>
+          <FilePlus {...ICON} />
+        </button>
+        <button type="button" className="tb-btn" aria-label="Open" onClick={todoFile("Open")}>
+          <FolderOpen {...ICON} />
+        </button>
+        <button type="button" className="tb-btn" aria-label="Save" onClick={todoFile("Save")}>
+          <Save {...ICON} />
+        </button>
+        <button type="button" className="tb-btn" aria-label="Save As" onClick={todoFile("Save As")}>
+          <SaveAll {...ICON} />
+        </button>
+      </div>
 
-      <Divider />
+      <span className="tb-divider" />
 
-      {/* Edit */}
-      <TbBtn
-        icon={<Undo {...ICON} />}
-        title="Undo (Ctrl+Z)"
-        onClick={() => { void bridge.request({ kind: "undo/perform", params: { direction: "undo" } }); }}
-      />
-      <TbBtn
-        icon={<Redo {...ICON} />}
-        title="Redo (Ctrl+Shift+Z)"
-        onClick={() => { void bridge.request({ kind: "undo/perform", params: { direction: "redo" } }); }}
-      />
+      {/* Group 2: playback */}
+      <div className="tb-group">
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label={paused ? "Play" : "Pause"}
+          aria-pressed={!paused}
+          onClick={() => { void bridge.request({ kind: "engine/set/paused", params: { paused: !paused } }); }}
+        >
+          {paused ? <Play {...ICON} /> : <Pause {...ICON} />}
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Step"
+          onClick={() => { void bridge.request({ kind: "engine/action/step-frames", params: { frames: 1 } }); }}
+        >
+          <ChevronRight {...ICON} />
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Step 10"
+          onClick={() => { void bridge.request({ kind: "engine/action/step-frames", params: { frames: 10 } }); }}
+        >
+          <ChevronsRight {...ICON} />
+        </button>
+      </div>
 
-      <Divider />
+      <span className="tb-divider" />
 
-      {/* View — preview clock */}
-      <TbBtn
-        icon={paused ? <Play {...ICON} /> : <Pause {...ICON} />}
-        title={paused ? "Resume preview (F8)" : "Pause preview (F8)"}
-        active={paused}
-        onClick={() => { void bridge.request({ kind: "engine/set/paused", params: { paused: !paused } }); }}
-      />
-      <TbBtn
-        icon={<StepForward {...ICON} />}
-        title="Step one frame"
-        disabled={!paused}
-        onClick={() => { void bridge.request({ kind: "engine/action/step-frames", params: { frames: 1 } }); }}
-      />
+      {/* Group 3: Spawner toggle */}
+      <div className="tb-group">
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Toggle Spawner panel"
+          aria-pressed={spawnerVisible}
+          onClick={toggleSpawner}
+        >
+          Spawner
+        </button>
+      </div>
 
-      <Divider />
+      <span className="tb-spacer" />
 
-      {/* Render */}
-      <TbBtn
-        icon={<Sparkles {...ICON} />}
-        title={bloomAvailable ? "Bloom" : "Bloom (shader unavailable)"}
-        active={bloom}
-        disabled={!bloomAvailable}
-        onClick={() => { void bridge.request({ kind: "engine/set/bloom", params: { enabled: !bloom } }); }}
-      />
-      <TbBtn
-        icon={<RefreshCw {...ICON} />}
-        title="Reload shaders"
-        onClick={() => { void bridge.request({ kind: "engine/action/reload-shaders", params: {} }); }}
-      />
-      <TbBtn
-        icon={<RefreshCw {...ICON} />}
-        title="Reload textures"
-        onClick={() => { void bridge.request({ kind: "engine/action/reload-textures", params: {} }); }}
-      />
-
-      {/* Particle Editor 2026 redesign: theme toggle at the right edge.
-          Phase 2.1 will reorganize the toolbar into proper 4-group layout
-          with a spacer; for Phase 1 we just mount it as the last child. */}
+      {/* Group 4: environment + theme — Ground and Background
+          dropdowns land in Tasks 2.2/2.3; placeholder for now. */}
       <ThemeToggle />
     </div>
   );
