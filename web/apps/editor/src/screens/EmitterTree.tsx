@@ -88,7 +88,7 @@ import {
   resolveReparentSlot,
   type DropZone,
 } from "@/lib/drop-zone";
-import { computeLinkGroupBrackets } from "@/lib/link-group-colors";
+import { computeLinkGroupBrackets, laneCount } from "@/lib/link-group-colors";
 
 type Props = {
   bridge: Bridge;
@@ -769,8 +769,10 @@ function EmitterRow({
 // bracket layer can lay out absolutely without per-render measurement
 // (a ResizeObserver pass adds complexity for a polish detail; if the
 // tree theme changes this constant moves with it).
-const ROW_HEIGHT_PX = 24;
-const GUTTER_WIDTH_PX = 16;
+const ROW_HEIGHT_PX     = 24;
+const LANE_WIDTH_PX     = 10;  // 2px bracket + 8px gap to next lane
+const GUTTER_LEFT_PAD_PX = 4;
+const GUTTER_MIN_PX     = 4;   // when no link groups exist (constant minimum to avoid layout shift)
 
 // ─── Panel-header toolbar ────────────────────────────────────────────
 // FD10 (Group A polish): restore the legacy panel toolbar from
@@ -1171,6 +1173,13 @@ export function EmitterTree({ bridge }: Props) {
     [flatRows],
   );
 
+  // Gutter width derived from the number of bracket lanes in use. The
+  // 4px minimum keeps the gutter from collapsing to 0 when no groups
+  // exist — avoids a layout shift the first time a group appears.
+  const lanes = laneCount(brackets);
+  const gutterPx =
+    lanes === 0 ? GUTTER_MIN_PX : lanes * LANE_WIDTH_PX + GUTTER_LEFT_PAD_PX;
+
   // ── Batch C — keyboard handler ─────────────────────────────────
   //
   // Routes via the focused row's `data-emitter-id`. The tree container
@@ -1315,7 +1324,7 @@ export function EmitterTree({ bridge }: Props) {
             role="tree"
             aria-label="Emitters"
             className="m-0 flex-1 list-none p-0"
-            style={{ marginRight: GUTTER_WIDTH_PX }}
+            style={{ marginRight: gutterPx }}
           >
           {flatRows.map((row) => (
             <EmitterRow
@@ -1341,33 +1350,33 @@ export function EmitterTree({ bridge }: Props) {
             />
           ))}
           </ul>
-          {/* Bracket gutter — single-lane. Each non-zero linkGroup
-              gets a vertical bar spanning its first → last row in the
-              flat order, plus 4px-wide horizontal caps at top + bottom.
-              Multi-lane (overlapping group ranges) is a future polish;
-              overlapping brackets currently stack on top of each
-              other. Absolute-positioned within the relative wrapper. */}
+          {/* Bracket gutter — multi-lane. Each non-zero linkGroup gets
+              a vertical bar spanning its first → last row in the flat
+              order, plus 4px-wide horizontal caps at top + bottom.
+              Overlapping group ranges are spread across lanes by the
+              greedy first-fit pass in computeLinkGroupBrackets; the
+              gutter widens dynamically to accommodate `laneCount`
+              lanes. Absolute-positioned within the relative wrapper. */}
           <div
             data-testid="link-group-bracket-gutter"
             aria-hidden
             className="pointer-events-none relative shrink-0"
-            style={{ width: GUTTER_WIDTH_PX }}
+            style={{ width: gutterPx }}
           >
             {brackets.map((b) => {
-              const top = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
-              const height = Math.max(
-                1,
-                (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX,
-              );
+              const top    = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
+              const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
+              const left   = GUTTER_LEFT_PAD_PX + b.lane * LANE_WIDTH_PX;
               return (
                 <div
                   key={b.groupId}
                   data-testid={`link-group-bracket-${b.groupId}`}
                   data-link-group={b.groupId}
+                  data-lane={b.lane}
                   className="absolute"
                   style={{
                     top,
-                    left: 4,
+                    left,
                     width: 2,
                     height,
                     background: b.color,

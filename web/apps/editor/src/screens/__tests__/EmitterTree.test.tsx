@@ -268,6 +268,34 @@ describe("EmitterTree", () => {
     expect(screen.queryByTestId("link-group-bracket-2")).toBeNull();
   });
 
+  it("gutter container width tracks the number of lanes in use", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // The fixture tree puts Smoke (id 0) and Sparks (id 3) both in
+    // link group 1. That's a single 2-lane bracket. laneCount = 1
+    // → gutterPx = 1 * 10 + 4 = 14.
+    const gutter = screen.getByTestId("link-group-bracket-gutter");
+    expect(gutter).toBeInTheDocument();
+    expect((gutter as HTMLElement).style.width).toBe("14px");
+  });
+
+  it("rendered brackets carry a data-lane attribute matching their assigned lane", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Group 1 spans Smoke (row 0) → Sparks (row 3). Only one group
+    // visible in the fixture → lane 0.
+    const bracket = screen.getByTestId("link-group-bracket-1");
+    expect(bracket).toHaveAttribute("data-lane", "0");
+  });
+
   // ─── Batch C — inline rename ─────────────────────────────────────
 
   it("F2 on the focused row enters inline rename mode (input renders with current name)", async () => {
