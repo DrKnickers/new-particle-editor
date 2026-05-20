@@ -901,13 +901,6 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       params: { id: primaryId, direction: "down" },
     });
   };
-  const toggleVisibility = () => {
-    if (primaryId === null || !hasPrimary) return;
-    void bridge.request({
-      kind: "emitters/set-visible",
-      params: { id: primaryId, visible: !primary!.node.visible },
-    });
-  };
   const showAll = () =>
     void bridge.request({
       kind: "emitters/set-all-visible",
@@ -919,16 +912,10 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       params: { visible: false },
     });
 
-  // Eye glyph: open eye when the primary is currently visible (click
-  // → hide); closed eye when hidden (click → show). No primary → use
-  // open eye disabled.
-  const primaryVisible = hasPrimary && primary!.node.visible;
-  const EyeGlyph = primaryVisible ? Eye : EyeOff;
-
   return (
     <div
       data-testid="emitter-tree-toolbar"
-      className="mb-1 flex items-center gap-0.5 border-b border-border pb-1"
+      className="tree-actions"
     >
       <Menubar.Root>
         <Menubar.Menu>
@@ -998,17 +985,6 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
         onClick={moveDown}
       >
         <ChevronDown className="size-4" />
-      </button>
-      <span className="mx-0.5 h-4 w-px bg-panel-2" aria-hidden />
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title={primaryVisible ? "Hide" : "Show"}
-        aria-label="Toggle emitter visibility"
-        disabled={!hasPrimary}
-        onClick={toggleVisibility}
-      >
-        <EyeGlyph className="size-4" />
       </button>
       <button
         type="button"
@@ -1346,7 +1322,6 @@ export function EmitterTree({ bridge }: Props) {
       onKeyDown={handleTreeKeyDown}
       className="flex h-full flex-col outline-none"
     >
-      <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
       {tree === null ? (
         <div className="text-text-3 text-sm">(loading…)</div>
       ) : rootChildren.length === 0 ? (
@@ -1447,6 +1422,7 @@ export function EmitterTree({ bridge }: Props) {
           </div>
         </div>
       )}
+      <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
     </div>
   );
 }

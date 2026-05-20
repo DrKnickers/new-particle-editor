@@ -467,4 +467,44 @@ describe("EmitterTree", () => {
     const rowButton = screen.getByText("Smoke").closest("button")!;
     expect(rowButton.style.gridTemplateColumns).toBe("12px 1fr 18px");
   });
+
+  // ─── Task 7 — toolbar moves below the tree, restyles to .tree-actions ──
+
+  it("toolbar renders AFTER the tree's <ul> in DOM order", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    const tree    = screen.getByRole("tree", { name: "Emitters" });
+    const toolbar = screen.getByTestId("emitter-tree-toolbar");
+
+    // The toolbar comes after the tree's <ul> in document order.
+    const cmp = tree.compareDocumentPosition(toolbar);
+    // DOCUMENT_POSITION_FOLLOWING === 4
+    expect(cmp & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("toolbar uses the .tree-actions class for design-aligned chrome", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    const toolbar = screen.getByTestId("emitter-tree-toolbar");
+    expect(toolbar.className).toContain("tree-actions");
+  });
+
+  it("toolbar no longer has the eye-toggle button (per-row eyes replace it)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // The legacy eye-toggle button used aria-label "Toggle emitter visibility".
+    expect(screen.queryByLabelText("Toggle emitter visibility")).toBeNull();
+  });
 });
