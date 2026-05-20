@@ -8,11 +8,21 @@
 //   3. Changing burstSize via the Spinner fires `spawner/start` with the
 //      new value embedded in the params.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { SpawnerPanel } from "../SpawnerPanel";
 import { makeDefaultEngineState, makeDefaultSpawnerParams } from "@/bridge/mock-state";
+import {
+  useSpawnerVisibility,
+  __resetSpawnerVisibilityForTests,
+} from "@/lib/spawner-visibility";
+import { renderHook } from "@testing-library/react";
+
+beforeEach(() => {
+  localStorage.removeItem("alo:spawner-visible");
+  __resetSpawnerVisibilityForTests();
+});
 
 function makeStubBridge(modeOverride: "manual" | "auto" = "manual"): Bridge & {
   request: ReturnType<typeof vi.fn>;
@@ -37,7 +47,7 @@ function makeStubBridge(modeOverride: "manual" | "auto" = "manual"): Bridge & {
 describe("SpawnerPanel", () => {
   it("renders at least 5 Spinners (burst size, spacing, position xyz, lifetime)", async () => {
     const bridge = makeStubBridge("manual");
-    render(<SpawnerPanel bridge={bridge} onClose={() => {}} />);
+    render(<SpawnerPanel bridge={bridge} />);
 
     expect(screen.getByLabelText("Burst size")).toBeInTheDocument();
     expect(screen.getByLabelText("Burst spacing")).toBeInTheDocument();
@@ -52,7 +62,7 @@ describe("SpawnerPanel", () => {
     // settle into the snapshot's mode before asserting the initial
     // "no interval" state.
     const bridge = makeStubBridge("manual");
-    render(<SpawnerPanel bridge={bridge} onClose={() => {}} />);
+    render(<SpawnerPanel bridge={bridge} />);
 
     await waitFor(() => {
       // Manual radio is checked once the snapshot lands.
@@ -76,7 +86,7 @@ describe("SpawnerPanel", () => {
 
   it("changing burstSize fires spawner/start with the new value embedded", async () => {
     const bridge = makeStubBridge("manual");
-    render(<SpawnerPanel bridge={bridge} onClose={() => {}} />);
+    render(<SpawnerPanel bridge={bridge} />);
 
     const input = screen.getByLabelText("Burst size") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "7" } });
@@ -90,5 +100,20 @@ describe("SpawnerPanel", () => {
       const last = calls[calls.length - 1];
       expect(last.params.burstSize).toBe(7);
     });
+  });
+
+  it("Close Spawner button toggles the visibility store", async () => {
+    const bridge = makeStubBridge("manual");
+    render(<SpawnerPanel bridge={bridge} />);
+    const { result } = renderHook(() => useSpawnerVisibility());
+    expect(result.current.visible).toBe(true); // default visible
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Spawner" }));
+
+    // After the click, the store flips to false.
+    await waitFor(() => {
+      expect(result.current.visible).toBe(false);
+    });
+    expect(localStorage.getItem("alo:spawner-visible")).toBe("false");
   });
 });

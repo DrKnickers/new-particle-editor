@@ -42,7 +42,6 @@ function renderMenuBar(bridge: Bridge) {
       bridge={bridge}
       onOpenLightingPanel={() => {}}
       onOpenBloomPanel={() => {}}
-      onOpenSpawnerPanel={() => {}}
       onOpenImportEmittersDialog={() => {}}
       onOpenAboutDialog={() => {}}
       onOpenRescaleDialog={() => {}}

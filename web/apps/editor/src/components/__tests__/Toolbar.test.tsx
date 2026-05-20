@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { Toolbar } from "../Toolbar";
 import type { Bridge } from "@particle-editor/bridge-schema";
+import { __resetSpawnerVisibilityForTests } from "@/lib/spawner-visibility";
 
 function makeBridge() {
   const snap = {
@@ -24,6 +25,9 @@ function makeBridge() {
 
 beforeEach(() => {
   localStorage.removeItem("alo:spawner-visible");
+  // The Zustand store's `visible` state is module-level and survives
+  // across tests; clearing localStorage isn't enough on its own.
+  __resetSpawnerVisibilityForTests();
 });
 
 describe("Toolbar — Particle Editor 2026 layout", () => {

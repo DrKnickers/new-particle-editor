@@ -24,7 +24,7 @@
 // `spawner/stop` and is disabled when count == 0.
 
 import { useEffect, useRef, useState } from "react";
-import { Square } from "lucide-react";
+import { Square, X } from "lucide-react";
 import type {
   Bridge,
   SpawnerParamsDto,
@@ -34,10 +34,10 @@ import type {
 import { Spinner } from "@/primitives/Spinner";
 import { ToolPanel } from "@/components/ToolPanel";
 import { makeDefaultSpawnerParams } from "@/bridge/mock-state";
+import { toggleSpawner } from "@/lib/spawner-visibility";
 
 type Props = {
   bridge: Bridge;
-  onClose: () => void;
 };
 
 /** Hard caps from `SpawnerDriver` — mirror the C++ constants at
@@ -65,7 +65,7 @@ function patchVec(base: Vec3, idx: 0 | 1 | 2, v: number): Vec3 {
   return out as Vec3;
 }
 
-export function SpawnerPanel({ bridge, onClose }: Props) {
+export function SpawnerPanel({ bridge }: Props) {
   // Cache the spawner config locally — fed by snapshot + state/changed.
   // Defaults to the same struct the engine ships with so the panel never
   // renders empty Spinners (which would clamp to NaN on first commit).
@@ -164,19 +164,10 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
   const isAuto = config.mode === "auto";
 
   return (
-    <ToolPanel
-      title="Spawner"
-      onClose={onClose}
-      bridge={bridge}
-      occlusionId="tool-panel:spawner"
-    >
-      {/* Header chips — active-count badge + Stop button.
-          Rendered as the first section so they sit just below the
-          ToolPanel's title bar (the ToolPanel chrome doesn't expose a
-          header-trailing slot, so a top section is the cleanest fit). */}
-      <div className="mb-3 flex items-center justify-between rounded-md border border-border bg-bg-2/40 px-3 py-2">
-        <span className="text-[11px] text-text-2">Active instances</span>
-        <div className="flex items-center gap-2">
+    <div className="panel" aria-label="Spawner">
+      <div className="panel-header">
+        <span>Spawner</span>
+        <div className="panel-actions">
           <span
             aria-label="Active instance count"
             className="inline-flex h-5 min-w-[24px] items-center justify-center rounded bg-panel-2 px-1.5 text-[11px] font-medium text-text"
@@ -188,13 +179,21 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
             onClick={handleStop}
             disabled={activeCount === 0}
             aria-label="Stop spawner"
-            className="flex size-5 items-center justify-center rounded text-text-2 outline-none hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+            className="icon-btn disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Square className="size-3" />
           </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Close Spawner"
+            onClick={toggleSpawner}
+          >
+            <X className="size-3.5" />
+          </button>
         </div>
       </div>
-
+      <div className="panel-body p-3">
       <ToolPanel.Section title="Mode" alwaysOpen>
         {/* Native radios under a role="radiogroup" wrapper — keyboard
             arrows + tab navigation come from the browser, and the
@@ -397,6 +396,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
           </button>
         </ToolPanel.Footer>
       )}
-    </ToolPanel>
+      </div>
+    </div>
   );
 }

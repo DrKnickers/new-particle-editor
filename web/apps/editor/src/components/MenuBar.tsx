@@ -32,6 +32,7 @@ import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
 import { useTreeContextStore } from "@/lib/tree-context";
 import { requestEmitterRename } from "@/lib/tree-action";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
+import { toggleSpawner } from "@/lib/spawner-visibility";
 import { Modal } from "@/components/Modal";
 
 // FD8 follow-up: each MenubarContent needs to register itself with the
@@ -71,7 +72,6 @@ type Props = {
   bridge: Bridge;
   onOpenLightingPanel: () => void;
   onOpenBloomPanel: () => void;
-  onOpenSpawnerPanel: () => void;
   onOpenImportEmittersDialog: () => void;
   onOpenAboutDialog: () => void;
   onOpenRescaleDialog: () => void;
@@ -119,7 +119,6 @@ export function MenuBar({
   bridge,
   onOpenLightingPanel,
   onOpenBloomPanel,
-  onOpenSpawnerPanel,
   onOpenImportEmittersDialog,
   onOpenAboutDialog,
   onOpenRescaleDialog,
@@ -495,8 +494,8 @@ export function MenuBar({
               Hide All Emitters
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} onSelect={() => onOpenSpawnerPanel()}>
-              Spawner…<Hint>F7</Hint>
+            <Menubar.Item className={ITEM} onSelect={toggleSpawner}>
+              Spawner<Hint>F7</Hint>
             </Menubar.Item>
           </OccludingMenubarContent>
         </Menubar.Portal>

@@ -44,12 +44,38 @@ async function openMenuItem(p: Page, menu: string, item: string) {
 }
 
 async function waitForPanel(p: Page, title: string) {
-  await p.waitForSelector(`[role="dialog"][aria-label="${title}"]`, {
+  await p.waitForSelector(`[aria-label="${title}"].panel, [role="dialog"][aria-label="${title}"]`, {
     timeout: 2000,
   });
 }
 
+/** Task 2.4: Spawner panel is now a permanent right-side column with
+ *  visibility tracked in localStorage('alo:spawner-visible'). Force it
+ *  visible before the assertions so we don't depend on test-order
+ *  leftovers. */
+async function ensureSpawnerVisible(p: Page) {
+  const visible = await p.evaluate(() => {
+    return !!document.querySelector('[aria-label="Spawner"].panel');
+  });
+  if (!visible) {
+    await p.locator('button[aria-label="Toggle Spawner panel"]').first().click();
+  }
+}
+
+async function ensureSpawnerHidden(p: Page) {
+  const visible = await p.evaluate(() => {
+    return !!document.querySelector('[aria-label="Spawner"].panel');
+  });
+  if (visible) {
+    await p.locator('button[aria-label="Toggle Spawner panel"]').first().click();
+  }
+}
+
 async function closeAnyPanel(p: Page) {
+  // Task 2.4: SpawnerPanel is no longer a ToolPanel slide-in (it's a
+  // permanent column controlled by alo:spawner-visible); only Lighting
+  // and Bloom still use ToolPanel chrome. Keep cleaning those up so
+  // earlier-test residue can't leak forward.
   const dialog = p.locator('[role="dialog"]:not([data-state])').first();
   if (await dialog.count()) {
     const closeBtn = dialog.locator('button[aria-label="Close"]').first();
@@ -59,36 +85,38 @@ async function closeAnyPanel(p: Page) {
   }
 }
 
-test("Emitters → Spawner opens the Spawner panel", async () => {
-  // FD5: Spawner moved from Tools to the new top-level Emitters menu.
+test("Emitters → Spawner toggles the Spawner column", async () => {
+  // Task 2.4: SpawnerPanel is a permanent right column. The Emitters
+  // menu's "Spawner" entry now toggles the column (not opens a
+  // slide-in). Start hidden so the menu click flips it visible.
   await closeAnyPanel(page);
+  await ensureSpawnerHidden(page);
   await openMenuItem(page, "Emitters", "Spawner");
   await waitForPanel(page, "Spawner");
 });
 
-test("Opening the Background popover does not close the Spawner panel (independent surfaces)", async () => {
+test("Opening the Background popover does not close the Spawner column (independent surfaces)", async () => {
   // Task 2.2: Background lives in a Radix Popover anchored to the
-  // toolbar, separate from the slide-in ToolPanel mutual-exclusion
-  // group. Opening the popover must not affect the Spawner panel.
+  // toolbar, separate from the workspace grid. Opening the popover
+  // must not affect the permanent Spawner column.
   await closeAnyPanel(page);
-  await openMenuItem(page, "Emitters", "Spawner");
+  await ensureSpawnerVisible(page);
   await waitForPanel(page, "Spawner");
 
   await page.locator('button[aria-label="Background"]').first().click();
   await page.waitForSelector('[data-radix-popper-content-wrapper]', { timeout: 2000 });
   const stillSpawner = await page
-    .locator('[role="dialog"][aria-label="Spawner"]')
+    .locator('[aria-label="Spawner"].panel')
     .count();
   expect(stillSpawner).toBe(1);
 
-  // Dismiss the Radix popover, then close the lingering ToolPanel.
+  // Dismiss the Radix popover.
   await page.keyboard.press("Escape");
-  await closeAnyPanel(page);
 });
 
 test("Changing Burst size fires engine/state/changed with new spawner.burstSize", async () => {
   await closeAnyPanel(page);
-  await openMenuItem(page, "Emitters", "Spawner");
+  await ensureSpawnerVisible(page);
   await waitForPanel(page, "Spawner");
 
   // Subscribe to engine/state/changed and capture each spawner.burstSize.
@@ -109,7 +137,7 @@ test("Changing Burst size fires engine/state/changed with new spawner.burstSize"
 
   // Type a new burstSize into the Spinner and blur to commit.
   const burst = page
-    .locator('[role="dialog"][aria-label="Spawner"] input[aria-label="Burst size"]')
+    .locator('[aria-label="Spawner"].panel input[aria-label="Burst size"]')
     .first();
   await burst.click();
   await page.keyboard.press("Control+A");
@@ -135,8 +163,6 @@ test("Changing Burst size fires engine/state/changed with new spawner.burstSize"
       params: { ...snap.spawner, burstSize: 1 },
     });
   });
-
-  await closeAnyPanel(page);
 });
 
 // Radix Dialog content carries data-state="open" (matches dialogs.spec.ts).

@@ -25,6 +25,7 @@ import {
   setOpenToolPanel,
   useOpenToolPanel,
 } from "@/lib/tool-panel";
+import { useSpawnerVisible } from "@/lib/spawner-visibility";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
 
@@ -50,6 +51,7 @@ function AppShell() {
   // `panelOpen` boolean that used to live here. Opening any panel from
   // the menu / Background pill closes whichever was previously open.
   const openPanel = useOpenToolPanel();
+  const spawnerVisible = useSpawnerVisible();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
@@ -177,7 +179,6 @@ function AppShell() {
           bridge={bridge}
           onOpenLightingPanel={() => setOpenToolPanel("lighting")}
           onOpenBloomPanel={() => setOpenToolPanel("bloom")}
-          onOpenSpawnerPanel={() => setOpenToolPanel("spawner")}
           onOpenImportEmittersDialog={() => setImportEmittersOpen(true)}
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}
@@ -241,9 +242,6 @@ function AppShell() {
             {openPanel === "bloom" && (
               <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
             )}
-            {openPanel === "spawner" && (
-              <SpawnerPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-            )}
           </div>
           {/* Lower-right — Track + Curve editor. Mounted only when an
               emitter is selected; placeholder otherwise. */}
@@ -260,6 +258,19 @@ function AppShell() {
             )}
           </div>
         </div>
+
+        {/* Right column — Spawner panel, permanent in the workspace
+            grid when spawnerVisible is true (Task 2.4). Hidden when
+            the user toggles the Spawner button off; the workspace
+            collapses back to two columns. */}
+        {spawnerVisible && (
+          <aside
+            data-testid="quadrant-spawner"
+            className="w-80 shrink-0 border-l border-border overflow-hidden"
+          >
+            <SpawnerPanel bridge={bridge} />
+          </aside>
+        )}
       </div>
 
       {/* Status bar */}
