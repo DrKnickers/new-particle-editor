@@ -29,7 +29,9 @@
 
 ## Phase 1 — Token system + theme toggle
 
-Single phase, ~6 tasks, ending in ONE commit. Phase 1 must end with the editor structurally identical to today but visually using the new tokens. Test counts unchanged (vitest 191/191, Playwright 80/80) since no DOM-semantic changes.
+Single phase, 7 tasks, ending in ONE commit. Phase 1 must end with the editor structurally identical to today but visually using the new tokens. Test counts: vitest 191 → **195** (+4 ThemeToggle specs); Playwright **80/80** unchanged.
+
+> **Re-plan note (2026-05-19, second draft).** The original Phase 1 draft (committed in `52f381c`) assumed Tailwind v3 with a `tailwind.config.ts` JS-extension file. The project actually uses **Tailwind v4** (CSS-first config via `@theme {}` blocks), and the entry stylesheet is `src/styles/globals.css` (not `src/index.css`). The existing `globals.css` also carries a load-bearing **FD4 constraint**: `body` must stay `bg-transparent` for WebView2-D3D9 sibling-HWND compositing — the design's body `background: var(--bg)` rule from `styles.css` is dropped, the shell's outer `<div>` paints the background instead. The original `@theme` block in `globals.css` (`--color-bg-app` and friends) has **zero consumers** across the 32 chrome components (verified by Grep at re-plan time) and is removed by this phase. Task numbering changes: the original Task 1.3 ("Extend Tailwind config") is eliminated — its work folds into Task 1.1's new `@theme inline` block in `tokens.css`. New numbering: **1.1** (CSS files), **1.2** (font), **1.3** (wire imports), **1.4** (ThemeToggle TDD), **1.5** (wire ThemeToggle), **1.6** (sweep), **1.7** (verify + commit).
 
 ### Task 1.1: Add CSS token files
 
@@ -38,7 +40,9 @@ Single phase, ~6 tasks, ending in ONE commit. Phase 1 must end with the editor s
 - Create: `web/apps/editor/src/styles/base.css`
 - Create: `web/apps/editor/src/styles/components.css`
 
-- [ ] **Step 1: Create `web/apps/editor/src/styles/tokens.css`** with the verbatim `:root` and `[data-theme="light"]` blocks from the design's `styles.css`:
+**Tailwind v4 surface.** Tailwind v4 generates utility classes from CSS variables named `--color-*`, `--radius-*`, `--font-*`, etc. — declared inside an `@theme {}` block. Declaring `--color-bg-2: var(--bg-2)` exposes `bg-bg-2` / `text-bg-2` / `border-bg-2` as utilities. We use `@theme inline { ... }` so the variable values resolve at use-time (so `[data-theme=light]` overrides still flip correctly at runtime) instead of being inlined as literal hex.
+
+- [ ] **Step 1: Create `web/apps/editor/src/styles/tokens.css`** with the design's `:root` + `[data-theme="light"]` blocks plus the Tailwind v4 `@theme inline` aliasing:
 
 ```css
 /* Particle Editor 2026 design tokens.
@@ -96,15 +100,46 @@ Single phase, ~6 tasks, ending in ONE commit. Phase 1 must end with the editor s
   --accent-2: #1f63b0;
   --accent-soft: rgba(47, 127, 212, 0.14);
 }
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-panel-3: var(--panel-3);
+  --color-border: var(--border);
+  --color-border-2: var(--border-2);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-selected-border: var(--selected-border);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-x-axis: var(--x-axis);
+  --color-y-axis: var(--y-axis);
+  --color-z-axis: var(--z-axis);
+  --radius-token: var(--radius);
+  --radius-token-sm: var(--radius-sm);
+}
 ```
 
-- [ ] **Step 2: Create `web/apps/editor/src/styles/base.css`** with body/html resets + `@font-face` declaration + scrollbar rules from the design:
+- [ ] **Step 2: Create `web/apps/editor/src/styles/base.css`** with `@font-face`, html sizing, scrollbar rules. **NOTE**: omit any `body { background }` rule — the existing `bg-transparent` rule in `globals.css` must survive (FD4 transparency for WebView2-D3D9 sibling-HWND compositing). The shell's outer `<div>` (App.tsx root) paints the chrome background:
 
 ```css
 /* Base resets, font registration, scrollbar styling.
-   The body/html rules come from the design's styles.css. Font-face declares
-   the locally-bundled Inter variable woff2 (preloaded in index.html for
-   first-paint correctness). */
+   NOTE: body { background } intentionally omitted — globals.css sets
+   bg-transparent on body for WebView2 transparency (FD4 requirement
+   for D3D9 viewport sibling-HWND compositing). The shell paints
+   bg-bg on its outer <div> instead. Font-feature-settings + font-family
+   live on the body rule in globals.css for the same cascade-friendliness
+   reason. */
 
 @font-face {
   font-family: "Inter";
@@ -114,23 +149,14 @@ Single phase, ~6 tasks, ending in ONE commit. Phase 1 must end with the editor s
   src: url("/fonts/inter/Inter-VariableFont_slnt,wght.woff2") format("woff2-variations");
 }
 
+/* box-sizing reset — Tailwind v4 preflight already applies this, so the
+   rule is a no-op in normal use. Kept verbatim from the design source
+   for parity in case preflight is ever disabled. */
 * { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 12px;
-  font-feature-settings: "ss01", "cv11";
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-}
-
-#root { height: 100vh; }
+/* html sizing — height: 100% so the workspace fills the viewport. body
+   sizing + transparency stay in globals.css. */
+html { height: 100%; overflow: hidden; }
 
 /* Scrollbar styling — applies to .panel-body and .curve-list scrollable
    containers (per the design's component class names). */
@@ -151,15 +177,17 @@ html, body {
 .curve-list::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 ```
 
-- [ ] **Step 3: Create `web/apps/editor/src/styles/components.css`** with the design's component-class rules. **Lift verbatim from `C:\Users\antho\AppData\Local\Temp\nu-particle-editor\nuparticle-editor\project\styles.css` lines 72-918** (everything after `#root { height: 100vh; }` and before the scrollbar block which is already in `base.css`). Include all of: `.app`, `.workspace`, `.workspace-center`, `.menubar`, `.app-icon`, `.app-title`, `.app-subtitle`, `.menu-items`, `.menu-item`, `.menu-dropdown`, `.menu-dropdown-item`, `.menu-dropdown-divider`, `.window-controls`, `.window-btn`, `.toolbar`, `.tb-group`, `.tb-btn`, `.tb-split`, `.tb-divider`, `.tb-spacer`, `.tb-field`, `.tb-select`, `.theme-toggle`, `.sim-speed-stepper`, `.panel`, `.panel-header`, `.panel-body`, `.search-row`, `.search`, `.emitter-tree`, `.tree-row`, `.tree-child`, `.tree-actions`, `.tabs`, `.tab`, `.inspector`, `.section`, `.section-header`, `.section-divider`, `.form-row`, `.num-input`, `.text-input`, `.select`, `.checkbox`, `.radio`, `.radio-label`, `.check-label`, `.viewport`, `.viewport-floor`, `.explosion`, `.gizmo`, `.vp-overlay`, `.vp-perspective`, `.vp-tools`, `.vp-stats`, `.vp-axes`, `.vp-bottom-right`, `.curve-editor`, `.ce-toolbar`, `.ce-body`, `.curve-list`, `.curve-canvas-wrap`, `.curve-canvas`, `.statusbar`. Read the source file and paste the relevant range.
+- [ ] **Step 3: Create `web/apps/editor/src/styles/components.css`** with the design's component-class rules. Lift the relevant range from `C:\Users\antho\AppData\Local\Temp\nu-particle-editor\nuparticle-editor\project\styles.css` — everything that defines layout/visual classes (`.app`, `.workspace`, `.workspace-center`, `.menubar`, `.app-icon`, `.app-title`, `.app-subtitle`, `.menu-items`, `.menu-item`, `.menu-dropdown`, `.menu-dropdown-item`, `.menu-dropdown-divider`, `.window-controls`, `.window-btn`, `.toolbar`, `.tb-group`, `.tb-btn`, `.tb-split`, `.tb-divider`, `.tb-spacer`, `.tb-field`, `.tb-select`, `.theme-toggle`, `.sim-speed-stepper`, `.panel`, `.panel-header`, `.panel-body`, `.search-row`, `.search`, `.emitter-tree`, `.tree-row`, `.tree-child`, `.tree-actions`, `.tabs`, `.tab`, `.inspector`, `.section`, `.section-header`, `.section-divider`, `.form-row`, `.num-input`, `.text-input`, `.select`, `.checkbox`, `.radio`, `.radio-label`, `.check-label`, `.viewport`, `.viewport-floor`, `.explosion`, `.gizmo`, `.vp-overlay`, `.vp-perspective`, `.vp-tools`, `.vp-stats`, `.vp-axes`, `.vp-bottom-right`, `.curve-editor`, `.ce-toolbar`, `.ce-body`, `.curve-list`, `.curve-canvas-wrap`, `.curve-canvas`, `.statusbar`). **Skip** the body/html/scrollbar block (already in `base.css`), the `:root` token blocks (already in `tokens.css`), and any rule referencing `.tweaks-*` (out of scope per spec section 1).
 
-Quick command to extract the right range:
+Use Read on the design source, identify the right line range, then Write the extracted content to `components.css`.
+
+- [ ] **Step 4: Verify all three files parse.** Run:
 
 ```bash
-sed -n '72,918p' "/c/Users/antho/AppData/Local/Temp/nu-particle-editor/nuparticle-editor/project/styles.css" > web/apps/editor/src/styles/components.css
+pnpm --filter @particle-editor/editor build 2>&1 | tail -10
 ```
 
-- [ ] **Step 4: Verify all three files parse** by running `cd web/apps/editor && pnpm build`. The build should still succeed (the new CSS files aren't imported yet — they're sitting in `src/styles/` ready for the next step). Expected: build clean, no errors related to the new files.
+Expected: build clean. The new CSS files aren't imported yet (Task 1.3 wires them in) — they're sitting in `src/styles/` ready to be picked up. Zero errors related to the new files.
 
 ### Task 1.2: Bundle Inter font
 
@@ -167,18 +195,18 @@ sed -n '72,918p' "/c/Users/antho/AppData/Local/Temp/nu-particle-editor/nuparticl
 - Create: `web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2`
 - Modify: `web/apps/editor/index.html`
 
-- [ ] **Step 1: Download Inter variable woff2** from the official Inter release. Use a recent stable version (Inter 4.x).
+- [ ] **Step 1: Download Inter variable woff2.** Use the rsms/inter v4.x mirror.
 
 ```bash
-mkdir -p "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3/web/apps/editor/public/fonts/inter"
-cd "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3/web/apps/editor/public/fonts/inter"
-curl -L -o "Inter-VariableFont_slnt,wght.woff2" "https://github.com/rsms/inter/raw/master/docs/font-files/Inter-VariableFont_slnt,wght.woff2"
-ls -la "Inter-VariableFont_slnt,wght.woff2"
+mkdir -p "web/apps/editor/public/fonts/inter"
+curl -L -o "web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2" \
+  "https://github.com/rsms/inter/raw/master/docs/font-files/Inter-VariableFont_slnt,wght.woff2"
+ls -la "web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2"
 ```
 
-Expected: a ~250 KB woff2 file. If the URL changes upstream, fall back to https://rsms.me/inter/inter.html for the latest mirror.
+Expected: ~250 KB file. If the rsms mirror URL changes, fall back to https://rsms.me/inter/inter.html for the canonical link.
 
-- [ ] **Step 2: Add the preload link to `web/apps/editor/index.html`.** Open the file, find the `<head>` block, add a `<link rel="preload">` for the font immediately before any existing `<link rel="stylesheet">` so the font request kicks off as early as possible:
+- [ ] **Step 2: Add the preload link to `web/apps/editor/index.html`.** The current `index.html` is minimal — add the preload tag inside `<head>`, before the existing `<title>` so the font request kicks off as early as possible:
 
 ```html
 <link rel="preload"
@@ -188,91 +216,101 @@ Expected: a ~250 KB woff2 file. If the URL changes upstream, fall back to https:
       href="/fonts/inter/Inter-VariableFont_slnt,wght.woff2">
 ```
 
-- [ ] **Step 3: Verify the font file is served by the dev server.** Run `pnpm dev` (or skip if running another verification mode), and in browser devtools confirm the font request returns 200 with `Content-Type: font/woff2`. Then stop the dev server.
+- [ ] **Step 3: Smoke-check the font load.** Run `pnpm --filter @particle-editor/editor dev` and open `http://localhost:5174`. In DevTools Network tab, filter `Inter-Variable*` and confirm 200 OK + `Content-Type: font/woff2`. Stop the dev server.
 
-### Task 1.3: Extend Tailwind config with token aliases
-
-**Files:**
-- Modify: `web/apps/editor/tailwind.config.ts`
-
-- [ ] **Step 1: Read the current `tailwind.config.ts`** to understand the existing `theme.extend` shape:
-
-```bash
-cat "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3/web/apps/editor/tailwind.config.ts"
-```
-
-- [ ] **Step 2: Extend `theme.colors` with token-backed aliases.** The goal is for `bg-bg-2`, `text-text`, `border-border-2`, `bg-accent`, etc. to resolve to `var(--bg-2)`, `var(--text)`, `var(--border-2)`, `var(--accent)`. Add this block inside `theme.extend`:
-
-```ts
-colors: {
-  // Particle Editor 2026 design tokens — see web/apps/editor/src/styles/tokens.css
-  'bg':              'var(--bg)',
-  'bg-2':            'var(--bg-2)',
-  'bg-3':            'var(--bg-3)',
-  'panel':           'var(--panel)',
-  'panel-2':         'var(--panel-2)',
-  'panel-3':         'var(--panel-3)',
-  'border':          'var(--border)',
-  'border-2':        'var(--border-2)',
-  'hover':           'var(--hover)',
-  'selected':        'var(--selected)',
-  'selected-border': 'var(--selected-border)',
-  'text':            'var(--text)',
-  'text-2':          'var(--text-2)',
-  'text-3':          'var(--text-3)',
-  'accent':          'var(--accent)',
-  'accent-2':        'var(--accent-2)',
-  'accent-soft':     'var(--accent-soft)',
-  'danger':          'var(--danger)',
-  'success':         'var(--success)',
-  'warning':         'var(--warning)',
-  'x-axis':          'var(--x-axis)',
-  'y-axis':          'var(--y-axis)',
-  'z-axis':          'var(--z-axis)',
-},
-borderRadius: {
-  'token':    'var(--radius)',
-  'token-sm': 'var(--radius-sm)',
-},
-```
-
-This co-exists with Tailwind's default palette — existing `bg-neutral-900` etc. still work. The new `bg-bg-2` and friends are additive.
-
-- [ ] **Step 3: Verify Tailwind config still type-checks.** Run `cd web/apps/editor && pnpm build`. Expected: build clean, dist rebuilt, no TS errors.
-
-### Task 1.4: Import the new CSS files into the app's entry stylesheet
+### Task 1.3: Wire new CSS into globals.css; remove legacy @theme block
 
 **Files:**
-- Modify: `web/apps/editor/src/index.css`
+- Modify: `web/apps/editor/src/styles/globals.css`
 
-- [ ] **Step 1: Read the current `index.css`** to see its existing import structure:
+**Context:** Current `globals.css` contains an `@theme {}` block defining 11 legacy tokens (`--color-bg-app`, `--color-fg-primary`, etc.). Grep confirmed **zero consumers** across the 32 chrome component files (verified at re-plan time) — the block was scaffolding that never landed. Remove it. The body rule with `bg-transparent` is load-bearing (FD4 transparency for WebView2-D3D9 sibling-HWND compositing) and must survive verbatim.
 
-```bash
-cat "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3/web/apps/editor/src/index.css"
+- [ ] **Step 1: Read current globals.css** to confirm its shape (already inspected at re-plan time — sanity-check that nothing changed):
+
+```
+web/apps/editor/src/styles/globals.css
 ```
 
-- [ ] **Step 2: Add the three new CSS imports** AFTER the existing `@tailwind base/components/utilities` directives but BEFORE any existing custom CSS so the design's component classes have higher specificity than Tailwind utilities at equal weight:
+Should currently look like:
 
 ```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-bg-app: #0F1115;
+  /* …11 legacy tokens… */
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  html, #root { background: transparent; }
+  body {
+    @apply bg-transparent text-neutral-100 antialiased;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+}
+```
+
+- [ ] **Step 2: Rewrite `web/apps/editor/src/styles/globals.css`** as:
+
+```css
+@import "tailwindcss";
 
 /* Particle Editor 2026 design system — token-aliased Tailwind utilities
    resolve to these CSS variables; design's component classes (.panel,
    .tree-row, .form-row, etc.) consume them too. */
-@import "./styles/tokens.css";
-@import "./styles/base.css";
-@import "./styles/components.css";
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";
 
-/* (any existing custom CSS continues below) */
+@layer base {
+  html, body, #root { height: 100%; }
+  /* html must also be transparent — the browser's system canvas paints white
+     when the html element has no background, even if body is transparent. */
+  html, #root { background: transparent; }
+  /* Phase 4.1 FD4 follow-up: body must NOT carry an opaque background.
+     WebView2 is set to transparent (DefaultBackgroundColor {0,0,0,0}) so
+     the D3D9 viewport sibling-HWND can show through transparent HTML
+     regions. Opaque chrome (header, toolbar, side panels, status bar,
+     track editor, modals) carries `bg-bg` (token-backed) on its own
+     root after Task 1.6's sweep; the viewport quadrant inside `App.tsx`
+     stays transparent end-to-end so the native viewport is visible.
+     Browser-mode (`pnpm dev` without the host) shows the default white
+     page in the viewport rect — that is intentional. */
+  body {
+    /* bg-transparent (NOT browser-default white) so the WebView2 transparent
+       surface composites onto the D3D9 viewport sibling-HWND in host mode.
+       In browser mode (`pnpm dev`), this shows whatever the browser fills
+       transparent pages with (usually white). text-text uses the new
+       token; font-family / font-size / font-feature-settings / user-select
+       come from the design's body rule. */
+    @apply bg-transparent text-text antialiased;
+    font-family: "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-feature-settings: "ss01", "cv11";
+    user-select: none;
+  }
+}
 ```
 
-- [ ] **Step 3: Run `pnpm build`** to confirm the imports resolve and the bundle still compiles. Expected: build clean, dist size grew by ~50-60 KB (the new CSS).
+Changes from the current shape:
+- Legacy `@theme {}` block removed (zero consumers verified).
+- Three new `@import` directives pull in `tokens.css` / `base.css` / `components.css`.
+- `body`'s `text-neutral-100` becomes `text-text` (uses new token).
+- Design's body rule additions: `font-size: 12px`, `font-feature-settings: "ss01", "cv11"`, `user-select: none`, expanded font-family stack.
+- `bg-transparent` preserved (FD4 constraint).
 
-- [ ] **Step 4: Run `pnpm dev`** briefly and visually confirm the app loads with the new font (Inter) and the dark-token color palette is active (default `:root` applies). Existing layout should be intact. Stop the dev server.
+- [ ] **Step 3: Build.**
 
-### Task 1.5: ThemeToggle component (TDD)
+```bash
+pnpm --filter @particle-editor/editor build 2>&1 | tail -10
+```
+
+Expected: build clean. The new tokens are now active; existing components still using `bg-neutral-*` etc. continue to render correctly (Tailwind's default palette stays intact alongside the new token-named utilities — `bg-neutral-900` still resolves AND `bg-bg-2` newly resolves).
+
+- [ ] **Step 4: Brief dev-server smoke.** `pnpm --filter @particle-editor/editor dev`, open the app, confirm it still renders (panels in place, Inter font now active, dark palette by default). Stop the dev server.
+
+### Task 1.4: ThemeToggle component (TDD)
 
 **Files:**
 - Create: `web/apps/editor/src/components/ThemeToggle.tsx`
@@ -326,7 +364,13 @@ describe("ThemeToggle", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to confirm it fails.** Run `cd web/apps/editor && pnpm test src/components/__tests__/ThemeToggle.test.tsx 2>&1 | tail -10`. Expected: 4 failures with "Cannot find module '../ThemeToggle'".
+- [ ] **Step 2: Confirm the test fails.**
+
+```bash
+pnpm --filter @particle-editor/editor test src/components/__tests__/ThemeToggle.test.tsx 2>&1 | tail -10
+```
+
+Expected: 4 failures with "Cannot find module '../ThemeToggle'".
 
 - [ ] **Step 3: Implement `web/apps/editor/src/components/ThemeToggle.tsx`:**
 
@@ -386,20 +430,31 @@ export function ThemeToggle() {
 }
 ```
 
-- [ ] **Step 4: Run the test to confirm it passes.** `cd web/apps/editor && pnpm test src/components/__tests__/ThemeToggle.test.tsx 2>&1 | tail -10`. Expected: 4 passed.
+- [ ] **Step 4: Confirm the test passes.**
 
-- [ ] **Step 5: Run the full vitest suite to confirm no regressions.** `cd web/apps/editor && pnpm test 2>&1 | tail -8`. Expected: 195 passed (was 191; +4 new specs).
+```bash
+pnpm --filter @particle-editor/editor test src/components/__tests__/ThemeToggle.test.tsx 2>&1 | tail -10
+```
 
-### Task 1.6: Wire ThemeToggle into App.tsx and Toolbar
+Expected: 4 passed.
+
+- [ ] **Step 5: Full vitest suite — no regressions.**
+
+```bash
+pnpm --filter @particle-editor/editor test 2>&1 | tail -8
+```
+
+Expected: **195 passed** (was 191; +4 new specs).
+
+### Task 1.5: Wire ThemeToggle into App.tsx + Toolbar.tsx
 
 **Files:**
 - Modify: `web/apps/editor/src/App.tsx`
 - Modify: `web/apps/editor/src/components/Toolbar.tsx`
 
-- [ ] **Step 1: Apply initial theme in App.tsx.** Read the current `App.tsx` and add a one-time `useEffect` near the top of the component that sets `document.documentElement.dataset.theme` from `localStorage` or `prefers-color-scheme`:
+- [ ] **Step 1: App.tsx initial-theme effect.** Add a one-time `useEffect` near the top of `AppShell()` (alongside the other `useEffect`s). Runs *before* any panel mounts so the first paint is in the right theme:
 
 ```tsx
-// In App.tsx, alongside other useEffects:
 useEffect(() => {
   const stored = localStorage.getItem("alo:theme");
   const theme = stored === "dark" || stored === "light"
@@ -411,125 +466,198 @@ useEffect(() => {
 }, []);
 ```
 
-This duplicates ThemeToggle's initial-read logic, which is fine — App.tsx runs FIRST so the data-theme is set before any panel mounts and the first paint isn't unstyled.
+This duplicates ThemeToggle's initial-read intentionally — App.tsx runs first so `data-theme` is set before any child renders. ThemeToggle's own `useEffect(() => { dataset.theme = theme; }, [theme])` keeps the attribute in sync after the toggle.
 
-- [ ] **Step 2: Insert `<ThemeToggle />` into Toolbar.tsx.** Read the current `Toolbar.tsx`. Add the import:
+- [ ] **Step 2: Insert `<ThemeToggle />` into Toolbar.tsx.** Add the import:
 
 ```tsx
 import { ThemeToggle } from "@/components/ThemeToggle";
 ```
 
-And insert `<ThemeToggle />` at the rightmost position in the toolbar JSX (it lives at the right edge per the design — for now insert it after whatever currently is the rightmost button; the toolbar reorganization in Task 2.1 will finalize positioning):
+And mount `<ThemeToggle />` at the right edge of the toolbar (Phase 2.1 will reorganize toolbar layout into 4 grouped sections; for Phase 1 just append after the rightmost existing element):
 
 ```tsx
-{/* ...existing toolbar buttons... */}
+{/* ...existing toolbar groups... */}
 <ThemeToggle />
 ```
 
-- [ ] **Step 3: Run the vitest suite.** `cd web/apps/editor && pnpm test 2>&1 | tail -8`. Expected: 195 passed.
-
-- [ ] **Step 4: Run `pnpm build`.** Expected: clean.
-
-### Task 1.7: Component-by-component utility class sweep
-
-**Files:** ~30 component files under `web/apps/editor/src/`
-
-The sweep replaces hardcoded color/border/typography Tailwind utilities with token-backed equivalents. Components that consume `bg-neutral-*`, `text-neutral-*`, `border-neutral-*`, `sky-*`, and similar get swapped to `bg-bg-2`, `text-text`, `border-border`, `accent`, etc.
-
-- [ ] **Step 1: Inventory the sweep targets.** Run this grep to list every file with utilities that need swapping:
+- [ ] **Step 3: Run vitest.**
 
 ```bash
-cd "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3"
-grep -RE "bg-neutral-|border-neutral-|text-neutral-|sky-500|sky-400" web/apps/editor/src --include="*.tsx" -l
+pnpm --filter @particle-editor/editor test 2>&1 | tail -8
 ```
 
-Expected: ~25-30 files. Note them.
+Expected: 195 passed. If any existing Toolbar test asserts an exhaustive button list and adding `<ThemeToggle />` breaks that count, update the assertion (the toggle should be accepted as a sibling, not a new assertion target).
 
-- [ ] **Step 2: Sweep each file.** For each listed file, apply this substitution table:
+- [ ] **Step 4: pnpm build.** Expected: clean.
 
-| Old utility | New utility |
-|---|---|
-| `bg-neutral-950` | `bg-bg` |
-| `bg-neutral-900` | `bg-bg-2` |
-| `bg-neutral-800` | `bg-panel-2` |
-| `bg-neutral-700` | `bg-panel-3` |
-| `text-neutral-100` | `text-text` |
-| `text-neutral-200` | `text-text` |
-| `text-neutral-300` | `text-text-2` |
-| `text-neutral-400` | `text-text-2` |
-| `text-neutral-500` | `text-text-3` |
-| `text-neutral-600` | `text-text-3` |
-| `border-neutral-800` | `border-border` |
-| `border-neutral-700` | `border-border-2` |
-| `sky-500` | `accent` |
-| `sky-400` | `accent` |
-| `bg-sky-500/20` | `bg-accent-soft` |
-| `bg-sky-500/10` | `bg-accent-soft` |
-| `rounded-md` | (leave alone — Tailwind default 6px close enough) |
+### Task 1.6: Component-by-component utility class sweep
 
-Use Edit with `replace_all: true` on each file for each substitution that has multiple matches. The substitutions are mechanical but semantically identical because the new tokens map close to the old neutral palette.
+**Files:** 32 component files under `web/apps/editor/src/` (inventory confirmed at re-plan time).
 
-For visual review, after each ~5 files, run `pnpm build` to catch any class-name typos.
+The sweep replaces hardcoded Tailwind defaults with token-backed equivalents. DOM semantics are unchanged — only class names swap.
 
-- [ ] **Step 3: Visual sanity check after sweep.** Run `cd web/apps/editor && pnpm build && pnpm dev` briefly. Open the app in browser, eyeball that nothing is obviously broken (panels still render, text is visible, accents are blue, dark theme is dark). Stop the dev server.
+- [ ] **Step 1: Inventory.** The 32 files using `bg-neutral-*`, `text-neutral-*`, `border-neutral-*`, or `sky-*`:
 
-- [ ] **Step 4: Run the full vitest suite.** `pnpm test 2>&1 | tail -8`. Expected: 195 passed (no regressions — DOM semantics unchanged, only class names swapped).
-
-### Task 1.8: Phase 1 verification gates + commit
-
-- [ ] **Step 1: Build the C++ binary** to confirm legacy mode is unaffected:
-
-```bash
-cd "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3"
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" //p:Configuration=Debug //p:Platform=x64 //v:m 2>&1 | tail -10
+```
+src/App.tsx
+src/components/MenuBar.tsx
+src/components/Modal.tsx
+src/components/StatusBar.tsx
+src/components/ToolPanel.tsx
+src/components/Toolbar.tsx
+src/components/ViewportSlot.tsx
+src/primitives/ColorButton.tsx
+src/primitives/RandomParam.tsx
+src/primitives/Spinner.tsx
+src/primitives/TexturePalette.tsx
+src/screens/AboutDialog.tsx
+src/screens/BackgroundButton.tsx
+src/screens/BackgroundPicker.tsx
+src/screens/BloomPanel.tsx
+src/screens/CurveEditor.tsx
+src/screens/EmitterPropertyPanel.tsx
+src/screens/EmitterPropertyTabs.tsx
+src/screens/EmitterTree.tsx
+src/screens/GroundTexturePanel.tsx
+src/screens/ImportEmittersDialog.tsx
+src/screens/IncrementIndexDialog.tsx
+src/screens/LightingPanel.tsx
+src/screens/LinkGroupSettingsDialog.tsx
+src/screens/ModNicknameDialog.tsx
+src/screens/PrimitivesGallery.tsx
+src/screens/RescaleDialog.tsx
+src/screens/RescaleEmitterDialog.tsx
+src/screens/SaveChangesPrompt.tsx
+src/screens/SetLinkGroupDialog.tsx
+src/screens/SpawnerPanel.tsx
+src/screens/TrackEditor.tsx
 ```
 
-Expected: clean (only preexisting LIBCMTD warning).
+Re-confirm at sweep time using the Grep tool:
 
-- [ ] **Step 2: Run vitest.**
-
-```bash
-cd web/apps/editor && pnpm test 2>&1 | tail -8
+```
+pattern: bg-neutral-|text-neutral-|border-neutral-|bg-sky-|text-sky-|border-sky-
+path: src
+glob: *.tsx
+output_mode: files_with_matches
 ```
 
-Expected: 195 / 195 (was 191; +4 ThemeToggle).
+- [ ] **Step 2: Apply the substitution table file-by-file.** Use Edit with `replace_all: true` per substitution per file.
 
-- [ ] **Step 3: Run Playwright.**
+| Old utility | New utility | Notes |
+|---|---|---|
+| `bg-neutral-950` | `bg-bg` | App chrome root |
+| `bg-neutral-900` | `bg-bg-2` | Panels, dialogs |
+| `bg-neutral-800` | `bg-panel-2` | Hover, tabs |
+| `bg-neutral-700` | `bg-panel-3` | Pressed, divider |
+| `bg-neutral-800/95` | `bg-panel-2/95` | Modal overlay (preserve opacity modifier) |
+| `text-neutral-100` | `text-text` | Primary text |
+| `text-neutral-200` | `text-text` | Primary text |
+| `text-neutral-300` | `text-text-2` | Secondary text |
+| `text-neutral-400` | `text-text-2` | Secondary text |
+| `text-neutral-500` | `text-text-3` | Tertiary text |
+| `text-neutral-600` | `text-text-3` | Tertiary text |
+| `text-neutral-700` | `text-text-3` | Disabled text |
+| `border-neutral-800` | `border-border` | Panel borders |
+| `border-neutral-700` | `border-border-2` | Stronger borders |
+| `border-neutral-600` | `border-border-2` | Stronger borders |
+| `bg-sky-500` | `bg-accent` | Accents |
+| `text-sky-500` | `text-accent` | Accent text |
+| `text-sky-400` | `text-accent` | Accent text |
+| `text-sky-300` | `text-accent` | Accent text (active states) |
+| `bg-sky-500/20` | `bg-accent-soft` | Active button bg |
+| `bg-sky-500/30` | `bg-accent-soft` | Hover on active button |
+| `bg-sky-500/10` | `bg-accent-soft` | Active button bg |
+| `border-sky-500` | `border-accent` | Accent borders |
+| `border-sky-400` | `border-accent` | Accent borders |
+| `rounded-md` | (leave alone — Tailwind default 6px ≈ new token-sm 5px) | |
+
+- [ ] **Step 3: Build after each batch of ~5 files** to catch class-name typos early:
 
 ```bash
-cd web/apps/editor && pnpm test:native 2>&1 | tail -8
+pnpm --filter @particle-editor/editor build 2>&1 | tail -8
 ```
 
-Expected: 80 / 80 (unchanged — Phase 1 has no DOM-semantic changes).
-
-- [ ] **Step 4: Visual verification via computer-use.** Launch the editor, take screenshots in both themes.
+- [ ] **Step 4: After all 32 files swept, full vitest.**
 
 ```bash
-cd "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3"
-"./x64/Debug/ParticleEditor.exe" --new-ui
+pnpm --filter @particle-editor/editor test 2>&1 | tail -8
 ```
 
-Wait ~3 seconds for window to appear. If `request_access` for `particleeditor.exe` isn't granted in this session, call it now. Take a screenshot of the dark theme. Click the ThemeToggle's Sun button. Take a screenshot of light theme. Close and relaunch; confirm the selected theme persisted.
+Expected: 195 passed (no DOM-semantic changes — only class names swapped).
 
-Expected: app renders with Inter font, the new dark palette by default (or light if OS is light), every panel is in the same location as before, theme toggle works and persists.
+- [ ] **Step 5: Visual smoke.** `pnpm --filter @particle-editor/editor dev`, open the app in a browser, confirm: app renders in dark theme by default, every panel intact, accent is the new blue (`#4ea3ff`) not Tailwind sky, no missing-class fallbacks (no transparent or default-white surfaces where chrome should be opaque).
 
-- [ ] **Step 5: Manual smoke by user.** Hand off to user with: "Phase 1 ready for verification. Launch the editor and confirm dark + light themes both render the existing layout with the new palette. Theme should persist across close+relaunch."
+### Task 1.7: Phase 1 verification gates + single commit
 
-- [ ] **Step 6: Commit Phase 1.** Stage all Phase 1 files:
+- [ ] **Step 1: C++ build.** Confirm legacy mode is unaffected.
 
 ```bash
-cd "C:/Modding/Particle Editor/.claude/worktrees/awesome-morse-5ea5c3"
-git add web/apps/editor/src/styles/tokens.css web/apps/editor/src/styles/base.css web/apps/editor/src/styles/components.css
-git add web/apps/editor/public/fonts/inter/
-git add web/apps/editor/index.html
-git add web/apps/editor/tailwind.config.ts
-git add web/apps/editor/src/index.css
-git add web/apps/editor/src/components/ThemeToggle.tsx
-git add web/apps/editor/src/components/__tests__/ThemeToggle.test.tsx
-git add web/apps/editor/src/App.tsx
-git add web/apps/editor/src/components/Toolbar.tsx
-git add web/apps/editor/src/  # catch any swept components
-git status  # verify what's staged before commit
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" \
+  "ParticleEditor.sln" //p:Configuration=Debug //p:Platform=x64 //v:m 2>&1 | tail -10
+```
+
+Expected: clean (preexisting LIBCMTD warning OK).
+
+- [ ] **Step 2: pnpm build.**
+
+```bash
+pnpm --filter @particle-editor/editor build 2>&1 | tail -10
+```
+
+Expected: clean.
+
+- [ ] **Step 3: Vitest.**
+
+```bash
+pnpm --filter @particle-editor/editor test 2>&1 | tail -8
+```
+
+Expected: **195 / 195** (191 baseline + 4 ThemeToggle).
+
+- [ ] **Step 4: Playwright.**
+
+```bash
+pnpm --filter @particle-editor/editor test:native 2>&1 | tail -8
+```
+
+Expected: **80 / 80** unchanged (Phase 1 has no DOM-semantic changes).
+
+- [ ] **Step 5: Computer-use visual verification.** Launch the editor in the background.
+
+```bash
+"./x64/Debug/ParticleEditor.exe" --new-ui &
+```
+
+Wait a few seconds for the window to appear. Then from the controller session, request access so screenshots resolve to the running PID's exe path (not a cached install from a previous session):
+
+```
+mcp__computer-use__request_access(["particleeditor.exe"])
+```
+
+Then: screenshot dark theme → click the ThemeToggle's Sun button → screenshot light theme → close the editor → relaunch → confirm the last-selected theme persisted across the restart.
+
+Expected: app renders with Inter font, the new dark palette by default (or light if OS preference is light), every panel in the same DOM location as before, theme toggle works and persists.
+
+- [ ] **Step 6: User manual smoke.** Hand off with: "Phase 1 ready for verification. Launch the editor; confirm dark + light themes both render the existing layout with the new palette. Theme should persist across close + relaunch."
+
+- [ ] **Step 7: Single commit on the session branch.** All Phase 1 work lands in one commit on the current `claude/<random>` session branch (will FF into `lt-4` at session end).
+
+```bash
+git add web/apps/editor/src/styles/tokens.css \
+        web/apps/editor/src/styles/base.css \
+        web/apps/editor/src/styles/components.css \
+        web/apps/editor/src/styles/globals.css \
+        web/apps/editor/public/fonts/inter/ \
+        web/apps/editor/index.html \
+        web/apps/editor/src/components/ThemeToggle.tsx \
+        web/apps/editor/src/components/__tests__/ThemeToggle.test.tsx \
+        web/apps/editor/src/App.tsx \
+        web/apps/editor/src/components/Toolbar.tsx
+# plus any swept components from Task 1.6:
+git add web/apps/editor/src/
+git status   # verify what's staged before commit
 ```
 
 Commit message:
@@ -546,19 +674,28 @@ Sun/Moon theme toggle; choice persists to localStorage and overrides the
 OS hint after first interaction.
 
 How we tackled it. New CSS files under web/apps/editor/src/styles/:
-tokens.css ports the design's :root + [data-theme="light"] verbatim,
-base.css declares the @font-face for the locally-bundled Inter variable
-woff2 + body/html resets + scrollbar styling, components.css carries the
-design's reusable component classes for later phases to consume.
-tailwind.config.ts aliases the new CSS variables into its color palette
-(`bg-bg-2`, `text-text-2`, `accent`, etc.) so existing utility-class
-components can incrementally swap from `bg-neutral-900` style without
-restructuring class architecture. ThemeToggle.tsx reads localStorage,
-falls back to matchMedia prefers-color-scheme on first launch, writes
-to <html data-theme>.
+tokens.css ports the design's :root + [data-theme="light"] tokens and
+adds a Tailwind v4 @theme inline block that republishes them as
+--color-* / --radius-* so utilities like bg-bg-2, text-text-3,
+border-border-2, accent become available; base.css declares the
+@font-face for the locally-bundled Inter variable woff2 and the
+scrollbar styling; components.css ports the design's reusable
+component classes for later phases to consume. globals.css drops the
+legacy @theme block (verified zero consumers across 32 chrome
+components), imports the three new files, and keeps the FD4-mandated
+bg-transparent body rule for WebView2-D3D9 sibling-HWND compositing.
+ThemeToggle.tsx reads localStorage, falls back to matchMedia
+prefers-color-scheme on first launch, writes to <html data-theme>.
 
 Vitest: 191 → 195 (+4 ThemeToggle specs). Playwright: 80/80 unchanged
 (no DOM-semantic changes). MSBuild Debug x64 clean.
+
+Notes on plan/reality drift addressed during execution. The original
+Phase 1 draft (commit 52f381c) assumed Tailwind v3 with a JS
+tailwind.config.ts; this project is on Tailwind v4 (CSS-first @theme).
+The plan file was re-written in place before any code landed; see
+docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md
+for the adapted task list.
 
 Phase 2 (structural moves) and Phase 3 (cleanup + dialog re-skin) land
 as follow-up commits per the spec at
@@ -569,15 +706,11 @@ EOF
 )"
 ```
 
-- [ ] **Step 7: Push to `origin/lt-4`** (if on lt-4 directly) or FF into lt-4 (if on a session branch) per the branch workflow:
+- [ ] **Step 8: FF into lt-4 at session end** (per CLAUDE.md `## Branch workflow`):
 
 ```bash
-# If currently on lt-4:
-git push
-
-# If on a claude/<random> session branch:
 git switch lt-4
-git merge --ff-only claude/<session-name>
+git merge --ff-only claude/great-varahamihira-b66cf4
 git push
 ```
 
