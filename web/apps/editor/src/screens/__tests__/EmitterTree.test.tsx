@@ -392,4 +392,54 @@ describe("EmitterTree", () => {
     expect(copyCall).toBeDefined();
     expect(copyCall.params).toEqual({ ids: [0, 3] });
   });
+
+  // ─── Task 5 — per-row visibility eye button ──────────────────────
+
+  it("each row renders a per-row visibility eye button", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // 6 emitter rows in the fixture → 6 eye buttons.
+    expect(screen.getByTestId("emitter-vis-0")).toBeInTheDocument();  // Smoke
+    expect(screen.getByTestId("emitter-vis-1")).toBeInTheDocument();  // Smoke embers
+    expect(screen.getByTestId("emitter-vis-3")).toBeInTheDocument();  // Sparks
+  });
+
+  it("clicking the per-row eye dispatches emitters/set-visible with toggled state", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Smoke (id=0) is `visible: true` in the fixture → click should
+    // dispatch { visible: false }.
+    fireEvent.click(screen.getByTestId("emitter-vis-0"));
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const setVis = calls.find((c) => c.kind === "emitters/set-visible");
+    expect(setVis).toBeDefined();
+    expect(setVis!.params).toEqual({ id: 0, visible: false });
+  });
+
+  it("clicking the per-row eye does NOT change selection", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Before click: selection is empty (beforeEach clears the store).
+    expect(useEmitterSelectionStore.getState().primary).toBeNull();
+
+    fireEvent.click(screen.getByTestId("emitter-vis-1"));  // Smoke embers
+
+    // Selection still empty — no emitters/select dispatched as a side effect.
+    expect(useEmitterSelectionStore.getState().primary).toBeNull();
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "emitters/select")).toBeUndefined();
+  });
 });

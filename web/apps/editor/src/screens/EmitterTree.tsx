@@ -680,6 +680,29 @@ function EmitterRow({
                 className="ml-auto inline-block size-2 shrink-0 rounded-full bg-accent"
               />
             )}
+            {!isEditing && (
+              <button
+                type="button"
+                data-testid={`emitter-vis-${node.id}`}
+                onClick={(e) => {
+                  // stopPropagation is load-bearing: the outer row button's
+                  // onClick selects the emitter. Without this, toggling
+                  // visibility would also re-select the row — confusing.
+                  e.stopPropagation();
+                  void bridge.request({
+                    kind: "emitters/set-visible",
+                    params: { id: node.id, visible: !node.visible },
+                  });
+                }}
+                title={node.visible ? "Hide emitter" : "Show emitter"}
+                aria-label={node.visible ? "Hide emitter" : "Show emitter"}
+                className="ml-auto grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text"
+              >
+                {node.visible
+                  ? <Eye className="size-3" />
+                  : <EyeOff className="size-3" />}
+              </button>
+            )}
           </button>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
