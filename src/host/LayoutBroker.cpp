@@ -45,13 +45,27 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
     {
         m_lastW = w;
         m_lastH = h;
+        bool resetOk = false;
         try
         {
             m_engine->Reset();
+            resetOk = true;
         }
         catch (...)
         {
             // Swallow — Engine::Reset can throw on device-lost.
+            // The device is now in DEVICENOTRESET. In interactive use
+            // Render()'s next-frame guard recovers; in --test-host mode
+            // the viewport HWND is hidden so Render() isn't pumped,
+            // which would leave the device stuck (HANDOFF Open Items §1
+            // pre-2026-05-20). Recover explicitly here so any later
+            // bridge call that touches D3D — engine/set/ground-texture
+            // is the canonical example — sees a live device.
+            resetOk = false;
+        }
+        if (!resetOk)
+        {
+            m_engine->RecoverDeviceIfNeeded();
         }
     }
 

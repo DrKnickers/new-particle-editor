@@ -1,7 +1,7 @@
-# Session Handoff — AloParticleEditor / LT-4 (post-Phase-2 + `tools.spec.ts:192` diagnosis)
+# Session Handoff — AloParticleEditor / LT-4 (post-Phase-2 + ground-texture engine bug fixed)
 
-**Last updated:** 2026-05-20 (end-of-session — `tools.spec.ts:192` diagnosed, marked `test.fixme`, engine bug filed for follow-up; native suite now reports 82 passing + 1 skipped)
-**Last conversation context:** Single-purpose session diagnosing the one failing native spec from the previous handoff. Confirmed the prior session's bisect (failure first appears at Task 2.4 commit `17768b6`); bisected the cross-spec pollution to the pair `background-picker.spec.ts` × `spawner-import-mod.spec.ts`; chased a credible-but-wrong React-portal-event hypothesis to its conclusion; saved by verifying the proposed programmatic-dispatch rewrite *in-situ* under the polluter pair, which *also* failed — proving the bug is engine-side (`SetGroundTexture` → `ReloadGroundTexture` falling back to slot 0 after specific D3D9 state from prior bridge ops), not React-side. Marked the test `test.fixme` with a long comment, wrote `lessons.md` L-007 (procedural rule: verify rewritten assertions in-situ before relying on them), refreshed CHANGELOG. **No production code moved.** HEAD = (this docs/test commit); 1 commit ahead of `02e5af8` from the previous handoff. Test counts: vitest **219 / 219**, Playwright **82 passing / 1 skipped (`test.fixme`)**, MSBuild Debug x64 clean.
+**Last updated:** 2026-05-20 (end-of-session — `tools.spec.ts:192` root-caused and fixed; native suite back to 83/83)
+**Last conversation context:** Continuation session that diagnosed the one failing native spec from the previous handoff *and* shipped the fix. Bisected the cross-spec pollution to the pair `background-picker.spec.ts` × `spawner-import-mod.spec.ts`; chased a credible-but-wrong React-portal-event hypothesis (caught the detour by re-running the proposed programmatic-dispatch rewrite *in-situ* under the polluter pair — which also failed, proving the bug was engine-side); added a `engine/debug/d3dx-canary` bridge handler that the JS reproducer called between each step, isolating the failure to the very first Spawner toolbar toggle (which fired a `layout/viewport-rect` resize that triggered `Engine::Reset` → returned `D3DERR_INVALIDCALL`). Root cause: `m_pSkydomeEffect` (an MT-3 addition) was missing its `OnLostDevice` / `OnResetDevice` pair in `Engine::Reset`. Two-line fix in [`engine.cpp:1360`](src/engine.cpp:1360). Belt-and-suspenders companion change: `Engine::RecoverDeviceIfNeeded` + `LayoutBroker::Apply` catch-path fallback so future "forgot OnLostDevice" regressions self-heal instead of latching. Test counts: vitest **219 / 219**, Playwright **83 / 83**, MSBuild Debug x64 clean.
 
 ---
 
@@ -32,7 +32,7 @@ If you are a fresh Claude session resuming this project:
 | **Ahead of origin/lt-4** | this docs commit + 9 prior — see `git log --oneline 24179ec..HEAD` |
 | **Behind master** | `lt-4` is ~352 commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4` |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). Vitest **219 / 219**. Playwright **82 passing / 1 skipped (`test.fixme`)** — `tools.spec.ts:192` is the parking-lot item, see Open Items. |
+| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). Vitest **219 / 219**. Playwright **83 / 83** — `tools.spec.ts:192` fixed at the engine layer, no longer `test.fixme`. |
 | **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 shipped (with Phase 2.8 restore). Phase 3 not started.** Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `great-varahamihira-b66cf4`, replacing the previous `awesome-morse-5ea5c3` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
@@ -73,20 +73,13 @@ Plus this docs commit refreshing HANDOFF + CHANGELOG.
 
 ## Open items (load-bearing — read before resuming)
 
-### 1. Ground-texture engine bug — `tools.spec.ts:192` `test.fixme`'d, engine root-cause open
+### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20
 
-**Status.** Test marked `test.fixme` so the suite reports 82 passing + 1 skipped. The underlying engine bug remains open; this is a parking-lot item, not a closed issue.
+The previously-open ground-texture lockup is fixed. Root cause: `m_pSkydomeEffect` (added in MT-3) was missing from `Engine::Reset`'s `OnLostDevice` / `OnResetDevice` pattern, leaving `D3DPOOL_DEFAULT` references active across `IDirect3DDevice9::Reset` → device latched at `D3DERR_DEVICENOTRESET` → all subsequent `D3DX*` calls failed with `D3DERR_NOTAVAILABLE`. Interactive users never noticed because `Engine::Render`'s next-frame `TestCooperativeLevel`/`Reset` recovery caught up on the next `WM_PAINT`; `--test-host` exposed the bug because the viewport HWND is hidden and the render loop never pumps.
 
-**Symptoms.** After the spec pair `background-picker.spec.ts` × `spawner-import-mod.spec.ts` runs earlier in the alphabetical native suite, `Engine::SetGroundTexture` silently fails: every slot set returns the dispatcher's standard `ok: {}` response but `groundTexture` stays at 0. Verified via direct `window.bridge.request({ kind: "engine/set/ground-texture", params: { slot: 1 } })` (bypassing the UI), iterating across slots 1/2/3/0. `engine/query/ground-slot-empty` returns `false` for the bundled slots; `groundSlotCustomPaths` are all empty; `engine/action/reload-textures` doesn't reset the state. In isolation — just `tools.spec.ts` alone — every slot set works normally. Either alone, `bg-picker + tools` and `spawner + tools` both pass. Only the combination triggers the latch.
+Fix is two lines in [`engine.cpp:1360`](src/engine.cpp:1360) (skydome effect added to the existing OnLost/OnReset cascade). Belt-and-suspenders: new `Engine::RecoverDeviceIfNeeded()` ([`engine.h:123`](src/engine.h:123)) + `LayoutBroker::Apply` catch-path fallback so any *future* missing-OnLost regression heals on its own instead of latching. Full diagnostic trail in [`tasks/lessons.md` L-007](lessons.md) and the CHANGELOG entry; the canary-handler shape (now removed but documented) is reusable for next D3D9 device-state debug.
 
-**Diagnosis trail.** Full prose in [`tasks/lessons.md` L-007](lessons.md). Short version:
-- Bisect confirmed the failure first appears at Task 2.4 commit `17768b6`. The previous handoff's contradiction-with-Task-2.4's-own-commit-message resolves as: bisect correct, commit message misled by a stale `dist/`.
-- Initial diagnostic chain (capture+bubble document click listeners, `#root`-level listener, React-fiber inspection, direct `props.onClick({})`) painted a credible React-portal-event-delegation story. **That story is wrong** — `props.onClick({})` running without producing any `engine/set/ground-texture` request was *not* React event delegation breaking; it was the call going through `NativeBridge.postMessage` while my instrumentation only intercepted `window.bridge` (TestHostBridge). The rewritten programmatic-dispatch test also failed — re-pointing the entire diagnosis from React to C++.
-- Most likely root cause: `D3DXCreateTextureFromFileInMemory` inside [`LoadGroundTextureFromResource`](src/engine.cpp:997) is failing for bundled RCDATA after specific D3D9 state from prior bridge ops (skydome slot/path mutations + spawner toggles). The engine's [`ReloadGroundTexture`](src/engine.cpp:1044) fallback chain then resets `m_groundTextureIndex` to 0, which is the observed symptom.
-
-**Diagnostic next step.** Attach a debugger or run `x64/Debug/ParticleEditor.exe --new-ui --test-host` under DebugView++, replay the bg-picker × spawner sequence by hand (or via the test runner with a breakpoint), then trigger `engine/set/ground-texture` and capture the HRESULT from `D3DXCreateTextureFromFileInMemory`. Note that `printf` / `fprintf(stdout, …)` from the host process **didn't reach the test runner's captured stdout** in this session despite `stdio: "inherit"` — route engine-side debug through `OutputDebugString` (visible in DebugView++) or to a log file instead.
-
-**`abort()` dialog (user-reported, prior handoff).** Not reproduced this session. The prior handoff's "convergent" claim (`tools.spec.ts:192` failure and the `abort()` dialog are the same `_ASSERTE`) is unconfirmed — could be true, could be a separate code path. Worth checking once a debugger is attached.
+**`abort()` dialog (user-reported, prior handoff).** Not reproduced this session. The prior handoff's "convergent" claim (`tools.spec.ts:192` failure and the `abort()` dialog are the same `_ASSERTE`) is *not* true — different bug, if any. Could be a separate code path; could have been a stale capture. Worth checking if it resurfaces.
 
 ### 2. Phase 2 / 3 references to `tailwind.config.ts` in the plan still need v4 translation
 
@@ -229,10 +222,10 @@ If anything regressed beyond the known `tools.spec.ts:192` failure, the most lik
 
 ## Recommended next moves
 
-1. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** This is the highest-leverage move right now — the test-side blocker on `:192` is resolved (`test.fixme`) so the suite is green and Phase 3 doesn't have to dodge it.
-2. **Engine ground-texture bug investigation** (Open Item §1). Owner-attended item — needs DebugView++ or a debugger attached locally to capture the failing HRESULT in `LoadGroundTextureFromResource`. Cheap once you have the trace; expensive to do remotely (this session burned an hour learning that the `pnpm test:native` harness suppresses host-process `printf` output). Worth scheduling against a focused afternoon, not interleaving with feature work.
-3. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
-4. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`.
+1. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Highest-leverage move right now — suite is at 83/83 with no open blockers.
+2. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
+3. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`.
+4. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (that's the engine resource-leak fixed this session), so it's still unknown what fires it.
 
 ---
 

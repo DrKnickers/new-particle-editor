@@ -122,6 +122,21 @@ public:
 	// width/height clamped to 64×64. Exposed read-only.
 	IDirect3DDevice9* GetDevice() const { return m_pDevice; }
 
+	// Idempotent device-state guard. Mirrors the recovery dance the
+	// Render() loop runs at the top of every frame:
+	//   - TestCooperativeLevel == D3D_OK              → returns true (no-op).
+	//   - TestCooperativeLevel == D3DERR_DEVICELOST   → returns false (caller
+	//                                                   should retry later).
+	//   - TestCooperativeLevel == D3DERR_DEVICENOTRESET → calls Reset() and
+	//                                                     returns the result.
+	// Call before any code path that creates D3D9 / D3DX9 resources off
+	// the render thread. In --test-host mode the render loop isn't pumped
+	// (hidden viewport HWND, no WM_PAINT), so resources allocated outside
+	// of Render() must guard themselves. In interactive mode this is a
+	// belt-and-suspenders no-op because Render() runs the same dance
+	// every frame.
+	bool RecoverDeviceIfNeeded();
+
 	// FD9b: install/clear the layered-window alpha compositor. When
 	// non-null, Render() redirects slot-0 RT to the compositor's
 	// off-screen ARGB surface and replaces Present() with

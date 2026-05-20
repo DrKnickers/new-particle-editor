@@ -370,18 +370,68 @@ ReloadGroundTexture() failing → fallback to slot 0 →
 EmitEngineStateChanged()`. The mistake was concluding the React
 side was the *cause* rather than another *symptom*.
 
-Resolution: revert the rewritten test, restore the original UI-click
-form, mark it `test.fixme` with a comment pointing at this lesson,
-file the engine bug for proper C++ investigation (likely needs
-DebugView++ or a debugger to capture the actual D3DX failure HRESULT
-inside `LoadGroundTextureFromResource`).
+**The actual engine bug** (root-caused and fixed in the same dispatch,
+once the right C++ diagnostic was in place). The clincher was a
+canary handler — `engine/debug/d3dx-canary` — that the JS reproducer
+called between each step of the polluter sequence, measuring
+`TestCooperativeLevel`, a procedural `CreateTexture`, and a D3DX
+texture create. The trace pinpointed the failure to a single step:
+the *first* Spawner toolbar toggle click. After that click, all
+three canary calls returned non-zero (`TCL=0x88760869
+D3DERR_DEVICENOTRESET`, `Proc=0x8876086C D3DERR_INVALIDCALL`,
+`D3DX=0x8876086A D3DERR_NOTAVAILABLE`).
 
-**Procedural rule that would have caught this earlier.** When a
-"narrow rewrite" is proposed in response to a failing assertion,
-*verify the narrow version under the same failing conditions* before
-spending diagnostic time on the assumed cause. A 30-second
-programmatic-dispatch check at the top of investigation would have
-re-pointed the entire diagnosis from React-portal-events to C++-
-engine-state. Adopt as a pre-flight step alongside L-004's "pnpm
-build is the truth gate": **rewritten assertions are truth-gate
-candidates too; verify them in-situ before relying on them.**
+The chain: Spawner toggle → React workspace grid resizes →
+`layout/viewport-rect` bridge call → `LayoutBroker::Apply` calls
+`m_engine->Reset()` → `IDirect3DDevice9::Reset` returns
+**`D3DERR_INVALIDCALL`** because **`m_pSkydomeEffect` still held
+`D3DPOOL_DEFAULT` references** from the prior `SetSkydomeSlot(5)` /
+render binding. `Engine::Reset` did the `OnLostDevice` /
+`OnResetDevice` dance for the regular shaders, the distort shader,
+and the bloom effect — but the skydome effect (added later in the
+MT-3 work) was forgotten when that pattern was established.
+`LayoutBroker::Apply`'s `catch (...) { /* swallow */ }` then
+discarded the throw, leaving the device in `D3DERR_DEVICENOTRESET`.
+Interactive use never noticed because `Engine::Render`'s next-frame
+recovery (`TestCooperativeLevel == D3DERR_DEVICENOTRESET → Reset()`)
+catches up; in `--test-host` mode the viewport HWND is hidden, no
+`WM_PAINT`, no `Render()` tick, no recovery.
+
+The **fix is one pair of calls in `Engine::Reset`** matching the
+existing pattern:
+
+```cpp
+if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnLostDevice();
+// ...m_pDevice->Reset(...)...
+if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnResetDevice();
+```
+
+Belt-and-suspenders companion change: introduce
+`Engine::RecoverDeviceIfNeeded()` (mirrors the render-loop guard,
+callable from any thread / non-render context) and have
+`LayoutBroker::Apply`'s catch handler call it as a recovery
+fallback so any *future* missing-OnLost regression heals
+automatically instead of latching.
+
+**Procedural rule that would have caught the wrong-cause early.**
+When a "narrow rewrite" is proposed in response to a failing
+assertion, *verify the narrow version under the same failing
+conditions* before spending diagnostic time on the assumed cause. A
+30-second programmatic-dispatch check at the top of investigation
+would have re-pointed the entire diagnosis from React-portal-events
+to C++-engine-state. Adopt as a pre-flight step alongside L-004's
+"pnpm build is the truth gate": **rewritten assertions are truth-
+gate candidates too; verify them in-situ before relying on them.**
+
+**Pattern worth keeping for future D3D9 device-state debugging.**
+The canary handler shape — one bridge endpoint that probes
+`TestCooperativeLevel` + a synthetic `CreateTexture` + a
+representative D3DX call — turns the "the engine seems wrong, when
+and why?" question into a step-by-step bisect. Combined with an
+`OutputDebugStringA` + logfile helper (the `--test-host` harness
+suppresses host-process stdout), the round trip from "test fails"
+to "HRESULT identified" was under 30 minutes. Both pieces (the
+canary handler in `BridgeDispatcher.cpp` and the `gtdbg.log` helper
+in `engine.cpp`) were removed once the bug was fixed, but the
+*shape* is reusable — anyone debugging a similar D3D9 latch should
+re-add them.

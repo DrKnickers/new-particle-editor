@@ -565,11 +565,29 @@ void Engine::Update()
     }
 }
 
+bool Engine::RecoverDeviceIfNeeded()
+{
+	if (m_pDevice == NULL) return false;
+	HRESULT hr = m_pDevice->TestCooperativeLevel();
+	if (hr == D3D_OK) return true;
+	if (hr == D3DERR_DEVICELOST) return false;
+	if (hr == D3DERR_DEVICENOTRESET)
+	{
+		try { Reset(); }
+		catch (...) { return false; }
+		return m_pDevice->TestCooperativeLevel() == D3D_OK;
+	}
+	return false;
+}
+
 bool Engine::Render()
 {
 	static const D3DXMATRIX Identity(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1);
 
-	// See if we can render
+	// See if we can render. Mirrors RecoverDeviceIfNeeded but keeps the
+	// switch here so DEVICELOST early-returns false (no point doing the
+	// rest of Render if we can't yet); RecoverDeviceIfNeeded is the
+	// "fix the latch, don't render" variant for non-render-thread callers.
 	switch (m_pDevice->TestCooperativeLevel())
 	{
 		case D3DERR_DEVICELOST:
@@ -1252,6 +1270,15 @@ void Engine::Reset()
         m_pShaders[i]->OnLostDevice();
     }
 	if (m_pBloomEffect != NULL) m_pBloomEffect->OnLostDevice();
+	// MT-3 skydome effect needs the same OnLost/OnReset dance — without it,
+	// the effect's internal D3DPOOL_DEFAULT state-cache references survive
+	// past Reset and cause D3DERR_INVALIDCALL on any later size change.
+	// Surfaced as the ground-texture-stuck-at-0 bug in --test-host mode
+	// after the polluter pair background-picker × spawner-import-mod;
+	// interactive use never noticed because Render()'s recovery path
+	// papered over the failed Reset on the next WM_PAINT. (HANDOFF
+	// Open Items §1, fixed 2026-05-20.)
+	if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnLostDevice();
 	// FD9b: the compositor's off-screen RT is D3DPOOL_DEFAULT, so
 	// it must be released before m_pDevice->Reset — otherwise Reset
 	// fails with D3DERR_INVALIDCALL and the engine is left in a
@@ -1269,6 +1296,7 @@ void Engine::Reset()
         m_pShaders[i]->OnResetDevice();
     }
 	if (m_pBloomEffect != NULL) m_pBloomEffect->OnResetDevice();
+	if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnResetDevice();
 
 	ResetParameters();
 

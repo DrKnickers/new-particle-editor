@@ -189,23 +189,7 @@ test("Ground popover opens from the toolbar dropdown trigger", async () => {
   await page.keyboard.press("Escape");
 });
 
-// PARKING LOT: deep C++ engine bug.  After background-picker.spec.ts +
-// spawner-import-mod.spec.ts run earlier in the suite, the engine refuses
-// to apply *any* engine/set/ground-texture mutation — every slot set
-// (verified programmatically via window.bridge.request, bypassing the UI
-// entirely) returns ok:{} but groundTexture stays at 0.  Slots 1/2/3
-// query as non-empty, customPaths are clean, and reload-textures doesn't
-// reset it.  In isolation (just tools.spec.ts) every slot set works
-// normally.  Either alone, bg-picker+tools and spawner+tools pass.  Only
-// the bg-picker × spawner-import-mod combination triggers the latch.
-//
-// Whatever the underlying D3D9 / engine-state interaction is, it sits
-// behind a bridge surface that should be deterministic — and the test
-// can't paper over an actual engine bug by changing what it asserts.
-// Filed for later investigation; see tasks/lessons.md L-007 for the
-// diagnostic trail.  When fixed, drop the `.fixme` and the test reverts
-// to a normal `test(...)`.
-test.fixme("Clicking a bundled ground slot in the popover updates groundTexture", async () => {
+test("Clicking a bundled ground slot in the popover updates groundTexture", async () => {
   await closeAnyPanel(page);
 
   const before = await page.evaluate(async () => {
