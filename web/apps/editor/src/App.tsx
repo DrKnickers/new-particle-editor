@@ -203,25 +203,33 @@ function AppShell() {
             height (`h-72` / `h-80`); top pane fills the remaining
             space via `flex-1 min-h-0`. */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left column */}
-        <div className="flex w-80 shrink-0 flex-col border-r border-border bg-bg">
-          {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
-              Read-only tree view with click-to-select + Batches B/C
-              mutations (rename, drag/drop, context menus). */}
-          <aside
-            data-testid="quadrant-emitter-tree"
-            className="flex-1 min-h-0 overflow-y-auto p-3 text-sm"
-          >
-            <EmitterTree bridge={bridge} />
-          </aside>
-          {/* Lower-left — Property tabs (Basic / Appearance / Physics).
-              Phase 4.1 Fix dispatch 1: Basic tab wired; Appearance +
-              Physics placeholders. */}
-          <div
-            data-testid="quadrant-property-tabs"
-            className="h-72 shrink-0 border-t border-border"
-          >
-            <EmitterPropertyTabs bridge={bridge} />
+        {/* Left column — Task 2.5: wrapped in the design's `.panel`
+            chrome (header "Particle System" + body) housing both the
+            EmitterTree (upper) and EmitterPropertyTabs (lower) as a
+            single visual unit. */}
+        <div className="panel w-80 shrink-0">
+          <div className="panel-header">
+            <span>Particle System</span>
+          </div>
+          <div className="panel-body flex min-h-0 flex-col overflow-hidden">
+            {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
+                Read-only tree view with click-to-select + Batches B/C
+                mutations (rename, drag/drop, context menus). */}
+            <aside
+              data-testid="quadrant-emitter-tree"
+              className="flex-1 min-h-0 overflow-y-auto p-3 text-sm"
+            >
+              <EmitterTree bridge={bridge} />
+            </aside>
+            {/* Lower-left — Property tabs (Basic / Appearance / Physics).
+                Phase 4.1 Fix dispatch 1: Basic tab wired; Appearance +
+                Physics placeholders. */}
+            <div
+              data-testid="quadrant-property-tabs"
+              className="h-72 shrink-0 border-t border-border"
+            >
+              <EmitterPropertyTabs bridge={bridge} />
+            </div>
           </div>
         </div>
 

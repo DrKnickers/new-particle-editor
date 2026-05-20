@@ -443,21 +443,11 @@ function BasicTab({
 }
 
 // ─── Field row primitives ──────────────────────────────────────────
-
-function FieldRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-[1fr,1.4fr] items-center gap-2">
-      <label className="text-xs text-text-2">{label}</label>
-      <div>{children}</div>
-    </div>
-  );
-}
+//
+// Task 2.5: form rows use the design's `.form-row` 3-column grid
+// (label / input / unit) from components.css. The optional third
+// column carries the unit hint (e.g. "s", "%"); empty for fields
+// that don't have one.
 
 function FieldText({
   label,
@@ -478,7 +468,8 @@ function FieldText({
     setText(value);
   }
   return (
-    <FieldRow label={label}>
+    <div className="form-row">
+      <span className="lbl">{label}</span>
       <input
         type="text"
         value={text}
@@ -494,13 +485,13 @@ function FieldText({
             (e.currentTarget as HTMLInputElement).blur();
           }
         }}
-        className="w-full rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none transition focus:border-accent"
-        style={{ height: "26px" }}
+        className="text-input"
         aria-label={label}
         spellCheck={false}
         autoComplete="off"
       />
-    </FieldRow>
+      <span className="unit" />
+    </div>
   );
 }
 
@@ -526,7 +517,11 @@ function FieldSpinner({
   onCommit: (value: number) => void;
 }) {
   return (
-    <FieldRow label={label}>
+    <div className="form-row">
+      <span className="lbl">{label}</span>
+      {/* Task 2.5: the design's .form-row 3rd column carries the unit
+          hint, so we suppress the Spinner's inline trailing-unit overlay
+          here. Outside .form-row callers still get the inline unit. */}
       <Spinner
         value={value}
         onChange={onCommit}
@@ -534,11 +529,11 @@ function FieldSpinner({
         max={max}
         step={step}
         decimals={decimals}
-        unit={unit}
         disabled={disabled}
         aria-label={label}
       />
-    </FieldRow>
+      <span className="unit">{unit ?? ""}</span>
+    </div>
   );
 }
 
@@ -554,7 +549,8 @@ function FieldCheckbox({
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <FieldRow label={label}>
+    <div className="form-row">
+      <span className="lbl">{label}</span>
       <Checkbox.Root
         checked={checked}
         disabled={disabled}
@@ -568,7 +564,8 @@ function FieldCheckbox({
           <Check size={12} className="text-text" />
         </Checkbox.Indicator>
       </Checkbox.Root>
-    </FieldRow>
+      <span className="unit" />
+    </div>
   );
 }
 
@@ -589,7 +586,8 @@ function FieldSelect({
 }) {
   const selected = options.find((o) => o.value === value);
   return (
-    <FieldRow label={label}>
+    <div className="form-row">
+      <span className="lbl">{label}</span>
       <Select.Root
         value={String(value)}
         onValueChange={(v) => onCommit(Number(v))}
@@ -628,7 +626,8 @@ function FieldSelect({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
-    </FieldRow>
+      <span className="unit" />
+    </div>
   );
 }
 
@@ -713,9 +712,16 @@ export function AppearanceTab({
         checked={properties.doColorAddGrayscale}
         onCheckedChange={(v) => onCommit({ doColorAddGrayscale: v })}
       />
-      <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-        <label className="pt-1 text-xs text-text-2">Random Colours</label>
-        <div className="grid grid-cols-2 gap-1">
+      {/* Random Colours — 4-spinner cluster (R/G/B/A as 0..100%).
+          Uses the `.form-row` label column but the spinner grid spans
+          the input + unit columns since 4 spinners don't fit in the
+          design's 92px input slot. */}
+      <div className="form-row items-start">
+        <span className="lbl pt-1">Random Colours</span>
+        <div
+          className="grid grid-cols-2 gap-1"
+          style={{ gridColumn: "2 / span 2" }}
+        >
           <Spinner
             value={properties.randomColors[0] * 100}
             min={0}
@@ -841,10 +847,14 @@ export function PhysicsTab({
 
   return (
     <div className="space-y-3">
-      {/* Acceleration X/Y/Z — 3 spinners side-by-side */}
-      <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-        <label className="pt-1 text-xs text-text-2">Acceleration</label>
-        <div className="grid grid-cols-3 gap-1">
+      {/* Acceleration X/Y/Z — 3-spinner cluster. Spans the .form-row
+          input + unit columns since 3 spinners don't fit in 92px. */}
+      <div className="form-row items-start">
+        <span className="lbl pt-1">Acceleration</span>
+        <div
+          className="grid grid-cols-3 gap-1"
+          style={{ gridColumn: "2 / span 2" }}
+        >
           <Spinner
             value={properties.acceleration[0]}
             step={0.1}
@@ -1112,9 +1122,12 @@ function Vec3Row({
   onChange: (axis: 0 | 1 | 2, v: number) => void;
 }) {
   return (
-    <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-      <label className="pt-1 text-xs text-text-2">{label}</label>
-      <div className="grid grid-cols-3 gap-1">
+    <div className="form-row items-start">
+      <span className="lbl pt-1">{label}</span>
+      <div
+        className="grid grid-cols-3 gap-1"
+        style={{ gridColumn: "2 / span 2" }}
+      >
         <Spinner
           value={value[0]}
           step={step}
