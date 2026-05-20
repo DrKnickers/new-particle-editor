@@ -259,6 +259,19 @@ export type TrackDto = {
   name: TrackName;
   keys: TrackKey[];
   interpolation: InterpolationType;
+  /** Pointer-equality lock target. When this channel's
+   *  `emit->tracks[i]` aliases another channel's `trackContents[j]`,
+   *  the two share key data — editing the locked channel is
+   *  disabled and changes to the target channel propagate
+   *  automatically. `null` (the common case) means the channel
+   *  owns its own keys. Only the first four channels
+   *  (red/green/blue/alpha) participate in locking; the engine
+   *  forbids locking for scale/index/rotationSpeed regardless of
+   *  what's sent. Per the legacy semantic at
+   *  [TrackEditor.cpp:90-110](src/UI/TrackEditor.cpp:90) and the
+   *  pointer-identity model in
+   *  [ParticleSystem.cpp:428](src/ParticleSystem.cpp:428). */
+  lockedTo: TrackName | null;
 };
 
 /** Fixed-order names for the 7 tracks. Index matches the native
@@ -481,6 +494,17 @@ export type Request =
       params: { id: number; track: TrackName; times: number[] } }
   | { kind: "emitters/set-track-interpolation";
       params: { id: number; track: TrackName; interpolation: InterpolationType } }
+
+  // Per-channel track lock — point `emit->tracks[channel]` at another
+  // channel's `trackContents`, making the locked channel a read-only
+  // alias whose keys auto-track the target's. `lockTo: null` restores
+  // the channel to its own trackContents (unlock). The engine only
+  // honours locking for red/green/blue/alpha and only "later-channel
+  // locks to earlier-channel" pairs (mirrors legacy
+  // [TrackEditor.cpp:90-110](src/UI/TrackEditor.cpp:90)); other
+  // combinations are silently rejected with an ok response.
+  | { kind: "emitters/set-track-lock";
+      params: { id: number; channel: TrackName; lockTo: TrackName | null } }
 
   // Track key mutations (Phase 3 Screen 6 Batch B-β).
   //
@@ -711,6 +735,7 @@ export type ResponseFor<R extends Request> =
   // Track mutations (Phase 3 Screen 5 / Screen 6 Batch B-α)
   R extends { kind: "emitters/delete-track-keys" }       ? Record<string, never> :
   R extends { kind: "emitters/set-track-interpolation" } ? Record<string, never> :
+  R extends { kind: "emitters/set-track-lock" } ? Record<string, never> :
 
   // Track key mutations (Phase 3 Screen 6 Batch B-β).
   // set-track-key returns empty; add-track-key returns the actual

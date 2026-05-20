@@ -1,7 +1,8 @@
 // Spinner.tsx — numeric input primitive.
 //
 // Behaviors (ported from legacy src/UI/Spinner.cpp):
-//   - Up/down arrow buttons: visible on hover only, increment/decrement by `step`.
+//   - Up/down arrow buttons: always visible (matches legacy Win32
+//     UDS_ALIGNRIGHT spin button), increment/decrement by `step`.
 //   - Scroll-wheel adjust: wheel-up increments, wheel-down decrements.
 //     Shift modifier uses `step * 10` (coarse) per NT-1 legacy convention.
 //   - Drag-to-adjust: vertical mouse-Y drag from the input rect.
@@ -13,7 +14,7 @@
 //     every keystroke. Avoids bridge spam from Screens 4/5/6.
 //   - density: row height override per call ("tight"=22px, "default"=26px, "loose"=32px).
 
-import { useRef, useState, useCallback, type KeyboardEvent, type WheelEvent } from "react";
+import { useEffect, useRef, useState, useCallback, type KeyboardEvent } from "react";
 
 export type SpinnerDensity = "tight" | "default" | "loose";
 
@@ -68,7 +69,6 @@ export function Spinner({
   const fmt = (v: number) => v.toFixed(dp);
 
   const [text, setText] = useState<string>(fmt(value));
-  const [hover, setHover] = useState(false);
   const [dragging, setDragging] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -128,13 +128,35 @@ export function Spinner({
     setText(fmt(value));
   };
 
-  const handleWheel = (e: WheelEvent<HTMLInputElement>) => {
-    if (disabled) return;
-    e.preventDefault();
-    const s = e.shiftKey ? step * 10 : step;
-    // wheel deltaY: positive = scroll down = decrement; negative = scroll up = increment.
-    adjustBy(e.deltaY < 0 ? s : -s);
-  };
+  // Wheel handler — attached natively to the OUTER wrapper (not just
+  // the input element) so the wheel works anywhere over the spinner:
+  // hovering over the input *or* the up/down arrow column. Native
+  // attachment with `{ passive: false }` is required because React
+  // 18+ adds `wheel` listeners as PASSIVE at the delegated root,
+  // which makes `preventDefault()` a no-op and lets the browser
+  // scroll the parent pane before our handler runs.
+  // The latest value/min/max/step/disabled are stashed in a ref so
+  // the listener doesn't need to be re-bound on every render.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const wheelDepsRef = useRef({ value, min, max, step, disabled, onChange, fmt });
+  wheelDepsRef.current = { value, min, max, step, disabled, onChange, fmt };
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (el === null) return;
+    const onWheelNative = (e: WheelEvent) => {
+      const d = wheelDepsRef.current;
+      if (d.disabled) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const s = e.shiftKey ? d.step * 10 : d.step;
+      const delta = e.deltaY < 0 ? s : -s;
+      const next = clamp(d.value + delta, d.min, d.max);
+      setText(d.fmt(next));
+      d.onChange(next);
+    };
+    el.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => el.removeEventListener("wheel", onWheelNative);
+  }, []);
 
   // Drag-to-adjust: pointer-capture on mousedown, track Y delta.
   const handleMouseDown = (e: React.MouseEvent<HTMLInputElement>) => {
@@ -177,12 +199,18 @@ export function Spinner({
     }
   }
 
+  // Always-visible Win32-style up/down arrow column. Reserve 14px on
+  // the right so digits don't sit underneath; if a unit is also
+  // present, push the unit left of the arrow column too.
+  const ARROW_W = 14;
+  const unitPad = unit ? unit.length * 7 + 6 : 0; // ~7px per char + a hair
+  const inputPadRight = ARROW_W + unitPad + 4;    // arrows + unit + breathing room
+
   return (
     <div
+      ref={wrapRef}
       className={`relative flex items-center ${dragging ? "cursor-ns-resize" : ""}`}
       style={{ height }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
     >
       <input
         ref={inputRef}
@@ -194,50 +222,54 @@ export function Spinner({
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         onFocus={handleFocus}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
-        className={`w-full rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none transition focus:border-accent ${
+        className={`w-full rounded border border-border-2 bg-bg-2 pl-2 text-xs text-text outline-none transition focus:border-accent ${
           disabled ? "cursor-not-allowed opacity-40" : "cursor-text"
         } ${dragging ? "cursor-ns-resize select-none" : ""}`}
-        style={{ height, paddingRight: unit ? `${unit.length * 7 + 8}px` : undefined }}
+        style={{ height, paddingRight: `${inputPadRight}px` }}
         spellCheck={false}
         autoComplete="off"
       />
-      {/* Unit suffix */}
+      {/* Unit suffix — positioned to the left of the arrow column. */}
       {unit && (
         <span
-          className="pointer-events-none absolute right-1 text-xs text-text-3"
-          style={{ top: "50%", transform: "translateY(-50%)" }}
+          className="pointer-events-none absolute text-xs text-text-3"
+          style={{ right: `${ARROW_W + 4}px`, top: "50%", transform: "translateY(-50%)" }}
           aria-hidden="true"
         >
           {unit}
         </span>
       )}
-      {/* Up/down arrow buttons — visible on hover only */}
-      {hover && !disabled && (
-        <div className="absolute right-0 top-0 flex flex-col" style={{ height }}>
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="Increment"
-            onMouseDown={(e) => { e.preventDefault(); adjustBy(step); }}
-            className="flex flex-1 items-center justify-center px-1 text-text-3 hover:text-text"
-            style={{ fontSize: "8px", lineHeight: 1 }}
-          >
-            ▲
-          </button>
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="Decrement"
-            onMouseDown={(e) => { e.preventDefault(); adjustBy(-step); }}
-            className="flex flex-1 items-center justify-center px-1 text-text-3 hover:text-text"
-            style={{ fontSize: "8px", lineHeight: 1 }}
-          >
-            ▼
-          </button>
-        </div>
-      )}
+      {/* Up/down arrow column — always visible, mirrors Win32 spin
+          button. Disabled state fades them to match the input. */}
+      <div
+        className={`absolute right-0 top-0 flex flex-col border-l border-border-2 ${disabled ? "opacity-40" : ""}`}
+        style={{ height, width: `${ARROW_W}px` }}
+        aria-hidden={disabled}
+      >
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={disabled}
+          aria-label="Increment"
+          onMouseDown={(e) => { e.preventDefault(); adjustBy(step); }}
+          className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
+          style={{ fontSize: "7px", lineHeight: 1 }}
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={disabled}
+          aria-label="Decrement"
+          onMouseDown={(e) => { e.preventDefault(); adjustBy(-step); }}
+          className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
+          style={{ fontSize: "7px", lineHeight: 1 }}
+        >
+          ▼
+        </button>
+      </div>
     </div>
   );
 }

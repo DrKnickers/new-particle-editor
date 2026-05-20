@@ -37,6 +37,12 @@
   --radius-sm: 5px;
   --row-h: 26px;
   --row-h-sm: 22px;
+  /* Curve-editor grid line colour. Dark theme: subtle dark grey
+     that's visible against `--panel`. Light theme overrides this
+     to a low-opacity black so the grid recedes under colourful
+     curves rather than competing with them. */
+  --curve-grid: #262626;
+  --curve-axis: #525252;
 }
 
 [data-theme="light"] {
@@ -57,6 +63,12 @@
   --accent: #2f7fd4;
   --accent-2: #1f63b0;
   --accent-soft: rgba(47, 127, 212, 0.14);
+  /* Light-theme grid: dimmed to ~25% black so curves stay readable
+     against the lighter panel background. The dark-theme value is
+     fine against `#161b25`; the light-theme `#f6f7fa` background
+     made pure `#262626` too prominent. */
+  --curve-grid: rgba(0, 0, 0, 0.25);
+  --curve-axis: rgba(0, 0, 0, 0.45);
 }
 
 @theme inline {

@@ -435,3 +435,85 @@ canary handler in `BridgeDispatcher.cpp` and the `gtdbg.log` helper
 in `engine.cpp`) were removed once the bug was fixed, but the
 *shape* is reusable — anyone debugging a similar D3D9 latch should
 re-add them.
+
+---
+
+## L-008 — React 18 attaches `wheel` listeners as passive at the root; use a native `addEventListener` with `{ passive: false }` when you need `preventDefault()` to actually work
+
+**Rule.** When a component needs to call `e.preventDefault()` on a
+`wheel` event (typically to stop the page/parent pane from scrolling
+while the user interacts with a numerical scrub control, custom
+zoom region, etc.), attach the listener *natively* on the target
+element via `useEffect` + `addEventListener("wheel", handler, {
+passive: false })`. Do **not** use React's `onWheel={handler}` —
+React 18+ attaches its delegated wheel listener at the root
+container as PASSIVE, which makes `preventDefault()` a no-op
+silently.
+
+**Trigger.** Any component where wheel-over-this-element should
+adjust a value (or zoom / pan etc.) without scrolling the parent
+pane. The natural-feeling `onWheel={...}` JSX prop *looks* like the
+right shape, the handler *fires*, but `preventDefault()` is silently
+ignored and the browser scrolls anyway.
+
+**Why this is sneaky:**
+- Vitest with jsdom does *not* enforce React's passive defaults, so
+  any spec exercising `<element fireEvent.wheel(...)>` passes even
+  though the production runtime is broken.
+- Adjacent React events (`onMouseDown`, `onKeyDown`, etc.) work
+  normally with `preventDefault`. There's no warning when `onWheel`
+  preventDefault is ignored.
+- The symptom is *both* the intended behaviour (value adjustment,
+  whatever the handler did) *and* the unwanted scroll happening
+  simultaneously. Easy to miss in casual testing if your scrollable
+  parent doesn't have content overflowing, OR if you reach the
+  scroll endpoint before noticing anything moved.
+
+**How to apply.** Pattern (also handles the stale-closure issue with
+the typical "useEffect with deps":
+
+```tsx
+const wrapRef = useRef<HTMLDivElement>(null);
+// Stash all the "current values" the handler needs in a ref so
+// it can read fresh state without re-binding the listener.
+const depsRef = useRef({ value, min, max, step, onChange });
+depsRef.current = { value, min, max, step, onChange };
+useEffect(() => {
+  const el = wrapRef.current;
+  if (!el) return;
+  const onWheel = (e: WheelEvent) => {
+    const d = depsRef.current;
+    e.preventDefault();
+    e.stopPropagation();  // also keep the event from bubbling to the
+                          //   parent's React-level wheel handlers.
+    // ... do the work using d.value, d.onChange etc.
+  };
+  el.addEventListener("wheel", onWheel, { passive: false });
+  return () => el.removeEventListener("wheel", onWheel);
+}, []);  // empty deps — the ref keeps the handler current.
+
+return <div ref={wrapRef}>...</div>;
+```
+
+Also: **attach to the outermost wrapper of the component**, not just
+the input element inside. Otherwise the wheel only fires when the
+cursor is on the input area, and the wheel doesn't work when the
+cursor is over related affordances (like up/down arrow buttons
+beside the input). The `wrapRef` should be on whatever the user
+visually thinks of as "the spinner widget."
+
+**Source incident (2026-05-20, Spinner wheel bug).** The Spinner
+component initially used `onWheel={handleWheel}` with
+`e.preventDefault()`. Looked right, passed vitest, failed in
+WebView2 — the wheel adjusted the value AND scrolled the parent
+pane simultaneously. Diagnosed by re-reading React's event-delegation
+docs (the wheel/touchstart/touchmove passive default was introduced
+in React 17 for scroll-performance reasons). Fix: native
+`addEventListener` with `{ passive: false }`. Follow-up: the wheel
+listener was initially on the input; moved to the wrapper so the
+wheel works over the spinner's up/down arrow column too.
+
+**Procedural note.** If you see anywhere else in this codebase that
+uses `onWheel={...}` AND calls `preventDefault`, audit it for the
+same bug. The pattern is general — any wheel-based zoom/scrub/pan
+component is suspect.

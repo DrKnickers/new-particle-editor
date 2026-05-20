@@ -31,6 +31,7 @@ function fixtureTracks(): TrackDto[] {
       { time: 100, value: name === "rotationSpeed" ? -1 : 1 },
     ],
     interpolation: "linear",
+    lockedTo: null,
   }));
 }
 
@@ -609,6 +610,7 @@ function makeStubBridgeWithFocusInteriorKey(initialSelectedId: number) {
           { time: 100, value: name === "rotationSpeed" ? -1 : 1 },
         ],
     interpolation: "linear",
+    lockedTo: null,
   }));
   const bridge = {
     request: vi.fn().mockImplementation((req: { kind: string }) => {

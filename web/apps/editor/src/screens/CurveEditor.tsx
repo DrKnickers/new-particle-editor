@@ -268,22 +268,34 @@ function valueRangeForTrack(track: TrackDto): { min: number; max: number } {
     case "blue":
     case "alpha":
       return { min: 0, max: 1 };
-    case "scale":
-    case "index": {
+    case "scale": {
+      // Lower 0, upper auto-grows to highest key, floor at 1. Kept
+      // in sync with the CurveEditorPanel copy.
       let max = 0;
       for (const k of track.keys) {
         if (k.value > max) max = k.value;
       }
-      return { min: 0, max: Math.max(max * 1.2, 100) };
+      return { min: 0, max: Math.max(max, 1) };
+    }
+    case "index": {
+      // Same shape as scale. Kept in sync with the CurveEditorPanel copy.
+      let max = 0;
+      for (const k of track.keys) {
+        if (k.value > max) max = k.value;
+      }
+      return { min: 0, max: Math.max(max, 1) };
     }
     case "rotationSpeed": {
-      let mag = 0;
+      // Default 0..1; expands in BOTH directions to include the
+      // highest and lowest keys — no caps. Kept in sync with the
+      // CurveEditorPanel copy.
+      let min = 0;
+      let max = 1;
       for (const k of track.keys) {
-        const m = Math.abs(k.value);
-        if (m > mag) mag = m;
+        if (k.value < min) min = k.value;
+        if (k.value > max) max = k.value;
       }
-      const bound = Math.max(mag * 1.2, 1);
-      return { min: -bound, max: bound };
+      return { min, max };
     }
   }
 }
@@ -786,7 +798,7 @@ export function CurveEditor({
       />
 
       {/* Grid */}
-      <g data-testid="curve-grid" stroke="#262626" strokeWidth={1} pointerEvents="none">
+      <g data-testid="curve-grid" stroke="var(--curve-grid)" strokeWidth={1} pointerEvents="none">
         {verticalLines.map((x, i) => (
           <line key={`v${i}`} x1={x} y1={0} x2={x} y2={height} />
         ))}
@@ -796,7 +808,7 @@ export function CurveEditor({
       </g>
 
       {/* Outer axes (left + bottom darker for orientation) */}
-      <g data-testid="curve-axes" stroke="#525252" strokeWidth={1.5} pointerEvents="none">
+      <g data-testid="curve-axes" stroke="var(--curve-axis)" strokeWidth={1.5} pointerEvents="none">
         <line x1={0} y1={0} x2={0} y2={height} />
         <line x1={0} y1={height} x2={width} y2={height} />
       </g>
@@ -1282,7 +1294,17 @@ function MultiChannelCurves({
       aria-label={`Multi-channel curve overlay, ${layers.length} channels`}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
-      className="h-full w-full select-none"
+      // `block` removes the inline-baseline gap that a default-inline
+      // <svg> would leave under it (descender space in the parent line
+      // box), preventing a few-pixel vertical offset from the cell top.
+      className="block h-full w-full select-none"
+      // `overflow="visible"` lets the endpoint key circles at time=0,
+      // time=100, value=min, value=max render their FULL body even
+      // when their centre sits exactly on the grid edge. Without
+      // this the SVG clips the half of the circle outside the
+      // viewBox, making endpoint keys look bisected (half-moons
+      // along the edges).
+      overflow="visible"
       onPointerMove={focusEnabled ? onPointerMove : undefined}
       onPointerUp={focusEnabled ? onPointerUp : undefined}
       onPointerCancel={focusEnabled ? onPointerCancel : undefined}
@@ -1323,8 +1345,11 @@ function MultiChannelCurves({
         />
       )}
 
-      {/* Grid */}
-      <g data-testid="curve-grid" stroke="#262626" strokeWidth={1} pointerEvents="none">
+      {/* Grid — bounded to the canvas drawing area (0..width × 0..height).
+          The grid does NOT shift with the focus channel's range —
+          it's a fixed 10×10 reference. Per-channel value ranges
+          are surfaced via the axis labels rendered below. */}
+      <g data-testid="curve-grid" stroke="var(--curve-grid)" strokeWidth={1} pointerEvents="none">
         {verticalLines.map((x, i) => (
           <line key={`v${i}`} x1={x} y1={0} x2={x} y2={height} />
         ))}
@@ -1333,8 +1358,10 @@ function MultiChannelCurves({
         ))}
       </g>
 
-      {/* Outer axes */}
-      <g data-testid="curve-axes" stroke="#525252" strokeWidth={1.5} pointerEvents="none">
+      {/* Outer axes — left vertical + bottom horizontal form the
+          "L" shape that bounds the grid. Axis tick labels render
+          outside this box (in the SVG's margin area). */}
+      <g data-testid="curve-axes" stroke="var(--curve-axis)" strokeWidth={1.5} pointerEvents="none">
         <line x1={0} y1={0} x2={0} y2={height} />
         <line x1={0} y1={height} x2={width} y2={height} />
       </g>
@@ -1350,7 +1377,7 @@ function MultiChannelCurves({
         // full opacity, normal stroke width, simple markers. Focus
         // mode dims non-focus layers and drops the markers.
         const layerOpacity = focusEnabled ? 0.4 : 1;
-        const strokeW = 1.5;
+        const strokeW = 2;
         const showMarkers = !focusEnabled;
         return (
           <g
@@ -1396,7 +1423,7 @@ function MultiChannelCurves({
                 data-key-time={p.time}
                 cx={p.x}
                 cy={p.y}
-                r={3}
+                r={4}
                 fill={channel.color}
                 stroke="#0a0a0a"
                 strokeWidth={1}
@@ -1426,7 +1453,7 @@ function MultiChannelCurves({
                 data-testid="curve-path"
                 fill="none"
                 stroke={channel.color}
-                strokeWidth={2.5}
+                strokeWidth={3}
                 d={buildSmoothPath(focusRenderPoints)}
                 pointerEvents="none"
               />
@@ -1437,7 +1464,7 @@ function MultiChannelCurves({
                 data-interpolation="step"
                 fill="none"
                 stroke={channel.color}
-                strokeWidth={2.5}
+                strokeWidth={3}
                 points={buildStepPolyline(focusRenderPoints)}
                 pointerEvents="none"
               />
@@ -1448,7 +1475,7 @@ function MultiChannelCurves({
                 data-interpolation="linear"
                 fill="none"
                 stroke={channel.color}
-                strokeWidth={2.5}
+                strokeWidth={3}
                 points={focusRenderPoints.map((p) => `${p.x},${p.y}`).join(" ")}
                 pointerEvents="none"
               />
@@ -1473,7 +1500,7 @@ function MultiChannelCurves({
                   data-border={isBorder ? "true" : "false"}
                   cx={p.x}
                   cy={p.y}
-                  r={selected ? 5 : 4}
+                  r={selected ? 6 : 5}
                   fill={fill}
                   stroke={stroke}
                   strokeWidth={strokeWidth}

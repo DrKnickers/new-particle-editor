@@ -1869,10 +1869,43 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
                     interp = interpToString(t->interpolation);
                 }
             }
+            // lockedTo: detect by pointer identity per the legacy
+            // model — channel i is locked to channel j when
+            // `tracks[i] == &trackContents[j]` (or transitively
+            // `tracks[i] == tracks[j]`, which collapses to the same
+            // pointer after the engine's file-load consolidation
+            // pass). Only RGBA participate; other channels always
+            // report null. Self-pointer (tracks[i] == &trackContents[i])
+            // means "not locked" and also reports null.
+            const char* lockedToName = nullptr;
+            if (emit != nullptr && i < 4)
+            {
+                for (int j = 0; j < 4; j++)
+                {
+                    if (j == i) continue;
+                    if (emit->tracks[i] == &emit->trackContents[j]
+                        || emit->tracks[i] == emit->tracks[j])
+                    {
+                        // Only "earlier channel" locks are valid per
+                        // the schema. If we matched a later channel
+                        // via transitive equality, skip it — the
+                        // earlier channel will be the canonical lock
+                        // target when we hit it in this loop.
+                        if (j < i)
+                        {
+                            lockedToName = kTrackNames[j];
+                            break;
+                        }
+                    }
+                }
+            }
             tracksArr.push_back(json{
                 {"name",          kTrackNames[i]},
                 {"keys",          keysArr},
                 {"interpolation", interp},
+                {"lockedTo",      lockedToName == nullptr
+                                      ? json(nullptr)
+                                      : json(lockedToName)},
             });
         }
         sendOk(json{{"tracks", tracksArr}});
@@ -2460,6 +2493,95 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
         captureUndo();
         track->interpolation = next;
+
+        sendOk(json::object());
+        markDirty();
+        EmitEmittersTreeChanged();
+        EmitEngineStateChanged();
+        return res;
+    }
+
+    // -------- emitters/set-track-lock ------------------------------
+    //
+    // Per-channel track lock. The legacy combo at
+    // [TrackEditor.cpp:90-110](src/UI/TrackEditor.cpp:90) and the
+    // file-load consolidation at [ParticleSystem.cpp:428] use the
+    // *pointer identity* of `emit->tracks[i]` as the source of
+    // truth for lock state: `tracks[i] == &trackContents[j]` (with
+    // `i != j`) means channel `i` is read-only and displays
+    // channel `j`'s key data.
+    //
+    // Locking rules (mirror legacy):
+    //   - Only the first four channels (RGBA) participate.
+    //   - Channel can only lock to an *earlier* channel (Green→Red,
+    //     Blue→Red/Green, Alpha→Red/Green/Blue). Other combinations
+    //     silently become "unlock" — UI surface already restricts
+    //     options so this is defensive only.
+    //   - `lockTo: null` restores `tracks[i] = &trackContents[i]`
+    //     (channel owns its keys again; previous trackContents[i]
+    //     is preserved because the lock didn't touch it).
+    if (kind == "emitters/set-track-lock")
+    {
+        int id = params.value("id", -1);
+        std::string channelName = params.value("channel", std::string{});
+        // lockTo is `string | null` per the schema; nlohmann's
+        // `value<string>` would throw on null, so check explicitly.
+        std::string lockToName;
+        bool lockToIsNull = !params.contains("lockTo") || params["lockTo"].is_null();
+        if (!lockToIsNull) lockToName = params["lockTo"].get<std::string>();
+
+        ParticleSystem::Emitter* target = getEmitterById(id);
+        if (target == nullptr)
+        {
+            sendErr("emitter not found");
+            return res;
+        }
+
+        int channelIdx = trackNameToIndex(channelName);
+        if (channelIdx < 0)
+        {
+            sendErr("unknown channel");
+            return res;
+        }
+
+        // Only RGBA participate. Silently accept and no-op for the
+        // other three — keeps the React side simple (it can always
+        // dispatch without first checking which channel it's on).
+        if (channelIdx >= 4)
+        {
+            sendOk(json::object());
+            return res;
+        }
+
+        ParticleSystem::Emitter::Track* desired = nullptr;
+        if (lockToIsNull)
+        {
+            desired = &target->trackContents[channelIdx];
+        }
+        else
+        {
+            int targetIdx = trackNameToIndex(lockToName);
+            // Reject invalid targets (must be 0..3 AND earlier than us)
+            // by falling back to self-pointer = unlock.
+            if (targetIdx >= 0 && targetIdx < 4 && targetIdx < channelIdx)
+            {
+                desired = &target->trackContents[targetIdx];
+            }
+            else
+            {
+                desired = &target->trackContents[channelIdx];
+            }
+        }
+
+        if (target->tracks[channelIdx] == desired)
+        {
+            // No-op — don't capture undo or fire events.
+            sendOk(json::object());
+            return res;
+        }
+
+        captureUndo();
+        target->tracks[channelIdx] = desired;
 
         sendOk(json::object());
         markDirty();

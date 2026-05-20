@@ -239,10 +239,14 @@ function AppShell() {
           {/* Lower — always-on Curve editor panel (Task 2.6). The
               panel itself handles the "no emitter selected" placeholder
               at the canvas level, so this row is always mounted at a
-              fixed 260px height. */}
+              fixed height. 290px (was 260px) lets all 6 of the
+              default-on channel rows fit naturally; Index is the only
+              row that prompts a brief scroll. Viewport loses 30px of
+              vertical real estate, which the curve editor's
+              always-visible nature justifies. */}
           <div
             data-testid="quadrant-curve-editor"
-            className="h-[260px] shrink-0 border-t border-border"
+            className="h-[290px] shrink-0 border-t border-border"
           >
             <CurveEditorPanel bridge={bridge} />
           </div>
@@ -251,11 +255,18 @@ function AppShell() {
         {/* Right column — Spawner panel, permanent in the workspace
             grid when spawnerVisible is true (Task 2.4). Hidden when
             the user toggles the Spawner button off; the workspace
-            collapses back to two columns. */}
+            collapses back to two columns.
+
+            `bg-panel` on the aside is load-bearing: without it, any
+            area not painted by the SpawnerPanel `.panel` inside —
+            empty space below the panel content, or the briefly-
+            unpainted region during a window resize — shows the
+            FD9b layered viewport popup's clear colour. The aside's
+            `bg-panel` matches the `.panel` inside seamlessly. */}
         {spawnerVisible && (
           <aside
             data-testid="quadrant-spawner"
-            className="w-80 shrink-0 border-l border-border overflow-hidden"
+            className="w-80 shrink-0 overflow-hidden border-l border-border bg-panel"
           >
             <SpawnerPanel bridge={bridge} />
           </aside>

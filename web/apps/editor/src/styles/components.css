@@ -805,22 +805,46 @@
 /* ========== Curve editor ========== */
 .curve-editor {
   display: grid;
-  grid-template-rows: 36px 1fr;
+  /* `minmax(0, 1fr)` instead of bare `1fr` so the body row can
+     shrink below its content's min-content size. With bare `1fr`,
+     CSS Grid's implicit `minmax(auto, 1fr)` refuses to shrink the
+     row below `.curve-list`'s 7-row min-content (~224px), which
+     pushes `.curve-editor` past its `flex:1` slot, the parent
+     `.panel`'s `overflow:hidden` clips the bottom, and
+     `.curve-list`'s own `overflow-y:auto` never trips because its
+     cell is being *given* its content's size. */
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
+  /* CurveEditorPanel renders us as a `.panel`-flex-column sibling of
+     a `.panel-header`. Claim only the REMAINING space below the
+     header. */
+  flex: 1;
 }
 
 .ce-toolbar {
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  /* Wrap to a second row when the panel is too narrow for the full
+     control set (Select/Insert + Linear/Smooth/Step + Lock-to +
+     Delete + Time/Value). Combined with `.curve-editor`'s `auto`
+     first row, the toolbar grows vertically as needed instead of
+     clipping the right-most control off the panel edge. */
+  flex-wrap: wrap;
+  padding: 4px 8px;
   gap: 2px;
   border-bottom: 1px solid var(--border);
+  min-height: 36px;
   flex-shrink: 0;
 }
 
 .ce-body {
   display: grid;
-  grid-template-columns: 160px 1fr;
+  /* `minmax(0, 1fr)` for the canvas column (same trick as
+     `.curve-editor`'s row template) so the column can shrink below
+     the SVG's intrinsic 600px viewBox width. Bare `1fr` would inherit
+     `min-content: 600px`, pushing the canvas cell past its available
+     space and clipping the right edge of the curve. */
+  grid-template-columns: 180px minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -829,6 +853,11 @@
   padding: 8px;
   display: flex;
   flex-direction: column;
+  /* 7 channel rows + padding don't always fit in the bottom 260px
+     strip (Inter line-height + native checkbox + DPI vary by host).
+     Scroll vertically so the Index row is always reachable. */
+  overflow-y: auto;
+  min-height: 0;
   gap: 2px;
   overflow: auto;
 }
@@ -850,6 +879,14 @@
 .curve-canvas-wrap {
   position: relative;
   min-width: 0;
+  /* Inset the SVG from the cell edges so curves at extreme values
+     (RGBA=1 at viewBox top, Index=0 near viewBox bottom) don't get
+     clipped by the cell border, and so the canvas's right edge
+     isn't flush against the Spawner panel divider. The 12px gutter
+     on all sides is also the reserved space for the Y-axis tick
+     labels (left), X-axis time labels (bottom), and breathing room
+     (top + right) that the next polish pass will add. */
+  padding: 12px;
 }
 .curve-canvas {
   display: block;

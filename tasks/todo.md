@@ -360,3 +360,55 @@ facing deliverable is a green suite + a tracked parking-lot item.
 - Engine ground-texture bug owner-attended investigation (Open Item §1).
 - Phase 3 of the redesign (Open Item §3 in HANDOFF).
 - L-007 procedural rule worth referencing in any future "rewrite the failing test" moment.
+
+---
+
+## Continuation (2026-05-20) — Engine ground-texture bug actually fixed + curve editor polish dispatch
+
+This `todo.md` covered the diagnosis-and-defer phase. After committing
+the `test.fixme` + L-007 entry, the same session continued into:
+
+1. **Engine ground-texture bug → ROOT-CAUSED + FIXED + SHIPPED.**
+   With a fresh approach (`engine/debug/d3dx-canary` bridge handler +
+   `gtdbg.log` helper to bypass the GUI-subsystem-stdout swallow),
+   isolated the failure to a single missing pair of method calls in
+   `Engine::Reset`: `m_pSkydomeEffect->OnLostDevice()` /
+   `OnResetDevice()`. Two-line fix at [`engine.cpp:1360`](src/engine.cpp:1360).
+   Belt-and-suspenders companion: new `Engine::RecoverDeviceIfNeeded()`
+   public method + `LayoutBroker::Apply` catch-path fallback. Committed
+   as `92ed1db` on `origin/lt-4`; native suite back to 83/83 (no more
+   `test.fixme`). Diagnostic trail and "verify the rewrite in-situ"
+   procedural lesson preserved in [`tasks/lessons.md` L-007](lessons.md).
+
+2. **Curve editor polish dispatch.** User started interactive smoke-
+   testing the editor and iteratively reported what looked off; each
+   issue got localised + fixed. Round of work covers: Spawner panel
+   background bleed-through fix, curve editor strip layout fixes
+   (scrollbar, row-height bump, padding around canvas), lock-to feature
+   wired end-to-end (new schema kind `emitters/set-track-lock`, C++
+   handler swapping `emit->tracks[i]` per legacy pointer-identity
+   model, `TrackDto.lockedTo` field, React UI dispatching + reading
+   it, edit affordances disable when locked, "Lock to:" label), per-
+   channel value-range rule rewrite (RGBA fixed `{0,1}`, Scale/Index
+   auto-grow upper bound from highest key, Rotation auto-grows both
+   ways with no caps), spinner bounds split from display range (the
+   "stuck at Scale=20" deadlock), Index integer step, toolbar text →
+   icons, HTML axis labels in a CSS-grid sibling cell (avoids
+   `preserveAspectRatio="none"` glyph distortion), theme-aware grid
+   colours (`--curve-grid` / `--curve-axis` CSS variables, dimmer in
+   light theme), `overflow="visible"` on the SVG so endpoint key
+   circles draw their full body even at the grid edge, slightly
+   thicker curves and bigger key markers, padding between grid and
+   axis labels. Spinner improvements (always-visible arrows, native
+   wheel listener with `{ passive: false }` to bypass React 18's
+   passive default — L-008 in lessons), spinner wheel works anywhere
+   over the spinner including the arrow column.
+
+3. **Verification.** All four gates green:
+   - `pnpm build` clean (0 TS errors).
+   - Vitest **219 / 219**.
+   - `pnpm test:native` **83 / 83**.
+   - MSBuild Debug x64 clean.
+
+4. **Status at handoff:** uncommitted in the working tree (12 files
+   modified). Needs commit + FF into `lt-4` + push to `origin/lt-4`.

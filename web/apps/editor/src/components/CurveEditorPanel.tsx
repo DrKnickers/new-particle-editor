@@ -32,9 +32,9 @@
 // round-trip (lessons.md L-006: sticky override; don't clear on
 // every `tracks` refresh).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, MousePointer2, Plus, Trash2 } from "lucide-react";
 import type {
   Bridge,
   InterpolationType,
@@ -63,7 +63,7 @@ export const CHANNELS: readonly ChannelDef[] = [
   { id: "blue",     label: "Blue",     color: "var(--z-axis)",  defaultOn: true,  trackName: "blue" },
   { id: "alpha",    label: "Alpha",    color: "var(--text-2)",  defaultOn: true,  trackName: "alpha" },
   { id: "rotation", label: "Rotation", color: "var(--accent)",  defaultOn: true,  trackName: "rotationSpeed" },
-  { id: "index",    label: "Index",    color: "var(--text-3)",  defaultOn: false, trackName: "index" },
+  { id: "index",    label: "Index",    color: "var(--text)",    defaultOn: false, trackName: "index" },
 ] as const;
 
 const STORAGE_KEY = "alo:curve-channels";
@@ -76,6 +76,35 @@ const TYPING_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 const INTERP_KINDS: readonly InterpolationType[] = Object.freeze([
   "linear", "smooth", "step",
 ]);
+
+/** Tiny inline glyphs for the three interpolation modes. Each is a
+ *  16×16 SVG showing the curve shape between two endpoints — clearer
+ *  than text at icon size, no lucide icon matches the semantics
+ *  closely enough (lucide has `Spline` but not `Linear` / `Step`
+ *  curve-editor glyphs). */
+const INTERP_ICONS: Record<InterpolationType, ReactElement> = {
+  linear: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+      <line x1="2" y1="12" x2="14" y2="4" strokeLinecap="round" />
+      <circle cx="2" cy="12" r="1.5" fill="currentColor" />
+      <circle cx="14" cy="4" r="1.5" fill="currentColor" />
+    </svg>
+  ),
+  smooth: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+      <path d="M 2 12 C 5 12, 7 4, 14 4" strokeLinecap="round" />
+      <circle cx="2" cy="12" r="1.5" fill="currentColor" />
+      <circle cx="14" cy="4" r="1.5" fill="currentColor" />
+    </svg>
+  ),
+  step: (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+      <polyline points="2,12 8,12 8,4 14,4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="2" cy="12" r="1.5" fill="currentColor" />
+      <circle cx="14" cy="4" r="1.5" fill="currentColor" />
+    </svg>
+  ),
+};
 
 /** Lock-to combo options per track. Mirrors the legacy table at
  *  [src/UI/TrackEditor.cpp:90-98]. The leading "None" option is
@@ -127,24 +156,193 @@ function valueRangeForTrack(track: TrackDto): { min: number; max: number } {
     case "blue":
     case "alpha":
       return { min: 0, max: 1 };
-    case "scale":
-    case "index": {
+    case "scale": {
+      // Lower bound always 0. Upper bound auto-grows to the highest
+      // key value so the curve actually reaches the top of the canvas
+      // at its max. Floor at 1 so a flat-zero curve isn't a degenerate
+      // single-point range (and renders as a flat line at the bottom).
       let max = 0;
       for (const k of track.keys) {
         if (k.value > max) max = k.value;
       }
-      return { min: 0, max: Math.max(max * 1.2, 100) };
+      return { min: 0, max: Math.max(max, 1) };
+    }
+    case "index": {
+      // Same shape as scale: lower bound 0, upper bound auto-grows
+      // to the highest key. Floor at 1.
+      let max = 0;
+      for (const k of track.keys) {
+        if (k.value > max) max = k.value;
+      }
+      return { min: 0, max: Math.max(max, 1) };
     }
     case "rotationSpeed": {
-      let mag = 0;
+      // Default display range 0..1. Expands in BOTH directions to
+      // include the highest and lowest keys — no caps. User can
+      // input any value and the grid scales accordingly.
+      let min = 0;
+      let max = 1;
       for (const k of track.keys) {
-        const m = Math.abs(k.value);
-        if (m > mag) mag = m;
+        if (k.value < min) min = k.value;
+        if (k.value > max) max = k.value;
       }
-      const bound = Math.max(mag * 1.2, 1);
-      return { min: -bound, max: bound };
+      return { min, max };
     }
   }
+}
+
+/** Spinner clamp bounds per track. These are the engine-allowed
+ *  bounds the user can enter — different from the *display* range
+ *  computed by `valueRangeForTrack` (which is derived from current
+ *  keys and adapts as keys change). Spinner bounds are constant per
+ *  channel so the user can push key values past the current display
+ *  range to grow it. */
+function spinnerBoundsForTrack(name: TrackName): {
+  min: number;
+  max: number;
+  step: number;
+} {
+  switch (name) {
+    case "red":
+    case "green":
+    case "blue":
+    case "alpha":
+      // Hard-clamped 0..1 — the engine enforces this at file-load
+      // (`Verify(key.value >= 0.0f && key.value <= 1.0f)` in
+      // [ParticleSystem.cpp:420](src/ParticleSystem.cpp:420)), so
+      // letting the user enter out-of-range values would just get
+      // rejected on save.
+      return { min: 0, max: 1, step: 0.01 };
+    case "scale":
+      // 0..∞ in concept; using a very large but finite ceiling so
+      // the Spinner's clamp logic has something to compare against.
+      return { min: 0, max: 1e6, step: 0.1 };
+    case "index":
+      // Integer particle-index. Step 1 enforces whole-number nudges
+      // via the spinner arrows / wheel / keyboard ↑↓. Users CAN
+      // still type a fractional value into the field; the engine
+      // accepts it but the spinner UX nudges in whole units.
+      return { min: 0, max: 1e6, step: 1 };
+    case "rotationSpeed":
+      // Unbounded in both directions. Step 0.1 for fine control.
+      return { min: -1e6, max: 1e6, step: 0.1 };
+  }
+}
+
+/** Format an axis-label number. Integer ranges show as integers,
+ *  non-integers show one decimal place. Avoids "12.0" noise on
+ *  integer ranges (Scale 0..24, Index -3..10) while keeping precision
+ *  for tight ranges (Rotation -1..1 → "0.5" mid). */
+function fmtAxis(n: number): string {
+  if (Number.isInteger(n)) return n.toFixed(0);
+  return n.toFixed(1);
+}
+
+/** HTML-overlay axis labels around the curve canvas. The SVG fills
+ *  the inner cell of a CSS grid; Y labels live in the left track,
+ *  X labels in the bottom track. Labels are HTML <span>, NOT
+ *  SVG <text>, because the SVG uses `preserveAspectRatio="none"`
+ *  to stretch the curve+grid to fill the cell, which would distort
+ *  text glyphs too. HTML labels stay at their CSS font size and
+ *  remain legible at any cell aspect ratio.
+ *
+ *  Y labels: always min (bottom), max (top), midpoint (middle).
+ *  If `0` falls strictly inside the range and isn't already the
+ *  midpoint, a fourth label at `0` is added at its actual position
+ *  — so ranges like Index `-3..10` show `-3 / 0 / 3.5 / 10`, making
+ *  the value=0 baseline easy to find visually.
+ *
+ *  X labels: 0 / 25 / 50 / 75 / 100 (time percentage), fixed. */
+function CanvasWithAxisLabels({
+  yMin,
+  yMax,
+  children,
+}: {
+  yMin: number;
+  yMax: number;
+  children: React.ReactNode;
+}) {
+  // pct = fraction of the grid box height measured from the TOP.
+  // value=yMax → pct=0 (top), value=yMin → pct=1 (bottom).
+  const yLabels: Array<{ key: string; value: number; pct: number }> = [
+    { key: "max", value: yMax, pct: 0 },
+    { key: "min", value: yMin, pct: 1 },
+    { key: "mid", value: (yMax + yMin) / 2, pct: 0.5 },
+  ];
+  // Add a "0" label when 0 is strictly inside the range and the
+  // midpoint isn't already 0 (avoids two labels overlapping).
+  if (yMin < 0 && yMax > 0 && Math.abs((yMax + yMin) / 2) > 1e-6) {
+    const zeroPct = yMax / (yMax - yMin);
+    yLabels.push({ key: "zero", value: 0, pct: zeroPct });
+  }
+
+  return (
+    <div
+      data-testid="curve-canvas-with-axes"
+      className="grid h-full w-full"
+      // Wider Y-label column (36 → 36px, was 32px) gives endpoint-key
+      // circles that extend past the grid via `overflow="visible"`
+      // (≈5px radius) breathing room before they crowd the labels.
+      // Taller X-label row (22px, was 18px) does the same vertically.
+      style={{ gridTemplateColumns: "36px 1fr", gridTemplateRows: "1fr 22px" }}
+    >
+      {/* Y-axis label column. Labels are absolutely-positioned within
+          this cell at their respective `pct` so they align with grid
+          rows even when the cell is stretched. `pr-2` pulls labels
+          4px left of the SVG edge so an endpoint-key circle (~5px
+          radius) extending leftward doesn't sit on top of the label
+          text. */}
+      <div className="relative" style={{ gridColumn: 1, gridRow: 1 }}>
+        {yLabels.map((l) => (
+          <span
+            key={l.key}
+            className="absolute pr-2 text-[10px] leading-none text-text-2"
+            style={{
+              top: `${l.pct * 100}%`,
+              right: 0,
+              transform:
+                l.pct === 0
+                  ? "translateY(0)"
+                  : l.pct === 1
+                    ? "translateY(-100%)"
+                    : "translateY(-50%)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {fmtAxis(l.value)}
+          </span>
+        ))}
+      </div>
+      {/* SVG cell — receives the grid+curve children unchanged. */}
+      <div style={{ gridColumn: 2, gridRow: 1 }} className="min-w-0">
+        {children}
+      </div>
+      {/* X-axis labels — 5 fixed stops at 0/25/50/75/100% of the
+          time range. End labels (0 and 100) anchor at the cell
+          edges so they don't clip; intermediates centre on their
+          percentage. */}
+      <div className="relative" style={{ gridColumn: 2, gridRow: 2 }}>
+        {[0, 25, 50, 75, 100].map((t) => (
+          <span
+            key={`xl-${t}`}
+            className="absolute pt-1.5 text-[10px] leading-none text-text-2"
+            style={{
+              left: `${t}%`,
+              transform:
+                t === 0
+                  ? "translateX(0)"
+                  : t === 100
+                    ? "translateX(-100%)"
+                    : "translateX(-50%)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {t}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function CurveEditorPanel({ bridge }: Props) {
@@ -167,7 +365,6 @@ export function CurveEditorPanel({ bridge }: Props) {
   const [keyContextMenu, setKeyContextMenu] = useState<
     { time: number; isBorder: boolean; x: number; y: number } | null
   >(null);
-  const [lockTo, setLockTo] = useState<string>("None");
 
   // Track which id we last fetched for, so a late-arriving response
   // for a stale selection doesn't clobber current data.
@@ -269,7 +466,6 @@ export function CurveEditorPanel({ bridge }: Props) {
       if (prev !== id) {
         setSelectedKeyTimes(new Set());
         setOptimisticSelected(null);
-        setLockTo("None");
       }
       return id;
     });
@@ -291,7 +487,6 @@ export function CurveEditorPanel({ bridge }: Props) {
     setFocusChannel(nextVisible.id);
     setSelectedKeyTimes(new Set());
     setOptimisticSelected(null);
-    setLockTo("None");
   }, [visible, focusChannel]);
 
   // ── Curve interactions ────────────────────────────────────────────
@@ -466,8 +661,11 @@ export function CurveEditorPanel({ bridge }: Props) {
       if (singleSelected === null) return;
       if (selectedId === null) return;
       if (nextValue === singleSelected.value) return;
-      const clamped = Math.max(focusedRange.min, Math.min(focusedRange.max, nextValue));
-      setOptimisticSelected({ time: singleSelected.time, value: clamped });
+      // No clamp to the *display* range — that range is derived from
+      // current keys and we want it to GROW when the user inputs a
+      // larger / more negative value. The Spinner already clamps to
+      // the channel's engine-allowed bounds (spinnerBoundsForTrack).
+      setOptimisticSelected({ time: singleSelected.time, value: nextValue });
       void bridge.request({
         kind: "emitters/set-track-key",
         params: {
@@ -475,11 +673,11 @@ export function CurveEditorPanel({ bridge }: Props) {
           track: focusedChannel.trackName,
           oldTime: singleSelected.time,
           newTime: singleSelected.time,
-          newValue: clamped,
+          newValue: nextValue,
         },
       }).catch(() => { /* silent */ });
     },
-    [singleSelected, bridge, selectedId, focusedChannel.trackName, focusedRange.min, focusedRange.max],
+    [singleSelected, bridge, selectedId, focusedChannel.trackName],
   );
 
   // ── Delete keyboard handler (window-scoped, TYPING_TAGS guard) ────
@@ -500,17 +698,60 @@ export function CurveEditorPanel({ bridge }: Props) {
   const lockToOptions = LOCK_TO_OPTIONS[focusedChannel.trackName];
   const lockToDisabled = lockToOptions.length <= 1;
 
+  // Lock-to dropdown value: derived from the host's TrackDto.lockedTo
+  // (NOT from local state — pointer-equality on the engine side is
+  // the source of truth, and a successful set-track-lock dispatches
+  // a tree/changed that triggers our get-tracks refetch). Display
+  // values are the capitalised label strings used by LOCK_TO_OPTIONS
+  // ("None", "Red", "Green", "Blue").
+  const lockToValue = useMemo<string>(() => {
+    if (focusedTrack?.lockedTo == null) return "None";
+    return focusedTrack.lockedTo[0]!.toUpperCase() + focusedTrack.lockedTo.slice(1);
+  }, [focusedTrack]);
+
+  // Dispatch set-track-lock when the user picks a new lock target.
+  // Maps the display label ("Red") back to the wire TrackName ("red")
+  // and "None" → null. The C++ host validates further (only RGBA
+  // channels, only earlier-channel targets); invalid choices land as
+  // an unlock per the dispatcher.
+  const handleLockToChange = useCallback((next: string) => {
+    if (selectedId === null) return;
+    if (next === lockToValue) return; // no-op
+    const lockTo: TrackName | null = next === "None"
+      ? null
+      : (next.toLowerCase() as TrackName);
+    void bridge.request({
+      kind: "emitters/set-track-lock",
+      params: {
+        id: selectedId,
+        channel: focusedChannel.trackName,
+        lockTo,
+      },
+    });
+    // Selection makes no sense while a track is locked; clear it so
+    // unlock doesn't snap back to a phantom previous selection.
+    setSelectedKeyTimes(new Set());
+    setOptimisticSelected(null);
+  }, [bridge, selectedId, focusedChannel.trackName, lockToValue]);
+
+  // Locked-now flag: when the focus channel is currently a read-only
+  // alias of another channel, every edit affordance (Insert mode,
+  // interpolation toggle, Delete, drag, marquee) should be disabled.
+  // Lock dropdown itself stays enabled so the user can unlock.
+  const focusLocked = focusedTrack !== null && focusedTrack.lockedTo !== null;
+
   // Delete-button disabled state for the toolbar.
   const deletableCount = useMemo(() => {
     let n = 0;
     for (const t of selectedKeyTimes) if (!borderKeyTimes.has(t)) n++;
     return n;
   }, [selectedKeyTimes, borderKeyTimes]);
-  const deleteDisabled = selectedId === null || deletableCount === 0;
+  const deleteDisabled = selectedId === null || deletableCount === 0 || focusLocked;
 
   // Bridge mutation guards — disable interp buttons when there's no
-  // selected emitter or focused track.
-  const interpDisabled = selectedId === null || focusedTrack === null;
+  // selected emitter, no focused track, OR the focused track is
+  // currently locked to another channel (read-only).
+  const interpDisabled = selectedId === null || focusedTrack === null || focusLocked;
 
   return (
     <div
@@ -543,14 +784,14 @@ export function CurveEditorPanel({ bridge }: Props) {
             data-state={mode === "select" ? "on" : "off"}
             data-testid="ce-tool-select"
             onClick={() => setMode("select")}
-            title="Click a key to select; click empty area to clear"
+            title="Select (click a key to select; click empty area to clear)"
             className={
               mode === "select"
-                ? "h-6 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
-                : "h-6 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2"
+                ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent"
+                : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2"
             }
           >
-            Select
+            <MousePointer2 className="size-3.5" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -559,14 +800,14 @@ export function CurveEditorPanel({ bridge }: Props) {
             data-state={mode === "insert" ? "on" : "off"}
             data-testid="ce-tool-insert"
             onClick={() => setMode("insert")}
-            title="Click empty canvas to add a key"
+            title="Insert (click empty canvas to add a key)"
             className={
               mode === "insert"
-                ? "h-6 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
-                : "h-6 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2"
+                ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent"
+                : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2"
             }
           >
-            Insert
+            <Plus className="size-3.5" aria-hidden="true" />
           </button>
 
           <span className="mx-1 h-4 w-px bg-panel-2" aria-hidden />
@@ -575,6 +816,7 @@ export function CurveEditorPanel({ bridge }: Props) {
               underlying track. */}
           {INTERP_KINDS.map((kind) => {
             const isActive = focusedTrack?.interpolation === kind;
+            const label = kind[0]!.toUpperCase() + kind.slice(1);
             return (
               <button
                 key={kind}
@@ -585,32 +827,41 @@ export function CurveEditorPanel({ bridge }: Props) {
                 data-state={isActive ? "on" : "off"}
                 data-testid={`ce-interp-${kind}`}
                 onClick={() => handleInterpolationClick(kind)}
+                title={`${label} interpolation`}
                 className={
                   isActive
-                    ? "h-6 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
-                    : "h-6 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
+                    ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent"
+                    : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
                 }
               >
-                {kind[0]!.toUpperCase() + kind.slice(1)}
+                {INTERP_ICONS[kind]}
               </button>
             );
           })}
 
           <span className="mx-1 h-4 w-px bg-panel-2" aria-hidden />
 
-          {/* Lock-to combo. Per-track options; disabled when only
-              "None" is available. */}
+          {/* Lock-to combo. Disabled only when the focus channel has
+              no possible targets (Red / Scale / Index / Rotation —
+              all of which can only be "None"). For Green/Blue/Alpha
+              the dropdown stays enabled even while locked so the user
+              can change the lock target or unlock. */}
+          <label className="text-xs text-text-2" htmlFor="ce-lock-to-trigger">
+            Lock to:&nbsp;
+          </label>
           <Select.Root
-            value={lockTo}
-            onValueChange={setLockTo}
+            value={lockToValue}
+            onValueChange={handleLockToChange}
             disabled={lockToDisabled || selectedId === null}
           >
             <Select.Trigger
+              id="ce-lock-to-trigger"
               data-testid="ce-lock-to-trigger"
-              className="flex h-6 min-w-[88px] items-center justify-between gap-1 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none hover:border-border-2 focus:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+              data-locked={focusLocked ? "true" : "false"}
+              className="flex h-6 min-w-[80px] items-center justify-between gap-1 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none hover:border-border-2 focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 data-[locked=true]:border-accent data-[locked=true]:text-accent"
               aria-label="Lock-to track"
             >
-              <Select.Value placeholder="Lock to" />
+              <Select.Value placeholder="None" />
               <Select.Icon>
                 <ChevronDown className="size-3 text-text-3" />
               </Select.Icon>
@@ -651,11 +902,11 @@ export function CurveEditorPanel({ bridge }: Props) {
             title={deleteDisabled ? "Select a non-border key first" : "Delete selected key(s)"}
             className={
               deleteDisabled
-                ? "h-6 rounded border border-border bg-bg-2/60 px-2 text-xs text-text-3"
-                : "h-6 rounded border border-rose-700 bg-rose-900/30 px-2 text-xs text-rose-200 hover:border-rose-500"
+                ? "grid h-6 w-6 place-items-center rounded border border-border bg-bg-2/60 text-text-3"
+                : "grid h-6 w-6 place-items-center rounded border border-rose-700 bg-rose-900/30 text-rose-200 hover:border-rose-500"
             }
           >
-            Delete
+            <Trash2 className="size-3.5" aria-hidden="true" />
           </button>
 
           <div className="flex-1" />
@@ -665,8 +916,8 @@ export function CurveEditorPanel({ bridge }: Props) {
               selected. Border keys disable the Time spinner (value-only
               edit). The Spinner `key` binds to track + selected time so
               the input remounts when selection changes. */}
-          <label className="text-xs text-text-2" htmlFor="ce-spinner-time">Time</label>
-          <div className="w-20" data-testid="ce-spinner-time-wrapper">
+          <label className="text-xs text-text-2" htmlFor="ce-spinner-time">Time:&nbsp;</label>
+          <div className="w-16" data-testid="ce-spinner-time-wrapper">
             <Spinner
               key={`time:${focusedChannel.trackName}:${singleSelected?.time ?? "none"}`}
               aria-label="Selected key time"
@@ -679,19 +930,24 @@ export function CurveEditorPanel({ bridge }: Props) {
               density="tight"
             />
           </div>
-          <label className="text-xs text-text-2 ml-1" htmlFor="ce-spinner-value">Value</label>
-          <div className="w-20" data-testid="ce-spinner-value-wrapper">
-            <Spinner
-              key={`value:${focusedChannel.trackName}:${singleSelected?.time ?? "none"}:${singleSelected?.value ?? "none"}`}
-              aria-label="Selected key value"
-              value={singleSelected?.value ?? 0}
-              onChange={handleValueSpinner}
-              min={focusedRange.min}
-              max={focusedRange.max}
-              step={(focusedRange.max - focusedRange.min) / 100}
-              disabled={spinnersDisabled}
-              density="tight"
-            />
+          <label className="text-xs text-text-2 ml-1" htmlFor="ce-spinner-value">Value:&nbsp;</label>
+          <div className="w-16" data-testid="ce-spinner-value-wrapper">
+            {(() => {
+              const sb = spinnerBoundsForTrack(focusedChannel.trackName);
+              return (
+                <Spinner
+                  key={`value:${focusedChannel.trackName}:${singleSelected?.time ?? "none"}:${singleSelected?.value ?? "none"}`}
+                  aria-label="Selected key value"
+                  value={singleSelected?.value ?? 0}
+                  onChange={handleValueSpinner}
+                  min={sb.min}
+                  max={sb.max}
+                  step={sb.step}
+                  disabled={spinnersDisabled}
+                  density="tight"
+                />
+              );
+            })()}
           </div>
         </div>
 
@@ -749,7 +1005,7 @@ export function CurveEditorPanel({ bridge }: Props) {
                     style={{ background: c.color }}
                     aria-hidden="true"
                   />
-                  <span>{c.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{c.label}</span>
                 </div>
               );
             })}
@@ -763,23 +1019,28 @@ export function CurveEditorPanel({ bridge }: Props) {
                 Select an emitter to edit its tracks
               </div>
             ) : (
-              <CurveEditor
-                tracks={tracks}
-                channels={CHANNELS}
-                visibleChannels={visible}
-                focusChannel={focusChannel}
-                selectedKeyTimes={selectedKeyTimes}
-                onKeyClick={handleKeyClick}
-                onCanvasClick={handleCanvasClick}
-                insertMode={mode === "insert"}
-                onCanvasAdd={handleCanvasAdd}
-                onCanvasContextMenu={() => setMode("select")}
-                onKeyContextMenu={(time, isBorder, x, y) =>
-                  setKeyContextMenu({ time, isBorder, x, y })
-                }
-                onKeyDragEnd={handleKeyDragEnd}
-                onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
-              />
+              <CanvasWithAxisLabels
+                yMin={focusedRange.min}
+                yMax={focusedRange.max}
+              >
+                <CurveEditor
+                  tracks={tracks}
+                  channels={CHANNELS}
+                  visibleChannels={visible}
+                  focusChannel={focusChannel}
+                  selectedKeyTimes={selectedKeyTimes}
+                  onKeyClick={handleKeyClick}
+                  onCanvasClick={handleCanvasClick}
+                  insertMode={mode === "insert"}
+                  onCanvasAdd={handleCanvasAdd}
+                  onCanvasContextMenu={() => setMode("select")}
+                  onKeyContextMenu={(time, isBorder, x, y) =>
+                    setKeyContextMenu({ time, isBorder, x, y })
+                  }
+                  onKeyDragEnd={handleKeyDragEnd}
+                  onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
+                />
+              </CanvasWithAxisLabels>
             )}
           </div>
         </div>

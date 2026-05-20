@@ -26,7 +26,7 @@ function fixtureTrack(
     time: (i / Math.max(1, keyCount - 1)) * 100,
     value: i % 2 === 0 ? 0.1 : 0.9,
   }));
-  return { name: "red", keys, interpolation };
+  return { name: "red", keys, interpolation, lockedTo: null };
 }
 
 describe("CurveEditor", () => {

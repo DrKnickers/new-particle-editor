@@ -16,7 +16,64 @@ Conventions:
 
 ## Changelog
 
-### Skydome effect missing OnLostDevice/OnResetDevice — ground-texture lockup under `--test-host` fixed
+### Curve editor polish: lock-to feature, axis labels, theme-aware grid, spinner improvements, Spawner panel bleed-through fix
+
+*2026-05-20 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Single dispatch that grew during interactive smoke-testing — what started as "fix the Spawner panel showing the DirectX clear colour" turned into a round of curve-editor polish driven by the user testing each surface and reporting what looked off. Net effect: the curve editor is now genuinely usable end-to-end. Lock-to is functional (color channels can be aliased per the legacy pointer-identity model). Axis labels render correctly per focus channel. Spinners are robust (visible arrows, wheel works anywhere over them including arrows, doesn't leak scroll to the parent pane). Theme-aware grid colours mean the light-theme grid doesn't fight curves any more. No engine-side production code beyond a single Lock-to handler addition.
+
+**How we tackled it.** Each item came up via user smoke-testing and got fixed in sequence; the through-line is "look at it, name what's wrong, fix the smallest correct shape, iterate." A few of the surfaces moved more than once because the first interpretation of "what's wrong" was incomplete — captured in the Issues section below.
+
+- **Spawner panel DirectX bleed-through.** Right-column aside in `App.tsx` workspace grid was transparent. With the FD9b layered viewport popup sitting under the WebView2 chrome, any transparent chrome region shows the popup's clear colour. Added `bg-panel` to the aside ([`App.tsx`](web/apps/editor/src/App.tsx)).
+- **Curve editor strip layout.** Channel list (7 rows) wouldn't fit the 260px strip; Index row clipped off the bottom; scrollbar absent because the CSS Grid `1fr` row inherited `min-content` from content and refused to shrink. Fixed in three escalating steps:
+  - `.curve-editor` row template `1fr` → `minmax(0, 1fr)` so the body row can drop below content height ([`components.css`](web/apps/editor/src/styles/components.css)).
+  - Strip height `h-[260px]` → `h-[290px]` so six of the seven channels fit naturally and only Index needs scrolling.
+  - `.curve-editor` flex shape: `flex: 1` inside the panel's flex column instead of `height: 100%`, so the body row claims *remaining* space below the panel-header rather than overflowing it.
+- **Canvas right-edge clip + axis label region.** `.ce-body` column template `180px 1fr` → `180px minmax(0, 1fr)` for the same reason (SVG's 600px intrinsic viewBox width was pushing the canvas cell past its bounds). Added 12px wrap padding around the canvas-wrap to make space for axis labels.
+- **Per-channel value-range rules** (after multiple iterations). `valueRangeForTrack` now:
+  - RGBA: fixed `{0, 1}` (the engine hard-clamps these).
+  - Scale: `{0, max(max-of-keys, 1)}` — upper bound tracks the highest key, floor at 1 so a flat-zero curve isn't a degenerate range.
+  - Index: same shape as Scale.
+  - Rotation: `{min(0, min-of-keys), max(1, max-of-keys)}` — expands in BOTH directions with no caps; the previous design with a ±1 ceiling was wrong per the user's spec.
+- **Spinner-bounds vs display-range split.** The Value spinner used to clamp to the focus channel's display range, which created a deadlock: user couldn't push a key value past the current max because the spinner wouldn't accept it. Introduced `spinnerBoundsForTrack(name)` returning engine-allowed bounds (`{0, 1}` for RGBA, `{0, 1e6}` for Scale/Index, `{-1e6, 1e6}` for Rotation), with `step: 1` for Index (integer-only nudges). Display range adapts as keys change; spinner clamp is constant per channel.
+- **Lock-to feature wired end-to-end.** Was a UI stub previously — dropdown rendered but `setLockTo` only updated local React state, nothing reached the bridge. Full implementation:
+  - New schema kind `emitters/set-track-lock` ([`bridge-schema/src/index.ts`](web/packages/bridge-schema/src/index.ts)).
+  - C++ handler that swaps `emit->tracks[channelIdx]` to point at the target channel's `trackContents`, matching the legacy `TrackEditor.cpp:178-198` `CBN_SELCHANGE` semantics. Mark dirty + emit tree-changed.
+  - `TrackDto.lockedTo` field; the dispatcher's `emitters/get-tracks` computes it from pointer equality (`tracks[i] == &trackContents[j]`).
+  - React dropdown reads `focusedTrack.lockedTo` (derived state, not local) and dispatches `set-track-lock` on change. Edit affordances (Insert, Linear/Smooth/Step, Delete) disable while the focus channel is locked.
+  - "Lock to:" label added before the dropdown.
+- **Toolbar icons.** Text labels (Select / Insert / Linear / Smooth / Step / Delete) → icons. Lucide for Select (`MousePointer2`), Insert (`Plus`), Delete (`Trash2`); inline 16×16 SVG glyphs for the three interpolation modes (no lucide match for "linear-curve-between-two-keys" / "step-curve-between-two-keys"). `flex-wrap: wrap` on `.ce-toolbar` + `grid-template-rows: auto minmax(0, 1fr)` on `.curve-editor` as a graceful narrow-window fallback (compresses to single row at normal widths).
+- **Spinner improvements** ([`primitives/Spinner.tsx`](web/apps/editor/src/primitives/Spinner.tsx)):
+  - Up/down arrows always visible (matching legacy Win32 `UDS_ALIGNRIGHT` — the prior "hover-only" was a design drift, not a legacy port).
+  - Wheel handler attached natively (`addEventListener("wheel", ..., { passive: false })`) instead of via React's `onWheel`. React 18+ attaches its delegated wheel listener as PASSIVE, which makes `preventDefault()` a no-op and lets the browser scroll the parent pane before our handler can stop it. Native attachment with `{ passive: false }` re-enables preventDefault.
+  - Native wheel listener on the outer wrapper (not just the input) so the wheel works anywhere over the spinner, including the arrow column.
+- **Curve editor canvas details:**
+  - Axis labels are HTML (`<span>`), not SVG `<text>`. `preserveAspectRatio="none"` stretches the SVG non-uniformly which would distort text glyphs. HTML labels live in a CSS grid sibling cell.
+  - Y-axis labels: max / midpoint / min, with a special "0" label added at its actual position when the range strictly crosses zero (so e.g. Rotation `{-0.5, 1}` shows `1 / 0.25 / 0 / -0.5`).
+  - X-axis labels: fixed `0 / 25 / 50 / 75 / 100`.
+  - Theme-aware grid colour via new `--curve-grid` / `--curve-axis` CSS variables ([`tokens.css`](web/apps/editor/src/styles/tokens.css)). Dark theme: existing `#262626` / `#525252`. Light theme: `rgba(0,0,0,0.25)` / `rgba(0,0,0,0.45)`.
+  - `overflow="visible"` on the SVG so endpoint key circles at time=0 / time=100 / value=min / value=max draw their full body even when the centre sits on the grid edge (was being bisected by the SVG viewBox clip).
+  - Slightly thicker curves (focus 3, non-focus 2 — were 2.5 / 1.5) and larger key markers (5/6 — were 4/5).
+
+**Architectural decisions worth recording.**
+
+1. **Pointer identity as lock-state source-of-truth (legacy model preserved).** The legacy `ParticleSystem::Emitter` uses `Track*` aliasing — `tracks[GREEN] = &trackContents[RED]` means Green's display IS Red's data. Saving + loading already handles this via the file-load consolidation pass at [`ParticleSystem.cpp:428`](src/ParticleSystem.cpp:428). The new bridge surface just exposes this state via `TrackDto.lockedTo` (derived from pointer equality) and a `set-track-lock` request that swaps the pointer. No new state primitive on the engine side; persistence is automatic.
+2. **Display range vs spinner-bounds split is the real fix for "stuck spinner".** Conflating these caused the user-reported "spinner caps Scale at 20" bug — display range derived from existing keys means the user can never push past the current max because the spinner won't supply a larger value. Constant per-channel spinner bounds break the deadlock and let the display range track new key values.
+3. **`overflow="visible"` is an SVG attribute, not just CSS.** Setting it as a CSS rule on the SVG element is documented as having different behaviour than the SVG attribute; using the attribute is reliable. Mentioning here because the project's other SVG-heavy components might want to apply the same pattern.
+4. **HTML labels around stretchy SVG.** `preserveAspectRatio="none"` is the right choice for the curve/grid content (it stretches naturally with the cell), but it's catastrophically wrong for any glyphs inside the SVG. Pattern: HTML labels positioned in a CSS-grid sibling cell, SVG handles only the lines/curves. Worth documenting for similar future surfaces.
+5. **Theme-aware SVG attributes via CSS variables.** `stroke="var(--curve-grid)"` works as an SVG presentation attribute; the value resolves through the same CSS variable cascade as Tailwind utilities. No JS prop drilling needed for theme switching.
+
+**Issues encountered and resolutions.** Worth recording the iteration loops:
+
+1. **Index curve range took 4 iterations.** First: `{0, 10}` floor → value=0 hugged the bottom edge invisibly. Second: `{-1, 10}` → user couldn't see the 9% margin clearly. Third: `{-3, 10}` → user said "I'm not seeing what I expect at value=0" because the labels said `10 / 3.5 / -3` (no "0" label). Fourth: dropped the negative padding, added a dedicated "0" label that sits at the actual zero-position regardless of where the midpoint is. The takeaway: when the user can't tell where value=0 is, the fix is to LABEL value=0 explicitly, not to nudge its rendering position.
+2. **Rotation spec changed mid-session.** Initial spec: cap at ±1. After observation: user wanted no caps, auto-grow in both directions. The cap was a legacy thinking-bias on my part — the new spec is more consistent with Scale/Index.
+3. **Grid clipping at value=0 was wrong.** I tried clipping the grid to only show in the positive-value region, hiding grid below the channel's `value=0`. User noticed the resulting "the grid moves around per focus channel" inconsistency and pushed back. Reverted; the grid is now uniform per the focus range, with axis labels carrying the per-channel scale information.
+4. **SVG-text axis labels were illegible.** Briefly tried rendering labels as `<text>` inside the SVG — they got stretched/squashed by `preserveAspectRatio="none"`. Switched to HTML labels in a CSS-grid sibling cell. Should have been the first instinct.
+5. **The "scroll wheel scrolls the parent pane" bug** required diagnosing React 18+'s passive-by-default behaviour for wheel listeners. The `onWheel={handler}` with `preventDefault()` *looked* correct (and worked in vitest's jsdom), but did nothing in the actual WebView2 runtime because the listener was passive. Documented in lessons (would have caught this faster). Native `addEventListener("wheel", ..., { passive: false })` is the fix.
+
+---
+
+
 
 *2026-05-20 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
 

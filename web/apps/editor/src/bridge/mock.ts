@@ -46,6 +46,7 @@ import {
   setEmitterVisibleMock,
   setLinkGroupMembership,
   setTrackInterpolationInOverlay,
+  setTrackLockInOverlay,
   setTrackKeyInOverlay,
   useMockEmitterClipboard,
   useMockEmitterProperties,
@@ -109,6 +110,7 @@ function isMutating(kind: Request["kind"]): boolean {
   // toggle are persisted mutations on the per-emitter Track state.
   if (kind === "emitters/delete-track-keys") return true;
   if (kind === "emitters/set-track-interpolation") return true;
+  if (kind === "emitters/set-track-lock") return true;
   // Screen 6 Batch B-β — drag-to-move + click-to-add land in the same
   // mutating tier as delete + interpolation: both edit per-emitter
   // Track state.
@@ -670,6 +672,28 @@ export class MockBridge implements Bridge {
       case "emitters/set-track-interpolation": {
         const { id, track, interpolation } = req.params;
         const ok = setTrackInterpolationInOverlay(id, track, interpolation);
+        if (ok) {
+          this.emit({
+            kind: "emitters/tree/changed",
+            payload: useMockEmitterTree.getState().tree,
+          });
+          this.emit({
+            kind: "engine/state/changed",
+            payload: snapshotEngineState(),
+          });
+        }
+        return {};
+      }
+
+      // ---------------- emitters/set-track-lock ----------------------
+      //
+      // Per-channel track lock. Mirrors the native semantic at
+      // [BridgeDispatcher.cpp emitters/set-track-lock] — only RGBA
+      // participate, only earlier-channel targets are honoured, and
+      // invalid combinations silently degrade to unlock.
+      case "emitters/set-track-lock": {
+        const { id, channel, lockTo } = req.params;
+        const ok = setTrackLockInOverlay(id, channel, lockTo);
         if (ok) {
           this.emit({
             kind: "emitters/tree/changed",

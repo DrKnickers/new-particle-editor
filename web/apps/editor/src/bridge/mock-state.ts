@@ -953,6 +953,9 @@ function buildFixtureTrack(id: number, trackIdx: number): TrackDto {
     name,
     keys,
     interpolation: TRACK_INTERPOLATIONS[trackIdx]!,
+    // Fixture defaults: no channel is locked. Mutators below override
+    // via `setTrackLockInOverlay`.
+    lockedTo: null,
   };
 }
 
@@ -1047,6 +1050,71 @@ export function deleteTrackKeysInOverlay(
   );
   useMockTrackOverlay.getState().write(id, nextTracks);
   return removed;
+}
+
+/** Set the lock state on (emitter `id`, channel `channel`). `lockTo`
+ *  is the *earlier* channel name to lock onto, or null to unlock. The
+ *  mock mirrors the native semantics:
+ *    - Only RGBA channels participate (channelIdx 0..3).
+ *    - Only earlier-channel targets are valid (channelIdx > targetIdx,
+ *      both in 0..3). Anything else is silently treated as unlock.
+ *    - When locked, the locked channel's keys array is overwritten to
+ *      mirror the target's keys, and `lockedTo` is set on the locked
+ *      channel's DTO; the native side does this by pointer alias, the
+ *      mock by copy + an explicit field. The locked channel's edit
+ *      surface should treat it as read-only.
+ *  Returns true when the state actually changed (write happened). */
+export function setTrackLockInOverlay(
+  id: number,
+  channel: TrackName,
+  lockTo: TrackName | null,
+): boolean {
+  const cur = useMockTrackOverlay.getState().read(id);
+  const channelIdx = cur.findIndex((t) => t.name === channel);
+  if (channelIdx === -1 || channelIdx >= 4) return false;
+
+  let resolvedLockTo: TrackName | null = null;
+  if (lockTo !== null) {
+    const targetIdx = cur.findIndex((t) => t.name === lockTo);
+    if (targetIdx >= 0 && targetIdx < 4 && targetIdx < channelIdx) {
+      resolvedLockTo = lockTo;
+    }
+  }
+
+  const target = cur[channelIdx]!;
+  if (target.lockedTo === resolvedLockTo) return false; // no-op
+
+  let nextTracks: TrackDto[];
+  if (resolvedLockTo === null) {
+    // Unlock — restore lockedTo: null. Keep the channel's current
+    // keys (the mock doesn't preserve pre-lock data separately;
+    // this matches a "locked-while-target-changes" path on the
+    // native side too, since the locked channel's own
+    // `trackContents[i]` is preserved unmodified during the lock
+    // and re-appears verbatim on unlock).
+    nextTracks = cur.map((t, i) =>
+      i === channelIdx ? { ...t, lockedTo: null } : t,
+    );
+  } else {
+    // Lock — mirror the target's keys + interpolation so the React
+    // side renders identical curves (native does this via pointer
+    // alias; mock does it by copy because the overlay stores keys
+    // per channel, not per shared Track object).
+    const sourceIdx = cur.findIndex((t) => t.name === resolvedLockTo);
+    const source = cur[sourceIdx]!;
+    nextTracks = cur.map((t, i) =>
+      i === channelIdx
+        ? {
+            ...t,
+            keys: source.keys.map((k) => ({ ...k })),
+            interpolation: source.interpolation,
+            lockedTo: resolvedLockTo,
+          }
+        : t,
+    );
+  }
+  useMockTrackOverlay.getState().write(id, nextTracks);
+  return true;
 }
 
 /** Set `track.interpolation = interp` on emitter `id`. Always succeeds

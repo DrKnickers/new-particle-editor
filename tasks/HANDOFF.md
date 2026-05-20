@@ -1,7 +1,11 @@
-# Session Handoff — AloParticleEditor / LT-4 (post-Phase-2 + ground-texture engine bug fixed)
+# Session Handoff — AloParticleEditor / LT-4 (curve editor polish + lock-to + spawner bg fix)
 
-**Last updated:** 2026-05-20 (end-of-session — `tools.spec.ts:192` root-caused and fixed; native suite back to 83/83)
-**Last conversation context:** Continuation session that diagnosed the one failing native spec from the previous handoff *and* shipped the fix. Bisected the cross-spec pollution to the pair `background-picker.spec.ts` × `spawner-import-mod.spec.ts`; chased a credible-but-wrong React-portal-event hypothesis (caught the detour by re-running the proposed programmatic-dispatch rewrite *in-situ* under the polluter pair — which also failed, proving the bug was engine-side); added a `engine/debug/d3dx-canary` bridge handler that the JS reproducer called between each step, isolating the failure to the very first Spawner toolbar toggle (which fired a `layout/viewport-rect` resize that triggered `Engine::Reset` → returned `D3DERR_INVALIDCALL`). Root cause: `m_pSkydomeEffect` (an MT-3 addition) was missing its `OnLostDevice` / `OnResetDevice` pair in `Engine::Reset`. Two-line fix in [`engine.cpp:1360`](src/engine.cpp:1360). Belt-and-suspenders companion change: `Engine::RecoverDeviceIfNeeded` + `LayoutBroker::Apply` catch-path fallback so future "forgot OnLostDevice" regressions self-heal instead of latching. Test counts: vitest **219 / 219**, Playwright **83 / 83**, MSBuild Debug x64 clean.
+**Last updated:** 2026-05-20 (end-of-session — curve editor is now production-quality: lock-to wired, axis labels, theme-aware grid, robust spinners, panel chrome opaque)
+**Last conversation context:** Long session that started with the user testing the editor manually and reporting what looked off, then iterating until each surface was solid. Two dispatches in flight:
+- **First dispatch (already shipped to `origin/lt-4` at commit `92ed1db`):** Root-caused + fixed the `tools.spec.ts:192` ground-texture lockup — a missing `m_pSkydomeEffect->OnLostDevice()` / `OnResetDevice()` pair in `Engine::Reset`. Native suite back to 83/83. Full detail in the previous changelog entry.
+- **Second dispatch (uncommitted at top of this branch — needs commit + FF + push):** A round of curve-editor + UI polish that emerged from interactive smoke-testing. Spawner panel bg-leak fix, curve editor strip layout (scrollbar, height, padding), lock-to feature wired end-to-end (schema + C++ handler + React UI + label), per-channel value-range rules redone (Scale/Index auto-grow, Rotation auto-grow both ways with no caps, RGBA fixed 0..1), separated spinner-bounds from display-range, integer step for Index, toolbar text→icons, HTML axis labels (Y per focus channel, X 0/25/50/75/100), theme-aware grid colours (dimmer in light), endpoint key circle clipping fix (`overflow="visible"`), slightly thicker curves and bigger markers, spinner up/down arrows always visible, native wheel listener bypassing React's passive-default, wheel works over the whole spinner including arrows. See the new CHANGELOG entry for the full breakdown.
+
+Test counts: vitest **219 / 219**, Playwright **83 / 83**, MSBuild Debug x64 clean.
 
 ---
 
@@ -25,15 +29,16 @@ If you are a fresh Claude session resuming this project:
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\great-varahamihira-b66cf4` (this session's; next session likely gets a fresh `claude/<random>` path) |
-| **Branch** | `lt-4` (integration). This session FF-merged into `lt-4` mid-session (after Phase 1) and committed Phase 2 sub-tasks directly on `lt-4`. Tracks `origin/lt-4`. |
-| **HEAD** | `3cd840a` (`feat(LT-4): hybrid focus-channel curve editor — restore edit surface`) |
-| **Working tree** | clean post-commit |
-| **Ahead of origin/lt-4** | this docs commit + 9 prior — see `git log --oneline 24179ec..HEAD` |
-| **Behind master** | `lt-4` is ~352 commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4` |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\charming-williams-0efd47` (this session's; next session gets a fresh `claude/<random>` path) |
+| **Branch** | `claude/charming-williams-0efd47` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
+| **HEAD (committed)** | `92ed1db` on `origin/lt-4` (`fix(LT-4): add m_pSkydomeEffect OnLost/OnReset…`) |
+| **HEAD (working tree)** | Uncommitted curve-editor polish dispatch — 12 files modified. Needs commit + FF + push at the start of next session OR end of this one. |
+| **Working tree** | dirty: 12 files (1 C++, 11 web/) — see `git diff --stat`. |
+| **Ahead of origin/lt-4** | 0 commits at HEAD; 12-file dispatch pending in worktree. |
+| **Behind master** | `lt-4` is ~353 commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). Vitest **219 / 219**. Playwright **83 / 83** — `tools.spec.ts:192` fixed at the engine layer, no longer `test.fixme`. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 shipped (with Phase 2.8 restore). Phase 3 not started.** Legacy `--legacy-ui` mode is untouched throughout. |
+| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). Vitest **219 / 219**. Playwright **83 / 83**. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 shipped + curve editor polished to production quality. Phase 3 not started.** Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `great-varahamihira-b66cf4`, replacing the previous `awesome-morse-5ea5c3` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 
@@ -73,13 +78,28 @@ Plus this docs commit refreshing HANDOFF + CHANGELOG.
 
 ## Open items (load-bearing — read before resuming)
 
-### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20
+### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20 (commit `92ed1db`)
 
-The previously-open ground-texture lockup is fixed. Root cause: `m_pSkydomeEffect` (added in MT-3) was missing from `Engine::Reset`'s `OnLostDevice` / `OnResetDevice` pattern, leaving `D3DPOOL_DEFAULT` references active across `IDirect3DDevice9::Reset` → device latched at `D3DERR_DEVICENOTRESET` → all subsequent `D3DX*` calls failed with `D3DERR_NOTAVAILABLE`. Interactive users never noticed because `Engine::Render`'s next-frame `TestCooperativeLevel`/`Reset` recovery caught up on the next `WM_PAINT`; `--test-host` exposed the bug because the viewport HWND is hidden and the render loop never pumps.
+The ground-texture lockup is fixed. Root cause: `m_pSkydomeEffect` (added in MT-3) was missing from `Engine::Reset`'s `OnLostDevice` / `OnResetDevice` pattern, leaving `D3DPOOL_DEFAULT` references active across `IDirect3DDevice9::Reset` → device latched at `D3DERR_DEVICENOTRESET` → all subsequent `D3DX*` calls failed with `D3DERR_NOTAVAILABLE`. Two-line fix in [`engine.cpp:1360`](src/engine.cpp:1360). Belt-and-suspenders: `Engine::RecoverDeviceIfNeeded()` ([`engine.h:123`](src/engine.h:123)) + `LayoutBroker::Apply` catch-path fallback. Full diagnostic trail in [`tasks/lessons.md` L-007](lessons.md).
 
-Fix is two lines in [`engine.cpp:1360`](src/engine.cpp:1360) (skydome effect added to the existing OnLost/OnReset cascade). Belt-and-suspenders: new `Engine::RecoverDeviceIfNeeded()` ([`engine.h:123`](src/engine.h:123)) + `LayoutBroker::Apply` catch-path fallback so any *future* missing-OnLost regression heals on its own instead of latching. Full diagnostic trail in [`tasks/lessons.md` L-007](lessons.md) and the CHANGELOG entry; the canary-handler shape (now removed but documented) is reusable for next D3D9 device-state debug.
+**`abort()` dialog (user-reported, prior handoff).** Not reproduced. Probably a separate code path; could have been a stale capture. Worth checking if it resurfaces.
 
-**`abort()` dialog (user-reported, prior handoff).** Not reproduced this session. The prior handoff's "convergent" claim (`tools.spec.ts:192` failure and the `abort()` dialog are the same `_ASSERTE`) is *not* true — different bug, if any. Could be a separate code path; could have been a stale capture. Worth checking if it resurfaces.
+### 1b. ~~Curve editor polish~~ ✅ READY FOR COMMIT (this session, uncommitted)
+
+A round of interactive smoke-testing through the curve editor surfaced a stack of issues the user wanted addressed. All fixed and verified through `pnpm build` + `pnpm test` + MSBuild + `pnpm test:native` (83/83). See top-of-CHANGELOG entry for the full breakdown; high-level summary:
+
+- **Spawner panel transparent leak** → `bg-panel` on the right aside.
+- **Curve editor strip layout** → `minmax(0, 1fr)` row/col templates, `h-[290px]`, `flex: 1` on `.curve-editor`.
+- **Lock-to feature wired end-to-end** → new schema kind `emitters/set-track-lock`, C++ handler swapping `emit->tracks[i]` pointer, `TrackDto.lockedTo` derived from pointer equality, React dispatches on dropdown change, edit affordances disable when locked.
+- **Per-channel value-range rules** → RGBA fixed `{0,1}`, Scale/Index auto-grow upper, Rotation auto-grows both ways with no caps.
+- **Spinner-bounds vs display-range split** → fixed the "can't push Scale past 20" deadlock.
+- **Toolbar icons** (Lucide + inline SVG glyphs for the interp modes) with `flex-wrap` fallback for narrow windows.
+- **Spinner improvements** → always-visible arrows, native-wheel-listener-with-`{passive:false}` (bypasses React 18 passive default), wheel works anywhere over the spinner including the arrow column.
+- **HTML axis labels** in a CSS-grid sibling cell (avoids `preserveAspectRatio="none"` glyph distortion).
+- **Theme-aware grid colours** via `--curve-grid` / `--curve-axis` CSS variables (dimmer in light theme).
+- **`overflow="visible"` on the SVG** so endpoint key circles draw their full body even when their centre is on the grid edge.
+
+**Pending: commit + FF into `lt-4` + push.** 12 files modified. Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK.
 
 ### 2. Phase 2 / 3 references to `tailwind.config.ts` in the plan still need v4 translation
 
@@ -114,6 +134,7 @@ All in `tasks/lessons.md`. **Read L-002, L-003, L-004, L-006 carefully before an
 - **L-004** — `pnpm test` (Vitest) doesn't type-check. `tsc --noEmit` (single-project) ≠ `tsc -b` (build mode with project references). Truth is `pnpm build`. Verification sequence: `pnpm build` → `pnpm test` → `pnpm test:native`.
 - **L-005** — pnpm v11 `allowBuilds:` block wants a boolean, not the literal placeholder string. Edit the workspace yaml directly.
 - **L-006** — Don't clear React optimistic state on every host-data refresh. Use sticky overrides cleared only on explicit user-action selection-change. **Now load-bearing in `CurveEditorPanel.tsx` — Phase 2.8's Time/Value spinners use this pattern.**
+- **L-007** — When a Playwright contract test fails and the "obvious fix" is to rewrite what the test asserts, verify the rewrite *in-situ under the failing conditions* before relying on it. The bigger test failing while the smaller passes can mean either (a) the bigger was too brittle, or (b) the engine has a real bug that the smaller test ALSO can't see in isolation. Always check (b) before declaring (a). Caught the ground-texture engine bug this session — without the in-situ check, the test-rewrite "fix" would have shipped a silent regression.
 
 ### Patterns from this session worth remembering
 
@@ -222,10 +243,11 @@ If anything regressed beyond the known `tools.spec.ts:192` failure, the most lik
 
 ## Recommended next moves
 
-1. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Highest-leverage move right now — suite is at 83/83 with no open blockers.
+0. **Commit + FF + push the uncommitted curve-editor polish dispatch.** 12 files modified in the working tree. See "Open items §1b" above. Standard CLAUDE.md flow: commit on session branch, fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
+1. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Suite is at 83/83 with no open blockers.
 2. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
-3. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`.
-4. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (that's the engine resource-leak fixed this session), so it's still unknown what fires it.
+3. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's curve-editor polish is a good example of the shape.
+4. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
 
 ---
 
