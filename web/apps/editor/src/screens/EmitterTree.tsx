@@ -681,8 +681,9 @@ function EmitterRow({
               />
             )}
             {!isEditing && (
-              <button
-                type="button"
+              <span
+                role="button"
+                tabIndex={0}
                 data-testid={`emitter-vis-${node.id}`}
                 onClick={(e) => {
                   // stopPropagation is load-bearing: the outer row button's
@@ -694,14 +695,29 @@ function EmitterRow({
                     params: { id: node.id, visible: !node.visible },
                   });
                 }}
+                onKeyDown={(e) => {
+                  // Enter / Space activate the eye, matching native
+                  // <button> semantics. preventDefault on Space stops the
+                  // page from scrolling; stopPropagation on both keeps
+                  // the tree's container-level keyboard handler from
+                  // also acting on the event.
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void bridge.request({
+                      kind: "emitters/set-visible",
+                      params: { id: node.id, visible: !node.visible },
+                    });
+                  }
+                }}
                 title={node.visible ? "Hide emitter" : "Show emitter"}
                 aria-label={node.visible ? "Hide emitter" : "Show emitter"}
-                className="ml-auto grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text"
+                className="ml-auto grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
               >
                 {node.visible
                   ? <Eye className="size-3" />
                   : <EyeOff className="size-3" />}
-              </button>
+              </span>
             )}
           </button>
         </ContextMenu.Trigger>
