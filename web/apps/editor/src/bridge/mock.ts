@@ -263,6 +263,13 @@ export class MockBridge implements Bridge {
         this.patchAndBroadcast({ bloomSize: req.params.v });
         return {};
 
+      // Task 2.7 — leave particles after instance death. Mirrors the
+      // native ParticleSystem::setLeaveParticles handler in
+      // BridgeDispatcher.cpp.
+      case "engine/set/leave-particles":
+        this.patchAndBroadcast({ leaveParticles: req.params.enabled });
+        return {};
+
       // ---------------- engine setters: debug / camera / lighting ----------------
       case "engine/set/heat-debug":
         this.patchAndBroadcast({ heatDebug: req.params.enabled });

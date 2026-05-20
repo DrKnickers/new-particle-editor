@@ -152,6 +152,12 @@ export type EngineStateDto = {
   bloomCutoff: number;              // GetBloomCutoff()
   bloomSize: number;                // GetBloomSize()
 
+  // Leave particles after instance death (Task 2.7). Defaults true —
+  // matches ParticleSystem's constructor seed at [ParticleSystem.cpp:956].
+  // Read via ParticleSystem::getLeaveParticles(); persisted with the
+  // particle system (chunk-serialised at [ParticleSystem.cpp:948]).
+  leaveParticles: boolean;
+
   // Debug
   heatDebug: boolean;               // GetHeatDebug()
 
@@ -414,6 +420,15 @@ export type Request =
   | { kind: "engine/set/bloom-cutoff";        params: { v: number } }
   | { kind: "engine/set/bloom-size";          params: { v: number } }
 
+  // Engine setters — leave particles after instance death (Task 2.7).
+  // Mirrors ParticleSystem::setLeaveParticles / getLeaveParticles
+  // ([src/ParticleSystem.h:343,347]). When true (default), particles
+  // continue to live after their owning instance is killed (the
+  // instance just stops spawning); when false the engine destroys
+  // the instance + its remaining particles immediately. Honored by
+  // Engine::KillParticleSystem at [src/engine.cpp:197].
+  | { kind: "engine/set/leave-particles";     params: { enabled: boolean } }
+
   // Engine setters — debug / camera / lighting
   | { kind: "engine/set/heat-debug";          params: { enabled: boolean } }
   | { kind: "engine/set/camera";              params: CameraDto }
@@ -649,6 +664,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/set/bloom-strength" }          ? Record<string, never> :
   R extends { kind: "engine/set/bloom-cutoff" }            ? Record<string, never> :
   R extends { kind: "engine/set/bloom-size" }              ? Record<string, never> :
+  R extends { kind: "engine/set/leave-particles" }         ? Record<string, never> :
   R extends { kind: "engine/set/heat-debug" }              ? Record<string, never> :
   R extends { kind: "engine/set/camera" }                  ? Record<string, never> :
   R extends { kind: "engine/set/light" }                   ? Record<string, never> :

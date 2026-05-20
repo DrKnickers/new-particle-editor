@@ -497,7 +497,8 @@ json BuildEngineStateSnapshot(Engine* engine,
                               bool dirty,
                               const json& spawnerConfig,
                               int selectedEmitterId,
-                              const std::wstring& activeModPath)
+                              const std::wstring& activeModPath,
+                              bool leaveParticles)
 {
     if (!engine) return json::object();
 
@@ -555,6 +556,11 @@ json BuildEngineStateSnapshot(Engine* engine,
         {"bloomStrength",         engine->GetBloomStrength()},
         {"bloomCutoff",           engine->GetBloomCutoff()},
         {"bloomSize",             engine->GetBloomSize()},
+
+        // Task 2.7 — leave particles after instance death. Read from
+        // the active ParticleSystem (passed in by caller); defaults true
+        // when no system is bound.
+        {"leaveParticles",        leaveParticles},
 
         // Debug
         {"heatDebug",             engine->GetHeatDebug()},
@@ -916,7 +922,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
             : m_spawnerConfig;
         const std::wstring& activeModPath = m_modManager ? m_modManager->GetSelectedModPath() : std::wstring();
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath));
+        const bool leaveParticles = (m_pParticleSystem != nullptr && *m_pParticleSystem)
+            ? (*m_pParticleSystem)->getLeaveParticles()
+            : true;
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles));
         return res;
     }
 
@@ -1033,6 +1042,26 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();
+        return res;
+    }
+    // Task 2.7 — leave particles after instance death. Persisted with
+    // the ParticleSystem (chunk-serialised at [ParticleSystem.cpp:948])
+    // so dirty must flip. Engine::KillParticleSystem honors the flag at
+    // [src/engine.cpp:197].
+    if (kind == "engine/set/leave-particles")
+    {
+        bool enabled = params.value("enabled", true);
+        if (m_pParticleSystem != nullptr && *m_pParticleSystem)
+        {
+            (*m_pParticleSystem)->setLeaveParticles(enabled);
+            sendOk(json::object());
+            markDirty();
+            EmitEngineStateChanged();
+        }
+        else
+        {
+            sendOk(json{{"ok", false}, {"error", "no particle system bound"}});
+        }
         return res;
     }
     if (kind == "engine/set/heat-debug")
@@ -3316,10 +3345,13 @@ void BridgeDispatcher::EmitEngineStateChanged()
         ? SpawnerConfigToJson(m_spawnerDriver->GetConfig())
         : m_spawnerConfig;
     const std::wstring& activeModPath = m_modManager ? m_modManager->GetSelectedModPath() : std::wstring();
+    const bool leaveParticles = (m_pParticleSystem != nullptr && *m_pParticleSystem)
+        ? (*m_pParticleSystem)->getLeaveParticles()
+        : true;
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles)},
     };
     m_emit(env.dump());
 }

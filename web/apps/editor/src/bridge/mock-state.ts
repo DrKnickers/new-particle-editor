@@ -91,6 +91,11 @@ export function makeDefaultEngineState(): EngineStateDto {
     bloomCutoff:   0.9,
     bloomSize:     0.1,
 
+    // Task 2.7 — leave particles after instance death. Default true
+    // matches the native ParticleSystem constructor at
+    // [ParticleSystem.cpp:956].
+    leaveParticles: true,
+
     heatDebug: false,
 
     paused: false,

@@ -733,6 +733,12 @@
 }
 
 .vp-tools {
+  /* Task 2.7: viewport-overlay positioning. The parent viewport
+     quadrant has `position: relative`, so absolute lifts the pill out
+     of flow and pins it to the top-left without participating in the
+     ViewportSlot layout. */
+  position: absolute;
+  z-index: 10;
   top: 10px; left: 10px;
   display: flex;
   flex-direction: column;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
 import { ViewportSlot } from "@/components/ViewportSlot";
+import { ViewportPill } from "@/components/ViewportPill";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
@@ -222,6 +223,10 @@ function AppShell() {
             className="relative flex-1 min-h-0"
           >
             <ViewportSlot bridge={bridge} />
+            {/* Task 2.7: viewport-overlay pill with Show ground /
+                Toggle bloom / Leave particles toggles. Positioned
+                absolutely via `.vp-tools`. */}
+            <ViewportPill bridge={bridge} />
             {/* Tool-panel host. Single panel mounted at a time, driven
                 by the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
             {openPanel === "lighting" && (

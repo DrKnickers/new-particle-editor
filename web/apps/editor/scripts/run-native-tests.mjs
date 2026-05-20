@@ -112,6 +112,7 @@ async function main() {
       "tests/track-editor.spec.ts",
       "tests/property-tabs.spec.ts",
       "tests/mods-contract.spec.ts",
+      "tests/leave-particles.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
