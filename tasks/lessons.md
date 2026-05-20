@@ -294,3 +294,94 @@ codebase (FD9b LayoutBroker re-emits occlusions in popup-client
 coords on popup move, not on every React rect update). Filed as a
 recurring shape because it's the third time the React⇄host async-
 mutation gap has bitten us in subtly different surfaces.
+
+---
+
+## L-007 — Don't paper over an engine bug by changing what a test asserts
+
+**Rule.** When a Playwright contract test fails and the natural fix is
+to rewrite the test (loosen the assertion, switch from UI click to
+programmatic dispatch, shorten the wait), first **prove the engine
+contract still holds** with the rewritten assertion in the same
+failure scenario. If the rewrite *also* fails, the engine has a real
+state-corruption bug — file it as a parking-lot item and mark the
+test `test.fixme` rather than silently masking the regression.
+
+**Trigger.** A test fails. You hypothesise the failure is in the test
+harness (timing, click delivery, event ordering) and propose a
+narrower assertion. Before swapping it in, confirm the narrower
+assertion *passes* in the exact failure scenario — not just in
+isolation.
+
+**Why.** "The bigger test failed, the smaller test passes" can mean
+either (a) the bigger test was too brittle and the smaller one
+correctly narrows the contract, OR (b) both tests would fail but you
+only checked the smaller one against a clean baseline. Without the
+side-by-side check, (b) ships as a silent regression: the suite goes
+green, the engine bug stays in place, and the next person who
+exercises that code path eats the broken behaviour with no test
+catching it.
+
+**Source incident (2026-05-20, `tools.spec.ts:192` diagnosis).** The
+spec "Clicking a bundled ground slot in the popover updates
+groundTexture" started failing after Phase 2.4 in the full suite
+(but passed in isolation, or with most spec subsets). Bisected the
+cross-spec pollution down to the pair `background-picker.spec.ts`
+(opens Background popover at :41 without dismissing; sets skydome
+slot/path/background colour) × `spawner-import-mod.spec.ts` (toggles
+the new Spawner permanent column via Zustand+localStorage, opens
+several modals). With just one of those two specs preceding tools,
+:192 passes; with both, it fails.
+
+Initial diagnostic narrative — *wrong* — was: "the click on the
+portal'd slot button isn't dispatching through React because Radix
+Portal + React event-delegation interact badly after the polluter
+pair." The instrumentation supported it superficially: capture- and
+bubble-phase document listeners both fired with `defaultPrevented:
+false`, but a listener attached to `#root` (the React root container)
+never fired; the button's React fiber and `onClick` props were
+present (`hasOnClick:true`, `disabled:false`); calling
+`props.onClick({})` directly ran without error but didn't produce
+any `engine/set/ground-texture` request through our wrapped
+`window.bridge.request`. Easy to conclude "React's portal delivery
+is broken, ship a programmatic dispatch."
+
+The fatal step was *not* re-running the programmatic dispatch
+through the same polluter scenario before declaring the fix. When
+that check was finally done (the rewritten `:192` calls
+`window.bridge.request({ kind: 'engine/set/ground-texture',
+params: { slot: 1 } })` directly), it *also* failed: `setResult: {}`
+came back ok, but `groundTexture` stayed at 0. Iterating across
+slots 1/2/3/0 confirmed every set is ignored. `engine/query/ground-
+slot-empty` returned `false` for every bundled slot;
+`groundSlotCustomPaths` were all empty; `engine/action/reload-
+textures` didn't reset the state. The engine is genuinely refusing
+to mutate `m_groundTextureIndex` in this scenario.
+
+That moves the bug from "React/portal" to "C++ engine state after
+specific bridge sequences" — almost certainly inside
+[ReloadGroundTexture](src/engine.cpp:1044)'s fallback chain
+(D3DXCreateTextureFromFileInMemory failing for RCDATA-bundled
+textures after enough prior calls, falling back to slot 0). The
+React diagnostic chain wasn't wrong about what it observed — the
+single `engine/state/changed` event with `groundTexture: 0` we saw
+post-click is exactly the trace of `SetGroundTexture(1) →
+ReloadGroundTexture() failing → fallback to slot 0 →
+EmitEngineStateChanged()`. The mistake was concluding the React
+side was the *cause* rather than another *symptom*.
+
+Resolution: revert the rewritten test, restore the original UI-click
+form, mark it `test.fixme` with a comment pointing at this lesson,
+file the engine bug for proper C++ investigation (likely needs
+DebugView++ or a debugger to capture the actual D3DX failure HRESULT
+inside `LoadGroundTextureFromResource`).
+
+**Procedural rule that would have caught this earlier.** When a
+"narrow rewrite" is proposed in response to a failing assertion,
+*verify the narrow version under the same failing conditions* before
+spending diagnostic time on the assumed cause. A 30-second
+programmatic-dispatch check at the top of investigation would have
+re-pointed the entire diagnosis from React-portal-events to C++-
+engine-state. Adopt as a pre-flight step alongside L-004's "pnpm
+build is the truth gate": **rewritten assertions are truth-gate
+candidates too; verify them in-situ before relying on them.**
