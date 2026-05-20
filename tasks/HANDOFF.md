@@ -1,7 +1,7 @@
-# Session Handoff — AloParticleEditor / LT-4 UI overhaul (post-D5)
+# Session Handoff — AloParticleEditor / LT-4 (post-redesign spec + plan)
 
-**Last updated:** 2026-05-19 (post-D5 dispatch)
-**Last conversation context:** Resumed in a fresh worktree (`awesome-morse-5ea5c3`) on the same commit lineage as the prior session's `goofy-shtern-ded61e`. Ran the pre-flight, surfaced the desktop-app auto-worktree behaviour as a separate workflow issue (no fix attempted), then shipped **D5** — texture-aware `file/open` for skydome + ground custom slots. The previous session had focused on FD9b / FD10 Group A / FD10 Group D + organic find-and-fix runs; see the post-FD10 section below and CHANGELOG entries for that detail.
+**Last updated:** 2026-05-19 (end-of-session — spec + plan committed, redesign implementation pending)
+**Last conversation context:** Long session that shipped D5 (texture-aware `file/open` filter) and D6 (Mods menu detection + selection — both refactor + feature commits), then set up the `lt-4` integration branch (replaces ad-hoc `claude/*` accumulation; pushed to `origin/lt-4` as off-machine backup). Documented the branch workflow in `CLAUDE.md`. Cleaned up 7 redundant `claude/*` branches. Then the user provided a Claude Design bundle for a full Particle Editor 2026 UI redesign — brainstormed scope through 6 design sections, wrote a comprehensive spec ([`docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md`](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)), wrote a 1700-line step-by-step implementation plan ([`docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md`](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)). **No implementation code shipped yet** — the redesign is in spec-and-plan state, ready for a fresh session to execute Phase 1.
 
 ---
 
@@ -10,11 +10,14 @@
 If you are a fresh Claude session resuming this project:
 
 1. **This file** — top to bottom.
-2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline.
-3. **[tasks/lessons.md](lessons.md)** — L-001 through L-006. **Read L-002, L-003, L-004, L-006 carefully before any test/build/optimistic-state work.**
-4. **[tasks/lt4_phase_4_1_acceptance.md](lt4_phase_4_1_acceptance.md)** — parity acceptance checklist. Section 16 lists intentional divergences from legacy.
-5. **[CHANGELOG.md](../CHANGELOG.md)** — top two entries are FD9b (layered viewport) and FD10 (Group A + Group D). Read them to understand the current architecture.
-6. Recent `git log --oneline -30` — 25 commits in this session, all in the LT-4 Phase 4.1 polish line.
+2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline. **The new `## Branch workflow` section** (added this session) is load-bearing: `lt-4` is the integration branch; new sessions land on `claude/<random>` and FF into `lt-4` at session end.
+3. **If picking up the Particle Editor 2026 redesign** (most likely next step):
+   - **[docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)** — full design spec. 13 sections including token system, structural moves, bridge surface delta, definition of done.
+   - **[docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)** — step-by-step implementation plan, 13 commits across 3 phases. Each task has concrete code + commands + verification gates. **Phase 1 is the recommended first session.**
+4. **[tasks/lessons.md](lessons.md)** — L-001 through L-006. **Read L-002, L-003, L-004, L-006 carefully before any test/build/optimistic-state work.**
+5. **[tasks/lt4_phase_4_1_acceptance.md](lt4_phase_4_1_acceptance.md)** — parity acceptance checklist. Section 16 lists intentional divergences from legacy.
+6. **[CHANGELOG.md](../CHANGELOG.md)** — top entries (D6, D5, FD10 Group A/D, FD9b, Playwright host-object) are all `lt-4`-only with `[#TODO]` PR placeholders; see the "Note on the LT-4 / new-UI entries" at the top of the Changelog section for the partial-backfill convention.
+7. Recent `git log --oneline -30` — the LT-4 dispatch history, ~340+ commits ahead of master, all on `lt-4`.
 
 ---
 
@@ -22,14 +25,14 @@ If you are a fresh Claude session resuming this project:
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\awesome-morse-5ea5c3` |
-| **Branch** | `claude/awesome-morse-5ea5c3` |
-| **HEAD** | unknown until D5 commit lands — check `git log --oneline -1` |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\awesome-morse-5ea5c3` (this session's; next session likely gets a fresh `claude/<random>` path) |
+| **Branch** | `lt-4` (integration; this session committed directly on it after the dry-run FF earlier) — also tracks `origin/lt-4` |
+| **HEAD** | `52f381c` (`docs(LT-4): implementation plan — Particle Editor 2026 redesign`) |
 | **Working tree** | clean post-commit |
-| **Behind master** | check `git log --oneline master..HEAD` (master was `b28f624` at start of D5 session) |
+| **Behind master** | `lt-4` is **343 commits ahead of `master`** (`b28f624`); none merged yet, all backed up to `origin/lt-4` |
 | **Open PRs** | none |
 | **Build status** | MSBuild Debug x64 clean (LIBCMTD warning is preexisting). Vitest **191/191**. Playwright **80/80**. |
-| **Phase status** | Phase 4.1 — FD9b, FD10 Group A, FD10 Group D, D5, and D6 shipped + several follow-ups. All "make a stub work" items closed. |
+| **Phase status** | Phase 4.1 — all "make a stub work" items closed (D1-D6). **Particle Editor 2026 redesign — spec + plan committed, implementation not yet started.** |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session inherited `awesome-morse-5ea5c3` from the harness, replacing the previous `goofy-shtern-ded61e` (now pruned). Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change. If you want to resume in a specific worktree directory rather than getting a fresh one each time, the CLI workflow `claude --continue` from inside the desired worktree path is the only way today (the desktop app has no equivalent setting). Documented in the conversation log for the D5 session.
 
@@ -84,7 +87,33 @@ Surfaced during normal use of the FD10-shipped build:
 
 ---
 
-## What landed in this session (D5 + D6)
+## What landed in this session
+
+### Particle Editor 2026 redesign — spec + plan (no implementation yet)
+
+User provided a Claude Design bundle (extracted to `C:\Users\antho\AppData\Local\Temp\nu-particle-editor\nuparticle-editor\project\` — `styles.css`, 8 JSX components, chat transcript with 30+ iteration decisions). Brainstormed scope through 6 design sections — settled on visual + structural overhaul in 3 phases (token system + theme → 7 structural sub-commits → cleanup + dialog re-skin). Wrote the spec ([commit `7e9a34e`](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)) and the implementation plan ([commit `52f381c`](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)).
+
+Implementation deferred to next session(s) because this session was already long (28% of 1M context remaining). The plan is written to be picked up cleanly by a fresh session — each task has concrete code + verification gates + commit instructions. Phase 1 (token swap + theme toggle, no structural changes) is ~70-80K parent-side and a natural single-session unit.
+
+**Key decisions captured in the spec** (so the next session doesn't need to re-litigate them):
+- 3-phase rollout, each phase independently shippable; per-commit gates keep suite green.
+- Tailwind stays in Phase 1 with token aliases (`bg-bg-2`, `text-text-2`, `accent`, etc.); components incrementally swap from `bg-neutral-900`-style.
+- Inter as variable woff2, bundled locally at `web/apps/editor/public/fonts/inter/`, `font-display: block` + `<link rel="preload">` so no FOUT.
+- Light theme via `[data-theme]` on `<html>`; `localStorage('alo:theme')` persistence; default = `prefers-color-scheme` at first launch.
+- Lighting and Bloom Settings stay as sliding ToolPanels (only re-skinned), not new toolbar dropdowns — the design didn't explicitly address them.
+- Curve editor: Index kept as 7th channel (default off) so feature parity is preserved.
+- Tweaks panel: skipped per user decision.
+- ModNicknameDialog: wired up via new `mods/set-nickname` bridge call + right-click on Mods menu entry.
+- New bridge surface total: 2 request kinds + 1 DTO field (`engine/set/leave-particles`, `mods/set-nickname`, `EngineStateDto.leaveParticles`).
+- Definition of done includes Claude visual verification via computer-use. Pre-grant for the dev binary was established in this session (path: `c:\modding\particle editor\.claude\worktrees\awesome-morse-5ea5c3\x64\debug\particleeditor.exe`). Grants likely don't persist across sessions — re-establishing involves launching the editor first then calling `request_access(["particleeditor.exe"])` so the resolver picks the running PID's actual path (not the cached v0.2.0 install in Downloads).
+
+### lt-4 integration branch setup
+
+User requested an integration branch separate from `master`. Created `lt-4` from the then-current HEAD, pushed to `origin/lt-4`. Cleaned up 7 redundant `claude/*` branches (all were subsets of `lt-4`'s history). Documented the branch workflow in [CLAUDE.md](../CLAUDE.md)'s new `## Branch workflow` section: long-lived `lt-4` for all LT-4 / new-UI work; per-session `claude/<random>` containers that fast-forward into `lt-4` at session end; `master` stays untouched until explicit user OK.
+
+Also did a partial CHANGELOG backfill — the 6 LT-4 entries previously had `TODO TODO TODO` date/hash/PR triples; now they have real `lt-4` commit hashes + dates, with PR# staying TODO. A note at the top of the Changelog section explains the partial-backfill state (self-deletes when LT-4 eventually merges to master).
+
+### D5 + D6 (shipped)
 
 **D5 — Texture-aware `file/open` for skydome + ground custom slots.** Replaces the hardcoded `*.alo` filter on the Background and Ground Texture custom-slot pickers with `*.dds;*.tga`. Skydome slots 9/10/11 used to silently misfilter; ground texture slots 5/6/7 were genuine no-ops. Both surfaces now work. See CHANGELOG entry "Texture-aware `file/open` for skydome + ground custom slots (D5)".
 
@@ -94,22 +123,11 @@ This closes out **all four "make a stub work" items** from FD10 Group D (D1 Exit
 
 ## What's left
 
-### Phase 4.1 acceptance items still deferred
+### Particle Editor 2026 redesign — IMPLEMENTATION (3 phases)
 
-None of the "make a stub work" items remain. The remaining LT-4 work is documented divergences from legacy (Group B / Group C) and Phase 4.2 cutover.
+Spec + plan committed; no code written yet. See [`docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md`](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md). Phase 1 (Tasks 1.1–1.8): tokens + theme toggle, no structural changes. Phase 2 (Tasks 2.1–2.7): 7 small structural commits. Phase 3 (Tasks 3.1–3.6): cleanup + dialog re-skin + ModNicknameDialog wiring.
 
-### Larger Group B / C work (design conversation first)
-
-These are documented divergences from legacy that the user flagged as "the new UI diverges too heavily" — Group A and Group D were the agreed first waves. Whether to keep, partially restore, or fully revert each is a judgment call. From `[tasks/lt4_phase_4_1_acceptance.md §16]`:
-
-**Group B — layout-shape divergences**
-- Tool panels: legacy = independent modeless windows; new-UI = single mutually-exclusive sliding panel.
-- Inline rename (F2/dbl-click) vs legacy's modal input.
-
-**Group C — replaced-with-different**
-- Native `ChooseColor` dialog (legacy) → Radix Popover (new) — every `ColorButton` site.
-- Drag/drop reparent slot picker (legacy popup) → auto-picks lifetime (new).
-- Multi-lane bracket rendering → single-lane (new).
+**Note on Groups B/C:** the redesign's structural changes (Background + Ground as toolbar dropdowns; permanent Spawner right column) resolve most of Group B. Group C (native ChooseColor → Radix Popover, drag/drop reparent picker, multi-lane brackets) is *unaffected* by the redesign and still on the deferred list.
 
 ### Phase 4.2 cutover (4 tasks, gated on parity)
 
@@ -118,11 +136,16 @@ These are documented divergences from legacy that the user flagged as "the new U
 - 4.3 ROADMAP + CHANGELOG ship entry (LT-4 → §5 Shipped, renumber per CLAUDE.md tier-tag rules)
 - 4.4 Release zip update (bundle `MicrosoftEdgeWebview2Setup.exe` + `web/apps/editor/dist/`)
 
+Cutover is still gated on the user signing off on parity acceptance (§17 of `tasks/lt4_phase_4_1_acceptance.md` is empty). After the redesign ships, much of the "is parity good enough" conversation may be settled by the new-UI's polish reaching production quality.
+
 ### Recommended next moves
 
-1. **Triage Groups B/C with the user before touching either.** They're not bugs — they're design decisions Claude made and the user might or might not agree with. The Group A "tackle this first" pattern worked because the user explicitly listed Group A's items as parity gaps; Groups B/C need the same user-driven prioritization. This is now the highest-leverage open item.
-2. **Phase 4.2 cutover** — delete legacy chrome, ROADMAP + CHANGELOG ship entry, release zip update. Gated on the user signing off on parity acceptance (§17 of `tasks/lt4_phase_4_1_acceptance.md` is still empty).
-3. **Organic find-and-fix runs continue to be high-yield.** The most important fixes from prior sessions (FPS counter using QPC instead of GetTickCount, cursor inheritance on the viewport popup) came from "play with the editor and report what looks off" prompts, not from any tracked plan item.
+1. **Execute Phase 1 of the redesign** ([plan Tasks 1.1–1.8](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)). This is the obvious next session — the plan is written for it, the spec captures all the decisions, no design work needed. ~70-80K parent-side; comfortably one session. Sub-agent-driven execution recommended (each task is small enough for a single dispatch + review).
+2. **After Phase 1: Phase 2 in a fresh session** (the seven structural sub-commits — Tasks 2.1–2.7). Phase 2 is the biggest cognitive lift; benefit most from a clean context.
+3. **Then Phase 3** in another fresh session. Cleanup + dialog re-skin + ship docs.
+4. **Triage Group C divergences** (native ChooseColor, drag/drop reparent, multi-lane brackets) only after the redesign ships, if they're still relevant. The redesign's pattern (Radix popovers everywhere) likely makes the ChooseColor question moot in practice.
+5. **Phase 4.2 cutover** comes after the redesign ships.
+6. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the redesign's per-phase computer-use verification fold cleanly into the next commit.
 
 ---
 
