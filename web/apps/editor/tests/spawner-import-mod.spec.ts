@@ -66,18 +66,23 @@ test("Emitters → Spawner opens the Spawner panel", async () => {
   await waitForPanel(page, "Spawner");
 });
 
-test("Opening Background closes the Spawner panel (mutual exclusion)", async () => {
+test("Opening the Background popover does not close the Spawner panel (independent surfaces)", async () => {
+  // Task 2.2: Background lives in a Radix Popover anchored to the
+  // toolbar, separate from the slide-in ToolPanel mutual-exclusion
+  // group. Opening the popover must not affect the Spawner panel.
   await closeAnyPanel(page);
   await openMenuItem(page, "Emitters", "Spawner");
   await waitForPanel(page, "Spawner");
 
   await page.locator('button[aria-label="Background"]').first().click();
-  await waitForPanel(page, "Background picker");
+  await page.waitForSelector('[data-radix-popper-content-wrapper]', { timeout: 2000 });
   const stillSpawner = await page
     .locator('[role="dialog"][aria-label="Spawner"]')
     .count();
-  expect(stillSpawner).toBe(0);
+  expect(stillSpawner).toBe(1);
 
+  // Dismiss the Radix popover, then close the lingering ToolPanel.
+  await page.keyboard.press("Escape");
   await closeAnyPanel(page);
 });
 

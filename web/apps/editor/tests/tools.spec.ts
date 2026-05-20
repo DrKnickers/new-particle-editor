@@ -80,23 +80,30 @@ test("View → Lighting opens the Lighting panel", async () => {
   await waitForPanel(page, "Lighting");
 });
 
-test("Opening Background closes the Lighting panel (mutual exclusion)", async () => {
-  // Ensure Lighting is the currently-open panel.
+test("Opening the Background popover does not close the Lighting panel (independent surfaces)", async () => {
+  // Task 2.2: Background was extracted from the slide-in ToolPanel
+  // mutual-exclusion group and now lives in a Radix Popover anchored
+  // to the toolbar. Opening the popover should therefore NOT close
+  // whatever ToolPanel is currently open — the two are orthogonal
+  // state machines.
   await closeAnyPanel(page);
   await openMenuItem(page, "View", "Lighting");
   await waitForPanel(page, "Lighting");
 
-  // Click the Background pill in the top bar. Its aria-label is "Background".
+  // Click the Background dropdown trigger in the toolbar.
   await page.locator('button[aria-label="Background"]').first().click();
 
-  // The Background picker should mount and Lighting should unmount.
-  await waitForPanel(page, "Background picker");
+  // The popover should mount as a Radix popper wrapper, and the
+  // Lighting tool panel should still be present.
+  await page.waitForSelector('[data-radix-popper-content-wrapper]', { timeout: 2000 });
   const stillLighting = await page
     .locator('[role="dialog"][aria-label="Lighting"]')
     .count();
-  expect(stillLighting).toBe(0);
+  expect(stillLighting).toBe(1);
 
-  // Cleanup so the next test starts from a clean slate.
+  // Cleanup so the next test starts from a clean slate. Press Escape
+  // to dismiss the Radix popover, then close the lingering ToolPanel.
+  await page.keyboard.press("Escape");
   await closeAnyPanel(page);
 });
 

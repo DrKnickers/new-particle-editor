@@ -5,8 +5,6 @@ import { ViewportSlot } from "@/components/ViewportSlot";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
-import { BackgroundButton } from "@/screens/BackgroundButton";
-import { BackgroundPicker } from "@/screens/BackgroundPicker";
 import { EmitterPropertyPanel } from "@/screens/EmitterPropertyPanel";
 import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
@@ -187,15 +185,6 @@ function AppShell() {
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}
         />
-        <div className="ml-auto flex items-center gap-2">
-          <BackgroundButton
-            open={openPanel === "background"}
-            onToggle={() =>
-              setOpenToolPanel(openPanel === "background" ? null : "background")
-            }
-            bridge={bridge}
-          />
-        </div>
       </header>
 
       {/* Toolbar — 4 groups (File · Edit · View · Render) */}
@@ -249,9 +238,6 @@ function AppShell() {
             <ViewportSlot bridge={bridge} />
             {/* Tool-panel host. Single panel mounted at a time, driven
                 by the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
-            {openPanel === "background" && (
-              <BackgroundPicker bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-            )}
             {openPanel === "lighting" && (
               <LightingPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
             )}

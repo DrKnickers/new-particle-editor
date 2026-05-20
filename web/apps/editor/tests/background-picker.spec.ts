@@ -38,27 +38,24 @@ test.afterAll(async () => {
   await browser?.close();
 });
 
-test("Background picker DOM renders after the toolbar button is clicked", async () => {
-  // The BackgroundButton has aria-label="Background"; that's the stable
-  // selector now that the top bar also contains the MenuBar (Screen 2)
-  // whose "File" trigger would otherwise be the first <button> in the
-  // header.
+test("Background popover opens from the toolbar dropdown trigger", async () => {
+  // Task 2.2: the BackgroundPicker slide-in ToolPanel was replaced by a
+  // Radix Popover triggered from the Toolbar's Group 4 dropdown. The
+  // dropdown button still carries aria-label="Background", but the
+  // mounted content is now a popover wrapper (data-radix-popper-content-wrapper)
+  // rather than role="dialog". Slot count assertion is preserved —
+  // BackgroundPickerBody still renders 12 aria-pressed slot buttons.
   const probe = await page.evaluate(async () => {
     const btn = document.querySelector<HTMLButtonElement>('button[aria-label="Background"]');
-    if (!btn) return { clicked: false, panel: false, slots: 0 };
+    if (!btn) return { clicked: false, popover: false, slots: 0 };
     btn.click();
-    // The picker mounts on the next React commit. 50ms used to be enough,
-    // but Screen 2 added a MenuBar with its own snapshot useEffect that
-    // commits in the same tick. Bump to 250ms (matches the bloom-flip
-    // wait in the toolbar spec) to ride out any racing commits.
     await new Promise((r) => setTimeout(r, 250));
-    const panel = document.querySelector('[role="dialog"][aria-label="Background picker"]');
-    // Solid colour + 8 bundled + 3 custom = 12 slot buttons inside the panel.
-    const slots = panel?.querySelectorAll("button[aria-pressed]").length ?? 0;
-    return { clicked: true, panel: !!panel, slots };
+    const popover = document.querySelector('[data-radix-popper-content-wrapper]');
+    const slots = popover?.querySelectorAll("button[aria-pressed]").length ?? 0;
+    return { clicked: true, popover: !!popover, slots };
   });
   expect(probe.clicked).toBe(true);
-  expect(probe.panel).toBe(true);
+  expect(probe.popover).toBe(true);
   expect(probe.slots).toBe(12);
 });
 

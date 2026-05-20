@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { BackgroundDropdown } from "@/components/BackgroundDropdown";
 import { useSpawnerVisibility } from "@/lib/spawner-visibility";
 
 type Props = { bridge: Bridge };
@@ -115,8 +116,8 @@ export function Toolbar({ bridge }: Props) {
 
       <span className="tb-spacer" />
 
-      {/* Group 4: environment + theme — Ground and Background
-          dropdowns land in Tasks 2.2/2.3; placeholder for now. */}
+      {/* Group 4: environment + theme — Ground dropdown lands in Task 2.3 */}
+      <BackgroundDropdown bridge={bridge} />
       <ThemeToggle />
     </div>
   );

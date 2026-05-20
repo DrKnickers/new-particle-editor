@@ -33,6 +33,10 @@ type Props = {
   onClose: () => void;
 };
 
+type BodyProps = {
+  bridge: Bridge;
+};
+
 type BundledSlot = {
   readonly slot: number;
   readonly name: string;
@@ -63,7 +67,14 @@ function basename(path: string): string {
   return i >= 0 ? norm.slice(i + 1) : norm;
 }
 
-export function BackgroundPicker({ bridge, onClose }: Props) {
+/**
+ * BackgroundPickerBody — the slot-grid + colour-picker chain markup that
+ * used to live inside <ToolPanel>. Extracted so both the legacy
+ * default-export wrapper and the new BackgroundDropdown popover can
+ * mount the same content. No onClose: the host (popover or ToolPanel)
+ * handles its own dismissal.
+ */
+export function BackgroundPickerBody({ bridge }: BodyProps) {
   const [snapshot, setSnapshot] = useState<EngineStateDto | null>(null);
   const colorInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -131,8 +142,7 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Background picker" onClose={onClose} bridge={bridge} occlusionId="tool-panel:background">
-      <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
         {/* Solid-colour row */}
         <div className="grid grid-cols-3 gap-2">
           <button
@@ -245,7 +255,27 @@ export function BackgroundPicker({ bridge, onClose }: Props) {
             );
           })}
         </div>
-      </div>
+    </div>
+  );
+}
+
+/**
+ * BackgroundPicker — thin <ToolPanel> wrapper around BackgroundPickerBody.
+ * Kept as the default export so the existing vitest spec
+ * (BackgroundPicker.test.tsx) and any remaining slide-in callsite still
+ * compile. The new toolbar dropdown (BackgroundDropdown) mounts
+ * BackgroundPickerBody directly inside a Radix Popover and never reaches
+ * this wrapper.
+ */
+export function BackgroundPicker({ bridge, onClose }: Props) {
+  return (
+    <ToolPanel
+      title="Background picker"
+      onClose={onClose}
+      bridge={bridge}
+      occlusionId="tool-panel:background"
+    >
+      <BackgroundPickerBody bridge={bridge} />
     </ToolPanel>
   );
 }
