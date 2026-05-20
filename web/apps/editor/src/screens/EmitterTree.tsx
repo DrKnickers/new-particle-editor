@@ -605,7 +605,7 @@ function EmitterRow({
             data-drop-zone={indicatorZone ?? ""}
             data-dragging={draggingId === node.id ? "true" : "false"}
             className={[
-              "flex w-full items-center gap-1.5 py-1 pr-2 text-left text-sm transition-colors",
+              "grid w-full items-center gap-1.5 py-1 pr-2 text-left text-sm transition-colors",
               "border-l-2",
               borderClass,
               rowBgClass,
@@ -614,7 +614,10 @@ function EmitterRow({
               node.visible ? "" : "opacity-50",
               draggingId === node.id ? "opacity-50" : "",
             ].join(" ")}
-            style={{ paddingLeft: `${8 + indentPx}px` }}
+            style={{
+              paddingLeft: `${8 + indentPx}px`,
+              gridTemplateColumns: "12px 1fr 18px",
+            }}
           >
             <span
               aria-label={roleLabel(node.role)}
@@ -673,13 +676,6 @@ function EmitterRow({
                 {node.name}
               </span>
             )}
-            {isLinked && !isEditing && (
-              <span
-                title={`Link group ${node.linkGroup}`}
-                aria-label={`Link group ${node.linkGroup}`}
-                className="ml-auto inline-block size-2 shrink-0 rounded-full bg-accent"
-              />
-            )}
             {!isEditing && (
               <span
                 role="button"
@@ -712,7 +708,7 @@ function EmitterRow({
                 }}
                 title={node.visible ? "Hide emitter" : "Show emitter"}
                 aria-label={node.visible ? "Hide emitter" : "Show emitter"}
-                className="ml-auto grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
+                className="grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
               >
                 {node.visible
                   ? <Eye className="size-3" />

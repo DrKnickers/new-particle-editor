@@ -442,4 +442,29 @@ describe("EmitterTree", () => {
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     expect(calls.find((c) => c.kind === "emitters/select")).toBeUndefined();
   });
+
+  it("per-row link-group dot is no longer rendered (gutter brackets are the only affordance)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // The legacy per-row dot used `aria-label="Link group N"`. No
+    // element should match that pattern any more.
+    const dots = screen.queryAllByLabelText(/^Link group \d+$/);
+    expect(dots).toHaveLength(0);
+  });
+
+  it("row uses a 3-column CSS grid template (glyph / name / eye)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Each row's outer button carries the grid template via inline style.
+    const rowButton = screen.getByText("Smoke").closest("button")!;
+    expect(rowButton.style.gridTemplateColumns).toBe("12px 1fr 18px");
+  });
 });
