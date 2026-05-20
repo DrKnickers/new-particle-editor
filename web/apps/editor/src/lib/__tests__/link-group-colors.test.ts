@@ -6,6 +6,8 @@ import {
   BRACKET_PALETTE_SIZE,
   colorForGroup,
   computeLinkGroupBrackets,
+  laneCount,
+  type LinkGroupBracket,
 } from "../link-group-colors";
 
 describe("link-group-colors", () => {
@@ -124,5 +126,28 @@ describe("link-group-colors", () => {
     expect(brackets.find((b) => b.groupId === 1)!.lane).toBe(0);
     expect(brackets.find((b) => b.groupId === 2)!.lane).toBe(1);
     expect(brackets.find((b) => b.groupId === 3)!.lane).toBe(0);  // reused
+  });
+
+  it("laneCount returns 0 for an empty bracket array", () => {
+    expect(laneCount([])).toBe(0);
+  });
+
+  it("laneCount returns 1 for a single-lane bracket set", () => {
+    const rows = [
+      { linkGroup: 1 }, { linkGroup: 1 },
+      { linkGroup: 0 },
+      { linkGroup: 2 }, { linkGroup: 2 },
+    ];
+    expect(laneCount(computeLinkGroupBrackets(rows))).toBe(1);
+  });
+
+  it("laneCount returns 3 for a 3-lane bracket set", () => {
+    // Build a bracket array directly with known lanes.
+    const brackets: LinkGroupBracket[] = [
+      { groupId: 1, color: "#000", firstRowIndex: 0, lastRowIndex: 5, lane: 0 },
+      { groupId: 2, color: "#000", firstRowIndex: 1, lastRowIndex: 4, lane: 1 },
+      { groupId: 3, color: "#000", firstRowIndex: 2, lastRowIndex: 3, lane: 2 },
+    ];
+    expect(laneCount(brackets)).toBe(3);
   });
 });

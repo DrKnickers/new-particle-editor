@@ -112,3 +112,15 @@ export function computeLinkGroupBrackets<T extends { linkGroup: number }>(
   withLanes.sort((a, b) => a.groupId - b.groupId);
   return withLanes;
 }
+
+/** Number of lanes used by the given bracket set. The gutter
+ *  renderer multiplies this by `LANE_WIDTH_PX` (+ a small left pad)
+ *  to size its container. Returns 0 for an empty set so the
+ *  renderer can collapse the gutter to its minimum width. */
+export function laneCount(brackets: ReadonlyArray<LinkGroupBracket>): number {
+  let max = 0;
+  brackets.forEach((b) => {
+    if (b.lane >= max) max = b.lane + 1;
+  });
+  return max;
+}
