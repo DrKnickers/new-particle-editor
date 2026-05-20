@@ -146,7 +146,7 @@ Single phase, 7 tasks, ending in ONE commit. Phase 1 must end with the editor st
   font-style: normal;
   font-weight: 100 900;
   font-display: block; /* No FOUT — wait for Inter to load before painting text */
-  src: url("/fonts/inter/Inter-VariableFont_slnt,wght.woff2") format("woff2-variations");
+  src: url("/fonts/inter/InterVariable.woff2") format("woff2-variations");
 }
 
 /* box-sizing reset — Tailwind v4 preflight already applies this, so the
@@ -192,19 +192,21 @@ Expected: build clean. The new CSS files aren't imported yet (Task 1.3 wires the
 ### Task 1.2: Bundle Inter font
 
 **Files:**
-- Create: `web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2`
+- Create: `web/apps/editor/public/fonts/inter/InterVariable.woff2`
 - Modify: `web/apps/editor/index.html`
 
-- [ ] **Step 1: Download Inter variable woff2.** Use the rsms/inter v4.x mirror.
+**Filename note:** rsms/inter v4.x renamed the variable font from `Inter-VariableFont_slnt,wght.woff2` (Google Fonts convention) to `InterVariable.woff2`. Same axes (slnt + wght), same coverage, ~352 KB. The original plan draft used the stale name; corrected here.
+
+- [ ] **Step 1: Download Inter variable woff2.** Use the rsms/inter v4.x source:
 
 ```bash
 mkdir -p "web/apps/editor/public/fonts/inter"
-curl -L -o "web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2" \
-  "https://github.com/rsms/inter/raw/master/docs/font-files/Inter-VariableFont_slnt,wght.woff2"
-ls -la "web/apps/editor/public/fonts/inter/Inter-VariableFont_slnt,wght.woff2"
+curl -L --fail -o "web/apps/editor/public/fonts/inter/InterVariable.woff2" \
+  "https://github.com/rsms/inter/raw/master/docs/font-files/InterVariable.woff2"
+ls -la "web/apps/editor/public/fonts/inter/InterVariable.woff2"
 ```
 
-Expected: ~250 KB file. If the rsms mirror URL changes, fall back to https://rsms.me/inter/inter.html for the canonical link.
+Expected: ~352 KB file. Magic bytes should be `wOF2` (0x77 0x4F 0x46 0x32). If the rsms repo path moves, fall back to https://rsms.me/inter/font-files/InterVariable.woff2.
 
 - [ ] **Step 2: Add the preload link to `web/apps/editor/index.html`.** The current `index.html` is minimal — add the preload tag inside `<head>`, before the existing `<title>` so the font request kicks off as early as possible:
 
@@ -213,7 +215,7 @@ Expected: ~250 KB file. If the rsms mirror URL changes, fall back to https://rsm
       as="font"
       type="font/woff2"
       crossorigin
-      href="/fonts/inter/Inter-VariableFont_slnt,wght.woff2">
+      href="/fonts/inter/InterVariable.woff2">
 ```
 
 - [ ] **Step 3: Smoke-check the font load.** Run `pnpm --filter @particle-editor/editor dev` and open `http://localhost:5174`. In DevTools Network tab, filter `Inter-Variable*` and confirm 200 OK + `Content-Type: font/woff2`. Stop the dev server.
@@ -649,7 +651,7 @@ git add web/apps/editor/src/styles/tokens.css \
         web/apps/editor/src/styles/base.css \
         web/apps/editor/src/styles/components.css \
         web/apps/editor/src/styles/globals.css \
-        web/apps/editor/public/fonts/inter/ \
+        web/apps/editor/public/fonts/inter/InterVariable.woff2 \
         web/apps/editor/index.html \
         web/apps/editor/src/components/ThemeToggle.tsx \
         web/apps/editor/src/components/__tests__/ThemeToggle.test.tsx \

@@ -52,21 +52,21 @@ export function ToolPanel({ title, onClose, children, bridge, occlusionId }: Too
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-neutral-800 bg-neutral-950 text-neutral-100"
+      className="absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-border bg-bg text-text"
       role="dialog"
       aria-label={title}
     >
       {/* Header — mirrors Modal's header layout (48 px, title left, X right). */}
       <div
-        className="flex shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-900 px-4"
+        className="flex shrink-0 items-center justify-between border-b border-border bg-bg-2 px-4"
         style={{ height: HEADER_HEIGHT_PX }}
       >
-        <span className="text-sm font-semibold text-neutral-100">{title}</span>
+        <span className="text-sm font-semibold text-text">{title}</span>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="flex size-6 items-center justify-center rounded text-neutral-400 outline-none hover:bg-neutral-800 hover:text-neutral-100"
+          className="flex size-6 items-center justify-center rounded text-text-2 outline-none hover:bg-panel-2 hover:text-text"
         >
           <X className="size-4" />
         </button>
@@ -101,8 +101,8 @@ function ToolPanelSection({
 }: ToolPanelSectionProps) {
   if (alwaysOpen) {
     return (
-      <section className="mb-3 rounded-md border border-neutral-800 bg-neutral-900/40">
-        <div className="border-b border-neutral-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-300">
+      <section className="mb-3 rounded-md border border-border bg-bg-2/40">
+        <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-2">
           {title}
         </div>
         <div className="space-y-2 p-3">{children}</div>
@@ -112,13 +112,13 @@ function ToolPanelSection({
   return (
     <details
       open={defaultOpen}
-      className="group mb-3 rounded-md border border-neutral-800 bg-neutral-900/40 [&_summary::-webkit-details-marker]:hidden"
+      className="group mb-3 rounded-md border border-border bg-bg-2/40 [&_summary::-webkit-details-marker]:hidden"
     >
-      <summary className="flex cursor-pointer select-none items-center justify-between border-b border-neutral-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-300 outline-none">
+      <summary className="flex cursor-pointer select-none items-center justify-between border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-2 outline-none">
         <span>{title}</span>
         <span
           aria-hidden="true"
-          className="text-neutral-500 transition-transform group-open:rotate-90"
+          className="text-text-3 transition-transform group-open:rotate-90"
         >
           ›
         </span>
@@ -132,7 +132,7 @@ type ToolPanelFooterProps = { children?: ReactNode };
 
 function ToolPanelFooter({ children }: ToolPanelFooterProps) {
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-800 pt-3">
+    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
       {children}
     </div>
   );
@@ -147,7 +147,7 @@ type ToolPanelRowProps = {
 function ToolPanelRow({ label, children }: ToolPanelRowProps) {
   return (
     <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-      <span className="text-[11px] text-neutral-400">{label}</span>
+      <span className="text-[11px] text-text-2">{label}</span>
       <div className="min-w-0">{children}</div>
     </div>
   );

@@ -154,7 +154,7 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
 
   return (
     <ToolPanel title="Ground Texture" onClose={onClose} bridge={bridge} occlusionId="tool-panel:ground">
-      <label className="mb-3 flex items-center gap-2 text-xs text-neutral-200">
+      <label className="mb-3 flex items-center gap-2 text-xs text-text">
         <input
           type="checkbox"
           checked={groundOn}
@@ -174,18 +174,18 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
           onClick={() => handleSelectSlot(SOLID_COLOR_SLOT)}
           className={`relative flex h-16 w-full items-center justify-between rounded-md border-2 px-3 transition ${
             selectedSlot === SOLID_COLOR_SLOT
-              ? "border-sky-500"
-              : "border-neutral-800 hover:border-neutral-700"
+              ? "border-accent"
+              : "border-border hover:border-border-2"
           }`}
           style={{ backgroundColor: solidHex }}
           aria-label="Solid colour"
           aria-pressed={selectedSlot === SOLID_COLOR_SLOT}
         >
-          <span className="rounded bg-neutral-950/70 px-2 py-0.5 text-xs text-neutral-100 backdrop-blur-sm">
+          <span className="rounded bg-bg/70 px-2 py-0.5 text-xs text-text backdrop-blur-sm">
             Solid colour
           </span>
           {selectedSlot === SOLID_COLOR_SLOT && (
-            <span className="flex size-5 items-center justify-center rounded-full bg-sky-500 text-xs text-white">
+            <span className="flex size-5 items-center justify-center rounded-full bg-accent text-xs text-white">
               ✓
             </span>
           )}
@@ -209,17 +209,17 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
               type="button"
               onClick={() => handleSelectSlot(slot)}
               className={`relative aspect-square overflow-hidden rounded-md border-2 transition ${
-                selected ? "border-sky-500" : "border-neutral-800 hover:border-neutral-700"
+                selected ? "border-accent" : "border-border hover:border-border-2"
               }`}
               aria-label={name}
               aria-pressed={selected}
             >
               <div className="absolute inset-0" style={{ background: gradient }} />
-              <span className="absolute inset-x-0 bottom-0 truncate bg-neutral-950/80 px-1 py-0.5 text-center text-xs text-neutral-100 backdrop-blur-sm">
+              <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-1 py-0.5 text-center text-xs text-text backdrop-blur-sm">
                 {name}
               </span>
               {selected && (
-                <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-sky-500 text-xs text-white">
+                <span className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-accent text-xs text-white">
                   ✓
                 </span>
               )}
@@ -242,29 +242,29 @@ export function GroundTexturePanel({ bridge, onClose }: Props) {
               onClick={() => handleCustomClick(slot, isEmpty)}
               className={`relative aspect-square overflow-hidden rounded-md border-2 transition ${
                 selected
-                  ? "border-sky-500"
+                  ? "border-accent"
                   : isEmpty
-                    ? "border-dashed border-neutral-700 hover:border-neutral-600"
-                    : "border-neutral-800 hover:border-neutral-700"
+                    ? "border-dashed border-border-2 hover:border-border-2"
+                    : "border-border hover:border-border-2"
               }`}
               aria-label={isEmpty ? `Custom slot ${slot - 4} (empty)` : `Custom slot ${slot - 4}: ${label}`}
               aria-pressed={selected}
             >
               {isEmpty ? (
-                <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-neutral-900 text-neutral-500">
+                <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-bg-2 text-text-3">
                   <span className="text-2xl leading-none">+</span>
                   <span className="text-xs">Browse...</span>
                 </div>
               ) : (
                 <>
-                  <div className="absolute inset-0 bg-neutral-800" />
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-neutral-950/80 px-1 py-0.5 text-center text-xs text-neutral-100 backdrop-blur-sm">
+                  <div className="absolute inset-0 bg-panel-2" />
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-1 py-0.5 text-center text-xs text-text backdrop-blur-sm">
                     {label}
                   </span>
                 </>
               )}
               {selected && !isEmpty && (
-                <span className="absolute left-1 top-1 flex size-5 items-center justify-center rounded-full bg-sky-500 text-xs text-white">
+                <span className="absolute left-1 top-1 flex size-5 items-center justify-center rounded-full bg-accent text-xs text-white">
                   ✓
                 </span>
               )}

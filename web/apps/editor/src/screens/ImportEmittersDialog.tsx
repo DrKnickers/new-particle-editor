@@ -154,7 +154,7 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
     return (
       <div key={node.id}>
         <label
-          className="flex items-center gap-2 py-1 text-xs text-neutral-200"
+          className="flex items-center gap-2 py-1 text-xs text-text"
           style={{ paddingLeft: `${depth * 16}px` }}
         >
           <input
@@ -182,10 +182,10 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
         <div className="space-y-3">
           {/* Source file row */}
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-neutral-400">Source file:</span>
+            <span className="text-[11px] text-text-2">Source file:</span>
             <span
               title={sourcePath ?? undefined}
-              className="flex-1 truncate rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-300"
+              className="flex-1 truncate rounded border border-border bg-bg px-2 py-1 text-xs text-text-2"
             >
               {sourcePath ? basename(sourcePath) : "(not selected)"}
             </span>
@@ -193,7 +193,7 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
               type="button"
               onClick={() => void handleBrowse()}
               aria-label="Browse for source file"
-              className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500"
+              className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent"
             >
               Browse…
             </button>
@@ -201,17 +201,17 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
 
           {/* Tree / loading / empty / error states */}
           <div
-            className="min-h-[160px] max-h-[280px] overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-2"
+            className="min-h-[160px] max-h-[280px] overflow-y-auto rounded border border-border bg-bg p-2"
             aria-label="Emitter tree"
           >
             {loading && (
-              <div className="text-xs text-neutral-500">Loading preview…</div>
+              <div className="text-xs text-text-3">Loading preview…</div>
             )}
             {!loading && error && (
               <div className="text-xs text-amber-400">{error}</div>
             )}
             {!loading && !error && !tree && (
-              <div className="text-xs text-neutral-500">
+              <div className="text-xs text-text-3">
                 Click Browse… to select a source .alo file.
               </div>
             )}
@@ -224,7 +224,7 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
           </div>
 
           {/* Auto-include children */}
-          <label className="flex items-center gap-2 text-xs text-neutral-200">
+          <label className="flex items-center gap-2 text-xs text-text">
             <input
               type="checkbox"
               checked={autoChildren}
@@ -242,7 +242,7 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
           onClick={handleSelectAll}
           disabled={!tree || allIds.length === 0}
           aria-label="Select all emitters"
-          className="mr-auto rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mr-auto rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           Select All
         </button>

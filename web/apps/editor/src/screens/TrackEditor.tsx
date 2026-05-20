@@ -546,9 +546,9 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           different track refreshes the displayed value). */}
       <div
         data-testid="track-editor-spinners"
-        className="flex items-center gap-2 border-b border-neutral-800 pb-2"
+        className="flex items-center gap-2 border-b border-border pb-2"
       >
-        <label className="text-xs text-neutral-400 w-10" htmlFor="track-spinner-time">
+        <label className="text-xs text-text-2 w-10" htmlFor="track-spinner-time">
           Time
         </label>
         <div className="w-24" data-testid="track-spinner-time-wrapper">
@@ -563,7 +563,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
             disabled={timeSpinnerDisabled}
           />
         </div>
-        <label className="text-xs text-neutral-400 w-10 ml-2" htmlFor="track-spinner-value">
+        <label className="text-xs text-text-2 w-10 ml-2" htmlFor="track-spinner-value">
           Value
         </label>
         <div className="w-24" data-testid="track-spinner-value-wrapper">
@@ -583,7 +583,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
       {/* Toolbar row */}
       <div
         data-testid="track-editor-toolbar"
-        className="flex flex-wrap items-center gap-1 border-b border-neutral-800 pb-2"
+        className="flex flex-wrap items-center gap-1 border-b border-border pb-2"
       >
         {/* 7 track-toggle buttons. Active one carries the focused
             border + sky tint; clicking switches the active track. */}
@@ -602,8 +602,8 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
                 onClick={() => handleTrackChange(name)}
                 className={
                   isActive
-                    ? "h-7 w-7 rounded border border-sky-500 bg-sky-900/40 text-xs font-semibold text-sky-200"
-                    : "h-7 w-7 rounded border border-neutral-700 bg-neutral-900 text-xs text-neutral-300 hover:border-neutral-500"
+                    ? "h-7 w-7 rounded border border-accent bg-accent-soft text-xs font-semibold text-accent"
+                    : "h-7 w-7 rounded border border-border-2 bg-bg-2 text-xs text-text-2 hover:border-border-2"
                 }
                 title={TRACK_LABELS[name]}
               >
@@ -614,7 +614,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
         </div>
 
         {/* Separator */}
-        <span className="mx-1 h-5 w-px bg-neutral-800" aria-hidden />
+        <span className="mx-1 h-5 w-px bg-panel-2" aria-hidden />
 
         {/* Select / Insert mode toggles. Functional in Batch B-β.
             data-state="on"/"off" mirrors the interpolation buttons so
@@ -629,8 +629,8 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           title="Click a key to select; click empty area to clear"
           className={
             mode === "select"
-              ? "h-7 rounded border border-sky-500 bg-sky-900/40 px-2 text-xs font-semibold text-sky-200"
-              : "h-7 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 hover:border-neutral-500"
+              ? "h-7 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
+              : "h-7 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2"
           }
         >
           Select
@@ -645,14 +645,14 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           title="Click empty canvas to add a key"
           className={
             mode === "insert"
-              ? "h-7 rounded border border-sky-500 bg-sky-900/40 px-2 text-xs font-semibold text-sky-200"
-              : "h-7 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 hover:border-neutral-500"
+              ? "h-7 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
+              : "h-7 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2"
           }
         >
           Insert
         </button>
 
-        <span className="mx-1 h-5 w-px bg-neutral-800" aria-hidden />
+        <span className="mx-1 h-5 w-px bg-panel-2" aria-hidden />
 
         {/* Interpolation picker — functional in Batch B-α. The active
             button reflects the current track's interpolation; clicking
@@ -672,8 +672,8 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
               onClick={() => handleInterpolationClick(kind)}
               className={
                 isActive
-                  ? "h-7 rounded border border-sky-500 bg-sky-900/40 px-2 text-xs font-semibold text-sky-200"
-                  : "h-7 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  ? "h-7 rounded border border-accent bg-accent-soft px-2 text-xs font-semibold text-accent"
+                  : "h-7 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
               }
             >
               {kind[0]!.toUpperCase() + kind.slice(1)}
@@ -681,7 +681,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           );
         })}
 
-        <span className="mx-1 h-5 w-px bg-neutral-800" aria-hidden />
+        <span className="mx-1 h-5 w-px bg-panel-2" aria-hidden />
 
         <button
           type="button"
@@ -692,7 +692,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           title={deleteDisabled ? "Select a non-border key first" : "Delete selected key(s)"}
           className={
             deleteDisabled
-              ? "h-7 rounded border border-neutral-800 bg-neutral-900/60 px-2 text-xs text-neutral-500"
+              ? "h-7 rounded border border-border bg-bg-2/60 px-2 text-xs text-text-3"
               : "h-7 rounded border border-rose-700 bg-rose-900/30 px-2 text-xs text-rose-200 hover:border-rose-500"
           }
         >
@@ -702,7 +702,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
 
       {/* Lock-to row */}
       <div className="flex items-center gap-2">
-        <label className="text-xs text-neutral-400" htmlFor="track-lock-to">
+        <label className="text-xs text-text-2" htmlFor="track-lock-to">
           Lock to
         </label>
         <Select.Root
@@ -713,19 +713,19 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
           <Select.Trigger
             id="track-lock-to"
             data-testid="track-lock-to-trigger"
-            className="flex h-7 min-w-[120px] items-center justify-between gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 outline-none hover:border-neutral-500 focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-7 min-w-[120px] items-center justify-between gap-1 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none hover:border-border-2 focus:border-accent disabled:cursor-not-allowed disabled:opacity-40"
             aria-label="Lock-to track"
           >
             <Select.Value />
             <Select.Icon>
-              <ChevronDown className="size-3 text-neutral-500" />
+              <ChevronDown className="size-3 text-text-3" />
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>
             <Select.Content
               position="popper"
               sideOffset={4}
-              className="z-50 min-w-[120px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+              className="z-50 min-w-[120px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
             >
               <Select.Viewport>
                 {lockToOptions.map((opt) => (
@@ -733,7 +733,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
                     key={opt}
                     value={opt}
                     data-testid={`track-lock-to-option-${opt.toLowerCase()}`}
-                    className="cursor-pointer rounded px-2 py-0.5 text-xs text-neutral-200 outline-none data-[highlighted]:bg-sky-700/40 data-[highlighted]:text-sky-100"
+                    className="cursor-pointer rounded px-2 py-0.5 text-xs text-text outline-none data-[highlighted]:bg-accent-soft data-[highlighted]:text-accent"
                   >
                     <Select.ItemText>{opt}</Select.ItemText>
                   </Select.Item>
@@ -745,7 +745,7 @@ export function TrackEditor({ tracks, bridge, emitterId, registerDeleteHandler }
       </div>
 
       {/* Canvas area — flex-1 so the SVG fills the remaining height. */}
-      <div className="flex flex-1 min-h-0 items-stretch justify-stretch overflow-hidden rounded border border-neutral-800 bg-neutral-950">
+      <div className="flex flex-1 min-h-0 items-stretch justify-stretch overflow-hidden rounded border border-border bg-bg">
         <CurveEditor
           track={current}
           valueRange={valueRange}
@@ -848,7 +848,7 @@ function KeyContextMenu({
       data-key-menu="true"
       role="menu"
       aria-label="Curve key actions"
-      className="fixed z-50 min-w-[140px] rounded-md border border-neutral-700 bg-neutral-900 p-1 text-xs text-neutral-200 shadow-xl"
+      className="fixed z-50 min-w-[140px] rounded-md border border-border-2 bg-bg-2 p-1 text-xs text-text shadow-xl"
       style={{ left: x, top: y }}
     >
       <button
@@ -857,7 +857,7 @@ function KeyContextMenu({
         onClick={onDelete}
         disabled={isBorder}
         title={isBorder ? "Border keys cannot be deleted" : undefined}
-        className="block w-full rounded px-2 py-1 text-left hover:bg-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent outline-none"
+        className="block w-full rounded px-2 py-1 text-left hover:bg-panel-2 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent outline-none"
       >
         Delete
       </button>

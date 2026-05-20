@@ -51,7 +51,7 @@ export function IncrementIndexDialog({ bridge }: Props) {
       <Modal.Body>
         <div className="flex flex-col gap-3 text-sm">
           <div className="grid grid-cols-[auto_1fr] items-center gap-x-3">
-            <label className="text-xs text-neutral-300" htmlFor="increment-delta">
+            <label className="text-xs text-text-2" htmlFor="increment-delta">
               Increment by
             </label>
             <Spinner
@@ -63,7 +63,7 @@ export function IncrementIndexDialog({ bridge }: Props) {
               aria-label="Increment by"
             />
           </div>
-          <p className="text-[11px] leading-relaxed text-neutral-500">
+          <p className="text-[11px] leading-relaxed text-text-3">
             Duplicates the emitter and shifts every atlas-index keyframe
             on the duplicate by this delta. If the source has no index
             keys, a single key at t=0 is inserted with the chosen value.

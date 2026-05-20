@@ -16,6 +16,7 @@ import {
   Sparkles, RefreshCw,
 } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type Props = { bridge: Bridge };
 
@@ -38,10 +39,10 @@ function TbBtn({ icon, title, onClick, active = false, disabled = false }: Butto
       disabled={disabled}
       className={`flex size-7 items-center justify-center rounded-md transition ${
         disabled
-          ? "cursor-not-allowed text-neutral-700"
+          ? "cursor-not-allowed text-text-3"
           : active
-            ? "bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
-            : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+            ? "bg-accent-soft text-accent hover:bg-accent-soft"
+            : "text-text-2 hover:bg-panel-2 hover:text-text"
       }`}
     >
       {icon}
@@ -50,7 +51,7 @@ function TbBtn({ icon, title, onClick, active = false, disabled = false }: Butto
 }
 
 function Divider() {
-  return <span className="mx-1 h-5 w-px bg-neutral-800" aria-hidden="true" />;
+  return <span className="mx-1 h-5 w-px bg-panel-2" aria-hidden="true" />;
 }
 
 const ICON = { className: "size-4" } as const;
@@ -77,7 +78,7 @@ export function Toolbar({ bridge }: Props) {
   };
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-neutral-800 bg-neutral-950 px-2">
+    <div className="flex h-9 shrink-0 items-center gap-0.5 border-b border-border bg-bg px-2">
       {/* File */}
       <TbBtn icon={<FilePlus {...ICON} />}   title="New (Ctrl+N)"   onClick={() => todoFile("New")} />
       <TbBtn icon={<FolderOpen {...ICON} />} title="Open (Ctrl+O)"  onClick={() => todoFile("Open")} />
@@ -133,6 +134,11 @@ export function Toolbar({ bridge }: Props) {
         title="Reload textures"
         onClick={() => { void bridge.request({ kind: "engine/action/reload-textures", params: {} }); }}
       />
+
+      {/* Particle Editor 2026 redesign: theme toggle at the right edge.
+          Phase 2.1 will reorganize the toolbar into proper 4-group layout
+          with a spacer; for Phase 1 we just mount it as the last child. */}
+      <ThemeToggle />
     </div>
   );
 }

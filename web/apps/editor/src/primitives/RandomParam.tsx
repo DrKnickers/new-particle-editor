@@ -74,12 +74,12 @@ export function RandomParam({
       {/* Mode selector */}
       <Select.Root value={value.mode} onValueChange={handleModeChange} disabled={disabled}>
         <Select.Trigger
-          className="flex items-center justify-between rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-xs text-neutral-200 outline-none hover:border-neutral-500 focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center justify-between rounded border border-border-2 bg-bg-2 px-2 py-0.5 text-xs text-text outline-none hover:border-border-2 focus:border-accent disabled:cursor-not-allowed disabled:opacity-40"
           aria-label="Random parameter mode"
         >
           <Select.Value />
           <Select.Icon>
-            <ChevronDown className="size-3 text-neutral-500" />
+            <ChevronDown className="size-3 text-text-3" />
           </Select.Icon>
         </Select.Trigger>
 
@@ -87,9 +87,9 @@ export function RandomParam({
           <Select.Content
             position="popper"
             sideOffset={4}
-            className="z-50 min-w-[140px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+            className="z-50 min-w-[140px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
           >
-            <Select.ScrollUpButton className="flex items-center justify-center py-0.5 text-neutral-500">
+            <Select.ScrollUpButton className="flex items-center justify-center py-0.5 text-text-3">
               <ChevronUp className="size-3" />
             </Select.ScrollUpButton>
 
@@ -98,17 +98,17 @@ export function RandomParam({
                 <Select.Item
                   key={mode}
                   value={mode}
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-neutral-200 outline-none data-[highlighted]:bg-neutral-800"
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-text outline-none data-[highlighted]:bg-panel-2"
                 >
                   <Select.ItemIndicator>
-                    <Check className="size-3 text-sky-400" />
+                    <Check className="size-3 text-accent" />
                   </Select.ItemIndicator>
                   <Select.ItemText>{MODE_LABELS[mode]}</Select.ItemText>
                 </Select.Item>
               ))}
             </Select.Viewport>
 
-            <Select.ScrollDownButton className="flex items-center justify-center py-0.5 text-neutral-500">
+            <Select.ScrollDownButton className="flex items-center justify-center py-0.5 text-text-3">
               <ChevronDown className="size-3" />
             </Select.ScrollDownButton>
           </Select.Content>
@@ -143,7 +143,7 @@ export function RandomParam({
             disabled={disabled}
             aria-label="Minimum"
           />
-          <span className="shrink-0 text-xs text-neutral-500">–</span>
+          <span className="shrink-0 text-xs text-text-3">–</span>
           <Spinner
             value={value.max}
             onChange={(max) => onChange({ mode: "UniformRange", min: value.min, max })}
@@ -159,7 +159,7 @@ export function RandomParam({
 
       {value.mode === "Normal" && (
         <div className="flex items-center gap-1">
-          <span className="shrink-0 text-xs text-neutral-400" aria-label="Mean">µ</span>
+          <span className="shrink-0 text-xs text-text-2" aria-label="Mean">µ</span>
           <Spinner
             value={value.mean}
             onChange={(mean) => onChange({ mode: "Normal", mean, sigma: value.sigma })}
@@ -170,7 +170,7 @@ export function RandomParam({
             disabled={disabled}
             aria-label="Mean"
           />
-          <span className="shrink-0 text-xs text-neutral-400" aria-label="Sigma">σ</span>
+          <span className="shrink-0 text-xs text-text-2" aria-label="Sigma">σ</span>
           <Spinner
             value={value.sigma}
             onChange={(sigma) => onChange({ mode: "Normal", mean: value.mean, sigma })}

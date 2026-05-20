@@ -36,7 +36,7 @@ export type TexturePaletteProps = {
 function MissingPlaceholder({ size }: { size: number }) {
   return (
     <div
-      className="flex items-center justify-center rounded border border-dashed border-neutral-700 bg-neutral-800 text-neutral-600"
+      className="flex items-center justify-center rounded border border-dashed border-border-2 bg-panel-2 text-text-3"
       style={{ width: size, height: size }}
       aria-label="Missing texture"
     >
@@ -56,7 +56,7 @@ export function TexturePalette({
 }: TexturePaletteProps) {
   if (items.length === 0) {
     return (
-      <div className="flex items-center justify-center rounded border border-dashed border-neutral-700 p-4 text-xs text-neutral-600">
+      <div className="flex items-center justify-center rounded border border-dashed border-border-2 p-4 text-xs text-text-3">
         (no textures)
       </div>
     );
@@ -76,10 +76,10 @@ export function TexturePalette({
                 aria-label={item.label ?? item.path}
                 title={item.label ?? item.path}
                 onClick={() => onChange(item.path)}
-                className={`relative overflow-hidden rounded border-2 transition focus:outline-none focus:ring-1 focus:ring-sky-500 ${
+                className={`relative overflow-hidden rounded border-2 transition focus:outline-none focus:ring-1 focus:ring-accent ${
                   selected
-                    ? "border-sky-500"
-                    : "border-neutral-700 hover:border-neutral-500"
+                    ? "border-accent"
+                    : "border-border-2 hover:border-border-2"
                 }`}
                 style={{ width: cellSize, height: cellSize }}
               >
@@ -94,7 +94,7 @@ export function TexturePalette({
                   <MissingPlaceholder size={cellSize - 4} />
                 )}
                 {item.label && (
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-neutral-950/80 px-0.5 text-center text-[9px] text-neutral-200">
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-0.5 text-center text-[9px] text-text">
                     {item.label}
                   </span>
                 )}
@@ -103,26 +103,26 @@ export function TexturePalette({
 
             <ContextMenu.Portal>
               <ContextMenu.Content
-                className="z-50 min-w-[160px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+                className="z-50 min-w-[160px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
               >
                 <ContextMenu.Item
                   disabled={!onBrowse}
                   onSelect={() => onBrowse?.(item.path)}
-                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800"
+                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-text data-[disabled]:cursor-not-allowed data-[disabled]:text-text-3 data-[highlighted]:bg-panel-2"
                 >
                   Browse for file…
                 </ContextMenu.Item>
                 <ContextMenu.Item
                   disabled={!onClear}
                   onSelect={() => onClear?.(item.path)}
-                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800"
+                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-text data-[disabled]:cursor-not-allowed data-[disabled]:text-text-3 data-[highlighted]:bg-panel-2"
                 >
                   Clear
                 </ContextMenu.Item>
                 <ContextMenu.Item
                   disabled={!onReveal}
                   onSelect={() => onReveal?.(item.path)}
-                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800"
+                  className="flex cursor-pointer items-center rounded px-2 py-1 text-xs text-text data-[disabled]:cursor-not-allowed data-[disabled]:text-text-3 data-[highlighted]:bg-panel-2"
                 >
                   Open texture folder
                 </ContextMenu.Item>

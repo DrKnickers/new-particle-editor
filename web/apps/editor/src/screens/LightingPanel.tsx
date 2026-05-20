@@ -519,7 +519,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
       </ToolPanel.Section>
 
       <ToolPanel.Footer>
-        <label className="flex select-none items-center gap-1.5 text-xs text-neutral-300">
+        <label className="flex select-none items-center gap-1.5 text-xs text-text-2">
           <input
             type="checkbox"
             checked={forceAlign}
@@ -533,7 +533,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
           type="button"
           onClick={handleMirrorSun}
           disabled={forceAlign}
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-800"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-panel-2"
           title={forceAlign ? "Disabled while Force Align is on" : undefined}
         >
           Mirror Sun
@@ -541,7 +541,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
         <button
           type="button"
           onClick={handleReset}
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3"
         >
           Reset
         </button>

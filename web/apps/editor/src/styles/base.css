@@ -1,0 +1,42 @@
+/* Base resets, font registration, scrollbar styling.
+   NOTE: body { background } intentionally omitted — globals.css sets
+   bg-transparent on body for WebView2 transparency (FD4 requirement
+   for D3D9 viewport sibling-HWND compositing). The shell paints
+   bg-bg on its outer <div> instead. Font-feature-settings + font-family
+   live on the body rule in globals.css for the same cascade-friendliness
+   reason. */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block; /* No FOUT — wait for Inter to load before painting text */
+  src: url("/fonts/inter/InterVariable.woff2") format("woff2-variations");
+}
+
+/* box-sizing reset — Tailwind v4 preflight already applies this, so the
+   rule is a no-op in normal use. Kept verbatim from the design source
+   for parity in case preflight is ever disabled. */
+* { box-sizing: border-box; }
+
+/* html sizing — height: 100% so the workspace fills the viewport. body
+   sizing + transparency stay in globals.css. */
+html { height: 100%; overflow: hidden; }
+
+/* Scrollbar styling — applies to .panel-body and .curve-list scrollable
+   containers (per the design's component class names). */
+.panel-body::-webkit-scrollbar,
+.curve-list::-webkit-scrollbar { width: 10px; height: 10px; }
+
+.panel-body::-webkit-scrollbar-track,
+.curve-list::-webkit-scrollbar-track { background: transparent; }
+
+.panel-body::-webkit-scrollbar-thumb,
+.curve-list::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 5px;
+  border: 2px solid var(--panel);
+}
+
+.panel-body::-webkit-scrollbar-thumb:hover,
+.curve-list::-webkit-scrollbar-thumb:hover { background: var(--text-3); }

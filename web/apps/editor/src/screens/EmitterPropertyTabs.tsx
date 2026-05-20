@@ -216,7 +216,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
     return (
       <div
         data-testid="emitter-property-tabs-placeholder"
-        className="flex h-full items-center justify-center p-4 text-center text-xs text-neutral-500"
+        className="flex h-full items-center justify-center p-4 text-center text-xs text-text-3"
       >
         Select an emitter to edit its properties
       </div>
@@ -224,7 +224,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
   }
   if (properties === null) {
     return (
-      <div className="flex h-full items-center justify-center p-4 text-xs text-neutral-500">
+      <div className="flex h-full items-center justify-center p-4 text-xs text-text-3">
         Loading…
       </div>
     );
@@ -237,7 +237,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
       className="flex h-full flex-col"
     >
       <Tabs.List
-        className="flex shrink-0 border-b border-neutral-800 bg-neutral-950"
+        className="flex shrink-0 border-b border-border bg-bg"
         aria-label="Emitter property tabs"
       >
         <TabTrigger value="basic" label="Basic" />
@@ -274,7 +274,7 @@ function TabTrigger({ value, label }: { value: string; label: string }) {
     <Tabs.Trigger
       value={value}
       data-testid={`tab-trigger-${value}`}
-      className="flex-1 cursor-pointer border-b-2 border-transparent px-3 py-2 text-xs text-neutral-400 outline-none transition data-[state=active]:border-sky-500 data-[state=active]:text-neutral-100 hover:text-neutral-200 focus-visible:bg-neutral-900"
+      className="flex-1 cursor-pointer border-b-2 border-transparent px-3 py-2 text-xs text-text-2 outline-none transition data-[state=active]:border-accent data-[state=active]:text-text hover:text-text focus-visible:bg-bg-2"
     >
       {label}
     </Tabs.Trigger>
@@ -453,7 +453,7 @@ function FieldRow({
 }) {
   return (
     <div className="grid grid-cols-[1fr,1.4fr] items-center gap-2">
-      <label className="text-xs text-neutral-400">{label}</label>
+      <label className="text-xs text-text-2">{label}</label>
       <div>{children}</div>
     </div>
   );
@@ -494,7 +494,7 @@ function FieldText({
             (e.currentTarget as HTMLInputElement).blur();
           }
         }}
-        className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 outline-none transition focus:border-sky-500"
+        className="w-full rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none transition focus:border-accent"
         style={{ height: "26px" }}
         aria-label={label}
         spellCheck={false}
@@ -559,13 +559,13 @@ function FieldCheckbox({
         checked={checked}
         disabled={disabled}
         onCheckedChange={(v) => onCheckedChange(v === true)}
-        className={`flex h-[18px] w-[18px] items-center justify-center rounded border border-neutral-700 bg-neutral-900 outline-none transition focus-visible:border-sky-500 ${
-          disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-neutral-500"
-        } data-[state=checked]:border-sky-500 data-[state=checked]:bg-sky-700`}
+        className={`flex h-[18px] w-[18px] items-center justify-center rounded border border-border-2 bg-bg-2 outline-none transition focus-visible:border-accent ${
+          disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-border-2"
+        } data-[state=checked]:border-accent data-[state=checked]:bg-accent`}
         aria-label={label}
       >
         <Checkbox.Indicator>
-          <Check size={12} className="text-neutral-100" />
+          <Check size={12} className="text-text" />
         </Checkbox.Indicator>
       </Checkbox.Root>
     </FieldRow>
@@ -598,18 +598,18 @@ function FieldSelect({
         <Select.Trigger
           data-testid={testId}
           aria-label={label}
-          className="flex h-[26px] w-full items-center justify-between gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 outline-none transition hover:border-neutral-500 focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-[26px] w-full items-center justify-between gap-1 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none transition hover:border-border-2 focus:border-accent disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Select.Value>{selected?.label ?? ""}</Select.Value>
           <Select.Icon>
-            <ChevronDown className="size-3 text-neutral-500" />
+            <ChevronDown className="size-3 text-text-3" />
           </Select.Icon>
         </Select.Trigger>
         <Select.Portal>
           <Select.Content
             position="popper"
             sideOffset={4}
-            className="z-50 min-w-[160px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+            className="z-50 min-w-[160px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
           >
             <Select.Viewport>
               {options.map((opt) => (
@@ -619,7 +619,7 @@ function FieldSelect({
                   data-testid={
                     testId ? `${testId}-option-${opt.value}` : undefined
                   }
-                  className="cursor-pointer rounded px-2 py-0.5 text-xs text-neutral-200 outline-none data-[highlighted]:bg-sky-700/40 data-[highlighted]:text-sky-100"
+                  className="cursor-pointer rounded px-2 py-0.5 text-xs text-text outline-none data-[highlighted]:bg-accent-soft data-[highlighted]:text-accent"
                 >
                   <Select.ItemText>{opt.label}</Select.ItemText>
                 </Select.Item>
@@ -714,7 +714,7 @@ export function AppearanceTab({
         onCheckedChange={(v) => onCommit({ doColorAddGrayscale: v })}
       />
       <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-        <label className="pt-1 text-xs text-neutral-400">Random Colours</label>
+        <label className="pt-1 text-xs text-text-2">Random Colours</label>
         <div className="grid grid-cols-2 gap-1">
           <Spinner
             value={properties.randomColors[0] * 100}
@@ -843,7 +843,7 @@ export function PhysicsTab({
     <div className="space-y-3">
       {/* Acceleration X/Y/Z — 3 spinners side-by-side */}
       <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-        <label className="pt-1 text-xs text-neutral-400">Acceleration</label>
+        <label className="pt-1 text-xs text-text-2">Acceleration</label>
         <div className="grid grid-cols-3 gap-1">
           <Spinner
             value={properties.acceleration[0]}
@@ -1001,9 +1001,9 @@ function GroupSection({
   return (
     <fieldset
       data-testid={`physics-group-${index}`}
-      className="space-y-2 rounded border border-neutral-800 bg-neutral-900/40 p-2"
+      className="space-y-2 rounded border border-border bg-bg-2/40 p-2"
     >
-      <legend className="px-1 text-xs font-medium text-neutral-300">
+      <legend className="px-1 text-xs font-medium text-text-2">
         {label}
       </legend>
       <FieldSelect
@@ -1113,7 +1113,7 @@ function Vec3Row({
 }) {
   return (
     <div className="grid grid-cols-[1fr,1.4fr] items-start gap-2">
-      <label className="pt-1 text-xs text-neutral-400">{label}</label>
+      <label className="pt-1 text-xs text-text-2">{label}</label>
       <div className="grid grid-cols-3 gap-1">
         <Spinner
           value={value[0]}

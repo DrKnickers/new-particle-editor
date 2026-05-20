@@ -30,7 +30,7 @@
 // lifetime), "death" is "✕" (one-shot spawn when parent dies). Greyed
 // when `visible === false`.
 //
-// Link-group dot: a small filled circle in `bg-sky-500` when
+// Link-group dot: a small filled circle in `bg-accent` when
 // `linkGroup !== 0`. The full coloured-bracket visualization (MT-9
 // port) renders in the right gutter (Batch C); the dot itself stays
 // as a per-row affordance for quick "this row is linked" recognition.
@@ -203,7 +203,7 @@ function OccludingContextMenuContent({
   useViewportOcclusion(bridge, occlusionId, ref, 24, 24);
   return (
     <ContextMenu.Content
-      className="z-50 min-w-[220px] rounded-md border border-neutral-700 bg-neutral-900 p-1 shadow-xl"
+      className="z-50 min-w-[220px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
       {...rest}
     >
       <div ref={ref}>{children}</div>
@@ -529,26 +529,26 @@ function EmitterRow({
 
   // Reparent target visual: tint the row + ring.
   const reparentTintClass = indicatorZone === "onto"
-    ? "bg-sky-500/30 ring-1 ring-sky-400"
+    ? "bg-accent-soft ring-1 ring-sky-400"
     : "";
 
   const menuItemClass =
-    "flex cursor-pointer items-center rounded px-2 py-1 text-xs text-neutral-200 outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-neutral-600 data-[highlighted]:bg-neutral-800";
+    "flex cursor-pointer items-center rounded px-2 py-1 text-xs text-text outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-text-3 data-[highlighted]:bg-panel-2";
   const separatorClass =
-    "my-1 h-px bg-neutral-800";
+    "my-1 h-px bg-panel-2";
 
   // Selected-row styling (Batch B2):
   //   - primary       : strong sky-500 left border + sky-500/15 bg
   //   - non-primary   : softer sky-400/50 left border + sky-500/15 bg
   //   - unselected    : transparent border + hover bg
   const borderClass = isPrimary
-    ? "border-sky-500"
+    ? "border-accent"
     : isSelected
-      ? "border-sky-400/50"
+      ? "border-accent/50"
       : "border-transparent";
   const rowBgClass = isSelected
-    ? "bg-sky-500/15 text-neutral-50"
-    : "text-neutral-300 hover:bg-neutral-900/40";
+    ? "bg-accent-soft text-text"
+    : "text-text-2 hover:bg-bg-2/40";
   const fontClass = isPrimary ? "font-medium" : "";
 
   return (
@@ -559,13 +559,13 @@ function EmitterRow({
       {indicatorZone === "above" && (
         <div
           data-testid={`drop-indicator-above-${node.id}`}
-          className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-0.5 bg-sky-400"
+          className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-0.5 bg-accent"
         />
       )}
       {indicatorZone === "below" && (
         <div
           data-testid={`drop-indicator-below-${node.id}`}
-          className="pointer-events-none absolute left-0 right-0 bottom-0 z-10 h-0.5 bg-sky-400"
+          className="pointer-events-none absolute left-0 right-0 bottom-0 z-10 h-0.5 bg-accent"
         />
       )}
       <ContextMenu.Root>
@@ -618,7 +618,7 @@ function EmitterRow({
           >
             <span
               aria-label={roleLabel(node.role)}
-              className="inline-block w-3 shrink-0 text-center font-mono text-xs text-neutral-500"
+              className="inline-block w-3 shrink-0 text-center font-mono text-xs text-text-3"
             >
               {roleGlyph(node.role)}
             </span>
@@ -656,7 +656,7 @@ function EmitterRow({
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
-                className="min-w-0 flex-1 rounded border border-sky-500 bg-neutral-950 px-1 py-0 text-sm text-neutral-50 outline-none"
+                className="min-w-0 flex-1 rounded border border-accent bg-bg px-1 py-0 text-sm text-text outline-none"
               />
             ) : (
               <span
@@ -677,7 +677,7 @@ function EmitterRow({
               <span
                 title={`Link group ${node.linkGroup}`}
                 aria-label={`Link group ${node.linkGroup}`}
-                className="ml-auto inline-block size-2 shrink-0 rounded-full bg-sky-500"
+                className="ml-auto inline-block size-2 shrink-0 rounded-full bg-accent"
               />
             )}
           </button>
@@ -781,10 +781,10 @@ const GUTTER_WIDTH_PX = 16;
 // schema — no host-side work needed.
 
 const TOOLBAR_BTN =
-  "flex h-6 w-6 items-center justify-center rounded text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-transparent outline-none";
+  "flex h-6 w-6 items-center justify-center rounded text-text-2 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent outline-none";
 
 const NEW_EMITTER_MENU_ITEM =
-  "flex select-none items-center gap-2 rounded px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-800 focus:bg-neutral-800 outline-none cursor-pointer data-[disabled]:text-neutral-600 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent";
+  "flex select-none items-center gap-2 rounded px-2 py-1 text-xs text-text hover:bg-panel-2 focus:bg-panel-2 outline-none cursor-pointer data-[disabled]:text-text-3 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent";
 
 function findNodeInTree(
   tree: EmitterTreeDto | null,
@@ -891,7 +891,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
   return (
     <div
       data-testid="emitter-tree-toolbar"
-      className="mb-1 flex items-center gap-0.5 border-b border-neutral-800 pb-1"
+      className="mb-1 flex items-center gap-0.5 border-b border-border pb-1"
     >
       <Menubar.Root>
         <Menubar.Menu>
@@ -904,7 +904,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
           </Menubar.Trigger>
           <Menubar.Portal>
             <Menubar.Content
-              className="min-w-[160px] rounded-md border border-neutral-800 bg-neutral-900 p-1 shadow-xl z-50"
+              className="min-w-[160px] rounded-md border border-border bg-bg-2 p-1 shadow-xl z-50"
               align="start"
               sideOffset={4}
             >
@@ -962,7 +962,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       >
         <ChevronDown className="size-4" />
       </button>
-      <span className="mx-0.5 h-4 w-px bg-neutral-800" aria-hidden />
+      <span className="mx-0.5 h-4 w-px bg-panel-2" aria-hidden />
       <button
         type="button"
         className={TOOLBAR_BTN}
@@ -975,7 +975,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       </button>
       <button
         type="button"
-        className="ml-0.5 h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 outline-none"
+        className="ml-0.5 h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-text-2 hover:bg-panel-2 hover:text-text outline-none"
         title="Show All Emitters"
         aria-label="Show all emitters"
         onClick={showAll}
@@ -984,7 +984,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       </button>
       <button
         type="button"
-        className="h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100 outline-none"
+        className="h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-text-2 hover:bg-panel-2 hover:text-text outline-none"
         title="Hide All Emitters"
         aria-label="Hide all emitters"
         onClick={hideAll}
@@ -1304,9 +1304,9 @@ export function EmitterTree({ bridge }: Props) {
     >
       <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
       {tree === null ? (
-        <div className="text-neutral-600 text-sm">(loading…)</div>
+        <div className="text-text-3 text-sm">(loading…)</div>
       ) : rootChildren.length === 0 ? (
-        <div className="text-neutral-600 text-sm">(no emitters)</div>
+        <div className="text-text-3 text-sm">(no emitters)</div>
       ) : (
         // Wrap the <ul> in a relative-positioned container so the
         // bracket gutter (absolute, right-aligned) can stack alongside.

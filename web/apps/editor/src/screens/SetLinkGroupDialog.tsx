@@ -105,7 +105,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
     >
       <Modal.Body>
         <div className="flex flex-col gap-3 text-sm">
-          <label className="flex items-center gap-2 text-neutral-200">
+          <label className="flex items-center gap-2 text-text">
             <input
               type="radio"
               name="set-link-group-mode"
@@ -119,7 +119,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
           <label
             className={[
               "flex items-center gap-2",
-              hasExisting ? "text-neutral-200" : "text-neutral-600",
+              hasExisting ? "text-text" : "text-text-3",
             ].join(" ")}
           >
             <input
@@ -138,7 +138,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
             onChange={(e) => setChosenGroup(Number.parseInt(e.target.value, 10))}
             disabled={!hasExisting || mode !== "existing"}
             data-testid="set-link-group-select"
-            className="ml-6 w-32 rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm text-neutral-100 outline-none focus:border-sky-500 disabled:opacity-50"
+            className="ml-6 w-32 rounded border border-border-2 bg-bg px-2 py-1 text-sm text-text outline-none focus:border-accent disabled:opacity-50"
           >
             {existingGroups.map((g) => (
               <option key={g} value={g}>
@@ -147,7 +147,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
             ))}
             {!hasExisting && <option value="">(none)</option>}
           </select>
-          <p className="text-[11px] leading-relaxed text-neutral-500">
+          <p className="text-[11px] leading-relaxed text-text-3">
             All {selectedIds.length} selected
             {selectedIds.length === 1 ? " emitter" : " emitters"} will be linked.
           </p>

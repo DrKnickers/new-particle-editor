@@ -64,6 +64,19 @@ function AppShell() {
   // subscription is independent — this scalar exists only to gate the
   // mount.
   const [selectedEmitterId, setSelectedEmitterId] = useState<number | null>(null);
+
+  // Particle Editor 2026 redesign: apply persisted theme (or OS preference)
+  // before any panel renders so the first paint is correctly themed.
+  useEffect(() => {
+    const stored = localStorage.getItem("alo:theme");
+    const theme = stored === "dark" || stored === "light"
+      ? stored
+      : window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    document.documentElement.dataset.theme = theme;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     bridge
@@ -159,9 +172,9 @@ function AppShell() {
   }, [bridge]);
 
   return (
-    <div className="flex h-full w-full flex-col text-neutral-100">
+    <div className="flex h-full w-full flex-col text-text">
       {/* Top bar */}
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-neutral-800 bg-neutral-950 px-4 text-sm">
+      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-bg px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>
         <MenuBar
           bridge={bridge}
@@ -204,7 +217,7 @@ function AppShell() {
             space via `flex-1 min-h-0`. */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left column */}
-        <div className="flex w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
+        <div className="flex w-80 shrink-0 flex-col border-r border-border bg-bg">
           {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
               Read-only tree view with click-to-select + Batches B/C
               mutations (rename, drag/drop, context menus). */}
@@ -219,7 +232,7 @@ function AppShell() {
               Physics placeholders. */}
           <div
             data-testid="quadrant-property-tabs"
-            className="h-72 shrink-0 border-t border-neutral-800"
+            className="h-72 shrink-0 border-t border-border"
           >
             <EmitterPropertyTabs bridge={bridge} />
           </div>
@@ -256,12 +269,12 @@ function AppShell() {
               emitter is selected; placeholder otherwise. */}
           <div
             data-testid="quadrant-track-editor"
-            className="h-80 shrink-0 border-t border-neutral-800 bg-neutral-950"
+            className="h-80 shrink-0 border-t border-border bg-bg"
           >
             {selectedEmitterId !== null ? (
               <EmitterPropertyPanel bridge={bridge} />
             ) : (
-              <div className="flex h-full items-center justify-center text-xs text-neutral-500">
+              <div className="flex h-full items-center justify-center text-xs text-text-3">
                 Select an emitter to edit its tracks
               </div>
             )}
@@ -319,7 +332,7 @@ function ModNicknameDemo() {
     });
   }, []);
   return (
-    <div className="flex h-full w-full items-center justify-center bg-neutral-950 text-sm text-neutral-400">
+    <div className="flex h-full w-full items-center justify-center bg-bg text-sm text-text-2">
       <span>Mod Nickname dialog demo — dismiss to log the result.</span>
       <ModNicknameDialog />
     </div>

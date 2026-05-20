@@ -8,8 +8,13 @@ import { afterEach, vi } from "vitest";
 // default behaviour. Without this, multiple renders in the same test file
 // accumulate in the shared jsdom body and cause "found multiple elements"
 // errors on the second and later tests.
+// Also clear localStorage so per-component persistence (Force Align toggle,
+// palette presets, ThemeToggle choice, etc.) doesn't leak across tests.
 afterEach(() => {
   cleanup();
+  if (typeof window !== "undefined" && window.localStorage) {
+    window.localStorage.clear();
+  }
 });
 
 // jsdom doesn't implement ResizeObserver — Radix Popover uses it internally.
@@ -51,4 +56,43 @@ if (!HTMLElement.prototype.setPointerCapture) {
 }
 if (!HTMLElement.prototype.releasePointerCapture) {
   HTMLElement.prototype.releasePointerCapture = vi.fn();
+}
+
+// jsdom in this config doesn't expose window.localStorage. Stub it with
+// an in-memory Map-backed shim so components using localStorage (e.g.
+// ThemeToggle persistence, palette-store) can round-trip in unit tests.
+// Each test that touches localStorage should clear it in beforeEach.
+if (typeof window.localStorage === "undefined") {
+  const store = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+      clear: () => { store.clear(); },
+      key: (i: number) => Array.from(store.keys())[i] ?? null,
+      get length() { return store.size; },
+    },
+  });
+}
+
+// jsdom doesn't implement window.matchMedia. Stub it with a no-match
+// shim (so prefers-color-scheme reads always return false → default
+// to light theme in tests; ThemeToggle still exercises localStorage
+// persistence even if the matchMedia branch is dead).
+if (typeof window.matchMedia === "undefined") {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),    // deprecated; some libs still call this
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    }),
+  });
 }

@@ -39,7 +39,7 @@ export function ViewportSlot({ bridge }: Props) {
   return (
     <div
       ref={ref}
-      className="absolute inset-0 bg-transparent flex items-center justify-center text-neutral-600 text-sm"
+      className="absolute inset-0 bg-transparent flex items-center justify-center text-text-3 text-sm"
     >
       {/* The native D3D9 viewport sibling renders here. In browser-mode
           (MockBridge), the underlying body bg shows through.

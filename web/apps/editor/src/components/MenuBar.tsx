@@ -82,20 +82,20 @@ type Props = {
 // Style constants — shared across triggers and items so the Tailwind
 // class strings don't drift between menus.
 const TRIGGER =
-  "px-2 py-1 text-xs font-medium text-neutral-300 hover:bg-neutral-900 rounded data-[state=open]:bg-neutral-900 data-[state=open]:text-neutral-100 outline-none select-none cursor-default";
+  "px-2 py-1 text-xs font-medium text-text-2 hover:bg-bg-2 rounded data-[state=open]:bg-bg-2 data-[state=open]:text-text outline-none select-none cursor-default";
 // FD9b restores the drop shadow. The layered viewport now stamps a
 // smoothstep-feathered alpha hole at each occlusion rect (with
 // FD8's edge padding sized to enclose the shadow), so shadow-xl
 // blends naturally against the D3D9 scene instead of leaving the
 // dark halo the prior HRGN cut produced.
 const CONTENT =
-  "min-w-[200px] bg-neutral-900 border border-neutral-800 rounded-md shadow-xl p-1 z-50";
+  "min-w-[200px] bg-bg-2 border border-border rounded-md shadow-xl p-1 z-50";
 const ITEM =
-  "flex items-center gap-2 px-2 py-1 text-xs text-neutral-200 rounded hover:bg-neutral-800 focus:bg-neutral-800 outline-none cursor-pointer data-[disabled]:text-neutral-600 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent select-none";
-const SEPARATOR = "my-1 h-px bg-neutral-800";
+  "flex items-center gap-2 px-2 py-1 text-xs text-text rounded hover:bg-panel-2 focus:bg-panel-2 outline-none cursor-pointer data-[disabled]:text-text-3 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent select-none";
+const SEPARATOR = "my-1 h-px bg-panel-2";
 
 function Hint({ children }: { children: string }) {
-  return <span className="ml-auto text-[10px] text-neutral-500">{children}</span>;
+  return <span className="ml-auto text-[10px] text-text-3">{children}</span>;
 }
 
 function CheckSlot({ active }: { active: boolean }) {
@@ -543,7 +543,7 @@ export function MenuBar({
                 <div key={g.label}>
                   <Menubar.Separator className={SEPARATOR} />
                   {/* Group header — a disabled item rendered subtly. */}
-                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-500 select-none">
+                  <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-text-3 select-none">
                     {g.label}
                   </div>
                   {g.items.map((m) => {
@@ -754,7 +754,7 @@ export function MenuBar({
       size="sm"
     >
       <Modal.Body>
-        <p className="text-sm text-neutral-300">
+        <p className="text-sm text-text-2">
           Reset background color, ground plane visibility, ground texture,
           ground Z offset, skydome, and bloom to defaults?
         </p>
@@ -763,14 +763,14 @@ export function MenuBar({
         <button
           type="button"
           onClick={() => setResetViewOpen(false)}
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={() => void handleResetViewConfirm()}
-          className="rounded bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-500 outline-none focus:ring-2 focus:ring-sky-400"
+          className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent outline-none focus:ring-2 focus:ring-accent"
         >
           Reset
         </button>

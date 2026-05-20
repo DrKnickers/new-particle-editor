@@ -48,11 +48,11 @@ export function ModNicknameDialog() {
       size="sm"
     >
       <Modal.Body>
-        <p className="mb-3 text-xs text-neutral-300">
+        <p className="mb-3 text-xs text-text-2">
           Give this mod&apos;s data directory a human-readable name.
         </p>
-        <label className="block text-xs text-neutral-200">
-          <span className="mb-1 block text-[11px] text-neutral-400">
+        <label className="block text-xs text-text">
+          <span className="mb-1 block text-[11px] text-text-2">
             Nickname:
           </span>
           <input
@@ -63,7 +63,7 @@ export function ModNicknameDialog() {
               if (e.key === "Enter") handleOk();
             }}
             aria-label="Mod nickname"
-            className="w-full rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-sky-500"
+            className="w-full rounded border border-border-2 bg-bg-2 px-2 py-1 text-xs text-text outline-none focus:border-accent"
             autoFocus
             spellCheck={false}
           />

@@ -1,0 +1,88 @@
+/* Particle Editor 2026 design tokens.
+   Single source of truth for colors, radii, row heights, shadow.
+   - :root holds the dark-default values.
+   - [data-theme="light"] overrides the same names for light mode.
+   - The @theme inline block below republishes the variables under
+     --color-*, --radius-* so Tailwind v4 generates utilities like
+     bg-bg-2, text-text-3, border-border-2, accent. `inline` keeps the
+     values as var() references (not literal hex) so dark/light flip
+     correctly at runtime. */
+
+:root {
+  --bg: #0e1116;
+  --bg-2: #141821;
+  --bg-3: #1a1f2b;
+  --panel: #161b25;
+  --panel-2: #1c2230;
+  --panel-3: #232a3a;
+  --border: #252b38;
+  --border-2: #2e3547;
+  --hover: #1f2532;
+  --selected: #213149;
+  --selected-border: #355385;
+  --text: #d8dee9;
+  --text-2: #a3acbd;
+  --text-3: #6b7488;
+  --accent: #4ea3ff;
+  --accent-2: #2f7fd4;
+  --accent-soft: rgba(78, 163, 255, 0.16);
+  --danger: #e06c75;
+  --success: #6fbf7a;
+  --warning: #e0a14b;
+  --x-axis: #ef5350;
+  --y-axis: #66bb6a;
+  --z-axis: #42a5f5;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  --radius: 8px;
+  --radius-sm: 5px;
+  --row-h: 26px;
+  --row-h-sm: 22px;
+}
+
+[data-theme="light"] {
+  --bg: #e9ecf2;
+  --bg-2: #f0f2f6;
+  --bg-3: #ffffff;
+  --panel: #f6f7fa;
+  --panel-2: #ffffff;
+  --panel-3: #eef0f5;
+  --border: #d8dce4;
+  --border-2: #c4c9d4;
+  --hover: #e6e9ef;
+  --selected: #d5e4f8;
+  --selected-border: #79a8e6;
+  --text: #1a1f29;
+  --text-2: #4a5366;
+  --text-3: #7c8497;
+  --accent: #2f7fd4;
+  --accent-2: #1f63b0;
+  --accent-soft: rgba(47, 127, 212, 0.14);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-panel-3: var(--panel-3);
+  --color-border: var(--border);
+  --color-border-2: var(--border-2);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-selected-border: var(--selected-border);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-x-axis: var(--x-axis);
+  --color-y-axis: var(--y-axis);
+  --color-z-axis: var(--z-axis);
+  --radius-token: var(--radius);
+  --radius-token-sm: var(--radius-sm);
+}

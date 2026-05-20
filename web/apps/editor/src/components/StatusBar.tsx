@@ -32,10 +32,10 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
 
   const cell = (label: string, value: string, dim = placeholder) => (
     <span className="flex items-baseline gap-1.5">
-      <span className="text-neutral-500">{label}</span>
+      <span className="text-text-3">{label}</span>
       <span
         className={`font-mono tabular-nums ${
-          dim ? "text-neutral-700" : "text-neutral-300"
+          dim ? "text-text-3" : "text-text-2"
         }`}
       >
         {value}
@@ -48,15 +48,15 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
     : `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)}, ${cursor.z.toFixed(1)}`;
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-neutral-800 bg-neutral-950 px-4 text-xs">
+    <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg px-4 text-xs">
       {cell("FPS", placeholder ? "—" : s!.fps.toFixed(0))}
-      <span className="text-neutral-700">·</span>
+      <span className="text-text-3">·</span>
       {cell("Emitters", placeholder ? "—" : s!.emitters.toString())}
-      <span className="text-neutral-700">·</span>
+      <span className="text-text-3">·</span>
       {cell("Particles", placeholder ? "—" : s!.particles.toString())}
-      <span className="text-neutral-700">·</span>
+      <span className="text-text-3">·</span>
       {cell("Instances", placeholder ? "—" : s!.instances.toString())}
-      <span className="text-neutral-700">·</span>
+      <span className="text-text-3">·</span>
       {cell("Cursor", cursorText, cursor === null)}
     </footer>
   );

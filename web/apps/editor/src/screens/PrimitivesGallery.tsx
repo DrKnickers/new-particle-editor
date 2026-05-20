@@ -37,7 +37,7 @@ const DEMO_TEXTURES: TextureItem[] = [
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mb-8">
-      <h2 className="mb-3 border-b border-neutral-800 pb-1 text-sm font-semibold text-neutral-300">
+      <h2 className="mb-3 border-b border-border pb-1 text-sm font-semibold text-text-2">
         {title}
       </h2>
       <div className="space-y-4">{children}</div>
@@ -48,7 +48,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] text-neutral-500">{label}</span>
+      <span className="text-[10px] text-text-3">{label}</span>
       <div>{children}</div>
     </div>
   );
@@ -73,12 +73,12 @@ export function PrimitivesGallery() {
   const [rp3, setRp3] = useState<RandomParamValue>({ mode: "Normal", mean: 1.0, sigma: 0.25 });
 
   return (
-    <div className="h-full w-full overflow-y-auto bg-neutral-950 text-neutral-100">
-      <header className="sticky top-0 z-10 flex h-10 items-center gap-3 border-b border-neutral-800 bg-neutral-950 px-6">
+    <div className="h-full w-full overflow-y-auto bg-bg text-text">
+      <header className="sticky top-0 z-10 flex h-10 items-center gap-3 border-b border-border bg-bg px-6">
         <span className="font-semibold">AloParticleEditor</span>
-        <span className="text-neutral-600">·</span>
-        <span className="text-xs text-neutral-400">Primitives gallery</span>
-        <span className="ml-auto text-[10px] text-neutral-600">?demo=primitives</span>
+        <span className="text-text-3">·</span>
+        <span className="text-xs text-text-2">Primitives gallery</span>
+        <span className="ml-auto text-[10px] text-text-3">?demo=primitives</span>
       </header>
 
       <main className="mx-auto max-w-2xl px-6 py-6">
@@ -88,7 +88,7 @@ export function PrimitivesGallery() {
             <div className="w-32">
               <Spinner value={spin1} onChange={setSpin1} step={1} aria-label="Demo spinner 1" />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">value: {spin1}</span>
+            <span className="mt-0.5 text-[10px] text-text-3">value: {spin1}</span>
           </Row>
           <Row label="Float, unit='deg/s', tight density, min=-180, max=180">
             <div className="w-40">
@@ -104,7 +104,7 @@ export function PrimitivesGallery() {
                 aria-label="Demo spinner 2"
               />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">value: {spin2}</span>
+            <span className="mt-0.5 text-[10px] text-text-3">value: {spin2}</span>
           </Row>
           <Row label="Scientific notation, step=1e-4, loose density">
             <div className="w-40">
@@ -117,7 +117,7 @@ export function PrimitivesGallery() {
                 aria-label="Demo spinner 3"
               />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">value: {spin3}</span>
+            <span className="mt-0.5 text-[10px] text-text-3">value: {spin3}</span>
           </Row>
         </Section>
 
@@ -125,7 +125,7 @@ export function PrimitivesGallery() {
         <Section title="ColorButton">
           <Row label="Default density">
             <ColorButton value={color1} onChange={setColor1} aria-label="Demo color 1" />
-            <span className="mt-0.5 text-[10px] text-neutral-500">
+            <span className="mt-0.5 text-[10px] text-text-3">
               rgb({color1.r}, {color1.g}, {color1.b})
             </span>
           </Row>
@@ -136,7 +136,7 @@ export function PrimitivesGallery() {
               density="tight"
               aria-label="Demo color 2"
             />
-            <span className="mt-0.5 text-[10px] text-neutral-500">
+            <span className="mt-0.5 text-[10px] text-text-3">
               rgb({color2.r}, {color2.g}, {color2.b})
             </span>
           </Row>
@@ -162,7 +162,7 @@ export function PrimitivesGallery() {
               onClear={(p) => console.log("[demo] clear", p)}
               onReveal={(p) => console.log("[demo] reveal", p)}
             />
-            <span className="mt-1 text-[10px] text-neutral-500">selected: {texVal ?? "(none)"}</span>
+            <span className="mt-1 text-[10px] text-text-3">selected: {texVal ?? "(none)"}</span>
           </Row>
           <Row label="Empty palette">
             <TexturePalette
@@ -187,7 +187,7 @@ export function PrimitivesGallery() {
             <div className="w-52">
               <RandomParam value={rp1} onChange={setRp1} step={0.1} decimals={2} />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">
+            <span className="mt-0.5 text-[10px] text-text-3">
               {JSON.stringify(rp1)}
             </span>
           </Row>
@@ -195,7 +195,7 @@ export function PrimitivesGallery() {
             <div className="w-64">
               <RandomParam value={rp2} onChange={setRp2} step={0.1} decimals={2} unit="s" />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">
+            <span className="mt-0.5 text-[10px] text-text-3">
               {JSON.stringify(rp2)}
             </span>
           </Row>
@@ -203,7 +203,7 @@ export function PrimitivesGallery() {
             <div className="w-64">
               <RandomParam value={rp3} onChange={setRp3} step={0.05} decimals={2} />
             </div>
-            <span className="mt-0.5 text-[10px] text-neutral-500">
+            <span className="mt-0.5 text-[10px] text-text-3">
               {JSON.stringify(rp3)}
             </span>
           </Row>

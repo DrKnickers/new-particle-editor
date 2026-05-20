@@ -174,12 +174,12 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
           Rendered as the first section so they sit just below the
           ToolPanel's title bar (the ToolPanel chrome doesn't expose a
           header-trailing slot, so a top section is the cleanest fit). */}
-      <div className="mb-3 flex items-center justify-between rounded-md border border-neutral-800 bg-neutral-900/40 px-3 py-2">
-        <span className="text-[11px] text-neutral-400">Active instances</span>
+      <div className="mb-3 flex items-center justify-between rounded-md border border-border bg-bg-2/40 px-3 py-2">
+        <span className="text-[11px] text-text-2">Active instances</span>
         <div className="flex items-center gap-2">
           <span
             aria-label="Active instance count"
-            className="inline-flex h-5 min-w-[24px] items-center justify-center rounded bg-neutral-800 px-1.5 text-[11px] font-medium text-neutral-100"
+            className="inline-flex h-5 min-w-[24px] items-center justify-center rounded bg-panel-2 px-1.5 text-[11px] font-medium text-text"
           >
             {activeCount}
           </span>
@@ -188,7 +188,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
             onClick={handleStop}
             disabled={activeCount === 0}
             aria-label="Stop spawner"
-            className="flex size-5 items-center justify-center rounded text-neutral-400 outline-none hover:bg-neutral-800 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex size-5 items-center justify-center rounded text-text-2 outline-none hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Square className="size-3" />
           </button>
@@ -201,7 +201,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
             Vitest jsdom harness can drive them with a plain click()
             without needing Radix's pointer-capture shim. */}
         <div role="radiogroup" aria-label="Spawner mode" className="flex gap-3">
-          <label className="flex items-center gap-2 text-xs text-neutral-200">
+          <label className="flex items-center gap-2 text-xs text-text">
             <input
               type="radio"
               name="spawner-mode"
@@ -213,7 +213,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
             />
             <span>Manual</span>
           </label>
-          <label className="flex items-center gap-2 text-xs text-neutral-200">
+          <label className="flex items-center gap-2 text-xs text-text">
             <input
               type="radio"
               name="spawner-mode"
@@ -228,7 +228,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
         </div>
 
         {isAuto && (
-          <label className="mt-2 flex items-center gap-2 text-xs text-neutral-200">
+          <label className="mt-2 flex items-center gap-2 text-xs text-text">
             <input
               type="checkbox"
               checked={config.enabled}
@@ -391,7 +391,7 @@ export function SpawnerPanel({ bridge, onClose }: Props) {
             type="button"
             onClick={handleTrigger}
             aria-label="Spawn now"
-            className="rounded bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-500 outline-none focus:ring-2 focus:ring-sky-400"
+            className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent outline-none focus:ring-2 focus:ring-accent"
           >
             Spawn now
           </button>

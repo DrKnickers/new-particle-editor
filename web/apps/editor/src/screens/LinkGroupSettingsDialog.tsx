@@ -211,7 +211,7 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
     >
       <Modal.Body>
         {state.kind === "loading" && (
-          <div className="text-sm text-neutral-400">Loading…</div>
+          <div className="text-sm text-text-2">Loading…</div>
         )}
         {state.kind === "error" && (
           <div data-testid="link-group-error" className="text-sm text-red-400">
@@ -220,7 +220,7 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
         )}
         {state.kind === "loaded" && (
           <div className="flex flex-col gap-1 text-sm">
-            <p className="mb-2 text-[11px] leading-relaxed text-neutral-500">
+            <p className="mb-2 text-[11px] leading-relaxed text-text-3">
               Checked fields are <em>shared</em> across the link group —
               edits propagate to every member. Unchecked fields are{" "}
               <em>per-emitter</em>.
@@ -231,7 +231,7 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
                 return (
                   <label
                     key={field}
-                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-neutral-800"
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-panel-2"
                   >
                     <input
                       type="checkbox"
@@ -239,7 +239,7 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
                       checked={shared}
                       onChange={(e) => toggleField(field, e.target.checked)}
                     />
-                    <span className="text-xs text-neutral-200">
+                    <span className="text-xs text-text">
                       {FIELD_LABELS[field] ?? field}
                     </span>
                   </label>
@@ -254,7 +254,7 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
           type="button"
           onClick={resetAll}
           disabled={state.kind !== "loaded"}
-          className="mr-auto rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mr-auto rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           Reset All
         </button>

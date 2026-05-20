@@ -58,7 +58,7 @@ export function RescaleEmitterDialog({ bridge }: Props) {
         <div className="flex flex-col gap-3 text-sm">
           <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2">
             <label
-              className="text-xs text-neutral-300"
+              className="text-xs text-text-2"
               htmlFor="rescale-emitter-duration"
             >
               Duration scale
@@ -73,7 +73,7 @@ export function RescaleEmitterDialog({ bridge }: Props) {
               aria-label="Duration scale"
             />
             <label
-              className="text-xs text-neutral-300"
+              className="text-xs text-text-2"
               htmlFor="rescale-emitter-size"
             >
               Size scale
@@ -88,7 +88,7 @@ export function RescaleEmitterDialog({ bridge }: Props) {
               aria-label="Size scale"
             />
           </div>
-          <p className="text-[11px] leading-relaxed text-neutral-500">
+          <p className="text-[11px] leading-relaxed text-text-3">
             Applies to the selected emitter only. Use{" "}
             <em>Rescale Particle System…</em> to rescale the entire system.
           </p>

@@ -31,16 +31,16 @@ export function AboutDialog({ open, onOpenChange }: Props) {
     >
       <Modal.Body>
         <div className="flex flex-col gap-3 text-sm">
-          <div className="text-lg font-semibold text-neutral-100">
+          <div className="text-lg font-semibold text-text">
             AloParticleEditor
           </div>
-          <div className="text-neutral-300">
+          <div className="text-text-2">
             Version {VERSION}
           </div>
-          <div className="text-xs text-neutral-500">
+          <div className="text-xs text-text-3">
             Build date: {BUILD_DATE}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+          <p className="mt-2 text-xs leading-relaxed text-text-2">
             Particle editor for the Petroglyph Alamo engine
             (Star Wars: Empire at War / Forces of Corruption).
             Distributed under the MIT licence. This software is provided
@@ -50,7 +50,7 @@ export function AboutDialog({ open, onOpenChange }: Props) {
             href={GITHUB_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-sky-400 underline hover:text-sky-300"
+            className="text-xs text-accent underline hover:text-accent"
           >
             {GITHUB_URL}
           </a>

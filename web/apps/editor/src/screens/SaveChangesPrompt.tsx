@@ -84,9 +84,9 @@ export function SaveChangesPrompt({ bridge }: Props) {
       size="sm"
     >
       <Modal.Body>
-        <p className="text-sm text-neutral-300">
+        <p className="text-sm text-text-2">
           Do you want to save changes to{" "}
-          <span className="font-medium text-neutral-100">{fileLabel}</span>?
+          <span className="font-medium text-text">{fileLabel}</span>?
         </p>
       </Modal.Body>
       <Modal.Footer>
@@ -94,7 +94,7 @@ export function SaveChangesPrompt({ bridge }: Props) {
           type="button"
           onClick={handleCancel}
           aria-label="Cancel"
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent"
         >
           Cancel
         </button>
@@ -102,7 +102,7 @@ export function SaveChangesPrompt({ bridge }: Props) {
           type="button"
           onClick={() => void handleDiscard()}
           aria-label="Don't Save"
-          className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent"
         >
           Don&apos;t Save
         </button>
@@ -110,7 +110,7 @@ export function SaveChangesPrompt({ bridge }: Props) {
           type="button"
           onClick={() => void handleSave()}
           aria-label="Save"
-          className="rounded bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-500 outline-none focus:ring-2 focus:ring-sky-400"
+          className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent outline-none focus:ring-2 focus:ring-accent"
         >
           Save
         </button>

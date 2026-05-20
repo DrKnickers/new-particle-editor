@@ -151,18 +151,18 @@ export function EmitterPropertyPanel({ bridge }: Props) {
       // onKeyDown wouldn't see it.
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      className="flex h-full w-full flex-col overflow-y-auto bg-neutral-950 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sky-700"
+      className="flex h-full w-full flex-col overflow-y-auto bg-bg p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-sky-700"
       aria-label="Emitter properties"
     >
       {selectedId === null ? (
         <div
           data-testid="emitter-property-panel-placeholder"
-          className="flex h-full items-center justify-center text-center text-neutral-500"
+          className="flex h-full items-center justify-center text-center text-text-3"
         >
           Select an emitter to edit its properties
         </div>
       ) : tracks === null ? (
-        <div className="text-neutral-500">Loading…</div>
+        <div className="text-text-3">Loading…</div>
       ) : (
         <TrackEditor
           tracks={tracks}

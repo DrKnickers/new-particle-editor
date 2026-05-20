@@ -63,16 +63,16 @@ export function Modal({
           // copy worth distinguishing from the title; the title alone is
           // sufficient SR context.
           aria-describedby={undefined}
-          className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900 text-neutral-100 shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
+          className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-border bg-bg-2 text-text shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
         >
           {/* Header */}
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-neutral-800 bg-neutral-900 px-4">
-            <Dialog.Title className="text-sm font-semibold text-neutral-100">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-bg-2 px-4">
+            <Dialog.Title className="text-sm font-semibold text-text">
               {title}
             </Dialog.Title>
             <Dialog.Close
               aria-label="Close"
-              className="flex size-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 outline-none"
+              className="flex size-6 items-center justify-center rounded text-text-2 hover:bg-panel-2 hover:text-text outline-none"
             >
               <X className="size-4" />
             </Dialog.Close>
@@ -94,7 +94,7 @@ function ModalBody({ children }: { children: ReactNode }) {
 
 function ModalFooter({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-14 shrink-0 items-center justify-end gap-2 border-t border-neutral-800 bg-neutral-900 px-4">
+    <div className="flex h-14 shrink-0 items-center justify-end gap-2 border-t border-border bg-bg-2 px-4">
       {children}
     </div>
   );
@@ -117,7 +117,7 @@ function ModalCancelButton({ children = "Cancel", onClick, disabled }: ButtonPro
         type="button"
         onClick={onClick}
         disabled={disabled}
-        className="rounded border border-neutral-700 bg-neutral-800 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-700 outline-none focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
       >
         {children}
       </button>
@@ -135,7 +135,7 @@ function ModalOkButton({ children = "OK", onClick, disabled }: ButtonProps) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded bg-sky-600 px-3 py-1 text-xs font-medium text-white hover:bg-sky-500 outline-none focus:ring-2 focus:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+      className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
     >
       {children}
     </button>

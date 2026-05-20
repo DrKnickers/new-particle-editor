@@ -196,7 +196,7 @@ export function Spinner({
         onFocus={handleFocus}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
-        className={`w-full rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-200 outline-none transition focus:border-sky-500 ${
+        className={`w-full rounded border border-border-2 bg-bg-2 px-2 text-xs text-text outline-none transition focus:border-accent ${
           disabled ? "cursor-not-allowed opacity-40" : "cursor-text"
         } ${dragging ? "cursor-ns-resize select-none" : ""}`}
         style={{ height, paddingRight: unit ? `${unit.length * 7 + 8}px` : undefined }}
@@ -206,7 +206,7 @@ export function Spinner({
       {/* Unit suffix */}
       {unit && (
         <span
-          className="pointer-events-none absolute right-1 text-xs text-neutral-500"
+          className="pointer-events-none absolute right-1 text-xs text-text-3"
           style={{ top: "50%", transform: "translateY(-50%)" }}
           aria-hidden="true"
         >
@@ -221,7 +221,7 @@ export function Spinner({
             tabIndex={-1}
             aria-label="Increment"
             onMouseDown={(e) => { e.preventDefault(); adjustBy(step); }}
-            className="flex flex-1 items-center justify-center px-1 text-neutral-500 hover:text-neutral-200"
+            className="flex flex-1 items-center justify-center px-1 text-text-3 hover:text-text"
             style={{ fontSize: "8px", lineHeight: 1 }}
           >
             ▲
@@ -231,7 +231,7 @@ export function Spinner({
             tabIndex={-1}
             aria-label="Decrement"
             onMouseDown={(e) => { e.preventDefault(); adjustBy(-step); }}
-            className="flex flex-1 items-center justify-center px-1 text-neutral-500 hover:text-neutral-200"
+            className="flex flex-1 items-center justify-center px-1 text-text-3 hover:text-text"
             style={{ fontSize: "8px", lineHeight: 1 }}
           >
             ▼

@@ -87,7 +87,7 @@ export function BloomPanel({ bridge, onClose }: Props) {
   return (
     <ToolPanel title="Bloom Settings" onClose={onClose} bridge={bridge} occlusionId="tool-panel:bloom">
       <ToolPanel.Section title="Bloom" alwaysOpen>
-        <label className="flex items-center gap-2 text-xs text-neutral-200">
+        <label className="flex items-center gap-2 text-xs text-text">
           <input
             type="checkbox"
             checked={enabled}
@@ -99,7 +99,7 @@ export function BloomPanel({ bridge, onClose }: Props) {
           <span>Enable bloom</span>
         </label>
         {disabled && (
-          <p className="text-[10px] text-neutral-500">
+          <p className="text-[10px] text-text-3">
             (Bloom is not supported on this device.)
           </p>
         )}

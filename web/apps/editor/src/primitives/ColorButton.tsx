@@ -123,10 +123,10 @@ export function ColorButton({
           type="button"
           disabled={disabled}
           aria-label={ariaLabel}
-          className={`flex items-center gap-1.5 rounded border border-neutral-700 bg-neutral-900 px-2 text-xs text-neutral-300 transition hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-40 ${HEIGHT_MAP[density]}`}
+          className={`flex items-center gap-1.5 rounded border border-border-2 bg-bg-2 px-2 text-xs text-text-2 transition hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40 ${HEIGHT_MAP[density]}`}
         >
           <span
-            className="inline-block size-3 rounded-sm border border-neutral-600"
+            className="inline-block size-3 rounded-sm border border-border-2"
             style={swatchStyle}
             aria-hidden="true"
           />
@@ -139,12 +139,12 @@ export function ColorButton({
           side="bottom"
           align="start"
           sideOffset={4}
-          className="z-50 w-72 rounded-md border border-neutral-700 bg-neutral-900 p-3 shadow-xl"
+          className="z-50 w-72 rounded-md border border-border-2 bg-bg-2 p-3 shadow-xl"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
           {/* Basic colors — 4 rows × 8 columns = 32 slots */}
           <div className="mb-2">
-            <div className="mb-1 text-[10px] text-neutral-500">Basic colors</div>
+            <div className="mb-1 text-[10px] text-text-3">Basic colors</div>
             <div className="grid grid-cols-8 gap-0.5">
               {BASIC_COLORS.map((color, i) => (
                 <button
@@ -153,7 +153,7 @@ export function ColorButton({
                   aria-label={`Basic color ${rgbToHex(color).toUpperCase()}`}
                   title={rgbToHex(color).toUpperCase()}
                   onClick={() => handleSelectColor(color)}
-                  className="size-5 rounded-sm border border-transparent hover:border-neutral-400 focus:border-sky-400 focus:outline-none"
+                  className="size-5 rounded-sm border border-transparent hover:border-border-2 focus:border-accent focus:outline-none"
                   style={{ backgroundColor: rgbToHex(color) }}
                 />
               ))}
@@ -162,7 +162,7 @@ export function ColorButton({
 
           {/* Custom colors — 2 rows × 8 columns = 16 slots */}
           <div className="mb-3">
-            <div className="mb-1 text-[10px] text-neutral-500">Custom colors</div>
+            <div className="mb-1 text-[10px] text-text-3">Custom colors</div>
             <div className="grid grid-cols-8 gap-0.5">
               {slots.map((color, i) => (
                 <button
@@ -172,8 +172,8 @@ export function ColorButton({
                   title={color ? rgbToHex(color).toUpperCase() : "Empty"}
                   onClick={() => { if (color) handleSelectColor(color); }}
                   onContextMenu={(e) => { e.preventDefault(); setSlot(i, null); }}
-                  className={`size-5 rounded-sm border hover:border-neutral-400 focus:outline-none ${
-                    color ? "border-neutral-600" : "border-dashed border-neutral-700"
+                  className={`size-5 rounded-sm border hover:border-border-2 focus:outline-none ${
+                    color ? "border-border-2" : "border-dashed border-border-2"
                   }`}
                   style={color ? { backgroundColor: rgbToHex(color) } : { backgroundColor: "transparent" }}
                 />
@@ -183,7 +183,7 @@ export function ColorButton({
 
           {/* Hex input */}
           <div className="mb-2 flex items-center gap-2">
-            <span className="text-[10px] text-neutral-500">#</span>
+            <span className="text-[10px] text-text-3">#</span>
             <input
               type="text"
               value={hexText}
@@ -191,12 +191,12 @@ export function ColorButton({
               onBlur={handleHexCommit}
               onKeyDown={(e) => { if (e.key === "Enter") handleHexCommit(); }}
               maxLength={6}
-              className="w-20 rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 font-mono text-xs text-neutral-200 outline-none focus:border-sky-500"
+              className="w-20 rounded border border-border-2 bg-panel-2 px-2 py-0.5 font-mono text-xs text-text outline-none focus:border-accent"
               aria-label="Hex color input"
               spellCheck={false}
             />
             <span
-              className="inline-block size-5 rounded border border-neutral-600"
+              className="inline-block size-5 rounded border border-border-2"
               style={{ backgroundColor: rgbToHex(pickerColor) }}
               aria-hidden="true"
             />
@@ -206,7 +206,7 @@ export function ColorButton({
           <div className="mb-3 space-y-1.5">
             {(["r", "g", "b"] as const).map((ch) => (
               <div key={ch} className="flex items-center gap-2">
-                <span className="w-3 text-[10px] text-neutral-500 uppercase">{ch}</span>
+                <span className="w-3 text-[10px] text-text-3 uppercase">{ch}</span>
                 <input
                   type="range"
                   min={0}
@@ -218,7 +218,7 @@ export function ColorButton({
                   className="flex-1 accent-sky-500"
                   aria-label={`${ch.toUpperCase()} channel`}
                 />
-                <span className="w-8 text-right font-mono text-[10px] text-neutral-400">
+                <span className="w-8 text-right font-mono text-[10px] text-text-2">
                   {pickerColor[ch]}
                 </span>
               </div>
@@ -229,7 +229,7 @@ export function ColorButton({
           <button
             type="button"
             onClick={handleAddToCustom}
-            className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] text-neutral-300 hover:bg-neutral-700 hover:text-neutral-100"
+            className="w-full rounded border border-border-2 bg-panel-2 px-2 py-1 text-[10px] text-text-2 hover:bg-panel-3 hover:text-text"
           >
             Add to custom colors
           </button>

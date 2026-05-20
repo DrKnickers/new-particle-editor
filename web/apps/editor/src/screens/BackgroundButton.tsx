@@ -59,12 +59,12 @@ export function BackgroundButton({ open, onToggle, bridge }: Props) {
       aria-label="Background"
       className={`flex items-center gap-2 rounded-md border px-2 py-1 text-xs transition ${
         open
-          ? "border-sky-500 bg-neutral-900"
-          : "border-neutral-800 bg-neutral-950 hover:bg-neutral-900"
+          ? "border-accent bg-bg-2"
+          : "border-border bg-bg hover:bg-bg-2"
       }`}
     >
       <span
-        className="inline-block size-3 rounded-sm border border-neutral-700"
+        className="inline-block size-3 rounded-sm border border-border-2"
         style={{ backgroundColor: swatch }}
       />
       Background
