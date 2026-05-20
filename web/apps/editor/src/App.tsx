@@ -175,10 +175,8 @@ function AppShell() {
         <span className="font-semibold">AloParticleEditor</span>
         <MenuBar
           bridge={bridge}
-          onOpenBackgroundPanel={() => setOpenToolPanel("background")}
           onOpenLightingPanel={() => setOpenToolPanel("lighting")}
           onOpenBloomPanel={() => setOpenToolPanel("bloom")}
-          onOpenGroundTexturePanel={() => setOpenToolPanel("ground")}
           onOpenSpawnerPanel={() => setOpenToolPanel("spawner")}
           onOpenImportEmittersDialog={() => setImportEmittersOpen(true)}
           onOpenAboutDialog={() => setAboutOpen(true)}

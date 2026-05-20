@@ -69,10 +69,8 @@ function OccludingMenubarContent({
 
 type Props = {
   bridge: Bridge;
-  onOpenBackgroundPanel: () => void;
   onOpenLightingPanel: () => void;
   onOpenBloomPanel: () => void;
-  onOpenGroundTexturePanel: () => void;
   onOpenSpawnerPanel: () => void;
   onOpenImportEmittersDialog: () => void;
   onOpenAboutDialog: () => void;
@@ -119,10 +117,8 @@ function basename(path: string): string {
 
 export function MenuBar({
   bridge,
-  onOpenBackgroundPanel,
   onOpenLightingPanel,
   onOpenBloomPanel,
-  onOpenGroundTexturePanel,
   onOpenSpawnerPanel,
   onOpenImportEmittersDialog,
   onOpenAboutDialog,
@@ -597,20 +593,6 @@ export function MenuBar({
             >
               <CheckSlot active={ground} />
               Ground
-            </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              onSelect={() => onOpenGroundTexturePanel()}
-            >
-              <CheckSlot active={false} />
-              Ground Texture…
-            </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              onSelect={() => onOpenBackgroundPanel()}
-            >
-              <CheckSlot active={false} />
-              Background…
             </Menubar.Item>
             <Menubar.Item
               className={ITEM}

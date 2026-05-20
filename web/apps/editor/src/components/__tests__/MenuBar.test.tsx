@@ -40,10 +40,8 @@ function renderMenuBar(bridge: Bridge) {
   return render(
     <MenuBar
       bridge={bridge}
-      onOpenBackgroundPanel={() => {}}
       onOpenLightingPanel={() => {}}
       onOpenBloomPanel={() => {}}
-      onOpenGroundTexturePanel={() => {}}
       onOpenSpawnerPanel={() => {}}
       onOpenImportEmittersDialog={() => {}}
       onOpenAboutDialog={() => {}}
