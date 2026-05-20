@@ -207,7 +207,7 @@ function AppShell() {
                 Physics placeholders. */}
             <div
               data-testid="quadrant-property-tabs"
-              className="h-72 shrink-0 border-t border-border"
+              className="h-72 shrink-0"
             >
               <EmitterPropertyTabs bridge={bridge} />
             </div>
