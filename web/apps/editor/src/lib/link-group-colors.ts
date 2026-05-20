@@ -37,10 +37,11 @@ export function colorForGroup(group: number): string | null {
 }
 
 /** Walks a flattened tree row list and returns one bracket descriptor
- *  per unique non-zero `linkGroup`. `firstRowIndex` + `lastRowIndex`
- *  are 0-based positions in `flatRows`. Single-lane (no overlap
- *  handling — overlapping group ranges will visually overlap in the
- *  gutter; multi-lane is a future polish). */
+ *  per unique non-zero `linkGroup` WITH AT LEAST 2 MEMBERS. Single-
+ *  member groups are filtered out (B1 invariant — every rendered
+ *  bracket spans ≥ 2 rows). `firstRowIndex` + `lastRowIndex` are
+ *  0-based positions in `flatRows`. Single-lane (no overlap handling
+ *  yet — see Task 2 for the lane assignment pass). */
 export type LinkGroupBracket = {
   groupId: number;
   color: string;
@@ -51,24 +52,25 @@ export type LinkGroupBracket = {
 export function computeLinkGroupBrackets<T extends { linkGroup: number }>(
   rows: ReadonlyArray<T>,
 ): LinkGroupBracket[] {
-  const ranges = new Map<number, { first: number; last: number }>();
+  const ranges = new Map<number, { first: number; last: number; count: number }>();
   rows.forEach((row, idx) => {
     const g = row.linkGroup;
     if (g <= 0) return;
     const existing = ranges.get(g);
     if (existing === undefined) {
-      ranges.set(g, { first: idx, last: idx });
+      ranges.set(g, { first: idx, last: idx, count: 1 });
     } else {
       existing.last = idx;
+      existing.count += 1;
     }
   });
   const out: LinkGroupBracket[] = [];
   ranges.forEach((range, groupId) => {
+    // B1 invariant: never render single-member groups. Bracket renderer
+    // can safely assume firstRowIndex < lastRowIndex throughout.
+    if (range.count < 2) return;
     const color = colorForGroup(groupId);
     if (color === null) return;
-    // Single-row groups (first == last) still get a bracket — the
-    // legacy renderer shows a small cap-only stub. Render handles
-    // the zero-height case via min-height.
     out.push({
       groupId,
       color,

@@ -32,19 +32,32 @@ describe("link-group-colors", () => {
       { linkGroup: 0 }, // 0  unlinked
       { linkGroup: 1 }, // 1  group 1 starts
       { linkGroup: 0 }, // 2  unlinked
-      { linkGroup: 1 }, // 3  group 1 extends
-      { linkGroup: 2 }, // 4  group 2 first+last (single-row)
-      { linkGroup: 0 }, // 5  unlinked
+      { linkGroup: 1 }, // 3  group 1 extends → 2-member group, KEPT
+      { linkGroup: 2 }, // 4  group 2 starts
+      { linkGroup: 2 }, // 5  group 2 extends → 2-member group, KEPT
+      { linkGroup: 3 }, // 6  group 3, ONLY member → FILTERED OUT
+      { linkGroup: 0 }, // 7  unlinked
     ];
     const brackets = computeLinkGroupBrackets(rows);
-    expect(brackets).toHaveLength(2);
+    expect(brackets).toHaveLength(2);  // group 3 absent
     const g1 = brackets.find((b) => b.groupId === 1)!;
     expect(g1.firstRowIndex).toBe(1);
     expect(g1.lastRowIndex).toBe(3);
     expect(g1.color).toBe(colorForGroup(1));
     const g2 = brackets.find((b) => b.groupId === 2)!;
     expect(g2.firstRowIndex).toBe(4);
-    expect(g2.lastRowIndex).toBe(4);
+    expect(g2.lastRowIndex).toBe(5);
     expect(g2.color).toBe(colorForGroup(2));
+    expect(brackets.find((b) => b.groupId === 3)).toBeUndefined();
+  });
+
+  it("filters single-member groups — they never appear in the result", () => {
+    const rows = [
+      { linkGroup: 5 },  // only member of group 5
+      { linkGroup: 0 },
+      { linkGroup: 7 },  // only member of group 7
+    ];
+    const brackets = computeLinkGroupBrackets(rows);
+    expect(brackets).toHaveLength(0);
   });
 });
