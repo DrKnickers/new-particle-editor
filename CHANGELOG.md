@@ -18,7 +18,7 @@ Conventions:
 
 ### Left-pane realignment (B1) — tree toolbar at bottom, per-row eye, multi-lane bracket gutter
 
-*TODO-DATE · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-20 · [`7e54015`](https://github.com/DrKnickers/new-particle-editor/commit/7e54015) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 Realigns the left pane against the design source's structural
 intent. Specifically: the tree toolbar moves from above the
