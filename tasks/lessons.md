@@ -517,3 +517,95 @@ wheel works over the spinner's up/down arrow column too.
 uses `onWheel={...}` AND calls `preventDefault`, audit it for the
 same bug. The pattern is general — any wheel-based zoom/scrub/pan
 component is suspect.
+
+---
+
+## L-009 — Never use raw floats as identity keys across the JS/C++ boundary; pre-round at the source with `Math.fround`
+
+**Rule.** Any value that crosses JS (64-bit `double`) ↔ C++ (32-bit
+`float`) gets quantized on the C++ side. JS-side bookkeeping that
+keys off the value (Map/Set/`===` comparisons against round-tripped
+values) **will silently break** because the round-trip
+value differs from the original by ~1 ULP-of-float32 (≈ 1e-6 for
+values near 50). The two values *print identically* in DevTools —
+you'll only notice the drift by expanding the numbers or by the
+downstream "lookup failed" symptom.
+
+**How to apply.**
+
+1. **Don't use floats as identity keys** if you can avoid it. Stable
+   integer IDs are much safer (and the design-of-record long-term
+   move).
+2. **When you must use floats as identity keys**, pre-quantize at
+   the source. In JS, `Math.fround(x)` rounds a double to the
+   nearest `float`-representable double — i.e. it pre-applies the
+   same rounding C++ will do. Store the rounded value in JS state
+   so when C++ returns the same value, `===` matches.
+3. **Audit every JS Set/Map/object key that holds a value the host
+   produced or will round.** Track times, vertex IDs, anything
+   where the JS side originates a value and expects it back from
+   the bridge.
+
+**Trigger.** Any of:
+- "I set the state correctly but the rendered UI doesn't reflect
+  it after a round-trip" → suspect precision drift first; instrument
+  `[STATE] selectedKeys: [...]` against `[STATE] tracksKeys: [...]`
+  and diff the floats with full precision.
+- A Set/Map keyed by a `number` that originated from a user gesture
+  (drag, marquee, click coordinate) and will be sent to the
+  engine and read back.
+- New bridge surfaces that round-trip float values, especially
+  positions/times/coordinates.
+
+**Source incident (2026-05-20, curve-editor drag selection bug).**
+The user reported: drag a curve key without pre-selecting it; the
+spinner showed live values during drag (proving the key was
+selected); on pointer release the key reverted to its
+channel-colour fill (no selected ring). Spent **three rounds** of
+patches reasoning from the UI-event layer (suspected the trailing
+synthetic click hitting a deselect handler, then suspected the
+hit-pad's onClick firing with stale closure, then suspected
+React batching). All three patches were correct in their
+mechanism but didn't fix the bug. Pivoted to instrumentation
+(per [L-007](#l-007--dont-paper-over-an-engine-bug-by-changing-what-a-test-asserts)
+— verify in-situ, don't keep guessing). Logged `STATE` on every
+panel state change and got:
+
+```
+STATE { selectedKeyTimes: [49.476439790575924], focusedTrackKeys: [..., 49.4764..., ...] }
+refetch tracks { id: 0, sampleKeys: Array(3) }      ← async tree/changed fired
+STATE { selectedKeyTimes: [49.476439790575924], focusedTrackKeys: [..., 49.4764..., ...] }
+```
+
+The two times printed identically but were not `===`. The first
+was the JS double the renderer computed via `unproject(...)`; the
+second was the engine's `float32` storage, returned through the
+bridge. The renderer's `selectedKeyTimes.has(p.time)` predicate
+failed silently, painting the key unselected. Fix at
+[CurveEditorPanel.tsx:570](web/apps/editor/src/components/CurveEditorPanel.tsx:570):
+`const engineNewTime = Math.fround(newTime);` and use that value
+for `selectedKeyTimes` / optimistic spinner / optimistic tracks
+patch. After: round-trip is a no-op because the value we stored
+IS the value the engine returns.
+
+**Anti-pattern that hid it.** Each of my failed patches was a
+"plausible UI-layer fix" — the symptom (deselection) looked like a
+UI-layer bug, so I kept looking at UI handlers. The root cause was
+a representation drift two layers down. Trust the instrumentation
+over the symptom theory. Add `[STATE]` logs when you're on the
+third hypothesis without progress; the actual state values
+falsify the theory you've been chasing in one screenshot.
+
+**Where else this could bite.** Audit (as of 2026-05-20):
+- `selectedKeyTimes` Set keyed by float times — fixed in
+  `handleKeyDragEnd`; `handleKeyClick` reads from `p.time`
+  (already float32-precision via the bridge), so it's safe.
+- `handleCanvasAdd` uses `res.time ?? time` — `res.time` from the
+  bridge is float32-precision; the fallback `time` is the
+  unproject'd JS double. If the bridge ever drops `res.time` from
+  its response, the fallback path will exhibit the same bug.
+  Consider `Math.fround(time)` there as defence-in-depth.
+- `handleTimeSpinner` sets `selectedKeyTimes(new Set([clampedTime]))`
+  where `clampedTime` is a JS-double user input. Same drift
+  potential on the next refetch. Apply `Math.fround` if a similar
+  bug surfaces there.

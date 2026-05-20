@@ -845,6 +845,17 @@
      `min-content: 600px`, pushing the canvas cell past its available
      space and clipping the right edge of the curve. */
   grid-template-columns: 180px minmax(0, 1fr);
+  /* Explicit row template, same `minmax(0, 1fr)` shape. Without this,
+     CSS Grid defaults to an implicit `auto`-sized row that grows to
+     content. The SVG inside `.curve-canvas-wrap` has
+     `preserveAspectRatio="none"` and no explicit height, so when its
+     width grows wide (≥ 2× the panel's available height), the
+     browser falls back to the viewBox's `600×300` aspect ratio and
+     computes a height that overflows the panel — at a 2415px wide
+     SVG that's a 1207px tall canvas, way past the 222px the row is
+     supposed to contain. Locking the row to `minmax(0, 1fr)` makes
+     the cell clamp to its container's height instead. */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 

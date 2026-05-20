@@ -55,8 +55,8 @@
 //     mode is unchanged: empty-canvas pointer-down still fires
 //     `onCanvasAdd` and marquee is suppressed.
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { TrackDto, TrackName } from "@particle-editor/bridge-schema";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import type { InterpolationType, TrackDto, TrackName } from "@particle-editor/bridge-schema";
 
 /** Channel definition for the multi-channel overlay branch (Task 2.6).
  *  `id` is the UI-facing identifier (e.g. "rotation"); `trackName` is
@@ -94,10 +94,17 @@ type Props = {
    *  When unset, the multi-channel branch stays view-only and dims
    *  every channel equally (the Task 2.6 behavior). */
   focusChannel?: string;
-  /** Y-axis range for single-track mode. Min defaults to 0 and max to
-   *  1 so an uninitialised range still renders something sensible.
-   *  Ignored in multi-channel mode — each channel uses its own
-   *  per-track range (see `valueRangeForTrack` below). */
+  /** Y-axis range for the canvas. In single-track mode this is the
+   *  one and only Y range. In multi-channel mode this is the
+   *  UNIFIED range across visible channels — every channel's curve
+   *  projects into the same Y space so when Scale-at-20 is visible
+   *  alongside RGB the canvas extends to 0..20 and the RGB curves
+   *  squish near the bottom. When omitted in multi-channel mode the
+   *  renderer falls back to per-channel ranges (legacy behaviour;
+   *  each curve fills the canvas independently). The drag
+   *  value-clamp uses the focus CHANNEL's own range regardless,
+   *  so engine bounds aren't violated even when the visible canvas
+   *  extends past them. Min defaults to 0 and max to 1. */
   valueRange?: { min: number; max: number };
   /** SVG drawable area in viewBox units. Defaults to 600×300; tests
    *  pin these to deterministic numbers when asserting positions. */
@@ -154,6 +161,23 @@ type Props = {
    *  When the drag ends with no net movement, this is NOT called;
    *  the original click path fires instead. */
   onKeyDragEnd?: (keyTime: number, newTime: number, newValue: number) => void;
+  /** Drag-start handler. Fires on pointer-down on a focus-channel
+   *  key BEFORE any movement is observed. The parent uses this to
+   *  pre-select the key so it paints with the selected ring the
+   *  moment the user grabs it (otherwise the visual selection only
+   *  appears on pointer-up via `onKeyClick`, which never fires when
+   *  the gesture turns out to be a drag rather than a click). */
+  onKeyDragStart?: (keyTime: number) => void;
+  /** Drag-move handler. Fires on every pointer-move during an active
+   *  drag once movement has crossed `DRAG_SLOP` (so it doesn't fire
+   *  on jitter-y clicks). The parent uses this to live-update Time /
+   *  Value spinners while the user is mid-drag. */
+  onKeyDragMove?: (keyTime: number, currentTime: number, currentValue: number) => void;
+  /** Drag-cancel handler. Fires when pointer-cancel interrupts an
+   *  active drag (browser hand-off, ESC, pointer leaving the
+   *  capturing surface). The parent uses this to roll back any
+   *  live-drag visualisation. */
+  onKeyDragCancel?: () => void;
   /** Marquee-select handler (Phase 4.1 Fix dispatch 5). Fires at
    *  pointer-up when a Select-mode rubber-band drag has covered at
    *  least one key. `times` is the set of key TIMES inside the
@@ -238,6 +262,50 @@ function buildStepPolyline(points: ReadonlyArray<{ x: number; y: number }>): str
   return parts.join(" ");
 }
 
+/** Build the closed area-under-curve path for the gradient fill that
+ *  emanates downward from the focus curve to the canvas floor. The
+ *  path traces the curve from left to right (matching whichever
+ *  interpolation mode is in use), drops straight down to `height`
+ *  at the rightmost point, walks left along the floor, and closes.
+ *  Caller fills it with a linearGradient that fades from the channel
+ *  colour (top, along the curve) to transparent (bottom, at the
+ *  floor). The curve stroke is rendered AFTER this path so the line
+ *  itself draws crisply on top of the fill. */
+function buildFillPath(
+  points: ReadonlyArray<{ x: number; y: number }>,
+  interp: InterpolationType,
+  height: number,
+): string {
+  if (points.length < 2) return "";
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  let d: string;
+  if (interp === "smooth") {
+    d = buildSmoothPath(points);
+  } else if (interp === "step") {
+    // Replay the step staircase manually as path commands; using
+    // `buildStepPolyline` would give space-separated points suited
+    // to <polyline>, not <path>'s `M/L/Z` grammar.
+    d = `M ${first.x} ${first.y}`;
+    for (let i = 1; i < points.length; i++) {
+      const p1 = points[i - 1]!;
+      const p2 = points[i]!;
+      d += ` L ${p2.x} ${p1.y} L ${p2.x} ${p2.y}`;
+    }
+  } else {
+    // Linear: straight segments between consecutive points.
+    d = `M ${first.x} ${first.y}`;
+    for (let i = 1; i < points.length; i++) {
+      const p = points[i]!;
+      d += ` L ${p.x} ${p.y}`;
+    }
+  }
+  // Drop to the floor on the right, walk back left along the floor,
+  // close the path back to the starting point.
+  d += ` L ${last.x} ${height} L ${first.x} ${height} Z`;
+  return d;
+}
+
 /** Map a DOM event's (clientX, clientY) to viewBox-space (x, y) using
  *  the SVG element's getBoundingClientRect. Returns (NaN, NaN) when
  *  the bounds aren't measurable (e.g. unmounted element). */
@@ -319,6 +387,9 @@ export function CurveEditor({
   onCanvasContextMenu,
   onKeyContextMenu,
   onKeyDragEnd,
+  onKeyDragStart,
+  onKeyDragMove,
+  onKeyDragCancel,
   onCanvasMarqueeSelect,
 }: Props) {
   // Multi-channel overlay branch. Triggered when the caller provides
@@ -334,6 +405,7 @@ export function CurveEditor({
         channels={channels}
         visibleChannels={visibleChannels}
         focusChannel={focusChannel}
+        displayRange={valueRange}
         width={width}
         height={height}
         timeMin={timeMin}
@@ -346,6 +418,9 @@ export function CurveEditor({
         onCanvasContextMenu={onCanvasContextMenu}
         onKeyContextMenu={onKeyContextMenu}
         onKeyDragEnd={onKeyDragEnd}
+        onKeyDragStart={onKeyDragStart}
+        onKeyDragMove={onKeyDragMove}
+        onKeyDragCancel={onKeyDragCancel}
         onCanvasMarqueeSelect={onCanvasMarqueeSelect}
       />
     );
@@ -953,6 +1028,14 @@ type MultiProps = {
   channels: readonly ChannelDef[];
   visibleChannels: Record<string, boolean>;
   focusChannel?: string;
+  /** Unified Y-axis range across all visible channels. When set, the
+   *  renderer projects every channel into this single space and uses
+   *  it for pointer↔value conversions (drag, insert, marquee). When
+   *  omitted, each channel falls back to its own per-track range
+   *  (legacy behaviour). The drag VALUE-clamp uses the focus
+   *  channel's own range regardless, so engine bounds aren't
+   *  violated even when the visible canvas extends past them. */
+  displayRange?: { min: number; max: number };
   width: number;
   height: number;
   timeMin: number;
@@ -971,6 +1054,9 @@ type MultiProps = {
     clientY: number,
   ) => void;
   onKeyDragEnd?: (keyTime: number, newTime: number, newValue: number) => void;
+  onKeyDragStart?: (keyTime: number) => void;
+  onKeyDragMove?: (keyTime: number, currentTime: number, currentValue: number) => void;
+  onKeyDragCancel?: () => void;
   onCanvasMarqueeSelect?: (times: number[], shift: boolean) => void;
 };
 
@@ -979,8 +1065,9 @@ function MultiChannelCurves({
   channels,
   visibleChannels,
   focusChannel,
-  width,
-  height,
+  displayRange,
+  width: propWidth,
+  height: propHeight,
   timeMin,
   timeMax,
   selectedKeyTimes,
@@ -991,8 +1078,48 @@ function MultiChannelCurves({
   onCanvasContextMenu,
   onKeyContextMenu,
   onKeyDragEnd,
+  onKeyDragStart,
+  onKeyDragMove,
+  onKeyDragCancel,
   onCanvasMarqueeSelect,
 }: MultiProps) {
+  // Live-measured SVG dimensions. We can't simply pass a fixed 600×300
+  // viewBox to a stretchy SVG (`preserveAspectRatio="none"`) without
+  // distorting circles into ellipses and giving gridline strokes
+  // non-uniform thickness — at a 2400×200 cell the 4× X / 0.65× Y
+  // stretch is glaringly visible. The fix is to match viewBox to the
+  // actual rendered CSS dimensions; that makes one viewBox unit equal
+  // one CSS pixel, so strokes / radii are isotropic. Measurement runs
+  // in a layout effect (synchronous post-DOM, pre-paint) so the user
+  // never sees the default-size first frame. In jsdom (tests) the
+  // ResizeObserver stub is a no-op and `getBoundingClientRect` returns
+  // zeros, so the measurement is rejected and the prop fallback is
+  // used — keeping the existing 600×300 test deterministic.
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [measured, setMeasured] = useState<{ width: number; height: number }>(
+    { width: propWidth, height: propHeight },
+  );
+  useLayoutEffect(() => {
+    const el = svgRef.current;
+    if (el === null) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setMeasured((prev) =>
+          prev.width === rect.width && prev.height === rect.height
+            ? prev
+            : { width: rect.width, height: rect.height },
+        );
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const width = measured.width;
+  const height = measured.height;
+
   // Grid: same layout as the single-track renderer so the visual
   // matches the design lock. 10 evenly-spaced cells per axis.
   const gridCells = 10;
@@ -1007,15 +1134,22 @@ function MultiChannelCurves({
 
   // For each visible channel, find the track by name + project its
   // keys. Tracks may be null (no emitter selected) — render the grid
-  // only.
+  // only. When the parent supplies `displayRange` every channel
+  // projects into the SAME Y space (so curves squish/stretch
+  // together as the union of their ranges); when omitted each
+  // channel falls back to its own per-track range (legacy
+  // per-channel scaling). The per-channel `range` we keep on each
+  // layer is still the channel's OWN engine-allowed range — the
+  // drag value-clamp downstream reads it from `focusLayer.range`.
   const layers = (tracks ?? []).flatMap((t) => {
     const channel = channels.find((c) => c.trackName === t.name);
     if (channel === undefined) return [];
     if (!(visibleChannels[channel.id] ?? channel.defaultOn)) return [];
     const range = valueRangeForTrack(t);
+    const projY = displayRange ?? range;
     const points = t.keys.map((k) => ({
       x: project(k.time, timeMin, timeMax, width),
-      y: height - project(k.value, range.min, range.max, height),
+      y: height - project(k.value, projY.min, projY.max, height),
       time: k.time,
       value: k.value,
     }));
@@ -1063,6 +1197,16 @@ function MultiChannelCurves({
   };
   const [marquee, setMarquee] = useState<MarqueeState | null>(null);
   const marqueeConsumedClickRef = useRef(false);
+  // After a key drag commits, the browser still fires a synthetic
+  // `click` event whose target is determined by the document
+  // hit-test at pointer-up location — pointer capture redirects
+  // `pointer*` events but NOT the click. If the drag ended over the
+  // canvas backdrop, the backdrop's onClick would run onCanvasClick
+  // and wipe the selection we just established in handleKeyDragEnd.
+  // This ref is set true on drag-end and consumed once by the
+  // backdrop's click handler so the deselect is suppressed for that
+  // single trailing click.
+  const dragConsumedClickRef = useRef(false);
 
   // Border keys on the focus track. First + last by time order.
   const focusBorderTimes = new Set<number>();
@@ -1073,8 +1217,20 @@ function MultiChannelCurves({
   }
 
   const focusRange = focusLayer?.range ?? { min: 0, max: 1 };
+  // The focus channel's engine-allowed bounds — used for the drag
+  // value-clamp so a drag can never push the focused key past what
+  // the engine accepts (e.g. red stays in [0, 1] even when the
+  // canvas extends to 0..20 because Scale is also visible).
   const focusVMin = focusRange.min;
   const focusVMax = focusRange.max;
+  // Visual Y space the canvas paints in — the unified display range
+  // when supplied, the focus channel's range otherwise. Pointer↔value
+  // conversions for drag, insert, marquee, and drag-preview projection
+  // all use this so "where the user clicks" matches "where the curve
+  // is drawn".
+  const canvasRange = displayRange ?? focusRange;
+  const canvasVMin = canvasRange.min;
+  const canvasVMax = canvasRange.max;
 
   /** Begin a drag on a focus-channel key. */
   const startDrag = (
@@ -1101,6 +1257,12 @@ function MultiChannelCurves({
     if (typeof t.setPointerCapture === "function") {
       try { t.setPointerCapture(event.pointerId); } catch { /* swallow */ }
     }
+    // Pre-select the key so it paints with the selected ring the
+    // moment the user grabs it — without this, a gesture that turns
+    // into a drag (rather than a click) never lands on `onKeyClick`,
+    // so the key would stay unselected throughout the drag and only
+    // become selected on pointer-up via `onKeyDragEnd`.
+    onKeyDragStart?.(keyTime);
   };
 
   /** Pointer-move during a drag OR marquee. */
@@ -1130,7 +1292,10 @@ function MultiChannelCurves({
     const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     let nextTime = unproject(x, timeMin, timeMax, width);
-    let nextValue = unproject(height - y, focusVMin, focusVMax, height);
+    // Pointer Y maps through the CANVAS range (so the cursor follows
+    // the curve visually); the value is then clamped to the focus
+    // channel's engine bounds below so the commit stays legal.
+    let nextValue = unproject(height - y, canvasVMin, canvasVMax, height);
     const isBorder = focusBorderTimes.has(drag.startTime);
     if (isBorder) {
       nextTime = drag.startTime;
@@ -1153,6 +1318,12 @@ function MultiChannelCurves({
     const dy2 = event.clientY - drag.startClientY;
     if (Math.abs(dx2) > DRAG_SLOP || Math.abs(dy2) > DRAG_SLOP) {
       drag.moved = true;
+    }
+    // Fire the live-drag callback only once we're past the slop
+    // threshold — jittery clicks shouldn't ripple a "drag move"
+    // upward to the spinner panel.
+    if (drag.moved) {
+      onKeyDragMove?.(drag.keyTime, drag.currentTime, drag.currentValue);
     }
     setDragTick((n) => n + 1);
   };
@@ -1203,6 +1374,10 @@ function MultiChannelCurves({
     }
     setDragTick((n) => n + 1);
     if (moved && onKeyDragEnd) {
+      // Suppress the trailing synthetic click — see
+      // `dragConsumedClickRef`'s comment. Without this the backdrop
+      // would clear the selection we set in handleKeyDragEnd.
+      dragConsumedClickRef.current = true;
       onKeyDragEnd(keyTime, currentTime, currentValue);
     } else if (!moved && onKeyClick) {
       onKeyClick(keyTime, event);
@@ -1219,6 +1394,9 @@ function MultiChannelCurves({
     if (event.pointerId !== drag.pointerId) return;
     dragRef.current = null;
     setDragTick((n) => n + 1);
+    // Notify the parent so it can roll back any live-drag state
+    // (Time / Value spinner overlay) that came from `onKeyDragMove`.
+    onKeyDragCancel?.();
   };
 
   // Esc cancels an active marquee.
@@ -1244,7 +1422,10 @@ function MultiChannelCurves({
       const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       const time = unproject(x, timeMin, timeMax, width);
-      const value = unproject(height - y, focusVMin, focusVMax, height);
+      // Pointer Y → value through the CANVAS range. The host
+      // (`emitters/add-track-key`) clamps to the channel's engine
+      // bounds before committing.
+      const value = unproject(height - y, canvasVMin, canvasVMax, height);
       event.stopPropagation();
       onCanvasAdd(time, value);
       return;
@@ -1276,7 +1457,11 @@ function MultiChannelCurves({
   const focusRenderPoints = focusLayer === null ? [] : focusLayer.points.map((p) => {
     if (drag !== null && p.time === drag.keyTime) {
       const dx = project(drag.currentTime, timeMin, timeMax, width);
-      const dy = height - project(drag.currentValue, focusVMin, focusVMax, height);
+      // Drag preview projects the in-flight value through the CANVAS
+      // range so the dragged circle tracks the cursor even when the
+      // canvas extends beyond the focus channel's own range (e.g. red
+      // key on a 0..20 canvas because Scale is also visible).
+      const dy = height - project(drag.currentValue, canvasVMin, canvasVMax, height);
       return { ...p, x: dx, y: dy };
     }
     return p;
@@ -1284,6 +1469,7 @@ function MultiChannelCurves({
 
   return (
     <svg
+      ref={svgRef}
       data-testid="curve-editor-svg"
       data-multi-channel="true"
       data-visible-count={layers.length}
@@ -1292,8 +1478,16 @@ function MultiChannelCurves({
       data-dragging={drag !== null ? "true" : "false"}
       role="img"
       aria-label={`Multi-channel curve overlay, ${layers.length} channels`}
+      // viewBox is sized to the SVG's MEASURED CSS dimensions (see
+      // the `useLayoutEffect` above), so one viewBox unit equals one
+      // CSS pixel. This means `preserveAspectRatio` becomes a
+      // no-op (any value works — viewBox already matches CSS dims
+      // exactly), strokes draw at their declared CSS-pixel width,
+      // and `r={5}` circles stay circular regardless of how the
+      // cell stretches. The prior `preserveAspectRatio="none"` was
+      // what made circles morph into ellipses and gridlines
+      // thicken / thin along different axes at wide windows.
       viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
       // `block` removes the inline-baseline gap that a default-inline
       // <svg> would leave under it (descender space in the parent line
       // box), preventing a few-pixel vertical offset from the cell top.
@@ -1311,6 +1505,10 @@ function MultiChannelCurves({
       onClick={focusEnabled ? (e) => {
         if (e.target !== e.currentTarget) return;
         if (insertMode) return;
+        if (dragConsumedClickRef.current) {
+          dragConsumedClickRef.current = false;
+          return;
+        }
         onCanvasClick?.(e);
       } : undefined}
     >
@@ -1337,6 +1535,10 @@ function MultiChannelCurves({
             if (insertMode) return;
             if (marqueeConsumedClickRef.current) {
               marqueeConsumedClickRef.current = false;
+              return;
+            }
+            if (dragConsumedClickRef.current) {
+              dragConsumedClickRef.current = false;
               return;
             }
             onCanvasClick?.(e);
@@ -1366,19 +1568,31 @@ function MultiChannelCurves({
         <line x1={0} y1={height} x2={width} y2={height} />
       </g>
 
-      {/* Background (non-focus) layers — dimmed lines only, no markers,
-          no pointer events. In view-only mode (no focus channel) every
-          layer renders this way. */}
+      {/* Background (non-focus) layers — dimmed lines + small
+          non-interactive markers. In view-only mode (no focus
+          channel) every layer renders the full-fidelity version
+          with regular markers; in focus mode the markers shrink and
+          drop their dark stroke so the focus layer's r=5 stroked
+          circles stay visually primary. */}
       {layers.map(({ channel, track, points }) => {
         const isFocus = focusEnabled && focusLayer !== null && channel.id === focusLayer.channel.id;
         if (isFocus) return null; // focus layer rendered separately below
         const interp = track.interpolation;
-        // View-only mode (no focus) keeps the Task 2.6 appearance:
-        // full opacity, normal stroke width, simple markers. Focus
-        // mode dims non-focus layers and drops the markers.
         const layerOpacity = focusEnabled ? 0.4 : 1;
         const strokeW = 2;
-        const showMarkers = !focusEnabled;
+        // Marker shape: in view-only mode, fully-styled circles
+        // (matching Task 2.6 appearance). In focus mode, smaller
+        // filled dots with no stroke — visible enough to read where
+        // the control points sit on the dim curve, quiet enough that
+        // the focus channel's keys remain the eye's target.
+        const markerR = focusEnabled ? 3 : 4;
+        const markerStroke = focusEnabled ? "none" : "#0a0a0a";
+        const markerStrokeW = focusEnabled ? 0 : 1;
+        // In focus mode the markers are non-interactive scenery — no
+        // testid (the `curve-key` testid means "an interactive key
+        // circle"), no key click handlers. View-only mode keeps the
+        // legacy testid so callers can still query them.
+        const markerTestId = focusEnabled ? undefined : "curve-key";
         return (
           <g
             key={channel.id}
@@ -1415,18 +1629,18 @@ function MultiChannelCurves({
                 pointerEvents="none"
               />
             )}
-            {showMarkers && points.map((p, i) => (
+            {points.map((p, i) => (
               <circle
                 key={i}
-                data-testid="curve-key"
+                {...(markerTestId !== undefined ? { "data-testid": markerTestId } : {})}
                 data-channel-id={channel.id}
                 data-key-time={p.time}
                 cx={p.x}
                 cy={p.y}
-                r={4}
+                r={markerR}
                 fill={channel.color}
-                stroke="#0a0a0a"
-                strokeWidth={1}
+                stroke={markerStroke}
+                strokeWidth={markerStrokeW}
                 pointerEvents="none"
               />
             ))}
@@ -1436,10 +1650,14 @@ function MultiChannelCurves({
 
       {/* Focus layer — full opacity, thicker stroke, interactive
           circles. Rendered last so it draws above the dimmed
-          background layers. */}
+          background layers. A vertical gradient fill emanates from
+          the curve down to the canvas floor (focus-only — keeping
+          non-focus layers free of fills avoids stacked-translucent
+          clutter when many channels are visible). */}
       {focusLayer !== null && (() => {
         const { channel, track } = focusLayer;
         const interp = track.interpolation;
+        const fillGradId = `curve-fill-${channel.id}`;
         return (
           <g
             key={channel.id}
@@ -1448,6 +1666,28 @@ function MultiChannelCurves({
             data-key-count={focusRenderPoints.length}
             data-focus="true"
           >
+            {/* Gradient definition — objectBoundingBox units mean the
+                stops are positioned within the fill path's own bbox,
+                so 0% lands at the top of the curve (highest point of
+                the fill area) and 100% lands at the canvas floor.
+                That produces the "colour emanating from the curve,
+                fading to transparent" effect rather than a
+                canvas-wide top-to-bottom wash. */}
+            <defs>
+              <linearGradient id={fillGradId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={channel.color} stopOpacity="0.25" />
+                <stop offset="100%" stopColor={channel.color} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            {focusRenderPoints.length >= 2 && (
+              <path
+                data-testid="curve-fill"
+                fill={`url(#${fillGradId})`}
+                stroke="none"
+                d={buildFillPath(focusRenderPoints, interp, height)}
+                pointerEvents="none"
+              />
+            )}
             {focusRenderPoints.length >= 2 && interp === "smooth" && (
               <path
                 data-testid="curve-path"
@@ -1483,42 +1723,65 @@ function MultiChannelCurves({
             {focusRenderPoints.map((p, i) => {
               const selected = selectedKeyTimes?.has(p.time) ?? false;
               const isBorder = focusBorderTimes.has(p.time);
-              const fill = selected
-                ? SELECTED_FILL
-                : isBorder
-                  ? BORDER_FILL
-                  : channel.color;
-              const stroke = isBorder ? BORDER_STROKE : "#0a0a0a";
-              const strokeWidth = isBorder ? 1.5 : 1;
+              // Border keys (first / last in time order) used to render
+              // with a slate fill + accent-blue stroke to signal "you
+              // can't delete or drag-in-time this one". The visual
+              // inconsistency (mid-curve red, edges blue) outweighed
+              // the value — the same restrictions are still enforced
+              // by the Delete handler + drag-time clamp, and the
+              // `data-border` attribute below tags them for callers
+              // that need the distinction programmatically.
+              const fill = selected ? SELECTED_FILL : channel.color;
+              const stroke = "#0a0a0a";
+              const strokeWidth = 1;
+              // Each focus key is rendered as a (hit-pad, visible)
+              // pair: the hit pad is a transparent circle ~2× the
+              // visible radius that owns every pointer handler +
+              // data attribute (so test queries + click targets
+              // land on it), and the visible circle on top is
+              // decorative-only (`pointerEvents="none"`). This
+              // makes keys comfortable to click without forcing a
+              // larger visual marker that would clutter the curve.
+              const hitR = selected ? 12 : 10;
+              const visR = selected ? 6 : 5;
               return (
-                <circle
-                  key={i}
-                  data-testid="curve-key"
-                  data-channel-id={channel.id}
-                  data-key-time={p.time}
-                  data-selected={selected ? "true" : "false"}
-                  data-border={isBorder ? "true" : "false"}
-                  cx={p.x}
-                  cy={p.y}
-                  r={selected ? 6 : 5}
-                  fill={fill}
-                  stroke={stroke}
-                  strokeWidth={strokeWidth}
-                  style={{ cursor: onKeyClick ? "pointer" : undefined }}
-                  onPointerDown={(e) => startDrag(e, p.time, p.value)}
-                  onContextMenu={(e) => {
-                    if (!onKeyContextMenu) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onKeyContextMenu(p.time, isBorder, e.clientX, e.clientY);
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (dragRef.current === null) {
-                      onKeyClick?.(p.time, e);
-                    }
-                  }}
-                />
+                <g key={i}>
+                  <circle
+                    data-testid="curve-key"
+                    data-channel-id={channel.id}
+                    data-key-time={p.time}
+                    data-selected={selected ? "true" : "false"}
+                    data-border={isBorder ? "true" : "false"}
+                    cx={p.x}
+                    cy={p.y}
+                    r={hitR}
+                    fill="transparent"
+                    stroke="transparent"
+                    style={{ cursor: onKeyClick ? "pointer" : undefined }}
+                    onPointerDown={(e) => startDrag(e, p.time, p.value)}
+                    onContextMenu={(e) => {
+                      if (!onKeyContextMenu) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onKeyContextMenu(p.time, isBorder, e.clientX, e.clientY);
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (dragRef.current === null) {
+                        onKeyClick?.(p.time, e);
+                      }
+                    }}
+                  />
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={visR}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={strokeWidth}
+                    pointerEvents="none"
+                  />
+                </g>
               );
             })}
           </g>

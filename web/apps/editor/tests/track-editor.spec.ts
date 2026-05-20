@@ -106,23 +106,22 @@ test("selecting an emitter swaps the placeholder for the multi-channel CurveEdit
   });
 });
 
-test("channel checkboxes default to Index OFF and the rest ON", async () => {
+test("channel checkboxes default to R / G / B ON; Scale / Alpha / Rotation / Index OFF", async () => {
   const panel = page.locator('[data-testid="curve-editor-panel"]');
   await expect(panel).toBeVisible({ timeout: 5_000 });
 
-  // Clear persisted state so the defaults take effect on next mount.
-  await page.evaluate(() => {
-    localStorage.removeItem("alo:curve-channels");
-  });
-  // Force a reload so the panel re-reads localStorage.
+  // Visibility is session-scoped now (no localStorage persistence),
+  // so a reload alone gives clean defaults — no removeItem needed.
   await page.reload();
 
-  for (const id of ["scale", "red", "green", "blue", "alpha", "rotation"]) {
+  for (const id of ["red", "green", "blue"]) {
     const cb = panel.locator(`[data-testid="curve-channel-checkbox-${id}"]`);
     await expect(cb).toBeChecked();
   }
-  const indexCb = panel.locator('[data-testid="curve-channel-checkbox-index"]');
-  await expect(indexCb).not.toBeChecked();
+  for (const id of ["scale", "alpha", "rotation", "index"]) {
+    const cb = panel.locator(`[data-testid="curve-channel-checkbox-${id}"]`);
+    await expect(cb).not.toBeChecked();
+  }
 });
 
 test("emitters/add-track-key via the bridge adds a key (host round-trip unchanged)", async () => {
@@ -263,14 +262,15 @@ test("clicking a channel row sets focus + only that channel renders interactive 
   });
 
   const panel = page.locator('[data-testid="curve-editor-panel"]');
-  await expect(panel).toHaveAttribute("data-focus-channel", "scale", { timeout: 5_000 });
-  await expect(panel.locator('[data-testid="curve-channel-row-scale"]'))
-    .toHaveAttribute("data-focus", "true");
-
-  // Click Red row — focus moves; data-focus-channel updates.
-  await panel.locator('[data-testid="curve-channel-row-red"]').click();
+  // Default focus is Red (the first channel visible by default).
   await expect(panel).toHaveAttribute("data-focus-channel", "red", { timeout: 5_000 });
   await expect(panel.locator('[data-testid="curve-channel-row-red"]'))
+    .toHaveAttribute("data-focus", "true");
+
+  // Click Green row — focus moves; data-focus-channel updates.
+  await panel.locator('[data-testid="curve-channel-row-green"]').click();
+  await expect(panel).toHaveAttribute("data-focus-channel", "green", { timeout: 5_000 });
+  await expect(panel.locator('[data-testid="curve-channel-row-green"]'))
     .toHaveAttribute("data-focus", "true");
 
   // Tear down.

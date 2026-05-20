@@ -26,11 +26,20 @@
 //     filtering out border keys + any presses inside a typing surface
 //     (input / textarea / select).
 //
-// Focus state is SESSION-SCOPED — not persisted to localStorage.
-// Selection (per focus channel) clears on focus change. Optimistic
-// (time, value) override keeps spinners populated across the bridge
-// round-trip (lessons.md L-006: sticky override; don't clear on
-// every `tracks` refresh).
+// Channel visibility AND focus are SESSION-SCOPED — every editor
+// boot starts with the documented defaults (R / G / B visible,
+// focus on Red). Selection (per focus channel) clears on focus
+// change. Optimistic (time, value) override keeps spinners
+// populated across the bridge round-trip (lessons.md L-006: sticky
+// override; don't clear on every `tracks` refresh).
+//
+// Y-axis range is UNIFIED across visible channels — every visible
+// curve renders into the same Y space (union of per-channel
+// ranges) so when you turn on Scale-at-20 alongside RGB, the canvas
+// scales out and the RGB curves squish near the bottom. Axis
+// labels reflect the unified range. Drag value-clamp stays scoped
+// to the focus channel so engine bounds aren't violated even when
+// the visible canvas extends past them.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import * as Select from "@radix-ui/react-select";
@@ -56,17 +65,21 @@ import { Spinner } from "@/primitives/Spinner";
  *    - Rotation  → --accent   (sky blue accent)
  *    - Index     → --text-3   (darker grey, defaults off)
  */
+// Display order is grouped: the colour channels (R / G / B / A) sit
+// at the top, and the transform-y channels (Scale / Index / Rotation)
+// sit below, separated by a horizontal divider rendered in the
+// list. Within the transform group, Scale is exclusive — enabling
+// it hides everything else (see `handleRowClick` + the checkbox
+// onChange handler).
 export const CHANNELS: readonly ChannelDef[] = [
-  { id: "scale",    label: "Scale",    color: "var(--warning)", defaultOn: true,  trackName: "scale" },
   { id: "red",      label: "Red",      color: "var(--x-axis)",  defaultOn: true,  trackName: "red" },
   { id: "green",    label: "Green",    color: "var(--y-axis)",  defaultOn: true,  trackName: "green" },
   { id: "blue",     label: "Blue",     color: "var(--z-axis)",  defaultOn: true,  trackName: "blue" },
-  { id: "alpha",    label: "Alpha",    color: "var(--text-2)",  defaultOn: true,  trackName: "alpha" },
-  { id: "rotation", label: "Rotation", color: "var(--accent)",  defaultOn: true,  trackName: "rotationSpeed" },
+  { id: "alpha",    label: "Alpha",    color: "var(--text-2)",  defaultOn: false, trackName: "alpha" },
+  { id: "scale",    label: "Scale",    color: "var(--warning)", defaultOn: false, trackName: "scale" },
   { id: "index",    label: "Index",    color: "var(--text)",    defaultOn: false, trackName: "index" },
+  { id: "rotation", label: "Rotation", color: "var(--accent)",  defaultOn: false, trackName: "rotationSpeed" },
 ] as const;
-
-const STORAGE_KEY = "alo:curve-channels";
 
 /** DOM tag names that own their own keyboard handling. Delete events
  *  originating inside these MUST NOT be intercepted — typing Delete in
@@ -126,24 +139,6 @@ function defaultVisibility(): Record<string, boolean> {
   const result: Record<string, boolean> = {};
   for (const c of CHANNELS) result[c.id] = c.defaultOn;
   return result;
-}
-
-function loadVisibility(): Record<string, boolean> {
-  if (typeof localStorage === "undefined") return defaultVisibility();
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === null) return defaultVisibility();
-  try {
-    const parsed = JSON.parse(stored) as Record<string, boolean>;
-    const merged = defaultVisibility();
-    for (const c of CHANNELS) {
-      if (typeof parsed[c.id] === "boolean") {
-        merged[c.id] = parsed[c.id]!;
-      }
-    }
-    return merged;
-  } catch {
-    return defaultVisibility();
-  }
 }
 
 /** Per-track value range — same logic as MultiChannelCurves' internal
@@ -284,7 +279,15 @@ function CanvasWithAxisLabels({
       // circles that extend past the grid via `overflow="visible"`
       // (≈5px radius) breathing room before they crowd the labels.
       // Taller X-label row (22px, was 18px) does the same vertically.
-      style={{ gridTemplateColumns: "36px 1fr", gridTemplateRows: "1fr 22px" }}
+      //
+      // Both tracks use `minmax(0, …)` instead of bare `1fr` / `36px`
+      // so the SVG inside the canvas cell can't push the row to its
+      // intrinsic aspect-ratio height (`preserveAspectRatio="none"`
+      // + no explicit height → browser falls back to `viewBox`
+      // 600×300 aspect → 2443px wide canvas would want 1221px tall).
+      // The `0` lower bound is the only mechanism that lets the grid
+      // shrink the cell below the SVG's intrinsic content size.
+      style={{ gridTemplateColumns: "36px minmax(0, 1fr)", gridTemplateRows: "minmax(0, 1fr) 22px" }}
     >
       {/* Y-axis label column. Labels are absolutely-positioned within
           this cell at their respective `pct` so they align with grid
@@ -313,8 +316,17 @@ function CanvasWithAxisLabels({
           </span>
         ))}
       </div>
-      {/* SVG cell — receives the grid+curve children unchanged. */}
-      <div style={{ gridColumn: 2, gridRow: 1 }} className="min-w-0">
+      {/* SVG cell — receives the grid+curve children unchanged.
+          `min-h-0` + `min-w-0` are required so the cell can actually
+          shrink below the SVG's intrinsic aspect-ratio content-size
+          (in concert with the row template's `minmax(0, …)`).
+          NOT `overflow-hidden`: the SVG sets `overflow="visible"`
+          specifically so endpoint key circles at time=0 / time=100 /
+          value=min / value=max can draw their full body (rather than
+          being bisected by the cell edge). Clipping here would
+          re-introduce the half-moon corner keys the prior polish
+          session fixed. */}
+      <div style={{ gridColumn: 2, gridRow: 1 }} className="min-w-0 min-h-0">
         {children}
       </div>
       {/* X-axis labels — 5 fixed stops at 0/25/50/75/100% of the
@@ -337,7 +349,11 @@ function CanvasWithAxisLabels({
               whiteSpace: "nowrap",
             }}
           >
-            {t}
+            {/* Only the rightmost tick carries the % suffix — putting
+                it on every label would make the axis read busy. The
+                100% anchor establishes that the whole axis is a
+                percentage range. */}
+            {t === 100 ? `${t}%` : t}
           </span>
         ))}
       </div>
@@ -348,10 +364,13 @@ function CanvasWithAxisLabels({
 export function CurveEditorPanel({ bridge }: Props) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [tracks, setTracks] = useState<TrackDto[] | null>(null);
-  const [visible, setVisible] = useState<Record<string, boolean>>(loadVisibility);
-  // Focus channel — session-scoped (not persisted). Defaults to
-  // "scale" (first channel by display order).
-  const [focusChannel, setFocusChannel] = useState<string>("scale");
+  const [visible, setVisible] = useState<Record<string, boolean>>(defaultVisibility);
+  // Focus channel — session-scoped. Defaults to "red", the first
+  // channel visible by default. Picking "scale" (the first row in
+  // display order) would land the focus on a hidden channel and
+  // trigger the auto-recover effect on first paint; starting on a
+  // visible channel avoids that one-tick churn.
+  const [focusChannel, setFocusChannel] = useState<string>("red");
   const [mode, setMode] = useState<EditMode>("select");
   // Selection state — keyed by key TIME (not array index). Per focus
   // channel; cleared on focus change.
@@ -362,6 +381,16 @@ export function CurveEditorPanel({ bridge }: Props) {
   const [optimisticSelected, setOptimisticSelected] = useState<
     { time: number; value: number } | null
   >(null);
+  // Live-drag state: populated on every pointer-move during an
+  // active key drag (once movement crosses DRAG_SLOP in the
+  // renderer). Cleared by `handleKeyDragEnd` (when the drag commits)
+  // and `handleKeyDragCancel` (when the drag is aborted). The
+  // Time / Value spinners prefer this over the committed selection
+  // value, so the user sees the key's in-flight position update
+  // continuously as they drag.
+  const [liveDrag, setLiveDrag] = useState<
+    { keyTime: number; time: number; value: number } | null
+  >(null);
   const [keyContextMenu, setKeyContextMenu] = useState<
     { time: number; isBorder: boolean; x: number; y: number } | null
   >(null);
@@ -369,17 +398,6 @@ export function CurveEditorPanel({ bridge }: Props) {
   // Track which id we last fetched for, so a late-arriving response
   // for a stale selection doesn't clobber current data.
   const inFlightFor = useRef<number | null>(null);
-
-  // Persist visibility on every change. Focus channel is intentionally
-  // NOT persisted — it's an ephemeral edit context.
-  useEffect(() => {
-    if (typeof localStorage === "undefined") return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(visible));
-    } catch {
-      // Quota / disabled storage — silent.
-    }
-  }, [visible]);
 
   // Snapshot seed + live selection subscription.
   useEffect(() => {
@@ -445,12 +463,28 @@ export function CurveEditorPanel({ bridge }: Props) {
     return tracks.find((t) => t.name === focusedChannel.trackName) ?? null;
   }, [tracks, focusedChannel]);
 
-  const focusedRange = useMemo(
-    () => (focusedTrack === null
-      ? { min: 0, max: 1 }
-      : valueRangeForTrack(focusedTrack)),
-    [focusedTrack],
-  );
+  // Unified Y-axis range across all VISIBLE channels' tracks. When
+  // multiple channels are visible the canvas extends to encompass
+  // the most extreme keys on any of them — so turning on Scale-at-20
+  // alongside RGB stretches the canvas to 0..20 and the RGB curves
+  // squish near the bottom. Falls back to {0, 1} when nothing is
+  // visible (which also covers the no-emitter / no-tracks branch).
+  const unifiedRange = useMemo<{ min: number; max: number }>(() => {
+    if (tracks === null) return { min: 0, max: 1 };
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const t of tracks) {
+      const channel = CHANNELS.find((c) => c.trackName === t.name);
+      if (channel === undefined) continue;
+      if (!(visible[channel.id] ?? channel.defaultOn)) continue;
+      const r = valueRangeForTrack(t);
+      if (r.min < min) min = r.min;
+      if (r.max > max) max = r.max;
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 1 };
+    return { min, max };
+  }, [tracks, visible]);
+
 
   // Border keys on the focus track (first + last in time order).
   const borderKeyTimes = useMemo<ReadonlySet<number>>(() => {
@@ -458,6 +492,18 @@ export function CurveEditorPanel({ bridge }: Props) {
     const ks = focusedTrack.keys;
     return new Set<number>([ks[0]!.time, ks[ks.length - 1]!.time]);
   }, [focusedTrack]);
+
+  // Scale is the only exclusive channel: turning it on hides every
+  // other channel ("Scale solo mode"). Selecting a different curve
+  // via row click exits solo by hiding Scale and showing the target.
+  // Checkbox toggles on non-Scale channels do NOT exit solo — the
+  // checkbox is granular control; the user can manually keep Scale
+  // alongside other channels if they want unified-range comparison.
+  const enableScaleExclusively = useCallback(() => {
+    const next: Record<string, boolean> = {};
+    for (const ch of CHANNELS) next[ch.id] = ch.id === "scale";
+    setVisible(next);
+  }, []);
 
   // Row-click handler: set focus + ensure visibility. Clears selection +
   // optimistic override when switching focus to a different channel.
@@ -469,7 +515,19 @@ export function CurveEditorPanel({ bridge }: Props) {
       }
       return id;
     });
-    setVisible((v) => (v[id] ? v : { ...v, [id]: true }));
+    setVisible((v) => {
+      if (id === "scale" && !v[id]) {
+        // Off→on Scale row click enters solo mode.
+        const next: Record<string, boolean> = {};
+        for (const ch of CHANNELS) next[ch.id] = ch.id === "scale";
+        return next;
+      }
+      if (id !== "scale" && v.scale) {
+        // Selecting any other curve exits solo: hide Scale, show target.
+        return { ...v, scale: false, [id]: true };
+      }
+      return v[id] ? v : { ...v, [id]: true };
+    });
   }, []);
 
   // Auto-recover focus when the user hides the currently-focused
@@ -532,14 +590,31 @@ export function CurveEditorPanel({ bridge }: Props) {
   const handleKeyDragEnd = useCallback(
     (keyTime: number, newTime: number, newValue: number) => {
       if (selectedId === null || focusedTrack === null) return;
-      setSelectedKeyTimes((prev) => {
-        if (!prev.has(keyTime)) return prev;
-        const next = new Set(prev);
-        next.delete(keyTime);
-        next.add(newTime);
-        return next;
+      // The engine stores track key times as float32; a JS-side
+      // double like 49.476439790575924 comes back from the bridge
+      // refetch as 49.476440429... — equal at float32 precision but
+      // not under ===. Pre-round our committed time to float32 here
+      // so the value we put in `selectedKeyTimes` / optimistic
+      // tracks / optimistic spinner IS the same value the engine
+      // returns on the next refetch. Without this, the trailing
+      // tree/changed refetch silently drifts the focused track's
+      // key time by ~1e-6, the renderer's
+      // `selectedKeyTimes.has(p.time)` check misses, and the key
+      // paints unselected (the bug this fixes).
+      const engineNewTime = Math.fround(newTime);
+      setSelectedKeyTimes(new Set([engineNewTime]));
+      setOptimisticSelected({ time: engineNewTime, value: newValue });
+      setLiveDrag(null);
+      setTracks((prev) => {
+        if (prev === null) return prev;
+        return prev.map((t) => {
+          if (t.name !== focusedChannel.trackName) return t;
+          const keys = t.keys
+            .map((k) => (k.time === keyTime ? { time: engineNewTime, value: newValue } : k))
+            .sort((a, b) => a.time - b.time);
+          return { ...t, keys };
+        });
       });
-      setOptimisticSelected({ time: newTime, value: newValue });
       void bridge.request({
         kind: "emitters/set-track-key",
         params: {
@@ -553,6 +628,33 @@ export function CurveEditorPanel({ bridge }: Props) {
     },
     [bridge, selectedId, focusedTrack, focusedChannel.trackName],
   );
+
+  const handleKeyDragStart = useCallback(
+    (keyTime: number) => {
+      // Pre-select the dragged key. This is what makes a select-mode
+      // drag show the selected ring while the user holds the key —
+      // the renderer's `selectedKeyTimes.has(p.time)` check is keyed
+      // off the rendered point's time, which stays equal to the
+      // dragged key's start time throughout the drag (the renderer
+      // only shifts the rendered POSITION via dragRef, not the
+      // logical time). Sticky-optimistic is cleared so it can't
+      // pull stale spinner values over the incoming live-drag data.
+      setSelectedKeyTimes(new Set([keyTime]));
+      setOptimisticSelected(null);
+    },
+    [],
+  );
+
+  const handleKeyDragMove = useCallback(
+    (keyTime: number, currentTime: number, currentValue: number) => {
+      setLiveDrag({ keyTime, time: currentTime, value: currentValue });
+    },
+    [],
+  );
+
+  const handleKeyDragCancel = useCallback(() => {
+    setLiveDrag(null);
+  }, []);
 
   const handleCanvasAdd = useCallback(
     (time: number, value: number) => {
@@ -601,6 +703,19 @@ export function CurveEditorPanel({ bridge }: Props) {
   // ── Spinner sync ─────────────────────────────────────────────────
 
   const singleSelected = useMemo<{ time: number; value: number; isBorder: boolean } | null>(() => {
+    // Live drag wins — while the user is mid-drag the spinner
+    // tracks the dragged key's in-flight (time, value) regardless of
+    // what the committed selection currently holds. `keyTime` is the
+    // ORIGINAL time of the dragged key (border-ness is keyed off
+    // that, not the live time, since border-ness is a structural
+    // property of the key not its current display time).
+    if (liveDrag !== null) {
+      return {
+        time: liveDrag.time,
+        value: liveDrag.value,
+        isBorder: borderKeyTimes.has(liveDrag.keyTime),
+      };
+    }
     if (selectedKeyTimes.size !== 1) return null;
     const onlyTime = selectedKeyTimes.values().next().value as number;
     if (optimisticSelected !== null && optimisticSelected.time === onlyTime) {
@@ -618,7 +733,7 @@ export function CurveEditorPanel({ bridge }: Props) {
       value: key.value,
       isBorder: borderKeyTimes.has(key.time),
     };
-  }, [selectedKeyTimes, focusedTrack, borderKeyTimes, optimisticSelected]);
+  }, [liveDrag, selectedKeyTimes, focusedTrack, borderKeyTimes, optimisticSelected]);
 
   const spinnersDisabled = singleSelected === null || selectedId === null;
   const timeSpinnerDisabled = spinnersDisabled || (singleSelected?.isBorder ?? false);
@@ -903,7 +1018,7 @@ export function CurveEditorPanel({ bridge }: Props) {
             className={
               deleteDisabled
                 ? "grid h-6 w-6 place-items-center rounded border border-border bg-bg-2/60 text-text-3"
-                : "grid h-6 w-6 place-items-center rounded border border-rose-700 bg-rose-900/30 text-rose-200 hover:border-rose-500"
+                : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-rose-500 hover:text-rose-300"
             }
           >
             <Trash2 className="size-3.5" aria-hidden="true" />
@@ -926,6 +1041,7 @@ export function CurveEditorPanel({ bridge }: Props) {
               min={0}
               max={100}
               step={1}
+              unit="%"
               disabled={timeSpinnerDisabled}
               density="tight"
             />
@@ -958,10 +1074,10 @@ export function CurveEditorPanel({ bridge }: Props) {
             aria-label="Curve channels"
             data-testid="curve-channel-list"
           >
-            {CHANNELS.map((c) => {
+            {CHANNELS.flatMap((c) => {
               const isOn = visible[c.id] ?? c.defaultOn;
               const isFocus = c.id === focusChannel;
-              return (
+              const row = (
                 <div
                   key={c.id}
                   className={
@@ -988,9 +1104,13 @@ export function CurveEditorPanel({ bridge }: Props) {
                   <input
                     type="checkbox"
                     checked={isOn}
-                    onChange={(e) =>
-                      setVisible((v) => ({ ...v, [c.id]: e.target.checked }))
-                    }
+                    onChange={(e) => {
+                      if (c.id === "scale" && e.target.checked) {
+                        enableScaleExclusively();
+                      } else {
+                        setVisible((v) => ({ ...v, [c.id]: e.target.checked }));
+                      }
+                    }}
                     onClick={(e) => {
                       // Don't propagate to the row click — the
                       // checkbox toggles visibility only; the row body
@@ -1008,6 +1128,22 @@ export function CurveEditorPanel({ bridge }: Props) {
                   <span className="min-w-0 flex-1 truncate">{c.label}</span>
                 </div>
               );
+              // Render a horizontal divider before the first
+              // transform-y channel (Scale) so the colour group
+              // visually separates from the transform group.
+              if (c.id === "scale") {
+                return [
+                  <div
+                    key="curve-channel-group-divider"
+                    className="section-divider"
+                    data-testid="curve-channel-group-divider"
+                    role="separator"
+                    aria-hidden="true"
+                  />,
+                  row,
+                ];
+              }
+              return [row];
             })}
           </div>
           <div className="curve-canvas-wrap">
@@ -1020,14 +1156,15 @@ export function CurveEditorPanel({ bridge }: Props) {
               </div>
             ) : (
               <CanvasWithAxisLabels
-                yMin={focusedRange.min}
-                yMax={focusedRange.max}
+                yMin={unifiedRange.min}
+                yMax={unifiedRange.max}
               >
                 <CurveEditor
                   tracks={tracks}
                   channels={CHANNELS}
                   visibleChannels={visible}
                   focusChannel={focusChannel}
+                  valueRange={unifiedRange}
                   selectedKeyTimes={selectedKeyTimes}
                   onKeyClick={handleKeyClick}
                   onCanvasClick={handleCanvasClick}
@@ -1038,6 +1175,9 @@ export function CurveEditorPanel({ bridge }: Props) {
                     setKeyContextMenu({ time, isBorder, x, y })
                   }
                   onKeyDragEnd={handleKeyDragEnd}
+                  onKeyDragStart={handleKeyDragStart}
+                  onKeyDragMove={handleKeyDragMove}
+                  onKeyDragCancel={handleKeyDragCancel}
                   onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
                 />
               </CanvasWithAxisLabels>
