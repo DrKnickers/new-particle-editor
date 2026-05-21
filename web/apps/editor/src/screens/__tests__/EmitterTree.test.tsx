@@ -507,4 +507,53 @@ describe("EmitterTree", () => {
     // The legacy eye-toggle button used aria-label "Toggle emitter visibility".
     expect(screen.queryByLabelText("Toggle emitter visibility")).toBeNull();
   });
+
+  it("toolbar renders a Duplicate button between New and Delete in DOM order", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    const newBtn = screen.getByLabelText("New Emitter");
+    const dupBtn = screen.getByLabelText("Duplicate emitter");
+    const delBtn = screen.getByLabelText("Delete emitter");
+
+    // newBtn comes before dupBtn comes before delBtn.
+    expect(newBtn.compareDocumentPosition(dupBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(dupBtn.compareDocumentPosition(delBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("clicking Duplicate dispatches emitters/duplicate with the primary's id", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Select Smoke (id=0) first.
+    fireEvent.click(screen.getByText("Smoke"));
+    await waitFor(() => {
+      expect(useEmitterSelectionStore.getState().primary).toBe(0);
+    });
+
+    fireEvent.click(screen.getByLabelText("Duplicate emitter"));
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const dup = calls.find((c) => c.kind === "emitters/duplicate");
+    expect(dup).toBeDefined();
+    expect(dup!.params).toEqual({ id: 0 });
+  });
+
+  it("Duplicate button is disabled when no emitter is selected", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // No selection at this point (beforeEach clears the store).
+    const dupBtn = screen.getByLabelText("Duplicate emitter");
+    expect(dupBtn).toBeDisabled();
+  });
 });

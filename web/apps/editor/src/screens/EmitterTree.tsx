@@ -67,7 +67,7 @@ import {
 } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Menubar from "@radix-ui/react-menubar";
-import { ChevronDown, ChevronUp, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 import type {
   Bridge,
@@ -883,6 +883,13 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       params: { parentId: primaryId },
     });
   };
+  const duplicatePrimary = () => {
+    if (primaryId === null) return;
+    void bridge.request({
+      kind: "emitters/duplicate",
+      params: { id: primaryId },
+    });
+  };
   const del = () => {
     if (primaryId === null) return;
     void bridge.request({ kind: "emitters/delete", params: { id: primaryId } });
@@ -956,6 +963,16 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
           </Menubar.Portal>
         </Menubar.Menu>
       </Menubar.Root>
+      <button
+        type="button"
+        className={TOOLBAR_BTN}
+        title="Duplicate"
+        aria-label="Duplicate emitter"
+        disabled={!hasPrimary}
+        onClick={duplicatePrimary}
+      >
+        <Copy className="size-4" />
+      </button>
       <button
         type="button"
         className={TOOLBAR_BTN}
