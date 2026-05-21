@@ -1005,21 +1005,21 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
       </button>
       <button
         type="button"
-        className="ml-0.5 h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-text-2 hover:bg-panel-2 hover:text-text outline-none"
+        className={TOOLBAR_BTN}
         title="Show All Emitters"
         aria-label="Show all emitters"
         onClick={showAll}
       >
-        Show All
+        <Eye className="size-4" />
       </button>
       <button
         type="button"
-        className="h-6 rounded px-1.5 text-[10px] uppercase tracking-wide text-text-2 hover:bg-panel-2 hover:text-text outline-none"
+        className={TOOLBAR_BTN}
         title="Hide All Emitters"
         aria-label="Hide all emitters"
         onClick={hideAll}
       >
-        Hide All
+        <EyeOff className="size-4" />
       </button>
     </div>
   );

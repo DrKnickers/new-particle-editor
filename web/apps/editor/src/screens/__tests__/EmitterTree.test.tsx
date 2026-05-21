@@ -556,4 +556,29 @@ describe("EmitterTree", () => {
     const dupBtn = screen.getByLabelText("Duplicate emitter");
     expect(dupBtn).toBeDisabled();
   });
+
+  it("Show All / Hide All render as icon buttons (no SHOW / HIDE text)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Tooltips / aria-labels still find the buttons.
+    expect(screen.getByLabelText("Show all emitters")).toBeInTheDocument();
+    expect(screen.getByLabelText("Hide all emitters")).toBeInTheDocument();
+
+    // The literal text "SHOW" and "HIDE" no longer appears in the toolbar.
+    // (The legacy implementation rendered uppercase letter-spaced spans.)
+    const toolbar = screen.getByTestId("emitter-tree-toolbar");
+    expect(toolbar.textContent).not.toMatch(/SHOW/);
+    expect(toolbar.textContent).not.toMatch(/HIDE/);
+
+    // The Eye / EyeOff Lucide icons should be present inside the
+    // Show All / Hide All buttons (svg elements).
+    const showAll = screen.getByLabelText("Show all emitters");
+    const hideAll = screen.getByLabelText("Hide all emitters");
+    expect(showAll.querySelector("svg")).not.toBeNull();
+    expect(hideAll.querySelector("svg")).not.toBeNull();
+  });
 });
