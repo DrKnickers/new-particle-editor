@@ -1355,6 +1355,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         sendOk(json::object());
         SetDirty(false);
         EmitEngineStateChanged();
+        // B1.3.1 polish round 3: React's EmitterTree subscribes to
+        // emitters/tree/changed; without this emit the tree stays on
+        // its pre-file/new state even after the ParticleSystem has
+        // been swapped under it.
+        EmitEmittersTreeChanged();
         return res;
     }
 
@@ -1466,6 +1471,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             m_engine->Clear();
             m_engine->OnParticleSystemChanged(-1);
+            // B1.3.1 polish round 3: legacy DoOpenFile relies on
+            // first-render lazy texture binding via per-instance
+            // construction; in --new-ui mode the host's WebView2
+            // composition timing produces white-fallback particles
+            // unless we explicitly invalidate the cache. ReloadTextures
+            // is the same operation View → Reload Textures already
+            // does on demand; calling it here makes file/open
+            // self-sufficient.
+            m_engine->ReloadTextures();
         }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
@@ -1473,6 +1487,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         SetDirty(false);
         EmitRecentChanged();
         EmitEngineStateChanged();
+        // B1.3.1 polish round 3: React's EmitterTree subscribes to
+        // emitters/tree/changed; without this emit the tree stays on
+        // the previous file's emitters even though the engine now
+        // holds the new file's ParticleSystem.
+        EmitEmittersTreeChanged();
         return res;
     }
 
