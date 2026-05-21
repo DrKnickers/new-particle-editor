@@ -1,12 +1,12 @@
-# B1.3.1.1 — Frosted-glass modal backdrop via engine-snapshot capture (NEXT DISPATCH)
+# B1.3.2 — Unify collapsible-section styling via shared CSS class
 
-**Status:** planning — pending user sign-off before P2 begins. Plan refined from a long investigation in the prior B1.3.1 session — see Hand-off context section below for why this is the right approach.
+**Status:** planning — pending user sign-off before execution.
 
-**Started:** 2026-05-21
-**HEAD at planning:** `52bb032` (B1.3.1 polish rounds 7-9 commit). Predecessor on `origin/lt-4` is `f12d6f2`; the in-flight session branch `claude/agitated-margulis-854108` has 10 commits ahead, all under the B1.3.1 dispatch banner.
-**Goal:** Replace the failed modal-mask + edge-feather approach with a captured engine snapshot rendered as an `<img>` in the WebView2 DOM, so `Dialog.Overlay`'s existing `bg-black/60 backdrop-blur-sm` blurs both panels AND the snapshot uniformly — the "snapshot the UI, blur it, use as popup background" intent the user finally articulated.
+**Started:** 2026-05-22
+**HEAD at planning:** `37a99fb` (B1.3.1.1 docs commit, on `origin/lt-4`). Session branch is clean / in sync.
+**Goal:** Adopt the Spawner-panel section aesthetic (uppercase, muted, right-chevron, bordered-box) for the inspector tabs by extracting a **shared CSS class** consumed by both `Section.tsx` and `ToolPanel.Section`. Aligns with the project's "reuse classes where possible for maintainability" principle.
 
-**Tech stack:** C++ (HostWindow / AlphaCompositor / BridgeDispatcher / LayoutBroker), GDI+ for PNG encoding, bridge-schema TypeScript, React Modal primitive.
+**Tech stack:** React + TypeScript + Tailwind v4 + CSS-first (`@theme` + custom utilities in `components.css`).
 
 ---
 
@@ -14,33 +14,24 @@
 
 ### Goal
 
-Eliminate the "inner-shadow halo" artifact around modals' popup boundary by frosted-glassing the entire visible background — engine viewport + WebView2 panels — through a single CSS path (`Dialog.Overlay`'s `backdrop-blur-sm bg-black/60`). Engine viewport is captured to a PNG snapshot, sent to React, rendered as an `<img>` inside the viewport-quadrant DOM, and the engine popup is fully alpha-cut while the modal is open. CSS then blurs panels + snapshot uniformly, and the popup HWND boundary becomes invisible because both sides of it are now WebView2-rendered.
+The inspector tabs (Basic / Appearance / Physics) currently render section headers with one visual treatment (title-case, full-color text, left chevron, flat divider); the Spawner / Lighting / Bloom tool panels render them with another (uppercase, muted text, right chevron, bordered-box). The user wants the Spawner aesthetic everywhere. Rather than restyling `Section.tsx` in place and leaving two parallel implementations, this dispatch **extracts the common visual to a shared CSS class** consumed by both component shapes. Single source of truth; future style tweaks land in one place.
 
-### Hand-off context (read first if you're a fresh session)
+### In scope
 
-The prior dispatch (B1.3.1 polish rounds 7-9) added a server-side compositor pipeline that blurs + dims the engine viewport pixels directly, plus an edge-feather of the popup HWND boundary. The dim/blur work. The edge-feather produces a visible **inner-shadow vignette** because:
-
-- Pixel math (with `globalAlpha=0.4`, Dialog.Overlay `bg-black/60` over panels):
-  - Popup center luminance ≈ `engine*0.4 + panel*0.24` ≈ ~60
-  - Popup mid-fade band luminance ≈ `engine*0.2 + panel*0.8 * dst-luminance` ≈ ~35 (mid-fade has LESS engine + MORE dst showing through)
-  - Popup outermost edge / just outside popup ≈ `panel * 0.4` ≈ ~10
-- A smooth visual transition would have endpoints at the same luminance. Mine doesn't — center is bright (engine + slight panel), edge is dim (pure panel via dst). The mid-fade band hits a luminance VALLEY where dst dominates, reading as a dark vignette.
-- Algebraically can't be tuned away — the cause is structural: CSS effects can't span the engine compositing layer, so any attempt to bridge the popup boundary by feathering its alpha reveals the underlying dim instead of bridging gradients.
-
-The snapshot-into-DOM approach lifts the engine into the WebView2 DOM tree (frozen at one frame), so CSS effects sample it natively. No layer boundary. No algebra needed.
-
-### In scope (B1.3.1.1)
-
-1. **C++ snapshot capture surface.** New `viewport/capture-snapshot` bridge request that returns the current engine DIB as a base64-encoded PNG + dimensions.
-2. **React Modal rewiring.** On open: request snapshot, render an `<img>` into the viewport-quadrant DOM via `createPortal`, send a full-quadrant `viewport/occlude` so the engine popup goes fully transparent. On window resize: re-capture and re-send (rAF-throttled). On close: undo everything.
-3. **Remove the modal-mask compositor path.** Delete the now-dead `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha`/`m_blurRadius`/`m_blurScratch` fields, the `viewport/set-modal-mask` bridge surface, the schema, the MockBridge case, the Modal dispatch, and the regression test.
+1. **Shared CSS** (`web/apps/editor/src/styles/components.css`): new `.panel-section` / `.panel-section-header` / `.panel-section-body` rules covering the bordered-box container, uppercase muted header, right-aligned chevron with rotation. Targets both the controlled `<div>` shape and the native `<details>` shape via two-selector rotation rule.
+2. **`Section.tsx` migration**: swap `.section` / `.section-header` / `.section-divider` / `.section-body` → new classes; move chevron from before-title to after-title with `justify-content: space-between`; flip rotation semantics so the chevron points down when expanded; switch the rotation source from a `.collapsed` modifier class to a `data-open={open}` attribute on the outer `.panel-section` element.
+3. **`ToolPanel.Section` migration**: drop the inline Tailwind utility classes (`mb-3 rounded-md border …`); consume the shared class; swap ASCII `›` glyph for Lucide `<ChevronDown>` for visual consistency with the inspector side.
+4. **Deletion of legacy CSS**: remove `.section`, `.section-header`, `.section-divider`, `.section-body` and the now-stale "20px chevron-aligned indent" comment block; update the `.form-row.name-row` comment that referenced the old indent.
+5. **Vitest spec audit** for any selector references to `.section-header` / `.section-body` / `[data-testid^="section-"]` etc. Update spec selectors if needed (likely a trivial data-testid bump if anything).
 
 ### Out of scope
 
-- Nested modals — not currently a use case; skip.
-- Pausing the engine while a modal is open — wasted CPU/GPU but doesn't break anything; defer until perf becomes a real complaint.
-- Refresh-while-modal-open for engine state changes (e.g., spawner auto-firing while About is up) — the snapshot is intentionally frozen during modal lifecycle. Resize is the only re-capture trigger.
-- Raw BGRA over the bridge — start with PNG; only fall back if encode latency proves user-visible.
+- Any change to `Section`'s reset-on-mount state behavior (the `Section.tsx:9-12` comment documents this as intentional — preserved).
+- Any change to `ToolPanel.Section`'s native `<details>` state model (browser-managed; preserved).
+- Restyling of other inspector surfaces (`.form-row`, axis-cell, panel-header, etc.) — out of scope here, separate dispatch if wanted.
+- Lighting / Bloom panel internals beyond the section header (their content rows stay unchanged).
+- Width-tuning of the inspector column (B1.4 will make the column draggable; default split stays at 25/75).
+- Refactoring `Section` and `ToolPanel.Section` into a single primitive — kept as two thin shells over shared CSS so each can keep its distinct state model. (Convergence at the visual layer; divergence at the state layer.)
 
 ---
 
@@ -48,248 +39,312 @@ The snapshot-into-DOM approach lifts the engine into the WebView2 DOM tree (froz
 
 | Surface | Where | What it provides |
 |---|---|---|
-| AlphaCompositor's DIB | [`src/host/AlphaCompositor.cpp`](../src/host/AlphaCompositor.cpp) | Engine pixels are already memcpy'd to a CPU-side DIB on every `Composite()`. Snapshot just needs to copy that buffer before chrome-stamps. |
-| GDI+ on Windows SDK | system | PNG encoding via `Gdiplus::Bitmap::Save` + PNG encoder CLSID. Requires one-time `GdiplusStartup` / matching `GdiplusShutdown`. |
-| Bridge dispatcher | [`src/host/BridgeDispatcher.cpp`](../src/host/BridgeDispatcher.cpp) | Pattern: `if (kind == "...") { read params; do work; sendOk(json); return; }`. Match existing `viewport/occlude` shape. |
-| LayoutBroker | [`src/host/LayoutBroker.h`](../src/host/LayoutBroker.h) | Already forwards occlusion calls to the compositor. The capture path can bypass LayoutBroker — the dispatcher can call AlphaCompositor directly since the host owns a pointer. |
-| MockBridge | [`web/apps/editor/src/bridge/mock.ts`](../web/apps/editor/src/bridge/mock.ts) | Pattern: switch case on `req.kind`. Return a stub (empty PNG, w=0, h=0) so MockBridge satisfies the schema for unit tests. |
-| BridgeContext | [`web/apps/editor/src/lib/bridge-context.ts`](../web/apps/editor/src/lib/bridge-context.ts) | New file from B1.3.1 polish round 8. Provides the live NativeBridge to deep consumers without `window.bridge` (which is broken under TestHostBridge swap). |
-| Quadrant-viewport DOM node | [`web/apps/editor/src/App.tsx`](../web/apps/editor/src/App.tsx) (`data-testid="quadrant-viewport"`) | The `<div>` that holds the engine viewport overlay. The snapshot `<img>` will be portaled into here. |
-| Modal callback-ref pattern | [`web/apps/editor/src/components/Modal.tsx`](../web/apps/editor/src/components/Modal.tsx) | Already established for handling Radix Dialog.Content's delayed mount via Portal+Presence — useState + callback ref forces a re-render when the node attaches. Reuse the same pattern for the quadrant-viewport lookup. |
+| Current `Section` component | [`src/components/Section.tsx`](../web/apps/editor/src/components/Section.tsx) | Controlled-by-`useState` collapsible; Lucide `ChevronDown` on left; `role="button"` + `tabIndex` + Enter/Space keyboard + `aria-expanded` + `data-testid` derived from title. Single consumer: `EmitterPropertyTabs.tsx`. |
+| Current `ToolPanel.Section` | [`src/components/ToolPanel.tsx:96-129`](../web/apps/editor/src/components/ToolPanel.tsx) | Native `<details>` collapsible; ASCII `›` glyph rotating 90° on open; uppercase 11px muted title via inline Tailwind. Consumers: Spawner, Lighting, Bloom. |
+| Legacy section CSS | [`src/styles/components.css:444-478`](../web/apps/editor/src/styles/components.css) | `.section`, `.section-header`, `.section-divider`, `.section-body` rules plus the 20px chevron-alignment indent comment. Inspector-only today. |
+| Design tokens | `src/styles/tokens.css` | `--border`, `--bg-2`, `--text`, `--text-2`, `--text-3` — already cover everything the bordered-box + uppercase-muted style needs. No new tokens required. |
+| Lucide `ChevronDown` | Already imported by `Section.tsx` | Reused as the unified chevron icon. Removes ASCII `›` from `ToolPanel.Section`. |
+| Vitest test setup | `src/test-setup.ts` | ResizeObserver / matchMedia / localStorage stubs in place. No new stubs needed. |
+| Existing inspector specs | `src/screens/__tests__/EmitterPropertyTabs*.test.tsx` etc. | Anchor on `getByText("Emitter Timing")` etc. — text content stays the same (uppercase via CSS, not JSX), so these specs survive without changes. |
+| Existing Spawner / Lighting / Bloom specs | `src/screens/__tests__/SpawnerPanel.test.tsx` etc. | Anchor on `getByText` for section titles too. Same survival argument. |
 
-No new dependencies. GDI+ is in `gdiplus.lib` from the Windows SDK; one extra `#pragma comment(lib, "gdiplus.lib")` in the host project.
+Per `grep`, `Section` is consumed only by [`EmitterPropertyTabs.tsx`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx) — clean restyle.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-### Phase 1 — C++ capture path
+### Phase 1 — Shared CSS
 
-**1.1 AlphaCompositor caches a pre-stamp DIB.**
-Add a `std::vector<uint8_t> m_lastRawDib` field plus `int m_lastRawW, m_lastRawH`. On every `Composite()`, after the memcpy from sysmem but BEFORE the occlusion-stamp loop, copy the freshly-read pixels into `m_lastRawDib`. This is the "what the engine actually rendered this frame" before any chrome cuts. ~1-2 ms/frame extra cost on a typical viewport size.
+Add to [`components.css`](../web/apps/editor/src/styles/components.css) (replacing the legacy `.section-*` rules):
 
-**1.2 New method `AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)`.**
-Returns `bool` (false if no DIB cached yet — engine never composited). On success:
-- Wrap `m_lastRawDib` in a `Gdiplus::Bitmap` constructed with `PixelFormat32bppPARGB` (premultiplied — matches the DIB format).
-- Create an `IStream*` via `CreateStreamOnHGlobal`.
-- Call `bitmap.Save(stream, &pngClsid, nullptr)` where pngClsid comes from `GetEncoderClsid(L"image/png", ...)`.
-- Read stream into a `std::vector<uint8_t>`.
-- Base64-encode (inline 30-line encoder, no new dep).
-- Write to `outBase64`, set `outW = m_lastRawW`, `outH = m_lastRawH`.
+```css
+/* Collapsible section primitive — shared by Section.tsx (controlled via
+ * useState + data-open) and ToolPanel.Section (native <details>). The
+ * rotation rule covers both state representations so each consumer
+ * keeps its own state model while sharing the visual. */
+.panel-section {
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
 
-**1.3 GDI+ initialization.**
-In `HostWindow::Run`'s startup: `Gdiplus::GdiplusStartup(&token, &input, nullptr)`. Matching `Gdiplus::GdiplusShutdown(token)` at teardown. Both calls bracket the entire app lifecycle — once per process.
+.panel-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+/* Hide native <details> disclosure marker on Blink/Webkit + everywhere else. */
+.panel-section-header::-webkit-details-marker { display: none; }
+.panel-section-header { list-style: none; }
 
-**1.4 BridgeDispatcher handler.**
-Add `if (kind == "viewport/capture-snapshot") { ... }`:
+.panel-section-header:hover { color: var(--text); }
+.panel-section-header:focus-visible { color: var(--text); }
 
-```cpp
-std::string pngBase64;
-int w = 0, h = 0;
-if (m_alphaCompositor && m_alphaCompositor->CaptureSnapshotPng(pngBase64, w, h)) {
-    sendOk(json{{"pngBase64", pngBase64}, {"w", w}, {"h", h}});
-} else {
-    sendOk(json{{"pngBase64", ""}, {"w", 0}, {"h", 0}});
+.panel-section-header .chev {
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: transform 0.12s;
+}
+/* Two selectors cover both consumer shapes: `[data-open="false"]` for the
+ * controlled <div> in Section.tsx; `:not([open])` for native <details>. */
+.panel-section[data-open="false"] .chev,
+.panel-section:not([open]) .chev {
+  transform: rotate(-90deg);
+}
+
+.panel-section-body {
+  padding: 12px;
 }
 ```
 
-The compositor pointer wiring: check what's already in BridgeDispatcher. If LayoutBroker holds the compositor reference, route through it (`m_layout.GetCompositor()`); otherwise add a direct setter `SetAlphaCompositor` paralleling `SetEngine` / `SetModManager`.
+Drop the legacy `.section`, `.section-header`, `.section-divider`, `.section-body` rules entirely. Update the `.form-row.name-row` comment that referenced the "20px chevron indent" — the new sections have their own internal `padding: 12px` so the name row's prior alignment story changes (the name row sits OUTSIDE any section, so it now uses 12px from the panel edge for consistency; verify visually).
 
-**1.5 Bridge schema additions.**
-
-```ts
-| { kind: "viewport/capture-snapshot"; params: Record<string, never> }
-
-// ResponseFor:
-R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
-```
-
-**1.6 MockBridge stub.**
-`case "viewport/capture-snapshot": return { pngBase64: "", w: 0, h: 0 };`
-
-### Phase 2 — React Modal rewiring
-
-**2.1 Drop the existing occlusion + modal-mask code in Modal.**
-- Remove the `useEffect` that fires `viewport/occlude` with Dialog.Content's rect.
-- Remove the `useEffect` (same block) that fires `viewport/set-modal-mask`.
-- Both get replaced with a single unified flow in 2.2.
-
-**2.2 New Modal useEffect — snapshot capture + full-quadrant occlude.**
-
-State:
-```ts
-const [snapshot, setSnapshot] = useState<{ pngBase64: string; w: number; h: number } | null>(null);
-const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null);
-```
-
-Effect (deps: `[open, bridge]`):
-- If `!open || !bridge`: return early.
-- Look up the quadrant-viewport node: `document.querySelector('[data-testid="quadrant-viewport"]')`. Set `viewportEl`.
-- Define an async `capture()`: request `viewport/capture-snapshot`, set into `snapshot` state.
-- Define `occlude()`: read `viewportEl.getBoundingClientRect()`, send `viewport/occlude` with the full quadrant rect (id `"modal-backdrop"`).
-- Fire `capture()` + `occlude()` immediately.
-- Subscribe to window `resize` with a single rAF-throttled handler that calls both. Cancel the rAF on cleanup.
-- Return cleanup: cancel rAF, remove listener, clear `snapshot`, send `viewport/occlude` with `rect: null`.
-
-**2.3 Render the snapshot via `createPortal`.**
-At the end of the Modal component's JSX, before the `Dialog.Root`:
+### Phase 2 — `Section.tsx` migration
 
 ```tsx
-{open && viewportEl && snapshot && createPortal(
-  <img
-    src={`data:image/png;base64,${snapshot.pngBase64}`}
-    alt=""
-    aria-hidden
-    style={{
-      position: "absolute",
-      inset: 0,
-      width: "100%",
-      height: "100%",
-      pointerEvents: "none",
-    }}
-  />,
-  viewportEl,
-)}
+export function Section({ title, defaultOpen = true, children }: Props) {
+  const [open, setOpen] = useState(defaultOpen);
+  const toggle = () => setOpen((o) => !o);
+  return (
+    <div className="panel-section" data-open={open}>
+      <div
+        className="panel-section-header"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        aria-expanded={open}
+        data-testid={`section-${title.toLowerCase().replace(/\s+/g, "-")}`}
+      >
+        <span>{title}</span>
+        <ChevronDown className="chev size-3" />
+      </div>
+      {open && <div className="panel-section-body">{children}</div>}
+    </div>
+  );
+}
 ```
 
-The img sits inside the quadrant-viewport DOM node, at z-index 0 (default), below Dialog.Overlay (z-40) and Dialog.Content (z-50). Dialog.Overlay's `bg-black/60 backdrop-blur-sm` blurs everything in the DOM behind it — including this img — uniformly with the panels. **This is the win condition.**
+Changes from current shape:
+- Outer `<div>` becomes `.panel-section` with `data-open={open}` attribute (replaces the `.collapsed` modifier class).
+- Header is `.panel-section-header` instead of `.section-header`.
+- Chevron moves AFTER the title `<span>` (right side, `justify-content: space-between` does the rest).
+- `.section-divider` `<div>` removed (the bordered-box header's `border-bottom` from `.panel-section-header` handles the separation).
+- Body is `.panel-section-body` instead of `.section-body`.
+- Same `role="button"`, `tabIndex={0}`, keyboard handler, `aria-expanded`, `data-testid` — vitest specs and a11y unaffected.
 
-### Phase 3 — Delete the dead modal-mask code
+### Phase 3 — `ToolPanel.Section` migration
 
-After 2.x is shipping the snapshot path successfully:
+```tsx
+function ToolPanelSection({
+  title,
+  defaultOpen = false,
+  alwaysOpen = false,
+  children,
+}: ToolPanelSectionProps) {
+  if (alwaysOpen) {
+    return (
+      <section className="panel-section">
+        <div className="panel-section-header" style={{ cursor: "default" }}>
+          {title}
+        </div>
+        <div className="panel-section-body">{children}</div>
+      </section>
+    );
+  }
+  return (
+    <details className="panel-section" open={defaultOpen}>
+      <summary className="panel-section-header">
+        <span>{title}</span>
+        <ChevronDown className="chev size-3" />
+      </summary>
+      <div className="panel-section-body">{children}</div>
+    </details>
+  );
+}
+```
 
-**3.1 C++ removals.**
-- `AlphaCompositor.{h,cpp}`: `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha` / `m_blurRadius` / `m_blurScratch` fields, the corresponding calls in `Composite`.
-- `LayoutBroker.{h,cpp}`: `SetModalMask` declaration + forwarding.
-- `BridgeDispatcher.cpp`: the `viewport/set-modal-mask` handler.
+Changes from current shape:
+- Outer `<details>` / `<section>` gets `.panel-section` (replaces inline `mb-3 rounded-md border …`).
+- Header `<summary>` / `<div>` gets `.panel-section-header` (replaces inline `flex cursor-pointer …`).
+- Chevron switches from ASCII `›` to Lucide `<ChevronDown>` — visual unification with the inspector side.
+- Body `<div>` gets `.panel-section-body` (replaces inline `space-y-2 p-3`).
+- The `alwaysOpen` branch (used by sections like Lighting's Ambient / Shadow that don't collapse) renders without a chevron and with `cursor: default` override on the header. The `<section>` element naturally lacks the `open` attribute, so the rotation selector won't trigger on it — but there's no chevron to rotate either, so safe.
 
-**3.2 Schema / mock removals.**
-- `web/packages/bridge-schema/src/index.ts`: the `viewport/set-modal-mask` request + response.
-- `web/apps/editor/src/bridge/mock.ts`: the `viewport/set-modal-mask` case.
+Note: lose the `space-y-2` rhythm between items inside ToolPanel.Section's body. The current Spawner spec for vertical rhythm may want a follow-up `.panel-section-body > * + * { margin-top: 8px }` (or similar). **Decide during smoke-test** — if rows feel too tight without `space-y-2`, add a body-child margin rule to the shared CSS.
 
-**3.3 Test updates.**
-- `Modal.test.tsx`: remove `dispatches viewport/set-modal-mask on open ...`. Add `dispatches viewport/capture-snapshot when open and clears occlusion on close`.
+### Phase 4 — Delete legacy CSS
+
+Remove from `components.css`:
+
+- `.section { … }`
+- `.section-header { … }` + `.section-header .chev` + `.section-header.collapsed .chev` + `.section-header:hover` 
+- `.section-divider { … }`
+- `.section-body { padding-left: 20px; padding-right: 12px; }`
+- The "Inspector contents indent" comment block (24-ish lines explaining the 20px chevron-alignment).
+
+Update the `.form-row.name-row` comment in the same file — it references the deleted 20px indent. New behavior: Name row sits at the panel's natural left edge (12px from `.panel-body`'s padding); section bodies start their inner padding at 12px from the `.panel-section` border. Verify visually that this still reads cleanly; if it looks misaligned, add a small `.form-row.name-row { padding-left: 12px }` to match.
+
+### Phase 5 — Test audit + adjust
+
+Pre-flight grep:
+
+```bash
+grep -rn "section-header\|section-body\|\.section[ \"'>]" web/apps/editor/src/
+```
+
+For each hit:
+- CSS rules in `components.css` — deleted by Phase 4.
+- TSX class consumers — covered by Phase 2 / 3.
+- Vitest selectors — if any spec queries `.section-header` directly (`container.querySelector('.section-header')` etc.), update to `.panel-section-header`.
+- Playwright selectors — same audit on `tests/`.
+
+The `[data-testid="section-…"]` selector on the inspector survives unchanged (the data-testid logic in `Section.tsx` stays).
 
 ---
 
 ## 4. Risks named up front + mitigations
 
-1. **PNG encode latency under drag.**
-   - **Hazard:** GDI+ PNG encode at 1280×720 takes ~10-30 ms. At 60 fps drag, that's 600-1800 ms/sec of CPU just on encoding, plus a similar cost in base64 + bridge transit. The drag might feel laggy.
-   - **Mitigation:** Throttle re-capture to rAF (~16 ms) instead of every resize event — this already coalesces multiple ResizeObserver fires per frame into one. If that's still too slow, fall back to raw BGRA (skip PNG encode, accept 3-6 MB base64 per capture). Measure first.
+1. **Width pressure on the inspector at narrow column widths.**
+   - **Hazard:** Each section gains ~14px of horizontal cost from the 1px border + 12px inner padding × 2. The inspector column at the default 25/75 split is ~25% of the workspace minus the left tree pane — roughly 250-300px in a typical window. The current `.form-row` grid (`1fr 58px 40px`) was tuned for the no-border layout; the inner-width shrink may push spinner cells against unit suffixes.
+   - **Mitigation:** Visual smoke-test the inspector at default and minimum realistic column widths before committing. If form rows truncate or wrap, tune `.panel-section-body` padding down (e.g. `8px` instead of `12px`) or adjust the `.form-row` grid columns. Worst case: keep the bordered visual but drop the body padding to match the legacy chevron-aligned width.
 
-2. **Bridge payload size.**
-   - **Hazard:** A 1280×720 PNG of dense 3D content can hit 200-500 KB; base64 inflates to 270-680 KB. `chrome.webview.postMessage` handles big payloads but it's not instant.
-   - **Mitigation:** Compare PNG vs raw BGRA on a representative scene. Pick whichever is faster end-to-end. Document the choice.
+2. **Spawner / Lighting / Bloom visual regression.**
+   - **Hazard:** Migrating `ToolPanel.Section`'s inline Tailwind to shared CSS changes the precise pixel padding, color, and chevron glyph. A pre-shipping panel that worked might pixel-shift. Particularly Lighting (which uses the `alwaysOpen` branch for Ambient / Shadow) — the inline Tailwind included `border-b border-border` on the alwaysOpen header that we'd replicate via the shared CSS, but the body's `space-y-2 p-3` rhythm doesn't carry over.
+   - **Mitigation:** Side-by-side screenshot diff each tool panel before/after. If `space-y-2` is load-bearing, add `.panel-section-body > * + * { margin-top: 8px }` to the shared CSS. If the alwaysOpen path needs different padding, add a `.panel-section[data-always-open] .panel-section-header { padding: …; cursor: default }` modifier and set it from the `alwaysOpen` branch.
 
-3. **Snapshot misalignment during fast drag.**
-   - **Hazard:** Between the user's drag tick and React's rAF, the snapshot is one frame stale. If the engine viewport position has moved 50 pixels in that frame, the snapshot is offset.
-   - **Mitigation:** Use the *current* `getBoundingClientRect` of the quadrant element when positioning the img (which is `position: absolute; inset: 0` inside the parent — so it tracks the parent's natural CSS rect, which DOES update in real time). Only the *content* of the snapshot is one frame stale, not its position. Imperceptible at human reaction times.
+3. **Vitest selector collisions.**
+   - **Hazard:** Specs that grep on `.section-*` selectors break when the classes are renamed. Pre-flight grep in §3 Phase 5 catches them, but the audit must actually run.
+   - **Mitigation:** Run `grep -rn "section-header\|section-body" web/apps/editor/src/__tests__ web/apps/editor/tests` before TSX changes; update selectors as the first sub-step of Phase 5. Vitest 281/281 must hold post-migration; any failure means an audit gap.
 
-4. **Engine keeps rendering under the modal.**
-   - **Hazard:** Wasted CPU / GPU during modal lifecycle. Spawner auto-mode could be firing into a viewport the user can't see.
-   - **Mitigation:** Accepted — out of scope. Pausing the engine could break legitimate flows (the user might WANT the spawner to keep going while reading a modal). Document as a known cost; revisit if it becomes a real complaint.
+4. **`<details>` indent / inset quirk.**
+   - **Hazard:** Native `<summary>` elements have an inner indent for the disclosure marker. `list-style: none` plus the Webkit pseudo-marker hide cover the visible glyph, but some browsers still reserve a small inset before the summary's content box (~15px). On Chrome/WebView2 specifically, `summary { padding: 0 }` may not be enough — needs `display: flex` on the summary to override the default `display: list-item`.
+   - **Mitigation:** `.panel-section-header` already declares `display: flex` which overrides `list-item`. Verify by inspecting in WebView2's DevTools post-migration; if a leading inset persists, add an explicit `margin-left: 0; padding-inline-start: 12px` to the summary.
 
-5. **GDI+ shutdown race.**
-   - **Hazard:** If `GdiplusShutdown` is called before the AlphaCompositor's destructor runs, any GDI+ object held by the compositor leaks or crashes.
-   - **Mitigation:** Order matters. `GdiplusStartup` runs first in `HostWindow::Run`; `GdiplusShutdown` runs after all compositor / engine teardown in the matching destructor path. The compositor doesn't hold any GDI+ objects between calls — each `CaptureSnapshotPng` creates and releases its own. So the only risk is calling `CaptureSnapshotPng` AFTER `GdiplusShutdown`, which can't happen if we shut down in the right order.
+5. **Chevron icon swap regression in Spawner.**
+   - **Hazard:** Spawner users (= the user) are accustomed to the ASCII `›` chevron rotating 90° on open. The migration to Lucide `<ChevronDown>` rotates -90° on close. Same visual semantics (chevron points right when collapsed, down when expanded) but a slightly different glyph shape.
+   - **Mitigation:** Confirm during smoke-test that the Lucide chevron at `size-3` (12px) renders crisply at the Spawner's typical font size. If it looks worse, revert to ASCII `›` in the shared CSS — both shapes have equivalent rotation behavior so either works; the unification target is the *position*, not the glyph.
 
-6. **MockBridge returns empty PNG; what does React do?**
-   - **Hazard:** Modal renders an `<img src="data:image/png;base64,">` — broken image. Visible in dev / unit tests.
-   - **Mitigation:** Modal's render guard already checks `snapshot && snapshot.pngBase64`. Empty string falsy short-circuits the portal render. Tests don't see a broken img.
+6. **Visual rhythm loss in tool-panel bodies.**
+   - **Hazard:** `ToolPanel.Section` currently applies `space-y-2` to its body (8px gap between direct children). The shared `.panel-section-body { padding: 12px }` doesn't include child-margin rules, so consumers like Spawner's vertical Vec3 row stack may collapse to touching siblings.
+   - **Mitigation:** Add `.panel-section-body > * + * { margin-top: 8px }` to the shared CSS upfront — matches the existing Tailwind `space-y-2` semantic and applies uniformly to both consumers. The inspector tabs use `.form-row` which has its own grid layout, so a sibling margin won't conflict.
+
+7. **Plan-deviation discovery during execution.**
+   - **Hazard:** Any of the above mitigations may need to land as a sub-task during execution rather than as a clean upfront change. The dispatch could end up touching more lines than estimated.
+   - **Mitigation:** If a risk fires beyond a 5-minute fix, STOP and re-plan per CLAUDE.md's "if something goes sideways, STOP and re-plan" guidance. Better to capture the divergence in the plan than to soldier on against shifted assumptions.
 
 ---
 
 ## 5. Testing & verification
 
-### Manual smoke-test
+### Pre-flight (before any code change)
 
-- [ ] Open Help → About. Modal renders. Engine viewport behind modal is replaced by a static snapshot, dimmed + blurred uniformly with the panels via Dialog.Overlay's CSS. **No visible rectangular popup boundary, no inner-shadow vignette.**
-- [ ] Resize the window while modal is open: backdrop tracks resize seamlessly (snapshot re-captures on each rAF tick).
-- [ ] Close modal: engine returns to full opacity instantly, runs at normal fps.
-- [ ] Open then immediately close modal: no orphaned occlusion (engine fully visible).
-- [ ] Two modals in sequence (About → close → SaveChangesPrompt via dirty doc → close): both work, no state leaks.
-- [ ] With the curve editor active: open About, snapshot captures the engine but NOT the curve editor (which is below the popup) — verify the snapshot doesn't include curve editor pixels.
+- [ ] Confirm baseline green: vitest 281/281, Playwright 83/83, MSBuild Debug x64 clean.
+- [ ] Grep audit: `grep -rn "section-header\|section-body\|\.section[ \"'>]" web/apps/editor/src/ web/apps/editor/tests/` — produces the complete list of selectors that will need updates.
 
-### Vitest
+### Per-phase verification
 
-- [ ] `pnpm test` clean (expect 281 → 282; +1 for new capture-snapshot test, the modal-mask test deletes).
-- [ ] New focused test: Modal dispatches `viewport/capture-snapshot` on open, dispatches `viewport/occlude { rect: <quadrant-rect> }`, and on close dispatches `viewport/occlude { rect: null }`.
-- [ ] Existing regression guards (opaque pill, no backdrop-filter, no shadow-xl/2xl) keep passing.
+- [ ] After Phase 1 (shared CSS added, legacy CSS still in place): nothing visible yet. `pnpm build` clean.
+- [ ] After Phase 2 (`Section.tsx` migrated): launch the editor, open the inspector tabs, confirm sections render with bordered-box + uppercase title + right chevron. No regression in the test counts. Spawner UNCHANGED at this point.
+- [ ] After Phase 3 (`ToolPanel.Section` migrated): Spawner / Lighting / Bloom now also use the shared class. Confirm all three render with the same visual as the inspector tabs.
+- [ ] After Phase 4 (legacy CSS deleted): full regression sweep — every panel that previously consumed `.section-*` must now look correct. The inspector + the tool panels are the only consumers; verify both.
+- [ ] After Phase 5 (test audit complete): vitest 281/281, Playwright 83/83 — same counts as baseline.
 
-### Playwright
+### Manual smoke-test checklist (per L-013 / CLAUDE.md pre-handoff discipline)
 
-- [ ] `pnpm test:native` 83/83. The snapshot path uses the same `viewport/occlude` surface Playwright already exercises, plus a new request that mock returns an empty stub for — no contract-level changes expected.
+- [ ] Inspector → Basic tab: 3 sections (Emitter Timing / Generation / Connection), all collapsible, render uppercase muted titles with right chevron, bordered-box container, no overflow against the form-row spinners at the default 25/75 column split.
+- [ ] Inspector → Appearance tab: 5 sections (Textures / Random color / Tail / Rotation / Rendering).
+- [ ] Inspector → Physics tab: 4 sections (Initial position / Initial speed / Acceleration / Ground interaction).
+- [ ] Spawner pane: 5 sections (Position / Velocity / Lifetime / Jitter position / Jitter velocity), all render same visual as the inspector tabs. Lifetime stays alwaysOpen (no chevron).
+- [ ] Lighting panel: Sun / Fill 1 / Fill 2 / Ambient / Shadow sections all render correctly. alwaysOpen branches (Ambient / Shadow) render without chevron.
+- [ ] Bloom panel: section structure preserved.
+- [ ] Keyboard: Tab focus moves into each section header; Enter / Space toggles collapse; focus indicator visible.
+- [ ] At minimum realistic inspector column width (drag the eventual splitter, or just narrow the window): form rows still fit, no horizontal scroll.
+- [ ] Modal-over-engine: open Help → About while inspector is visible behind. Sections in the inspector should be visible (dimmed by Dialog.Overlay's `bg-black/60`) and the frosted-glass backdrop from B1.3.1.1 still works. The new bordered-box style should integrate cleanly with the dim — no harsh borders showing through.
 
-### MSBuild
+### Cleanup
 
-- [ ] Debug x64 clean. GDI+ link via `#pragma comment(lib, "gdiplus.lib")` in HostWindow.cpp.
+- [ ] No dead CSS (`grep -n "section-header\|section-divider\|section-body" components.css` returns zero hits in the rules section, only the deletion-history comment if any).
+- [ ] No orphaned references to the old class names anywhere in `src/`.
 
 ---
 
 ## 6. Implementation steps
 
-- [ ] **P1 — Pre-flight.** Confirm baseline green (vitest 281/281, Playwright 83/83, MSBuild clean). Read this todo top-to-bottom. Read [`tasks/HANDOFF.md`](HANDOFF.md) section 0 for the dispatch context.
-- [ ] **P2 — AlphaCompositor snapshot path.** Add `m_lastRawDib` field, the pre-stamp copy in `Composite`, the `CaptureSnapshotPng` method, GDI+ startup/shutdown in HostWindow. Build + manual test by adding a temporary `viewport/capture-snapshot` handler returning a fixed-size dummy PNG to verify the bridge round-trip.
-- [ ] **P3 — Bridge surface.** Schema + dispatcher + mock. Vitest contract test exercises the round-trip via MockBridge (empty PNG).
-- [ ] **P4 — React Modal rewiring.** Replace the existing useEffect with the new snapshot + full-quadrant-occlude flow. Render the img via createPortal. Add the new vitest regression test. **DO NOT remove the modal-mask path yet** — keep both running so the smoke-test can A/B compare.
-- [ ] **P5 — Smoke-test.** Run through the manual checklist. Confirm the snapshot path produces the intended frosted-glass look. If issues surface, fix them while modal-mask is still available as a fallback.
-- [ ] **P6 — Phase 3 cleanup.** Delete the modal-mask path top-to-bottom (3.1, 3.2, 3.3). One commit, clearly labelled `refactor(LT-4): drop modal-mask compositor path (replaced by snapshot backdrop)`.
-- [ ] **P7 — Docs.** CHANGELOG entry (frosted-glass approach + reasoning); HANDOFF refresh; ROADMAP strike B1.3.1.1 + move to Shipped if user OKs the FF.
+- [ ] **P1 — Pre-flight.** Baseline verification + grep audit. Confirm `Section.tsx` has exactly one consumer.
+- [ ] **P2 — Shared CSS.** Add `.panel-section` / `.panel-section-header` / `.panel-section-body` + child-margin rule + rotation selectors to `components.css`. Legacy `.section-*` rules STAY in this commit — no consumer touches them yet.
+- [ ] **P3 — `Section.tsx` migration.** Swap class names, move chevron to right, switch from `.collapsed` modifier to `data-open` attribute. `pnpm build` + vitest. Manual smoke-test the inspector tabs visually.
+- [ ] **P4 — `ToolPanel.Section` migration.** Replace inline Tailwind utilities with shared classes; swap ASCII `›` for Lucide `<ChevronDown>`. `pnpm build` + vitest + Playwright. Manual smoke-test Spawner / Lighting / Bloom.
+- [ ] **P5 — Legacy CSS deletion.** Remove `.section`, `.section-header`, `.section-divider`, `.section-body` rules from `components.css`; update the `.form-row.name-row` comment. `pnpm build` + vitest + Playwright. Visual smoke-test once more to confirm nothing slipped.
+- [ ] **P6 — Test selector updates** (if any surfaced in P1 grep). Most likely none.
+- [ ] **P7 — Docs.** CHANGELOG entry describing the unification. ROADMAP doesn't need touching (no [TIER-K] tag for this polish-style change). HANDOFF refresh on session-end.
+- [ ] **P8 — FF + push** when user signs off.
 
-Three commits total in this dispatch (P2-P3 squash into one, P4 + P6 + P7 each one commit).
+**Commit slicing:** one focused commit covering P2-P6 (CSS addition + both component migrations + legacy deletion + test updates) — they're internally coherent and shouldn't be bisected separately. Plus a docs commit (P7) on top. Two commits total.
+
+**Estimated effort:** ~1-2 hours, ~100 lines net (60 CSS + 30 TSX + 10 deletions).
 
 ---
 
 ## Review (filled in during execution)
 
-**Dispatch:** B1.3.1.1 [NT-9] — Frosted-glass modal backdrop via engine-snapshot capture.
-**Status:** ✅ shipped on session branch `claude/bold-volhard-e0e0f0`, pending FF to `origin/lt-4` at user's OK.
+**Status:** ✅ shipped on session branch `claude/bold-volhard-e0e0f0`, pending FF to `origin/lt-4`.
 
-**Commits landed (4):**
+**Commits landed (2):**
 
 | Commit | Phase | Summary |
 |---|---|---|
-| [`1e49d37`](https://github.com/DrKnickers/new-particle-editor/commit/1e49d37) | P2 + P3 | AlphaCompositor snapshot path (pre-stamp DIB cache, GDI+ PNG encode, inline base64) + bridge surface (schema + dispatcher + LayoutBroker forwarding + MockBridge stub) + GDI+ startup/shutdown in HostWindow. |
-| [`f3570d3`](https://github.com/DrKnickers/new-particle-editor/commit/f3570d3) | P4 | React Modal rewiring — snapshot capture + full-quadrant occlude + `createPortal` `<img>` backdrop. Modal regression test pivoted from `set-modal-mask` assertion to the new contract + `expect.not.toHaveBeenCalledWith` lock against set-modal-mask. |
-| [`cb7b4c7`](https://github.com/DrKnickers/new-particle-editor/commit/cb7b4c7) | P5 polish | Sentinel-rect occlude + one-shot capture. Driven by two smoke-test findings (drag-resize leaks opaque engine pixels; drag stutter from per-frame PNG encodes). Mental shift from "fix the trigger" to "encode the state durably" — captured as L-013. |
-| [`c287033`](https://github.com/DrKnickers/new-particle-editor/commit/c287033) | P6 | Drop modal-mask compositor pipeline — `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha`/`blurRadius`/`blurScratch` fields, the `viewport/set-modal-mask` bridge surface + schema + dispatcher + mock. 256 lines deleted from `AlphaCompositor.cpp`. |
+| [`65a5eae`](https://github.com/DrKnickers/new-particle-editor/commit/65a5eae) | P2+P3+P4+P5+P6 squashed | Shared `.panel-section` CSS + Section.tsx migration + ToolPanel.Section migration + legacy CSS deletion + test-selector update — landed as one focused implementation commit. 15 inspector polish items folded in across three smoke-test rounds. |
+| `TODO-HASH` | P7 | Docs (CHANGELOG + HANDOFF + todo.md review). |
 
-**Plan deviations from original §6 commit slicing:**
+**Plan deviations:**
 
-- Original plan said three commits (P2-P3 squash + P4 + P6). Actual is four because P5's smoke-test surfaced two structural fixes worth their own traceable commit (sentinel rect + one-shot capture), not just polish on top of P4.
-- The plan's mention of keeping the modal-mask path live during P5 ("DO NOT remove the modal-mask path yet — keep both running so the smoke-test can A/B compare") wasn't load-bearing in practice — the snapshot path worked on first smoke-test, the only fallback need was the in-binary code (not a runtime A/B), and P6 deleted it cleanly without ever needing the fallback. The plan note was a safety hedge that turned out unnecessary; recording for future plans considering similar hedges.
+- **Single commit instead of "one impl + one docs" upfront slicing.** The plan said P2 keeps legacy CSS in place; I rolled the deletion into the same commit because the legacy `.section-*` rules and the new `.panel-section-*` rules can't coexist without consumer-side switching, and the consumer (Section.tsx) switches in the same commit. Three intermediate states (legacy CSS + old consumer / both CSS / new CSS + new consumer / new CSS only) didn't have intermediate utility. The actual progression was: edit components.css (legacy → shared), edit Section.tsx, edit ToolPanel.tsx, edit Section.test.tsx, single commit.
+- **Polish items folded in.** The plan was strictly the section-header unification (Out of scope: any restyling beyond the section header). When the user smoke-tested the unification, they surfaced 8 polish items in round 1; I executed them. The user then surfaced 5 more in round 2; I executed those too. And then 2 alignment-fix iterations in round 3. All folded into the same commit because they touch the same files (components.css + EmitterPropertyTabs.tsx + SpawnerPanel.tsx) and the same conceptual surface (inspector visual polish). Per CLAUDE.md "if something goes sideways, STOP and re-plan" — but these weren't structural shifts, just visual fine-tuning; the dispatch shape didn't need to change.
+- **Three smoke-test rounds, not one.** Original plan §5 expected one smoke-test pass. Actual was three: (1) initial unification + first 8 polish items pass; (2) second-round widening / RGBA layout changes; (3) third-round checkbox right-edge alignment (two attempts — first aligned to unit-cell right edge, second corrected to spinner-input right edge per user clarification). Each round took ~5 minutes of edit + verify + smoke-test.
 
 **Risks status:**
 
-- §4.1 PNG encode latency under drag — INVALIDATED by P5's one-shot capture. No per-frame encode at all.
-- §4.2 Bridge payload size — observed PNG sizes during smoke-test were ~50-150 KB (base64 ~70-200 KB) for the default skydome scene. Well under the 270-680 KB risk band; rAF coalescing wasn't needed because we don't re-capture at all. PNG encoding choice validated.
-- §4.3 Snapshot misalignment during fast drag — IRRELEVANT under one-shot capture. The img tracks the parent's CSS rect in real time; only the content is frozen, which is intentional.
-- §4.4 Engine keeps rendering under the modal — accepted as documented. No complaint surfaced.
-- §4.5 GDI+ shutdown race — no incident; the ordering (Startup after CoInitializeEx + WebView2 check, Shutdown right before CoUninitialize after the message pump drains) held cleanly.
-- §4.6 MockBridge empty-PNG render guard — exercised by all vitest specs that mount Modal in isolation (MockBridge returns `{ pngBase64: "", w: 0, h: 0 }`, render guard short-circuits the portal). No broken-img warnings in test output.
-
-**New risk surfaced (not in original §4):** the Win32 modal sizing loop starves WebView2 IPC for the duration of a drag-resize. Renderer→host bridge messages can't land until release. Documented in L-013; the fix (host-state-durable design) is the same pattern any future "follow the popup during resize" surface should adopt.
+- §4.1 Width pressure — didn't fire. Section bordered-box at the default 25/75 inspector split fits all form rows cleanly. Body padding stayed at 12 px (the plan's mitigation of dropping to 8 px wasn't needed).
+- §4.2 Spawner / Lighting / Bloom visual regression — didn't fire. Migration from inline Tailwind to shared CSS rendered visually identical (modulo the deliberate Lucide chevron swap). User's smoke-test of the Spawner showed it consistent with the inspector tabs.
+- §4.3 Vitest selector collisions — partial fire. The pre-flight grep audit caught `.section-divider` (kept as standalone) but missed the `.collapsed` modifier-class assertion in Section.test.tsx (which is a JS string, not a CSS selector). Caught by post-migration vitest run; fix was one assertion rewrite. **Procedural takeaway** worth carrying forward: grep for modifier-class names as JS strings too, not just as CSS selectors.
+- §4.4 `<details>` indent quirk — didn't fire. `display: flex` + `list-style: none` + `::-webkit-details-marker { display: none }` together fully suppress the native disclosure marker on Chrome/WebView2.
+- §4.5 Chevron icon swap regression in Spawner — didn't fire. User's smoke-test accepted the Lucide chevron at `size-3` as visually equivalent.
+- §4.6 Visual rhythm loss in tool-panel bodies — didn't fire. The shared `.panel-section-body > * + * { margin-top: 8px }` rule preserves Spawner's previous `space-y-2` semantics.
 
 **Test counts:**
 
-- vitest **281 / 281** (no count change — Modal.test.tsx's modal-mask spec reshaped to the new contract; +1 `expect.not.toHaveBeenCalledWith` assertion to lock the deletion).
-- Playwright **83 / 83** (no spec touched the deleted `viewport/set-modal-mask` surface).
-- MSBuild Debug x64 clean (preexisting LIBCMTD warning only).
-
-**Smoke-test verdicts:**
-
-- ✅ Help → About: modal renders, frosted-glass backdrop blurs panels + snapshot uniformly, no popup-boundary seam, no inner-shadow vignette.
-- ✅ Drag-resize while modal open: no opaque engine bands, no stutter.
-- ✅ Modal close: engine returns to full opacity instantly.
-
-**Lessons added:** L-013 (Win32 modal sizing loop starves WebView2 IPC).
-**Lessons reinforced:** L-011 (CSS effects can't span engine compositing layer — the whole reason this dispatch exists).
+- vitest **281 / 281** (no count change — Section.test.tsx's "collapsed state" assertion reshaped from class-presence to attribute-presence)
+- Playwright **83 / 83**
+- MSBuild Debug x64 clean (no C++ touched)
 
 **Cleanup performed:**
 
-- modal-mask C++ machinery deleted (P6).
-- `viewport/set-modal-mask` schema entry + MockBridge case + dispatcher handler removed (P6).
-- ROADMAP NT-9 struck, *Actual:* line added, moved to position 5.1 in Shipped; 22 existing Shipped entries shifted to 5.2 - 5.23; Near-term entries 1.2 / 1.3 / 1.4 renumbered to 1.1 / 1.2 / 1.3.
+- Legacy `.section`, `.section-header`, `.section-divider` rules deleted from components.css.
+- `.section-divider` retained as standalone hairline primitive (used by `CurveEditorPanel.tsx:1138`).
+- ASCII `›` glyph removed from `ToolPanel.Section`; Lucide ChevronDown used everywhere.
 - CHANGELOG entry added at top.
 - HANDOFF refreshed for next session.
+
+**Procedural patterns worth carrying:**
+
+- **Folding polish into the same dispatch.** Three rounds of smoke-test-surfaced polish (8 + 5 + 2 items) all landed in the same commit because they touch the same files and the same conceptual surface. Mid-session smoke-test-driven iteration is a high-yield shape for inspector visual work; the alternative (separate "polish" dispatches per round) would have produced ~3 commits with no architectural difference.
+- **Grep audits for class-rename dispatches: include modifier-class JS string references.** The `.collapsed` miss in pre-flight grep was a one-line oversight that cost a one-line test fix — cheap to recover but cheaper to anticipate. Future dispatch checklists: grep for the modifier class name as a JS string, in addition to grep for it as a CSS selector.
+- **Width-boost prop scaffolding scales linearly.** Adding `widthBoost?: "mid" | "wide" | "x2"` to FieldSelect + FieldSpinner gave us 6 distinct width variants (default 58, mid 73, wide 87, x2 116; plus the Basic-tab-scoped 73) without proliferating per-call props. The CSS modifier-class pattern (`form-row-mid-input` etc.) matches the existing modifier family (`.full`, `.name-row`, `.form-row-cluster`, `.form-row-text`).
+- **Checkbox right-edge alignment via `grid-column: 2; justify-self: end`.** Single CSS rule pins every checkbox's right edge to the spinner-input column right edge across every form-row width variant — the alignment is structural, not per-case. The `grid-column: 2 / -1` first attempt aligned to a different column (unit cell right edge); the one-character swap to `grid-column: 2` corrected to the spinner column right edge. Worth remembering as the canonical pattern for "align this single-cell content to the right of a multi-cell row layout."

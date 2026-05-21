@@ -1,16 +1,20 @@
-# Session Handoff — AloParticleEditor / LT-4 (B1.3.1.1 frosted-glass modal backdrop — snapshot-into-DOM approach SHIPPED, modal-mask machinery deleted, ready for FF to lt-4)
+# Session Handoff — AloParticleEditor / LT-4 (B1.3.1.1 frosted-glass modal backdrop + B1.3.2 section-header unification & inspector polish SHIPPED, ready for FF to lt-4)
 
-**Last updated:** 2026-05-22 (end-of-session — B1.3.1.1 [NT-9] frosted-glass modal backdrop SHIPPED on the session branch. Snapshot-into-DOM approach replaces the interim modal-mask compositor pipeline that the prior session's polish round 9 landed; the popup-boundary inner-shadow vignette is gone. Two smoke-test rounds caught structural issues — drag-resize leaking opaque engine pixels (Win32 modal sizing loop starves WebView2 IPC; fixed via sentinel rect + host-state-durable design) and drag stutter (per-frame GDI+ encodes piled on D3D9 device Reset; fixed via one-shot capture). Captured as L-013 in lessons.md.)
+**Last updated:** 2026-05-22 (end-of-session — B1.3.1.1 [NT-9] frosted-glass modal backdrop + B1.3.2 (untagged polish) shared `.panel-section` CSS class + 15 inspector field tweaks SHIPPED on the session branch. B1.3.1.1's FF to `origin/lt-4` already happened mid-session (at `37a99fb`); B1.3.2's single implementation commit + this docs commit are pending FF. The inspector tabs (Basic / Appearance / Physics) and tool panels (Spawner / Lighting / Bloom) now share one collapsible-section visual via `.panel-section`; 15 polish items across 3 smoke-test rounds addressed widened dropdowns, +25% Basic-tab spinner widths, RGBA per-channel labels, long-label checkboxes, and uniform checkbox right-edge alignment.)
 
-**Last conversation context:** Four-commit dispatch executing the plan in [`tasks/todo.md`](todo.md):
+**Last conversation context — B1.3.1.1 (FF'd to origin/lt-4 at `37a99fb`):** Four-commit dispatch executing the plan in [`tasks/todo.md`](todo.md):
 - **C1 — P2+P3** ([`1e49d37`](https://github.com/DrKnickers/new-particle-editor/commit/1e49d37)): AlphaCompositor snapshot path (`m_lastRawDib` pre-stamp cache + `CaptureSnapshotPng` method via GDI+ + inline base64) + bridge surface (`viewport/capture-snapshot` schema + dispatcher + LayoutBroker forwarding + MockBridge stub) + GDI+ startup/shutdown bracketing the message pump in HostWindow.
 - **C2 — P4** ([`f3570d3`](https://github.com/DrKnickers/new-particle-editor/commit/f3570d3)): React Modal rewiring — snapshot capture + full-quadrant occlude + `createPortal` `<img>` backdrop into the viewport-quadrant DOM. Modal regression test pivots to the new contract.
 - **C2.5 — P5 smoke-test polish** ([`cb7b4c7`](https://github.com/DrKnickers/new-particle-editor/commit/cb7b4c7)): two issues surfaced by manual smoke-test, both with the same root cause (Win32 modal sizing loop starves WebView2 IPC). Fixes: (a) sentinel rect `(-1e5, -1e5, 2e5, 2e5)` instead of actual quadrant — `ApplyOcclusion` clips to current DIB bounds, resize-resilient by construction; (b) one-shot capture on modal open — no re-capture during the modal's lifetime, img scales via CSS, blur hides content staleness.
 - **C3 — P6** ([`c287033`](https://github.com/DrKnickers/new-particle-editor/commit/c287033)): drop modal-mask compositor pipeline — `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha`/`blurRadius`/`blurScratch` fields, the `viewport/set-modal-mask` bridge surface + schema + dispatcher + mock case. **256 lines deleted from `AlphaCompositor.cpp`.**
 
-The session also covers the FF the prior session left pending — the 11 B1.3.1 polish-rounds commits + the prior handoff docs commit are already on `origin/lt-4` at `386c37b`, and `origin/lt-4` is the predecessor of this session's branch. The B1.3.1.1 commits ahead of `origin/lt-4` are ready for end-of-session FF.
+The session also covers the FF the prior session left pending — the 11 B1.3.1 polish-rounds commits + the prior handoff docs commit are already on `origin/lt-4` at `386c37b`, and `origin/lt-4` is the predecessor of this session's branch.
 
-**Test counts:** vitest **281 / 281** (no count change — Modal test reshaped from `set-modal-mask` assertion to the new contract + `expect.not.toHaveBeenCalledWith` lock against re-introducing set-modal-mask). Playwright **83 / 83**. MSBuild Debug x64 clean (preexisting LIBCMTD warning).
+**Last conversation context — B1.3.2 (pending FF):** Two-commit dispatch (one impl + one docs) executing the plan rewritten into [`tasks/todo.md`](todo.md) after B1.3.1.1 shipped:
+- **Impl** ([`65a5eae`](https://github.com/DrKnickers/new-particle-editor/commit/65a5eae)): shared `.panel-section` CSS class consumed by both `Section.tsx` (inspector tabs, controlled `useState`) and `ToolPanel.Section` (Spawner / Lighting / Bloom, native `<details>`). The rotation selector targets both state shapes — `[data-open="false"]` for the controlled div, `:not([open])` for the native details — so each consumer keeps its state model while sharing the visual. Lucide ChevronDown replaces ASCII `›` glyph in ToolPanel.Section for icon consistency. Legacy `.section-*` CSS deleted; `.section-divider` kept as a standalone hairline primitive (consumed by `CurveEditorPanel.tsx:1138`). Same commit folded in 15 inspector polish items across 3 smoke-test rounds: widened Type / Blend mode / Emit mode / Behavior dropdowns; +25% Basic-tab spinner widths via scoped `.basic-tab .form-row` CSS; RGBA cluster gets per-channel R/G/B/A micro-labels and 2x2 layout; long-label checkboxes (Link particles to instance, Object space acceleration) adopt new `inlineLabel` prop; all checkboxes right-edge-align via `grid-column: 2; justify-self: end`; Spawn now button moves into Mode section; Burst becomes collapsible. New `widthBoost?: "mid" | "wide" | "x2"` prop on FieldSelect + FieldSpinner maps to .form-row-mid-input / -wide-input / -x2-input CSS modifiers (73 / 87 / 116 px).
+- **Docs** (this commit): CHANGELOG entry, HANDOFF refresh.
+
+**Test counts:** vitest **281 / 281** (no count change — Modal test reshaped from `set-modal-mask` assertion to the new contract + `expect.not.toHaveBeenCalledWith` lock against re-introducing set-modal-mask; Section test reshaped from `.collapsed` modifier class to `data-open` attribute). Playwright **83 / 83**. MSBuild Debug x64 clean (preexisting LIBCMTD warning).
 
 **Next dispatch:** **B1.4 [NT-8] — Resizable splitters via `react-resizable-panels`** (now top of Near-term). Same scope as previously planned: drag the left/centre/right column boundaries (and the tree/tabs split inside the left column) via `react-resizable-panels`, persist to `localStorage`. Defaults match B1.3.1's 25/75 inner split and the existing fixed-width column sizes. No bridge schema, no C++. Standard CLAUDE.md plan expected.
 
@@ -39,13 +43,13 @@ If you are a fresh Claude session resuming this project:
 |---|---|
 | **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\bold-volhard-e0e0f0` (this session's; next session gets a fresh `claude/<random>` path) |
 | **Branch** | `claude/bold-volhard-e0e0f0` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | `c287033` (P6 modal-mask deletion) + this docs commit on top. Session branch has 4 impl commits + 1 docs commit ahead of origin/lt-4. Oldest in the sequence is `1e49d37`. |
+| **HEAD (committed)** | `65a5eae` (B1.3.2 impl) + this docs commit on top. Session branch has 5 B1.3.1.1 commits already FF'd to `origin/lt-4` mid-session at `37a99fb`, then 1 B1.3.2 impl + 1 B1.3.2 docs = 2 commits pending FF. |
 | **Working tree** | clean (after docs commit). |
-| **Ahead of origin/lt-4** | 5 (P2+P3 + P4 + P5 polish + P6 + docs) — pending FF + push to `origin/lt-4` with the user's OK. Pre-FF `origin/lt-4` HEAD is `386c37b` (the prior session's docs commit; FF was completed at the start of this session). |
+| **Ahead of origin/lt-4** | 2 (B1.3.2 impl + this docs commit) — pending FF + push to `origin/lt-4` with the user's OK. Pre-FF `origin/lt-4` HEAD is `37a99fb` (the B1.3.1.1 docs commit). |
 | **Behind master** | `lt-4` is ~370+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
 | **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). C++ touched: AlphaCompositor (snapshot path added + modal-mask deleted) + LayoutBroker (snapshot forwarding added + modal-mask forwarding deleted) + BridgeDispatcher (capture-snapshot handler added + set-modal-mask handler deleted) + HostWindow (GDI+ startup/shutdown). Vitest **281 / 281** (Modal test reshaped to new contract). Playwright **83 / 83**. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 + B1.2 + B1.2.1 + B1.3 + B1.3.1 + B1.3.1.1 SHIPPED on the session branch (not yet FF'd to `origin/lt-4`).** Next dispatch is **B1.4 [NT-8] — resizable splitters via `react-resizable-panels`** (now top of Near-term in ROADMAP). Queued behind: **B2 obsolescence audit**, **MT-1 follow-up** (texture-picker "…" buttons), **NT-5 / NT-6** (link-group cleanups). Phase 3 of the 2026 redesign (dialog re-skin, Tailwind cleanup, theme-persistence test) remains not started. Legacy `--legacy-ui` mode is untouched throughout. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 + B1.2 + B1.2.1 + B1.3 + B1.3.1 + B1.3.1.1 SHIPPED + FF'd to `origin/lt-4` mid-session. B1.3.2 (untagged: section-header unification + 15 inspector polish items) SHIPPED on the session branch, pending FF.** Next dispatch is **B1.4 [NT-8] — resizable splitters via `react-resizable-panels`** (now top of Near-term in ROADMAP). Queued behind: **B2 obsolescence audit**, **MT-1 follow-up** (texture-picker "…" buttons), **NT-5 / NT-6** (link-group cleanups). Phase 3 of the 2026 redesign (dialog re-skin, Tailwind cleanup, theme-persistence test) remains not started. Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session was in `agitated-margulis-854108`, succeeding `brave-buck-1295c8`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 
@@ -62,7 +66,18 @@ Then the standard Debug x64 build works. Skip this step on a worktree that's alr
 
 ---
 
-## What landed this session — B1.3.1.1 (4 impl commits + 1 docs commit)
+## What landed this session — B1.3.2 (1 impl commit + 1 docs commit, PENDING FF)
+
+In execution order (newest first):
+
+| Commit | What |
+|---|---|
+| `TODO-HASH` | **docs(LT-4): B1.3.2 handoff — shared section CSS + 15 polish items shipped.** This docs commit. Adds CHANGELOG entry; refreshes HANDOFF + todo.md review. |
+| [`65a5eae`](https://github.com/DrKnickers/new-particle-editor/commit/65a5eae) | **feat(LT-4): B1.3.2 — unify section headers + inspector polish rounds.** Shared `.panel-section` CSS class consumed by both `Section.tsx` (controlled `useState` + `data-open`) and `ToolPanel.Section` (native `<details>`); rotation selector bridges the two state shapes. Lucide ChevronDown replaces ASCII `›` in ToolPanel.Section. Legacy `.section-*` CSS deleted; `.section-divider` kept as standalone hairline primitive. Same commit folds 15 inspector polish items: dropdowns widened where long labels truncated (Physics Type / Appearance Blend mode / Basic Emit mode / Physics Behavior); Tail length spinner +25 % width; RGBA cluster gains R/G/B/A micro-labels + 2x2 layout; long-label checkboxes (Link particles to instance + Object space acceleration) adopt `inlineLabel` prop with label-wraps-not-truncates; ALL checkboxes right-edge-align via `grid-column: 2; justify-self: end` (pins right edge to spinner number-input column's right edge across every form-row width variant); Basic-tab numeric spinners get +25 % width via single scoped `.basic-tab .form-row` CSS rule; Spawn now button moves into Mode section (manual-only); Burst becomes collapsible. New `widthBoost?: "mid" \| "wide" \| "x2"` prop on FieldSelect / FieldSpinner maps to .form-row-mid-input / -wide-input / -x2-input CSS modifiers (73 / 87 / 116 px input columns). |
+
+---
+
+## What landed this session — B1.3.1.1 (4 impl commits + 1 docs commit, FF'd mid-session at `37a99fb`)
 
 In execution order (oldest → newest):
 
