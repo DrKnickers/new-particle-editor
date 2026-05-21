@@ -46,12 +46,16 @@ describe("Section", () => {
     expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("collapsed state applies the .collapsed class for chevron rotation", () => {
-    render(<Section title="Collision"><div>child</div></Section>);
+  it("collapsed state flips data-open on the section container (drives chevron rotation in CSS)", () => {
+    // B1.3.2: rotation is driven by `[data-open="false"]` on .panel-section
+    // (matching the `:not([open])` selector for native <details> in the
+    // shared CSS). The .collapsed modifier class is gone.
+    const { container } = render(<Section title="Collision"><div>child</div></Section>);
+    const section = container.querySelector(".panel-section");
+    expect(section).toHaveAttribute("data-open", "true");
     const header = screen.getByTestId("section-collision");
-    expect(header.className).not.toContain("collapsed");
     fireEvent.click(header);
-    expect(header.className).toContain("collapsed");
+    expect(section).toHaveAttribute("data-open", "false");
   });
 
   it("respects defaultOpen=false", () => {

@@ -395,7 +395,7 @@ export function BasicTab({
   const continuousEnabled = mode === "continuous";
   const weatherEnabled = mode === "weather";
   return (
-    <div className="inspector">
+    <div className="inspector basic-tab">
       {/* Name row — custom 60px 1fr grid per design source's
           left_panel.jsx:100. Outside any Section so it always
           shows at the top of the tab. */}
@@ -566,6 +566,7 @@ export function BasicTab({
           label="Link particles to instance"
           checked={properties.linkToSystem}
           onCheckedChange={(v) => onCommit({ linkToSystem: v })}
+          inlineLabel
         />
         <FieldSelect
           label="Emit mode:"
@@ -573,6 +574,7 @@ export function BasicTab({
           options={EMIT_FROM_MESH_OPTIONS}
           onCommit={(v) => onCommit({ emitFromMesh: v })}
           testId="basic-emit-from-mesh-trigger"
+          widthBoost="x2"
         />
         <FieldSpinner
           label="Emit offset:"
@@ -661,6 +663,7 @@ export function FieldSpinner({
   unit,
   disabled,
   displayInvertedPercent,
+  widthBoost,
   onCommit,
 }: {
   label: string;
@@ -676,6 +679,11 @@ export function FieldSpinner({
    *  `randomLifetimePerc` and `randomScalePerc` per legacy IDC_SPINNER13/14
    *  inverted convention (see Emitter.cpp:487, 492). */
   displayInvertedPercent?: boolean;
+  /** Optional input-column boost for spinners whose values exceed the
+   *  default 58 px width (e.g. "Tail length:" running up to 4-digit
+   *  multipliers). "mid" = +25 % (~73 px), "wide" = +50 % (~87 px),
+   *  "x2" = doubled (~116 px). */
+  widthBoost?: "mid" | "wide" | "x2";
   onCommit: (value: number) => void;
 }) {
   const displayValue = displayInvertedPercent
@@ -692,8 +700,16 @@ export function FieldSpinner({
   const effectiveMax = displayInvertedPercent ? 100 : max;
   const effectiveStep = displayInvertedPercent ? 1 : step;
   const effectiveDecimals = displayInvertedPercent ? 0 : decimals;
+  const rowClass =
+    widthBoost === "x2"
+      ? "form-row form-row-x2-input"
+      : widthBoost === "wide"
+        ? "form-row form-row-wide-input"
+        : widthBoost === "mid"
+          ? "form-row form-row-mid-input"
+          : "form-row";
   return (
-    <div className="form-row">
+    <div className={rowClass}>
       <span className="lbl" title={label}>{label}</span>
       {/* Task 2.5: the design's .form-row 3rd column carries the unit
           hint, so we suppress the Spinner's inline trailing-unit overlay
@@ -718,20 +734,40 @@ function FieldCheckbox({
   checked,
   disabled,
   onCheckedChange,
+  inlineLabel,
 }: {
   label: string;
   checked: boolean;
   disabled?: boolean;
   onCheckedChange: (checked: boolean) => void;
+  /** When true, allow the label to wrap onto multiple lines instead of
+   *  truncating with ellipsis. Layout is otherwise IDENTICAL to a
+   *  default FieldCheckbox — both variants share `.form-row`'s
+   *  `1fr 58px 40px` grid and the checkbox spans columns 2-3 with
+   *  right-justify so its right edge aligns with the unit cell's
+   *  terminus (and therefore with every spinner's unit suffix).
+   *  Use inlineLabel for labels like "Link particles to instance"
+   *  whose ellipsis-truncation would hide load-bearing text. */
+  inlineLabel?: boolean;
 }) {
+  // The checkbox sits in col 2 with `justify-self: end`, pinning its
+  // right edge to the right edge of col 2 — which IS the right edge
+  // of every spinner's number input (the spinner has `w-full` on the
+  // same column). Col 3 (the empty unit cell) becomes a deliberate
+  // ~40 px gutter between the checkbox and the panel edge, matching
+  // the trailing space spinner rows naturally have between their unit
+  // suffix and the panel edge minus 8 px gap. Every checkbox in the
+  // inspector lands at the same X regardless of which form-row width
+  // modifier (-mid-input / -wide-input / -x2-input / .basic-tab
+  // default) sits underneath.
   return (
-    <div className="form-row">
+    <div className={`form-row${inlineLabel ? " form-row-check-inline" : ""}`}>
       <span className="lbl" title={label}>{label}</span>
       <Checkbox.Root
         checked={checked}
         disabled={disabled}
         onCheckedChange={(v) => onCheckedChange(v === true)}
-        className={`flex h-[18px] w-[18px] items-center justify-center rounded border border-border-2 bg-bg-2 outline-none transition focus-visible:border-accent ${
+        className={`flex h-[18px] w-[18px] items-center justify-center rounded border border-border-2 bg-bg-2 outline-none transition focus-visible:border-accent col-2 justify-self-end ${
           disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer hover:border-border-2"
         } data-[state=checked]:border-accent data-[state=checked]:bg-accent`}
         aria-label={label}
@@ -740,7 +776,6 @@ function FieldCheckbox({
           <Check size={12} className="text-text" />
         </Checkbox.Indicator>
       </Checkbox.Root>
-      <span className="unit" />
     </div>
   );
 }
@@ -752,6 +787,7 @@ function FieldSelect({
   disabled,
   onCommit,
   testId,
+  widthBoost,
 }: {
   label: string;
   value: number;
@@ -759,10 +795,24 @@ function FieldSelect({
   disabled?: boolean;
   onCommit: (value: number) => void;
   testId?: string;
+  /** Optional input-column boost so dropdown triggers with long option
+   *  labels render without truncation. "mid" = +25 % (~73 px),
+   *  "wide" = +50 % (~87 px), "x2" = doubled (~116 px). Maps to
+   *  .form-row-mid-input / .form-row-wide-input / .form-row-x2-input
+   *  CSS modifiers. */
+  widthBoost?: "mid" | "wide" | "x2";
 }) {
   const selected = options.find((o) => o.value === value);
+  const rowClass =
+    widthBoost === "x2"
+      ? "form-row form-row-x2-input"
+      : widthBoost === "wide"
+        ? "form-row form-row-wide-input"
+        : widthBoost === "mid"
+          ? "form-row form-row-mid-input"
+          : "form-row";
   return (
-    <div className="form-row">
+    <div className={rowClass}>
       <span className="lbl" title={label}>{label}</span>
       <Select.Root
         value={String(value)}
@@ -898,49 +948,63 @@ export function AppearanceTab({
       </Section>
 
       <Section title="Random color addition">
-        {/* RGBA — 4-spinner cluster (R/G/B/A as 0..100%). Uses the
-            `.form-row` label column but the spinner grid spans the
-            input + unit columns since 4 spinners don't fit in the
-            design's 92px input slot. */}
+        {/* RGBA — 4-spinner cluster (R/G/B/A as 0..100%). Per-channel
+            R / G / B / A micro-labels above each spinner mirror the
+            X/Y/Z pattern Vec3 rows use elsewhere. Laid out as
+            2 columns × 2 rows (R/G top, B/A bottom) so each spinner
+            cell is twice as wide as a 4-up layout — easier to read at
+            the inspector's typical column width. */}
         <div className="form-row form-row-cluster items-start">
           <span className="lbl pt-1" title="RGBA:">RGBA:</span>
           <div className="grid grid-cols-2 gap-1">
-            <Spinner
-              value={properties.randomColors[0] * 100}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              onChange={(v) => updateRandomColors(0, v)}
-              aria-label="Red"
-            />
-            <Spinner
-              value={properties.randomColors[1] * 100}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              onChange={(v) => updateRandomColors(1, v)}
-              aria-label="Green"
-            />
-            <Spinner
-              value={properties.randomColors[2] * 100}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              onChange={(v) => updateRandomColors(2, v)}
-              aria-label="Blue"
-            />
-            <Spinner
-              value={properties.randomColors[3] * 100}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              onChange={(v) => updateRandomColors(3, v)}
-              aria-label="Alpha"
-            />
+            <div className="axis-cell">
+              <span className="axis-lbl">R</span>
+              <Spinner
+                value={properties.randomColors[0] * 100}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                onChange={(v) => updateRandomColors(0, v)}
+                aria-label="Red"
+              />
+            </div>
+            <div className="axis-cell">
+              <span className="axis-lbl">G</span>
+              <Spinner
+                value={properties.randomColors[1] * 100}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                onChange={(v) => updateRandomColors(1, v)}
+                aria-label="Green"
+              />
+            </div>
+            <div className="axis-cell">
+              <span className="axis-lbl">B</span>
+              <Spinner
+                value={properties.randomColors[2] * 100}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                onChange={(v) => updateRandomColors(2, v)}
+                aria-label="Blue"
+              />
+            </div>
+            <div className="axis-cell">
+              <span className="axis-lbl">A</span>
+              <Spinner
+                value={properties.randomColors[3] * 100}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                onChange={(v) => updateRandomColors(3, v)}
+                aria-label="Alpha"
+              />
+            </div>
           </div>
         </div>
         <FieldCheckbox
@@ -965,6 +1029,7 @@ export function AppearanceTab({
           unit="x"
           disabled={!tailEnabled}
           onCommit={(v) => onCommit({ tailSize: v })}
+          widthBoost="mid"
         />
       </Section>
 
@@ -1029,6 +1094,7 @@ export function AppearanceTab({
           options={BLEND_MODE_OPTIONS}
           onCommit={(v) => onCommit({ blendMode: v })}
           testId="appearance-blend-mode-trigger"
+          widthBoost="x2"
         />
       </Section>
     </div>
@@ -1197,6 +1263,7 @@ export function PhysicsTab({
           checked={properties.objectSpaceAcceleration}
           disabled={!nonWeather}
           onCheckedChange={(v) => onCommit({ objectSpaceAcceleration: v })}
+          inlineLabel
         />
       </Section>
 
@@ -1208,6 +1275,7 @@ export function PhysicsTab({
           disabled={!nonWeather}
           onCommit={(v) => onCommit({ groundBehavior: v })}
           testId="physics-ground-behavior-trigger"
+          widthBoost="mid"
         />
         <FieldSpinner
           label="Bounciness:"
@@ -1257,6 +1325,7 @@ function GroupBody({
         options={GROUP_TYPE_OPTIONS}
         onCommit={(v) => onChange({ type: v })}
         testId={`physics-group-${index}-type-trigger`}
+        widthBoost="wide"
       />
       {group.type === GT_EXACT && (
         <Vec3Row

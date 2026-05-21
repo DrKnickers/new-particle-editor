@@ -25,9 +25,9 @@ export function Section({ title, defaultOpen = true, children }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   const toggle = () => setOpen((o) => !o);
   return (
-    <div className="section">
+    <div className="panel-section" data-open={open}>
       <div
-        className={`section-header ${open ? "" : "collapsed"}`}
+        className="panel-section-header"
         role="button"
         tabIndex={0}
         onClick={toggle}
@@ -40,11 +40,10 @@ export function Section({ title, defaultOpen = true, children }: Props) {
         aria-expanded={open}
         data-testid={`section-${title.toLowerCase().replace(/\s+/g, "-")}`}
       >
-        <ChevronDown className="chev size-3" />
         <span>{title}</span>
+        <ChevronDown className="chev size-3" />
       </div>
-      <div className="section-divider" aria-hidden />
-      {open && <div className="section-body">{children}</div>}
+      {open && <div className="panel-section-body">{children}</div>}
     </div>
   );
 }

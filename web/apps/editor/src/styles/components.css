@@ -441,41 +441,74 @@
   padding: 8px 10px 12px;
 }
 
-.section {
-  margin-top: 4px;
+/* Collapsible section primitive — shared by Section.tsx (controlled
+ * via useState + data-open attribute) and ToolPanel.Section (native
+ * <details>). The rotation selector targets both state shapes so each
+ * consumer keeps its own state model while sharing the visual.
+ * B1.3.2 unification. */
+.panel-section {
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: 6px;
+  margin-bottom: 12px;
 }
-.section-header {
+
+.panel-section-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 2px 6px;
-  font-size: 12px;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text);
-  letter-spacing: 0.1px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-2);
   cursor: pointer;
   user-select: none;
+  outline: none;
+  /* Hide the native <details> disclosure marker. `list-style: none`
+   * covers Firefox + Safari's `::marker`; the `-webkit-details-marker`
+   * pseudo handles older Blink. `display: flex` (declared above)
+   * overrides `display: list-item` which `<summary>` carries by
+   * default — without it the chrome reserves an inset for the marker
+   * even when the marker is hidden. */
+  list-style: none;
 }
-.section-header .chev {
+.panel-section-header::-webkit-details-marker { display: none; }
+
+.panel-section-header:hover { color: var(--text); }
+.panel-section-header:focus-visible { color: var(--text); }
+
+.panel-section-header .chev {
   color: var(--text-3);
+  flex-shrink: 0;
   transition: transform 0.12s;
 }
-.section-header.collapsed .chev { transform: rotate(-90deg); }
-.section-header:hover { color: var(--text); }
-.section-divider { height: 1px; background: var(--border); margin: 2px 0 6px; }
+/* Collapsed state: chevron points right. Two selectors bridge the two
+ * consumer state shapes — `[data-open="false"]` for the controlled
+ * <div> in Section.tsx; `:not([open])` for native <details>. */
+.panel-section[data-open="false"] .chev,
+.panel-section:not([open]) .chev {
+  transform: rotate(-90deg);
+}
 
-/* Inspector contents indent so field labels align with the
- * section-header title text. Section header is:
- *   padding-left 2px + chevron 12px + gap 6px = 20px from section's left.
- * Apply the same 20px indent to .section-body and .form-row.name-row
- * (the Name row sits outside any Section).
- *
- * B1.3.1 polish: also a `padding-right: 12px` so form rows inside a
- * Section keep a comfortable margin from the inspector scrollbar —
- * matching the Physics tab's Tabs.Content `p-3` wrapper. The Name row
- * + Section headers (which sit OUTSIDE .section-body) are unaffected
- * and continue to extend to the inspector's edge. */
-.section-body { padding-left: 20px; padding-right: 12px; }
+.panel-section-body {
+  padding: 12px;
+}
+/* Restore the `space-y-2` vertical rhythm that ToolPanel.Section's
+ * inline Tailwind utilities previously declared on the body's direct
+ * children. The inspector's `.form-row` grid carries its own row
+ * spacing so the sibling margin doesn't apply there visually — but
+ * it does apply between `.form-row` blocks, which is the desired
+ * inspector behavior too. */
+.panel-section-body > * + * { margin-top: 8px; }
+
+/* Generic 1px horizontal hairline. Used by CurveEditorPanel to
+ * separate the colour-channel group from the transform-channel
+ * group; was previously also the section-header bottom rule (now
+ * supplanted by .panel-section's bordered container). Kept as a
+ * standalone primitive for reuse. */
+.section-divider { height: 1px; background: var(--border); margin: 2px 0 6px; }
 
 .form-row {
   display: grid;
@@ -493,6 +526,16 @@
 }
 .form-row .lbl { color: var(--text-2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .form-row .unit { color: var(--text-3); font-size: 11px; overflow: visible; min-width: 0; }
+
+/* Basic-tab-scoped default: every plain .form-row inside .basic-tab
+   picks up a wider input column (73 px, +25 % over the standard 58 px)
+   so all numeric spinners in Basic — Emitter Timing / Generation /
+   Connection — read with more room. Declared BEFORE the named modifier
+   rules below so equal-specificity modifiers (.full / .name-row /
+   .form-row-cluster / .form-row-mid-input / .form-row-wide-input /
+   .form-row-x2-input / etc.) win on declaration order and keep their
+   own layouts. */
+.basic-tab .form-row { grid-template-columns: 1fr 73px 40px; }
 
 .form-row.full {
   grid-template-columns: 1fr;
@@ -534,6 +577,31 @@
   grid-template-columns: 60px minmax(0, 1fr);
 }
 
+/* Wider input cell for FieldSelect / FieldSpinner instances whose
+   default 58 px input column truncates long option labels (e.g. the
+   Physics "Type:" dropdown options "Exact" / "Box" / "Sphere…",
+   or "Tail length:" values like "1000.0x"). 87 px = 50% wider;
+   73 px = 25% wider. Unit cell stays at 40 px so "units/s²" still
+   fits. */
+.form-row.form-row-wide-input { grid-template-columns: 1fr 87px 40px; }
+.form-row.form-row-mid-input  { grid-template-columns: 1fr 73px 40px; }
+.form-row.form-row-x2-input   { grid-template-columns: 1fr 116px 40px; }
+
+/* Long-label FieldCheckbox variant for labels that don't fit the
+   default `1fr 58px 40px` label cell without truncation (e.g.
+   "Object space acceleration", "Link particles to instance"). Uses
+   the SAME column template as the default form-row so the checkbox
+   (which spans col 2-3 with `justify-self: end`) lines up
+   right-edge-wise with every other checkbox and every spinner's
+   unit-cell terminus. Only the label cell's wrapping behavior
+   diverges — wrap instead of ellipsis-truncate so the full text
+   shows even on a narrow inspector column. */
+.form-row.form-row-check-inline .lbl {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 /* Per-axis micro-label above each spinner in a Vec3 cluster (X / Y /
    Z labels stacked above their Spinner). Matches legacy IDD_EMITTER_PROPS3
    (.rc:352-354) which puts individual "X" / "Y" / "Z" LTEXTs above
@@ -556,8 +624,8 @@
 
 /* Tri-state Generation radio rows (B1.3 P3). Hand-rolled radio chrome
    rather than Radix RadioGroup so the layout sits tightly inside
-   `.section-body` alongside the FieldSpinner form-rows. Active state
-   fills the inner dot via the accent token. */
+   `.panel-section-body` alongside the FieldSpinner form-rows. Active
+   state fills the inner dot via the accent token. */
 .radio-row {
   display: grid;
   grid-template-columns: 16px 1fr;

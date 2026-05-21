@@ -238,9 +238,20 @@ export function SpawnerPanel({ bridge }: Props) {
             <span>Enabled</span>
           </label>
         )}
+
+        {!isAuto && (
+          <button
+            type="button"
+            onClick={handleTrigger}
+            aria-label="Spawn now"
+            className="mt-2 rounded bg-accent px-3 py-1 text-xs font-medium text-white outline-none transition hover:bg-accent focus:ring-2 focus:ring-accent"
+          >
+            Spawn now
+          </button>
+        )}
       </ToolPanel.Section>
 
-      <ToolPanel.Section title="Burst" alwaysOpen>
+      <ToolPanel.Section title="Burst" defaultOpen>
         <ToolPanel.Row label="Burst size">
           <Spinner
             value={config.burstSize}
@@ -420,18 +431,6 @@ export function SpawnerPanel({ bridge }: Props) {
         </div>
       </ToolPanel.Section>
 
-      {!isAuto && (
-        <ToolPanel.Footer>
-          <button
-            type="button"
-            onClick={handleTrigger}
-            aria-label="Spawn now"
-            className="rounded bg-accent px-3 py-1 text-xs font-medium text-white hover:bg-accent outline-none focus:ring-2 focus:ring-accent"
-          >
-            Spawn now
-          </button>
-        </ToolPanel.Footer>
-      )}
       </div>
     </div>
   );

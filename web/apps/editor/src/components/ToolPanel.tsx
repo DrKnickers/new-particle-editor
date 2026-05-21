@@ -25,7 +25,7 @@
 // the `×` glyph or by re-toggling the launcher (e.g. clicking the
 // Background pill again, picking a different Tools-menu entry).
 
-import { X } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
@@ -99,31 +99,29 @@ function ToolPanelSection({
   alwaysOpen = false,
   children,
 }: ToolPanelSectionProps) {
+  // B1.3.2: shared `.panel-section` class set with Section.tsx so both
+  // collapsible-section consumers use one source-of-truth styling.
+  // alwaysOpen branch keeps its no-chevron / no-cursor variant; the
+  // `cursor: default` override on the header suppresses the shared
+  // class's `cursor: pointer` so Lighting's Ambient / Shadow sections
+  // don't suggest interactivity they don't have.
   if (alwaysOpen) {
     return (
-      <section className="mb-3 rounded-md border border-border bg-bg-2/40">
-        <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-2">
+      <section className="panel-section">
+        <div className="panel-section-header" style={{ cursor: "default" }}>
           {title}
         </div>
-        <div className="space-y-2 p-3">{children}</div>
+        <div className="panel-section-body">{children}</div>
       </section>
     );
   }
   return (
-    <details
-      open={defaultOpen}
-      className="group mb-3 rounded-md border border-border bg-bg-2/40 [&_summary::-webkit-details-marker]:hidden"
-    >
-      <summary className="flex cursor-pointer select-none items-center justify-between border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-2 outline-none">
+    <details className="panel-section" open={defaultOpen}>
+      <summary className="panel-section-header">
         <span>{title}</span>
-        <span
-          aria-hidden="true"
-          className="text-text-3 transition-transform group-open:rotate-90"
-        >
-          ›
-        </span>
+        <ChevronDown className="chev size-3" />
       </summary>
-      <div className="space-y-2 p-3">{children}</div>
+      <div className="panel-section-body">{children}</div>
     </details>
   );
 }
