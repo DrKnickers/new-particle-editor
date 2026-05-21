@@ -1098,3 +1098,31 @@
   border-radius: 50%;
   background: var(--success);
 }
+
+/* ========== Splitters (B1.4) ========== */
+/* react-resizable-panels 4.x emits `data-separator` on the handle.
+   Active-drag styling piggybacks on the `:active` pseudo-class
+   (4.x dropped the `data-resize-handle-active` attribute that 2.x
+   exposed). 4 px hit area matches the existing border affordance;
+   --accent-soft hover preview is a tactile but quiet signal. */
+[data-separator].ce-splitter {
+  background: transparent;
+  position: relative;
+  transition: background 120ms ease;
+}
+[data-separator].ce-splitter:hover,
+[data-separator].ce-splitter:active {
+  background: var(--accent-soft);
+}
+[data-separator].ce-splitter-v {
+  width: 4px;
+  cursor: col-resize;
+}
+[data-separator].ce-splitter-h {
+  height: 4px;
+  cursor: row-resize;
+}
+[data-separator].ce-splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
