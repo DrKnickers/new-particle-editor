@@ -11,13 +11,22 @@
 // accessibility tools see the toggle semantics rather than a generic
 // button click.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
+import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 
 type Props = { bridge: Bridge };
 
 export function ViewportPill({ bridge }: Props) {
   const [snap, setSnap] = useState<EngineStateDto | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // FD9b: register the pill's rect with the AlphaCompositor so the
+  // engine viewport punches a hole over it. Without this, the layered
+  // viewport renders on top of the pill and only the drop-shadow
+  // leaks through. 24 px pad+feather matches the menubar wrappers so
+  // the pill's box-shadow blur stays inside the cut.
+  useViewportOcclusion(bridge, "viewport-pill", ref, 24, 24);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,7 +43,7 @@ export function ViewportPill({ bridge }: Props) {
   const leave = snap?.leaveParticles ?? true;
 
   return (
-    <div className="vp-tools" role="group" aria-label="Viewport toggles">
+    <div ref={ref} className="vp-tools" role="group" aria-label="Viewport toggles">
       <button
         type="button"
         className={`tool ${ground ? "active" : ""}`}

@@ -68,6 +68,30 @@ function OccludingMenubarContent({
   );
 }
 
+// SubContent analogue. Menubar.SubContent renders in its OWN portal
+// when the SubMenu opens (e.g. File → Recent Files); without an
+// occlusion registration the engine viewport renders over it and the
+// user sees only the drop shadow leaking through. Pattern + 24 px
+// pad/feather match OccludingMenubarContent verbatim.
+type MenuSubContentProps = ComponentProps<typeof Menubar.SubContent> & {
+  bridge: Bridge;
+  occlusionId: string;
+};
+function OccludingMenubarSubContent({
+  bridge,
+  occlusionId,
+  children,
+  ...rest
+}: MenuSubContentProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useViewportOcclusion(bridge, occlusionId, ref, 24, 24);
+  return (
+    <Menubar.SubContent {...rest}>
+      <div ref={ref}>{children}</div>
+    </Menubar.SubContent>
+  );
+}
+
 type Props = {
   bridge: Bridge;
   onOpenLightingPanel: () => void;
@@ -321,7 +345,9 @@ export function MenuBar({
                 <ChevronRight className="ml-auto size-3.5" />
               </Menubar.SubTrigger>
               <Menubar.Portal>
-                <Menubar.SubContent
+                <OccludingMenubarSubContent
+                  bridge={bridge}
+                  occlusionId="menu:file:recent"
                   className={CONTENT}
                   sideOffset={2}
                   alignOffset={-4}
@@ -342,7 +368,7 @@ export function MenuBar({
                       </Menubar.Item>
                     ))
                   )}
-                </Menubar.SubContent>
+                </OccludingMenubarSubContent>
               </Menubar.Portal>
             </Menubar.Sub>
             <Menubar.Separator className={SEPARATOR} />
