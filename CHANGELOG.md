@@ -18,7 +18,7 @@ Conventions:
 
 ### Left-pane polish (B1.2) — collapsible sections, Name input width, toolbar Duplicate + icon Show/Hide All
 
-*TODO-DATE · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-20 · [`d69e7cc`](https://github.com/DrKnickers/new-particle-editor/commit/d69e7cc) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 Tightens the left pane's interior fidelity against the design
 source. New `Section` primitive at
