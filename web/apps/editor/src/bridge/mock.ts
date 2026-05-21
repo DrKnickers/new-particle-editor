@@ -431,6 +431,10 @@ export class MockBridge implements Bridge {
         // Mock: no native HWND to clip. Acknowledge silently.
         return {};
 
+      case "viewport/set-modal-mask":
+        // Mock: no AlphaCompositor to dim/blur. Acknowledge silently.
+        return {};
+
       // ---------------- file ops (Phase 3 Screen 8 Batch 3) ----------
       //
       // The mock implementations are deliberately UI-free: there's no

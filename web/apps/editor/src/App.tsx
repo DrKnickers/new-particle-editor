@@ -29,6 +29,7 @@ import {
 import { useSpawnerVisible } from "@/lib/spawner-visibility";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
+import { BridgeContext } from "@/lib/bridge-context";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -152,6 +153,7 @@ function AppShell() {
   }, [bridge]);
 
   return (
+    <BridgeContext.Provider value={bridge}>
     <div className="flex h-full w-full flex-col text-text">
       {/* Top bar */}
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-bg px-4 text-sm">
@@ -320,6 +322,7 @@ function AppShell() {
       {/* Screen 4 Batch B2 — multi-select link-group assignment. */}
       <SetLinkGroupDialog bridge={bridge} />
     </div>
+    </BridgeContext.Provider>
   );
 }
 

@@ -183,6 +183,11 @@ void LayoutBroker::RemoveOcclusion(const std::string& id)
     if (m_compositor) m_compositor->RemoveOcclusion(id);
 }
 
+void LayoutBroker::SetModalMask(float alpha, int blurRadius)
+{
+    if (m_compositor) m_compositor->SetModalMask(alpha, blurRadius);
+}
+
 void LayoutBroker::ReemitOcclusions()
 {
     if (!m_compositor) return;

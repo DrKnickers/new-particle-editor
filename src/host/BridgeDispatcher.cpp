@@ -777,13 +777,40 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             int w = r.value("w", 0);
             int h = r.value("h", 0);
             int feather = params.value("feather", 0);
+            printf("[Occlude] SET id=%s rect=(%d,%d,%d,%d) feather=%d\n",
+                   id.c_str(), x, y, w, h, feather); fflush(stdout);
             m_layout.SetOcclusion(id, x, y, w, h, feather);
         }
         else
         {
+            printf("[Occlude] CLEAR id=%s\n", id.c_str()); fflush(stdout);
             // rect=null or missing → remove the occlusion.
             m_layout.RemoveOcclusion(id);
         }
+        sendOk(json::object());
+        return res;
+    }
+
+    // -------- viewport/set-modal-mask --------
+    // B1.3.1: React's Modal primitive calls this on open/close to
+    // dim + blur the engine viewport, matching Dialog.Overlay's
+    // `bg-black/60 backdrop-blur-sm` treatment of the WebView2
+    // panels (which can't reach the engine layer via CSS). On open:
+    // alpha ≈ 0.4, blurRadius ≈ 6. On close: alpha=1.0, blurRadius=0
+    // (identity, free).
+    if (kind == "viewport/set-modal-mask")
+    {
+        float alpha = 1.0f;
+        int   blurRadius = 0;
+        if (auto it = params.find("alpha"); it != params.end() && it->is_number())
+        {
+            alpha = it->get<float>();
+        }
+        if (auto it = params.find("blurRadius"); it != params.end() && it->is_number())
+        {
+            blurRadius = it->get<int>();
+        }
+        m_layout.SetModalMask(alpha, blurRadius);
         sendOk(json::object());
         return res;
     }

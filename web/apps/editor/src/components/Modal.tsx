@@ -24,9 +24,8 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { useRef, type ReactNode, type MouseEventHandler } from "react";
-import type { Bridge } from "@particle-editor/bridge-schema";
-import { useViewportOcclusion } from "@/lib/viewport-occlusion";
+import { useCallback, useEffect, useState, type ReactNode, type MouseEventHandler } from "react";
+import { useBridge } from "@/lib/bridge-context";
 
 export type ModalSize = "sm" | "md" | "lg";
 
@@ -52,26 +51,102 @@ export function Modal({
   children,
 }: ModalProps) {
   // FD9b: the engine viewport renders as a layered window on top of
-  // WebView2. Without registering the modal's full-screen overlay with
-  // the AlphaCompositor, the viewport paints over the modal and only
-  // the modal's bottom edge (outside the viewport quadrant) shows.
-  // Read bridge from window.bridge — set unconditionally by App.tsx
-  // at startup — so we don't have to drill `bridge` through every
-  // modal caller for what's a UI-layer concern. useViewportOcclusion
-  // early-returns when bridge is undefined (test envs without the
-  // bridge expose), so this is safe in vitest too.
-  const overlayRef = useRef<HTMLDivElement | null>(null);
-  const bridge =
-    typeof window !== "undefined"
-      ? (window as Window & { bridge?: Bridge }).bridge
-      : undefined;
-  useViewportOcclusion(open ? bridge : undefined, "modal", overlayRef, 0, 0);
+  // WebView2. Register the Dialog.Content's bounds with the
+  // AlphaCompositor so the engine punches a hole exactly where the
+  // modal body sits — viewport keeps rendering everywhere else.
+  //
+  // Why this inlines the occlusion logic instead of using
+  // useViewportOcclusion: Radix Dialog.Content mounts via a
+  // Portal+Presence wrapper that delays ref attachment by at least
+  // one render cycle past the parent's useEffect. The shared hook
+  // captures `ref.current` once at effect time and never re-runs
+  // when the target attaches later, so for Dialog.Content the
+  // effect early-returns on every open transition. Tracking the
+  // element via useState + a callback ref forces a re-render when
+  // the node attaches, the effect re-runs with the element ready,
+  // and the occlusion finally fires. Bridge comes from
+  // BridgeContext (NOT window.bridge — see bridge-context.ts).
+  const bridge = useBridge();
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  const contentRef = useCallback((node: HTMLDivElement | null) => {
+    setContentEl(node);
+  }, []);
+
+  useEffect(() => {
+    if (!open || !bridge || !contentEl) return;
+    // Tight alpha cut just around the modal chrome — 8 px pad + 8 px
+    // feather is enough soft-edge for clean alpha AA without exposing
+    // a visible ring of Dialog.Overlay's `bg-black/60` dim through
+    // the popup. (Wider pad widens the cut, which exposes more of
+    // the dim and produces a visible dark band around the modal —
+    // the dim's full-screen rect is what fills the transparent zone
+    // in the popup, not the modal's CSS shadow.) Tradeoff: the
+    // chrome's `shadow-2xl` won't render on the engine-viewport
+    // side, but the modal sits cleanly against the rendered scene.
+    const padPx = 8;
+    const featherPx = 8;
+    const send = () => {
+      const r = contentEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      void bridge
+        .request({
+          kind: "viewport/occlude",
+          params: {
+            id: "modal",
+            rect: {
+              x: Math.round((r.left - padPx) * dpr),
+              y: Math.round((r.top  - padPx) * dpr),
+              w: Math.round((r.width  + padPx * 2) * dpr),
+              h: Math.round((r.height + padPx * 2) * dpr),
+            },
+            feather: Math.round(featherPx * dpr),
+          },
+        })
+        .catch(() => { /* ignore — ResizeObserver / resize will retry */ });
+    };
+    send();
+    const ro = new ResizeObserver(send);
+    ro.observe(contentEl);
+    window.addEventListener("resize", send);
+    // B1.3.1 modal-mask: dim + blur the engine viewport so it matches
+    // Dialog.Overlay's `bg-black/60 backdrop-blur-sm` treatment of the
+    // WebView2 panels. HTML CSS can't reach the engine layer (separate
+    // compositing window), so the AlphaCompositor renders the effect
+    // server-side via per-pixel alpha multiply (dim) + a separable
+    // box-blur on the engine pixels. Magic numbers chosen to visually
+    // match the WebView2-side dim+blur: alpha=0.4 ≈ bg-black/60's
+    // 60% darkening; blurRadius=6 ≈ backdrop-blur-sm's 4px blur scaled
+    // up slightly to account for the engine's natural high-frequency
+    // content vs the panels' low-frequency content.
+    void bridge
+      .request({
+        kind: "viewport/set-modal-mask",
+        params: { alpha: 0.4, blurRadius: 6 },
+      })
+      .catch(() => { /* ignore — visual polish only, not required for modal function */ });
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", send);
+      void bridge
+        .request({
+          kind: "viewport/occlude",
+          params: { id: "modal", rect: null },
+        })
+        .catch(() => { /* ignore */ });
+      // Restore identity (no effect) on close.
+      void bridge
+        .request({
+          kind: "viewport/set-modal-mask",
+          params: { alpha: 1.0, blurRadius: 0 },
+        })
+        .catch(() => { /* ignore */ });
+    };
+  }, [open, bridge, contentEl]);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
-          ref={overlayRef}
           data-testid="modal-overlay"
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0"
         />
@@ -82,7 +157,8 @@ export function Modal({
           // copy worth distinguishing from the title; the title alone is
           // sufficient SR context.
           aria-describedby={undefined}
-          className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-border bg-bg-2 text-text shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
+          ref={contentRef}
+          className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-border bg-bg-2 text-text shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
         >
           {/* Header */}
           <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-bg-2 px-4">

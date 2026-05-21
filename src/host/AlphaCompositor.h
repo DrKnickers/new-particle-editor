@@ -78,6 +78,20 @@ public:
     // Remove a previously registered occlusion. No-op if id unknown.
     void RemoveOcclusion(const std::string& id);
 
+    // B1.3.1: modal-mask post-process. When a modal opens, React calls
+    // viewport/set-modal-mask with alpha < 1 and blurRadius > 0; the
+    // compositor blurs the engine pixels (separable box blur, runs on
+    // the DIB before stamps) and multiplies the popup's per-pixel
+    // alpha by `alpha` (runs after stamps). The visible result is a
+    // dimmed + blurred engine viewport that matches the panels'
+    // `bg-black/60 backdrop-blur-sm` Dialog.Overlay treatment, since
+    // HTML's CSS effects can't reach into the engine popup layer
+    // directly.
+    //
+    // Identity (no effect) is alpha=1.0, blurRadius=0 — the cheap
+    // fast-path that runs every frame when no modal is open.
+    void SetModalMask(float alpha, int blurRadius);
+
     // Per-frame readback + occlusion stamp + UpdateLayeredWindow push.
     // No-op if Resize hasn't run or the HWND is null.
     void Composite(HWND layeredHwnd);

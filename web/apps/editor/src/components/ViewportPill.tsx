@@ -22,11 +22,15 @@ export function ViewportPill({ bridge }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   // FD9b: register the pill's rect with the AlphaCompositor so the
-  // engine viewport punches a hole over it. Without this, the layered
-  // viewport renders on top of the pill and only the drop-shadow
-  // leaks through. 24 px pad+feather matches the menubar wrappers so
-  // the pill's box-shadow blur stays inside the cut.
-  useViewportOcclusion(bridge, "viewport-pill", ref, 24, 24);
+  // engine viewport punches a hole over it. The pill has NO CSS
+  // box-shadow (just `backdrop-filter: blur(8px)` over a translucent
+  // background), so the cut doesn't need a large pad for shadow like
+  // the menubar wrappers do. 8 px pad + 8 px feather is enough for
+  // soft-edge alpha AA around the pill's rounded corners without
+  // exposing a visible ring of bare WebView2 background. (Setting
+  // pad=0 would put the feather band INSIDE the pill, dimming its
+  // own edge.)
+  useViewportOcclusion(bridge, "viewport-pill", ref, 8, 8);
 
   useEffect(() => {
     let cancelled = false;
