@@ -479,6 +479,9 @@
 .form-row.full {
   grid-template-columns: 1fr;
 }
+.form-row.name-row {
+  grid-template-columns: 60px 1fr;
+}
 .form-row.with-radio {
   grid-template-columns: 16px 1fr 92px 56px;
 }

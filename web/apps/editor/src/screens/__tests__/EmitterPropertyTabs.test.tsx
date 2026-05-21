@@ -380,17 +380,17 @@ describe("EmitterPropertyTabs", () => {
     expect(screen.queryByLabelText("Lifetime")).not.toBeInTheDocument();
   });
 
-  it("Name row uses the custom 60px 1fr grid template", async () => {
+  it("Name row uses the .name-row modifier class for its custom grid", async () => {
     const { bridge } = makeStubBridge(0);
     render(<EmitterPropertyTabs bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByLabelText("Name")).toBeInTheDocument();
     });
-    // The Name field's <input> is inside a div with the custom grid template.
+    // The Name field's <input> is inside a div with the .name-row modifier class.
     const nameInput = screen.getByLabelText("Name");
     const row = nameInput.closest('div.form-row') as HTMLElement | null;
     expect(row).not.toBeNull();
-    expect(row!.style.gridTemplateColumns).toBe("60px 1fr");
+    expect(row!.classList.contains("name-row")).toBe(true);
   });
 
   it("editing Lifetime fires emitters/set-properties with patch.lifetime", async () => {

@@ -301,10 +301,7 @@ function BasicTab({
       {/* Name row — custom 60px 1fr grid per design source's
           left_panel.jsx:100. Outside any Section so it always
           shows at the top of the tab. */}
-      <div
-        className="form-row"
-        style={{ gridTemplateColumns: "60px 1fr" }}
-      >
+      <div className="form-row name-row">
         <span className="lbl">Name</span>
         <FieldText
           value={properties.name}
