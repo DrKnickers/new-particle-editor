@@ -90,63 +90,58 @@ export function Modal({
     const el = document.querySelector<HTMLElement>('[data-testid="quadrant-viewport"]');
     setViewportEl(el);
 
-    let rafId: number | null = null;
     let cancelled = false;
 
-    const captureAndOcclude = () => {
-      // Engine popup → fully alpha-cut while the modal is open. The
-      // full-quadrant occlude has no padding and no feather: the
-      // snapshot img exactly fills the quadrant (inset:0 inside the
-      // position:relative parent), so the popup boundary and the img
-      // edge coincide. CSS effects above blend them.
-      if (el)
-      {
-        const r = el.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        void bridge
-          .request({
-            kind: "viewport/occlude",
-            params: {
-              id: "modal",
-              rect: {
-                x: Math.round(r.left * dpr),
-                y: Math.round(r.top  * dpr),
-                w: Math.round(r.width  * dpr),
-                h: Math.round(r.height * dpr),
-              },
-              feather: 0,
-            },
-          })
-          .catch(() => { /* ignore — resize handler will retry */ });
-      }
+    // One-shot capture + occlude on modal open. NO re-capture during
+    // the modal's lifetime — by design:
+    //
+    //   1. The occlude uses a sentinel rect that's far larger than any
+    //      realistic popup, so ApplyOcclusion always clips it to the
+    //      current popup bounds and zeroes every pixel. The popup
+    //      stays fully alpha-cut across any resize without needing a
+    //      fresh viewport/occlude — important because the Win32
+    //      drag-resize modal loop starves WebView2 IPC, so renderer→
+    //      host messages can't reliably land during the drag anyway.
+    //
+    //   2. The snapshot img sits at position:absolute; inset:0 inside
+    //      the quadrant, so CSS scales it to fill the current bounds
+    //      as the window resizes. The content is mildly stale during
+    //      a drag (engine keeps rendering but we don't re-encode),
+    //      but it's behind Dialog.Overlay's `bg-black/60
+    //      backdrop-blur-sm` — particle motion blurs to mush at that
+    //      treatment, so staleness is invisible. The visual model
+    //      (modal = frozen backdrop) matches user mental model.
+    //
+    //   3. Re-capturing during drag would force a ~10-30 ms GDI+ PNG
+    //      encode per frame plus base64 transit, on top of the
+    //      engine's already-expensive D3D9 device Reset per WM_SIZE.
+    //      Stacking both produces visible stutter; dropping the
+    //      re-capture eliminates the modal's contribution to it
+    //      entirely.
+    if (el)
+    {
       void bridge
-        .request({ kind: "viewport/capture-snapshot", params: {} })
-        .then((res) => {
-          if (cancelled) return;
-          const snap = res as { pngBase64: string; w: number; h: number };
-          setSnapshot(snap);
+        .request({
+          kind: "viewport/occlude",
+          params: {
+            id: "modal",
+            rect: { x: -100000, y: -100000, w: 200000, h: 200000 },
+            feather: 0,
+          },
         })
-        .catch(() => { /* MockBridge / test env — render guard short-circuits */ });
-    };
-
-    captureAndOcclude();
-
-    // rAF-throttled re-capture: drag-resize fires resize many times per
-    // frame; coalesce to one capture per frame to keep encode cost
-    // bounded (~10-30 ms per 1280×720 PNG via GDI+, per todo.md §4).
-    const onResize = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        captureAndOcclude();
-      });
-    };
-    window.addEventListener("resize", onResize);
+        .catch(() => { /* ignore */ });
+    }
+    void bridge
+      .request({ kind: "viewport/capture-snapshot", params: {} })
+      .then((res) => {
+        if (cancelled) return;
+        const snap = res as { pngBase64: string; w: number; h: number };
+        setSnapshot(snap);
+      })
+      .catch(() => { /* MockBridge / test env — render guard short-circuits */ });
 
     return () => {
       cancelled = true;
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", onResize);
       setSnapshot(null);
       setViewportEl(null);
       void bridge
