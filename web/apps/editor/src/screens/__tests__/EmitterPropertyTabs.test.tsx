@@ -384,12 +384,12 @@ describe("EmitterPropertyTabs", () => {
     });
     // Post-B1.3-P3: Lifetime moved into Generation, so test the
     // collapse via an Emitter Timing field that still lives there
-    // (Initial Delay).
-    expect(screen.getByLabelText("Initial Delay")).toBeInTheDocument();
+    // (Initial spawn delay).
+    expect(screen.getByLabelText("Initial spawn delay:")).toBeInTheDocument();
     // Collapse Emitter Timing.
     fireEvent.click(screen.getByTestId("section-emitter-timing"));
-    // Initial Delay field is no longer in the DOM.
-    expect(screen.queryByLabelText("Initial Delay")).not.toBeInTheDocument();
+    // Initial spawn delay field is no longer in the DOM.
+    expect(screen.queryByLabelText("Initial spawn delay:")).not.toBeInTheDocument();
   });
 
   it("Name row uses the .name-row modifier class for its custom grid", async () => {

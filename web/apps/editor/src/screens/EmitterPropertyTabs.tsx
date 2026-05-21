@@ -388,7 +388,6 @@ export function BasicTab({
   const burstsEnabled = mode === "bursts";
   const continuousEnabled = mode === "continuous";
   const weatherEnabled = mode === "weather";
-  const rotationEnabled = properties.randomRotation;
   return (
     <div className="inspector">
       {/* Name row — custom 60px 1fr grid per design source's
@@ -406,7 +405,7 @@ export function BasicTab({
 
       <Section title="Emitter Timing">
         <FieldSpinner
-          label="Initial Delay"
+          label="Initial spawn delay:"
           value={properties.initialDelay}
           min={0}
           step={0.1}
@@ -414,7 +413,7 @@ export function BasicTab({
           onCommit={(v) => onCommit({ initialDelay: v })}
         />
         <FieldSpinner
-          label="Skip Time"
+          label="Skip time:"
           value={properties.skipTime}
           min={0}
           step={0.1}
@@ -422,7 +421,7 @@ export function BasicTab({
           onCommit={(v) => onCommit({ skipTime: v })}
         />
         <FieldSpinner
-          label="Freeze Time"
+          label="Freeze time:"
           value={properties.freezeTime}
           min={0}
           step={0.1}
@@ -554,65 +553,28 @@ export function BasicTab({
           onCommit={(v) => onCommit({ randomLifetimePerc: v })}
         />
 
-        {/* Below are fields that stay in Generation for P3; P4 moves
-            rotation / random scale / parent link strength / Index out
-            to their own sections. */}
-        <FieldSpinner
-          label="Random Scale"
-          value={properties.randomScalePerc}
-          min={0}
-          max={100}
-          step={1}
-          unit="%"
-          onCommit={(v) => onCommit({ randomScalePerc: v })}
-        />
-        <FieldCheckbox
-          label="Random Rotation"
-          checked={properties.randomRotation}
-          onCheckedChange={(v) => onCommit({ randomRotation: v })}
-        />
-        <FieldCheckbox
-          label="Random Rotation Direction"
-          checked={properties.randomRotationDirection}
-          disabled={!rotationEnabled}
-          onCheckedChange={(v) => onCommit({ randomRotationDirection: v })}
-        />
-        <FieldSpinner
-          label="Rotation Average"
-          value={properties.randomRotationAverage}
-          step={0.1}
-          disabled={!rotationEnabled}
-          onCommit={(v) => onCommit({ randomRotationAverage: v })}
-        />
-        <FieldSpinner
-          label="Rotation Variance"
-          value={properties.randomRotationVariance}
-          step={0.1}
-          disabled={!rotationEnabled}
-          onCommit={(v) => onCommit({ randomRotationVariance: v })}
-        />
-        <FieldSpinner
-          label="Index"
-          value={properties.index}
-          min={0}
-          step={1}
-          decimals={0}
-          onCommit={(v) => onCommit({ index: Math.round(v) })}
-        />
       </Section>
 
       <Section title="Connection">
         <FieldCheckbox
-          label="Link to System"
+          label="Link particles to instance"
           checked={properties.linkToSystem}
           onCheckedChange={(v) => onCommit({ linkToSystem: v })}
         />
+        <FieldSelect
+          label="Emit mode:"
+          value={properties.emitFromMesh}
+          options={EMIT_FROM_MESH_OPTIONS}
+          onCommit={(v) => onCommit({ emitFromMesh: v })}
+          testId="basic-emit-from-mesh-trigger"
+        />
         <FieldSpinner
-          label="Parent Link Strength"
-          value={properties.parentLinkStrength}
-          min={0}
-          step={0.01}
-          onCommit={(v) => onCommit({ parentLinkStrength: v })}
+          label="Emit offset:"
+          value={properties.emitFromMeshOffset}
+          step={0.1}
+          unit="units"
+          disabled={properties.emitFromMesh === EMIT_FROM_MESH_DISABLE}
+          onCommit={(v) => onCommit({ emitFromMeshOffset: v })}
         />
       </Section>
     </div>
