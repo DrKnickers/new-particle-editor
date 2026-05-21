@@ -392,7 +392,7 @@ export function BasicTab({
           left_panel.jsx:100. Outside any Section so it always
           shows at the top of the tab. */}
       <div className="form-row name-row">
-        <span className="lbl">Name</span>
+        <span className="lbl" title="Name">Name</span>
         <FieldText
           value={properties.name}
           onCommit={(v) => onCommit({ name: v })}
@@ -636,10 +636,9 @@ function FieldText({
     return input;
   }
   return (
-    <div className="form-row">
-      <span className="lbl">{label}</span>
+    <div className="form-row form-row-text">
+      <span className="lbl" title={label}>{label}</span>
       {input}
-      <span className="unit" />
     </div>
   );
 }
@@ -687,7 +686,7 @@ export function FieldSpinner({
   const effectiveDecimals = displayInvertedPercent ? 0 : decimals;
   return (
     <div className="form-row">
-      <span className="lbl">{label}</span>
+      <span className="lbl" title={label}>{label}</span>
       {/* Task 2.5: the design's .form-row 3rd column carries the unit
           hint, so we suppress the Spinner's inline trailing-unit overlay
           here. Outside .form-row callers still get the inline unit. */}
@@ -719,7 +718,7 @@ function FieldCheckbox({
 }) {
   return (
     <div className="form-row">
-      <span className="lbl">{label}</span>
+      <span className="lbl" title={label}>{label}</span>
       <Checkbox.Root
         checked={checked}
         disabled={disabled}
@@ -756,7 +755,7 @@ function FieldSelect({
   const selected = options.find((o) => o.value === value);
   return (
     <div className="form-row">
-      <span className="lbl">{label}</span>
+      <span className="lbl" title={label}>{label}</span>
       <Select.Root
         value={String(value)}
         onValueChange={(v) => onCommit(Number(v))}
@@ -896,7 +895,7 @@ export function AppearanceTab({
             input + unit columns since 4 spinners don't fit in the
             design's 92px input slot. */}
         <div className="form-row items-start">
-          <span className="lbl pt-1">RGBA:</span>
+          <span className="lbl pt-1" title="RGBA:">RGBA:</span>
           <div
             className="grid grid-cols-2 gap-1"
             style={{ gridColumn: "2 / span 2" }}
@@ -1138,7 +1137,7 @@ export function PhysicsTab({
             Combined "X / Y / Z:" label per legacy IDD_EMITTER_PROPS3
             (.rc:350). */}
         <div className="form-row items-start">
-          <span className="lbl pt-1">X / Y / Z:</span>
+          <span className="lbl pt-1" title="X / Y / Z:">X / Y / Z:</span>
           <div
             className="grid grid-cols-3 gap-1"
             style={{ gridColumn: "2 / span 2" }}

@@ -473,7 +473,11 @@
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 56px 32px;
+  /* Spinner cell trimmed 56→52px and unit cell bumped 32→40px so
+     "units/s²" (Acceleration / Gravity / Inward acceleration) fits
+     without truncation. The unit also gets overflow:visible below so
+     it can spill into the gap if a longer suffix ever shows up. */
+  grid-template-columns: 1fr 52px 40px;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
@@ -481,7 +485,7 @@
   color: var(--text-2);
 }
 .form-row .lbl { color: var(--text-2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.form-row .unit { color: var(--text-3); font-size: 11px; }
+.form-row .unit { color: var(--text-3); font-size: 11px; overflow: visible; min-width: 0; }
 
 .form-row.full {
   grid-template-columns: 1fr;
@@ -495,6 +499,18 @@
 }
 .form-row.with-check {
   grid-template-columns: 16px 1fr 92px 56px;
+}
+/* Text-input rows have no unit cell, so the input slot expands to
+   span the combined spinner+unit width (52+40=92px) — keeps texture
+   filenames like "p_particle_default.tga" visible instead of
+   truncating at the 52px spinner column. minmax(0,…) lets the row
+   shrink gracefully if the panel narrows. */
+.form-row.form-row-text {
+  grid-template-columns: 1fr minmax(0, 92px);
+}
+.form-row.form-row-text .text-input {
+  min-width: 0;
+  width: 100%;
 }
 
 /* Tri-state Generation radio rows (B1.3 P3). Hand-rolled radio chrome
