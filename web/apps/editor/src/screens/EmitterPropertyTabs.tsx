@@ -1058,13 +1058,16 @@ export function AppearanceTab({
 //     tree (Q4); schema array still carries 3 entries, we just don't
 //     render index 1.
 //
-// Cascade rules (cross-referenced against
-// [src/UI/Emitter.cpp:175-190]):
-//   - `isWeatherParticle === true` (weather mode in Basic) disables
-//     acceleration X/Y/Z, gravity, inwardSpeed, inwardAcceleration,
-//     objectSpaceAcceleration, groundBehavior, and `affectedByWind`.
-//   - `groundBehavior !== Bounce` (!= 2) disables `bounciness`
-//     ([src/UI/Emitter.cpp:190]).
+// Weather-mode disable cascade (matches legacy
+// [src/UI/Emitter.cpp:175-190]): when `isWeatherParticle === true`,
+// the following controls disable — `groups[2]` (Initial position),
+// `parentLinkStrength` (Parent speed inherit), `acceleration[0..2]`
+// (X/Y/Z), `gravity`, `inwardAcceleration`,
+// `objectSpaceAcceleration`, `groundBehavior`, and `bounciness`. The
+// following STAY ENABLED under weather: `inwardSpeed`, `groups[0]`
+// (Initial speed), `affectedByWind`. Bounciness has an additional
+// gate: only enabled when `groundBehavior === GROUND_BEHAVIOR_BOUNCE`
+// ([src/UI/Emitter.cpp:190]).
 export function PhysicsTab({
   properties,
   onCommit,
@@ -1103,7 +1106,6 @@ export function PhysicsTab({
           value={properties.inwardSpeed}
           step={0.1}
           unit="units/s"
-          disabled={!nonWeather}
           onCommit={(v) => onCommit({ inwardSpeed: v })}
         />
         {/* Parent speed inherit — schema field is float in [0,1]; legacy
@@ -1120,12 +1122,12 @@ export function PhysicsTab({
           step={1}
           decimals={0}
           unit="%"
+          disabled={!nonWeather}
           onCommit={(v) => onCommit({ parentLinkStrength: v / 100 })}
         />
         <FieldCheckbox
           label="Affected by wind"
           checked={properties.affectedByWind}
-          disabled={!nonWeather}
           onCheckedChange={(v) => onCommit({ affectedByWind: v })}
         />
       </Section>

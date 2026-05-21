@@ -341,12 +341,26 @@ describe("EmitterPropertyTabs", () => {
     expect(onCommit).toHaveBeenCalledWith({ affectedByWind: true });
   });
 
-  it("PhysicsTab: Affected by wind disabled when isWeatherParticle === true", () => {
+  it("PhysicsTab: Affected by wind STAYS ENABLED when weather mode active (legacy parity, Emitter.cpp:175-190)", () => {
     const props = { ...makeFixtureProperties(0), isWeatherParticle: true, affectedByWind: false };
     render(<PhysicsTab properties={props} onCommit={() => {}} />);
     // Radix Checkbox renders a <button> for the input; query by role.
     const checkbox = screen.getByRole("checkbox", { name: "Affected by wind" });
-    expect(checkbox).toHaveAttribute("data-disabled");
+    expect(checkbox).not.toHaveAttribute("data-disabled");
+  });
+
+  it("PhysicsTab: Parent speed inherit IS disabled when weather mode active (legacy parity, Emitter.cpp:175-190)", () => {
+    const props = { ...makeFixtureProperties(0), isWeatherParticle: true };
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    const input = screen.getByLabelText("Parent speed inherit:") as HTMLInputElement;
+    expect(input.disabled).toBe(true);
+  });
+
+  it("PhysicsTab: Inward speed STAYS ENABLED when weather mode active (legacy parity, Emitter.cpp:175-190)", () => {
+    const props = { ...makeFixtureProperties(0), isWeatherParticle: true };
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    const input = screen.getByLabelText("Inward speed:") as HTMLInputElement;
+    expect(input.disabled).toBe(false);
   });
 
   it("PhysicsTab: Parent speed inherit displays * 100 and commits / 100", async () => {
