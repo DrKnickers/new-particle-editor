@@ -16,6 +16,88 @@ Conventions:
 
 ## Changelog
 
+### Left-pane polish (B1.2) — collapsible sections, Name input width, toolbar Duplicate + icon Show/Hide All
+
+*TODO-DATE · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Tightens the left pane's interior fidelity against the design
+source. New `Section` primitive at
+[`src/components/Section.tsx`](src/components/Section.tsx) (entire
+header row clickable, plus Enter/Space when focused; defaults to
+`defaultOpen=true`; session-only state — re-mounting on emitter
+selection re-expands every section). BasicTab gains three section
+groupings (Emitter Timing / Generation / Connection) matching the
+design source's `left_panel.jsx` layout; field set unchanged
+(19 fields total). Name field gets a custom `60px 1fr` grid override
+expressed as a new `.form-row.name-row` modifier class in
+[`components.css`](src/styles/components.css) (matching the existing
+`.full` / `.with-radio` / `.with-check` convention), so the text
+input fills available width; `FieldText` learns a small
+`wide?: boolean` prop so callers can embed it in a custom-grid row
+without the default `.form-row` wrapper. Tree toolbar gains a
+Duplicate button between New ▾ and Delete (dispatches the existing
+`emitters/duplicate`; disabled when no primary is selected). Show All
+/ Hide All become Lucide `Eye` / `EyeOff` icon buttons; tooltips
+preserve the full text.
+
+**How we tackled it.** Section primitive is ~40 lines:
+`useState<boolean>`, `role="button" tabIndex={0}` with `onKeyDown`
+for Enter/Space (preventDefault on Space to suppress page scroll),
+and `aria-expanded` reflecting state. The `data-testid` is derived
+from the title so individual sections are test-addressable. The
+intentional reset-on-mount behaviour means switching emitters
+re-expands sections — documented as a comment in the component
+with the upgrade path (lift state or per-tab persistence map) if
+the trade-off proves wrong in real use. BasicTab's restructure is
+purely wrapping: existing field components untouched, only their
+parent containers change. The Name row sits outside any Section
+(top-of-tab) using the new `.form-row.name-row` modifier — the
+inline `style={{ gridTemplateColumns: "60px 1fr" }}` first
+implementation was caught in code review as breaking the existing
+`.form-row.*` modifier-class convention and refactored to the
+class-based form. `FieldText`'s `wide` prop is a four-line diff:
+extract the `<input>` into a local variable, return it directly if
+`wide`. The toolbar's Duplicate button uses the existing
+`emitters/duplicate` bridge surface (consumed by the context-menu
+Duplicate item before this) and the existing `TOOLBAR_BTN`
+className for visual consistency. Show All / Hide All swap from
+custom text-button classNames to `TOOLBAR_BTN` with `Eye` /
+`EyeOff` icons. CSS audit found everything already in sync with
+the design source — no commit needed (P1 was a no-op).
+
+**Issues encountered and resolutions.** *Nested `<button>` →
+`<span role="button">` (legacy of B1's Task 5).* Not new here, but
+mentioned for context: the per-row visibility eye established
+in B1 is the basis for visual disambiguation against the new
+toolbar Eye / EyeOff. The toolbar uses `size-4` in a `w-6 h-6` cell
+with `text-text-2`; the per-row eye uses `size-3` in a `w-4 h-4`
+cell with `text-text-3`. Different size, brightness, and
+cardinality (paired action row vs per-row toggle) plus tooltips
+disambiguate.
+*Inline style vs modifier class.* The first BasicTab restructure
+implementation used `style={{ gridTemplateColumns: "60px 1fr" }}`
+inline on the Name row. Code review flagged this as breaking the
+established `.form-row.full` / `.with-radio` / `.with-check` modifier-
+class convention; refactored in a follow-up commit to use a new
+`.form-row.name-row` class. The plan documented inline style
+explicitly; reality is that the modifier-class form is more
+idiomatic with the surrounding code.
+*Spec assumed a toolbar divider that doesn't exist.* The plan
+listed the toolbar as `New ▾ │ Duplicate │ Delete │ Move Up │
+Move Down │ divider │ Show All │ Hide All`. The divider was
+correctly removed in B1's Task 7 when the eye-toggle button (the
+divider's left neighbour) was dropped. The plan's "divider
+unchanged" assumption was stale. Current toolbar has 7 buttons
+without a divider, which actually matches the design source's
+`tree-actions` (no divider in the design either).
+
+Test count: vitest **254 / 254** (was 239 at B1 close; +15 across
+all the new specs: 8 from Section, 3 from BasicTab restructure, 3
+from Duplicate, 1 from Show/Hide icons), Playwright unchanged at
+**83 / 83**.
+
+---
+
 ### Left-pane realignment (B1) — tree toolbar at bottom, per-row eye, multi-lane bracket gutter
 
 *2026-05-20 · [`7e54015`](https://github.com/DrKnickers/new-particle-editor/commit/7e54015) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

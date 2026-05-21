@@ -1,9 +1,9 @@
-# Session Handoff — AloParticleEditor / LT-4 (left-pane realignment B1)
+# Session Handoff — AloParticleEditor / LT-4 (left-pane polish B1.2)
 
-**Last updated:** 2026-05-20 (end-of-session — B1 left-pane realignment shipped: tree toolbar at bottom, per-row eye, multi-lane bracket gutter, single-member groups filtered)
-**Last conversation context:** Single dispatch executing the B1 plan (left-pane realignment against the design source). All 8 implementation tasks (P1–P8) landed plus brainstorm spec + plan + this docs commit. Tree toolbar moves from above the `<ul>` to below it and restyles to `.tree-actions`; every row gains a per-row 👁 eye (the toolbar's primary-only eye toggle is gone as redundant); per-row sky-blue link-group dot drops in favour of gutter brackets alone; bracket gutter gains aggressive-reuse multi-lane support via greedy first-fit; single-member link groups filter at the render layer so no group appears as a single-row stub; hard `border-t` between tree region and inspector is gone. Cumulative vitest delta 221 → **239** (+18); Playwright stable at 83/83. Next dispatch is B2 — Appearance + Physics tab wiring against the live model.
+**Last updated:** 2026-05-20 (end-of-session — B1.2 left-pane polish shipped: Section primitive, BasicTab restructured into Emitter Timing / Generation / Connection, `.name-row` modifier class, Name input full-width, toolbar Duplicate button, Show/Hide icon swap)
+**Last conversation context:** Polish dispatch executing the B1.2 plan on top of B1. All five implementation P-tasks landed plus brainstorm spec + plan + this docs commit (P1 audit was a no-op — no commit). New `Section` primitive at `src/components/Section.tsx` gives BasicTab three collapsible groupings (Emitter Timing / Generation / Connection) matching the design source's `left_panel.jsx`. Name field gets a custom `60px 1fr` grid via a new `.form-row.name-row` modifier class in `components.css` so the input fills available width; `FieldText` learns a `wide?: boolean` prop for embedding in custom-grid rows. Tree toolbar gains a Duplicate button between New ▾ and Delete (dispatches existing `emitters/duplicate`). Show All / Hide All become Lucide `Eye` / `EyeOff` icon buttons. Cumulative vitest delta 239 → **254** (+15); Playwright stable at 83/83. Next dispatch is **B1.3** — resizable splitters via `react-resizable-panels`. **B2** (Appearance + Physics wiring) is the secondary follow-up.
 
-Test counts: vitest **239 / 239**, Playwright **83 / 83**, MSBuild Debug x64 clean (no C++ change this dispatch).
+Test counts: vitest **254 / 254**, Playwright **83 / 83**, MSBuild Debug x64 clean (no C++ change this dispatch).
 
 ---
 
@@ -13,8 +13,8 @@ If you are a fresh Claude session resuming this project:
 
 1. **This file** — top to bottom.
 2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline. The `## Branch workflow` section is load-bearing: `lt-4` is the integration branch; new sessions land on `claude/<random>` and FF into `lt-4` at session end.
-3. **[CHANGELOG.md](../CHANGELOG.md)** — the top entry (B1 left-pane realignment) covers what just shipped; the entries below (curve editor polish, Phase 2.8 focus-channel restore, Phase 2.1–2.7 structural moves, Phase 1 tokens + theme) cover the architectural foundation B1 sits on.
-4. **If picking up B2 / Phase 3** (most likely next step):
+3. **[CHANGELOG.md](../CHANGELOG.md)** — the top entry (B1.2 left-pane polish) covers what just shipped; the B1 entry below covers the structural realignment this polish sits on; entries further down (curve editor polish, Phase 2.8 focus-channel restore, Phase 2.1–2.7 structural moves, Phase 1 tokens + theme) cover the architectural foundation.
+4. **If picking up B1.3 / B2 / Phase 3** (most likely next step):
    - **[docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)** — full design spec.
    - **[docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)** — step-by-step plan. **Phase 3 still references `tailwind.config.ts` in a few places — those need the same Tailwind v4 / `globals.css` translation Phase 1 got** (see the re-plan note at the top of Phase 1 for the pattern).
 5. **[tasks/lessons.md](lessons.md)** — L-001 through L-006. **L-006 (don't clear React optimistic state on every host-data refresh) is now load-bearing in `CurveEditorPanel.tsx` — the spinners' optimistic override comes from that pattern.**
@@ -29,13 +29,13 @@ If you are a fresh Claude session resuming this project:
 |---|---|
 | **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\sweet-vaughan-dc78c1` (this session's; next session gets a fresh `claude/<random>` path) |
 | **Branch** | `claude/sweet-vaughan-dc78c1` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | This docs commit at the top of the session branch (P9). Top non-docs commit is `9b6326b` (`feat(LT-4): drop hard border between tree region and inspector`). |
+| **HEAD (committed)** | This docs commit at the top of the session branch (B1.2 P6). Top non-docs commit is `a2d1fb6` (`feat(LT-4): Show All / Hide All become Eye / EyeOff icon buttons`). |
 | **Working tree** | clean. |
-| **Ahead of origin/lt-4** | 11 commits — the prior session's curve-editor polish (`df1bba7`) + B1 brainstorm + plan + P1–P8 implementation commits + this P9 docs commit. Needs FF + push at end of this session OR start of next. |
+| **Ahead of origin/lt-4** | The B1 trailing commits (FF'd at session start, see below) plus the B1.2 stack: brainstorm spec + plan + 5 implementation commits (P2 Section, P3 BasicTab restructure, P3-fix `.name-row` refactor, P4 Duplicate button, P5 Show/Hide icons) + this P6 docs commit. Needs FF + push at end of this session OR start of next. |
 | **Behind master** | `lt-4` is ~353+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning; no C++ change this dispatch). Vitest **239 / 239**. Playwright **83 / 83**. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment shipped. Phase 3 not started; next dispatch is B2 (Appearance + Physics tab wiring).** Legacy `--legacy-ui` mode is untouched throughout. |
+| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning; no C++ change this dispatch). Vitest **254 / 254**. Playwright **83 / 83**. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment + B1.2 left-pane polish shipped. Phase 3 not started; next dispatch is B1.3 (resizable splitters via `react-resizable-panels`); B2 (Appearance + Physics wiring) is the secondary follow-up.** Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session is in `sweet-vaughan-dc78c1`, succeeding `charming-williams-0efd47`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 
@@ -50,7 +50,24 @@ Then the standard Debug x64 build works. Skip this step on a worktree that's alr
 
 ---
 
-## What landed this session — B1 left-pane realignment (11 commits ahead of `origin/lt-4`)
+## What landed this session — B1.2 left-pane polish (on top of B1, which FF'd to `origin/lt-4` at session start)
+
+In execution order (oldest → newest):
+
+| Commit | What |
+|---|---|
+| `85503ae` | **docs(LT-4): brainstorm spec — left-pane polish (B1.2)** — captured intent + scope + tradeoffs for the polish dispatch before any plan was written. |
+| `27f2877` | **docs(LT-4): implementation plan — left-pane polish (B1.2)** — 6-task plan (P1 CSS audit → P6 docs). Goal + scope, codebase-survey, architecture, risks, testing checklist per CLAUDE.md plan structure. |
+| *(no commit)* | **P1 CSS audit — no-op.** Audit found `components.css` already in sync with the design source. No commit needed. |
+| `7ce9155` | **feat(LT-4): Section primitive — collapsible header with keyboard support** (P2) — ~40-line `Section` component at `src/components/Section.tsx`. Entire header row clickable; Enter/Space when focused; `aria-expanded` reflects state; `data-testid` derived from title. 8 specs covering toggle behaviour, default open, keyboard activation, testid derivation, reset-on-remount. |
+| `efda121` | **feat(LT-4): BasicTab restructure — Emitter Timing / Generation / Connection sections + Name row** (P3) — BasicTab wraps existing field components in three `Section`s matching the design source's `left_panel.jsx`. Name row sits outside any Section using a custom `60px 1fr` grid. 3 specs covering section presence, field counts, Name-row placement. |
+| `a79086a` | **refactor(LT-4): Name row uses `.form-row.name-row` modifier class** (P3-fix) — caught in code review: the inline `style={{ gridTemplateColumns: "60px 1fr" }}` on the Name row broke the established `.form-row.full` / `.with-radio` / `.with-check` modifier-class convention. Refactored to a new `.form-row.name-row` class in `components.css`; `FieldText` gained a `wide?: boolean` prop so callers can embed in custom-grid rows without the default `.form-row` wrapper. |
+| `12d01c4` | **feat(LT-4): Duplicate button on tree toolbar** (P4) — between New ▾ and Delete. Dispatches the existing `emitters/duplicate` bridge surface (consumed by the context-menu Duplicate item before this). Disabled when no primary is selected. Uses the existing `TOOLBAR_BTN` className. 3 specs covering presence, dispatch, disabled-state. |
+| `a2d1fb6` | **feat(LT-4): Show All / Hide All become Eye / EyeOff icon buttons** (P5) — swap from custom text-button classNames to `TOOLBAR_BTN` with Lucide `Eye` / `EyeOff` icons. Tooltips preserve the full text. Toolbar disambiguates from per-row eye via size (`size-4` vs `size-3`), brightness (`text-text-2` vs `text-text-3`), and cardinality (paired action vs per-row toggle). 1 spec covering icon presence + tooltip text. |
+
+Plus this P6 docs commit refreshing CHANGELOG + HANDOFF.
+
+### B1 trailing commits (FF'd to `origin/lt-4` at session start, kept for context)
 
 In execution order (oldest → newest):
 
@@ -69,13 +86,13 @@ In execution order (oldest → newest):
 | `6a804b0` | **feat(LT-4): tree toolbar moves below the `<ul>`, restyles to .tree-actions, drops eye** (P7) — `<EmitterTreeToolbar>` moves from above the tree to after it; outer container restyled to `.tree-actions` (banded hairlines top + bottom); the toolbar's primary-only eye-toggle button + its `primaryVisible` / `EyeGlyph` / `toggleVisibility` helpers (now unused) are removed. |
 | `9b6326b` | **feat(LT-4): drop hard border between tree region and inspector** (P8) — one-line edit removing `border-t border-border` on the inspector wrapper in `App.tsx`. The tab strip's underline carries the transition naturally. |
 
-Plus this P9 docs commit refreshing ROADMAP + CHANGELOG + HANDOFF.
+Plus the B1 P9 docs commit refreshing ROADMAP + CHANGELOG + HANDOFF (FF'd to `origin/lt-4` at the start of this session alongside the rest of the B1 stack).
 
 ---
 
 ## Previously landed (kept for context)
 
-The earlier Phase 1 + Phase 2 + curve-editor-polish dispatches are still the structural foundation under B1. In execution order (oldest → newest):
+The earlier Phase 1 + Phase 2 + curve-editor-polish dispatches are still the structural foundation under B1 + B1.2. In execution order (oldest → newest):
 
 | Commit | What |
 |---|---|
@@ -97,9 +114,13 @@ The earlier Phase 1 + Phase 2 + curve-editor-polish dispatches are still the str
 
 ## Open items (load-bearing — read before resuming)
 
-### 0. B2 — Appearance + Physics tab wiring (next dispatch)
+### 0. B1.3 — Resizable splitters via `react-resizable-panels` (next dispatch)
 
-The next move. B1 finished the left pane's structural realignment; B2 wires the Appearance and Physics inspector tabs to the live model so the form-row controls actually drive engine state through the bridge instead of being placeholder visuals. Specifics will be defined in a separate brainstorm + plan pair; the spec source is the design bundle's `appearance.html` + `physics.html`. Standard CLAUDE.md plan structure expected.
+The next move. B1 finished the structural realignment, B1.2 tightened the interior fidelity; B1.3 makes the left / centre / right column boundaries draggable so users can size the panes to taste. Target library is `react-resizable-panels` (battle-tested, accessible drag handles, persistence hooks). Specifics will be defined in a separate brainstorm + plan pair. Standard CLAUDE.md plan structure expected. Persistence target is `localStorage` like the theme toggle; default sizes match the current fixed widths.
+
+### 0b. B2 — Appearance + Physics tab wiring (secondary follow-up)
+
+After B1.3. B1.2 finished the BasicTab restructure; B2 wires the Appearance and Physics inspector tabs to the live model so the form-row controls actually drive engine state through the bridge instead of being placeholder visuals. Specifics will be defined in a separate brainstorm + plan pair; the spec source is the design bundle's `appearance.html` + `physics.html`. Standard CLAUDE.md plan structure expected.
 
 ### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20 (commit `92ed1db`)
 
@@ -124,14 +145,18 @@ A round of interactive smoke-testing through the curve editor surfaced a stack o
 
 **Status:** FF'd to `origin/lt-4` at the start of this session as `339ab95`. No outstanding work.
 
-### 1c. ~~B1 left-pane realignment~~ ✅ SHIPPED this session (uncommitted FF — needs FF into `lt-4` + push)
+### 1c. ~~B1 left-pane realignment~~ ✅ SHIPPED (FF'd to `origin/lt-4` at the start of this session)
 
-P1–P8 implementation + brainstorm + plan + this docs commit. 11 commits ahead of `origin/lt-4`. Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK. Full breakdown in the "What landed this session" table above and the top CHANGELOG entry.
+P1–P8 implementation + brainstorm + plan + the B1 P9 docs commit. FF + push completed at session start. Full breakdown in the "B1 trailing commits" table above and the second CHANGELOG entry.
 
-Two ROADMAP follow-ups filed for B1 work that's worth doing later but deliberately out-of-scope for this dispatch:
+Two ROADMAP follow-ups filed for B1 work that's worth doing later but deliberately out-of-scope:
 
 - **[NT-5] Engine-side single-member link-group enforcement.** B1 ships a render-layer filter; the data layer can still carry single-member groups. NT-5 makes the data layer match the rendered view end-to-end across the three C++ mutation paths.
 - **[NT-6] Visual-stability lane assignment for bracket gutter (option).** B1 uses aggressive-reuse greedy first-fit; a setting that opts the user into `lane = (groupId - 1) % maxLanes` would keep lanes stable across renders. Only worth doing if the bouncing turns out to be a real ergonomic issue.
+
+### 1d. ~~B1.2 left-pane polish~~ ✅ SHIPPED this session (uncommitted FF — needs FF into `lt-4` + push)
+
+P2 Section + P3 BasicTab restructure + P3-fix `.name-row` refactor + P4 Duplicate + P5 Show/Hide icon swap, plus brainstorm + plan + this P6 docs commit (P1 audit was a no-op). Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK. Full breakdown in the "What landed this session" table above and the top CHANGELOG entry.
 
 ### 2. Phase 2 / 3 references to `tailwind.config.ts` in the plan still need v4 translation
 
@@ -205,7 +230,7 @@ Run these in order before touching code:
 #    desktop app provisions a fresh worktree each session.)
 cd "/c/Modding/Particle Editor/.claude/worktrees/$WORKTREE_NAME"
 git worktree list
-git log --oneline -5    # HEAD should be the B1 P9 docs commit (this one) or the next dispatch's
+git log --oneline -5    # HEAD should be the B1.2 P6 docs commit (this one) or the next dispatch's
 git status              # clean
 git log --oneline lt-4..HEAD   # 0 if session branched cleanly from lt-4 (assuming B1 FF'd)
 git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
@@ -220,7 +245,7 @@ git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
 cd web/apps/editor
 pnpm install     # may re-inject the allowBuilds block — see L-005
 pnpm build       # 0 errors expected
-pnpm test        # 239/239 expected
+pnpm test        # 254/254 expected
 pnpm test:native # 83/83 expected
 ```
 
@@ -275,13 +300,14 @@ If anything regressed (no known failing specs at session end), the most likely c
 
 ## Recommended next moves
 
-0. **FF + push the B1 dispatch.** 11 commits ahead of `origin/lt-4` (P1–P8 + brainstorm + plan + this docs commit). Standard CLAUDE.md flow: fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
-1. **Execute B2 — Appearance + Physics tab wiring** (next dispatch). The form rows are in place from Phase 2.5; B2 makes them drive engine state through the bridge. Specifics defined in a separate brainstorm + plan pair; spec source is the design bundle's `appearance.html` + `physics.html`.
-2. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Can run in parallel with B2 if helpful.
-3. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
-4. **ROADMAP follow-ups from B1 (NT-5, NT-6).** Engine-side single-member link-group enforcement (NT-5) and the visual-stability lane assignment option (NT-6). Both small. NT-6 only worth doing if the bouncing-gutter turns out to be a real ergonomic issue in daily use.
-5. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's B1 dispatch is a good example of the shape.
-6. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
+0. **FF + push the B1.2 dispatch.** Brainstorm + plan + 5 implementation commits + this docs commit ahead of `origin/lt-4`. Standard CLAUDE.md flow: fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
+1. **Execute B1.3 — Resizable splitters via `react-resizable-panels`** (next dispatch). Make the left / centre / right column boundaries draggable so users can size the panes to taste. Persistence to `localStorage` like the theme toggle; defaults match current fixed widths. Specifics defined in a separate brainstorm + plan pair.
+2. **Execute B2 — Appearance + Physics tab wiring** (secondary follow-up). The form rows are in place from Phase 2.5; B2 makes them drive engine state through the bridge. Specifics defined in a separate brainstorm + plan pair; spec source is the design bundle's `appearance.html` + `physics.html`.
+3. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Can run in parallel with B1.3 / B2 if helpful.
+4. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
+5. **ROADMAP follow-ups from B1 (NT-5, NT-6).** Engine-side single-member link-group enforcement (NT-5) and the visual-stability lane assignment option (NT-6). Both small. NT-6 only worth doing if the bouncing-gutter turns out to be a real ergonomic issue in daily use.
+6. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's B1.2 dispatch is a good example of the shape.
+7. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
 
 ---
 
