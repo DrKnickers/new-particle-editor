@@ -186,18 +186,18 @@ export function Spinner({
   };
 
   // Keep text in sync when prop changes from outside (not while editing).
-  // Use a layout-style pattern: derive text from value when not focused.
-  if (!isFocused.current && !dragging) {
-    const expected = fmt(value);
-    if (text !== expected) {
-      // setText is synchronous in render — this is fine in React 18+/19.
-      // (We check text !== expected to avoid infinite loops.)
-      // Can't call setState during render; use an effect. But that adds lag.
-      // Instead, use a ref-based approach: only update in handleFocus.
-      // The mismatch will be fixed on next focus. This is acceptable — the
-      // displayed value reflects value when un-focused after blur/commit.
-    }
-  }
+  // Effect runs post-commit so the displayed value reflects external
+  // updates (e.g. undo, mod-switch, parent rerender with a transformed
+  // value like FieldSpinner's displayInvertedPercent) without requiring
+  // the user to focus the input first. Guarded on isFocused/dragging so
+  // mid-edit typing is never clobbered. Deps are kept primitive (value,
+  // dp, dragging) so the effect doesn't run on every render and clobber
+  // in-flight `setText` from `onChange`.
+  useEffect(() => {
+    if (isFocused.current || dragging) return;
+    const expected = value.toFixed(dp);
+    setText((prev) => (prev === expected ? prev : expected));
+  }, [value, dp, dragging]);
 
   // Always-visible Win32-style up/down arrow column. Reserve 14px on
   // the right so digits don't sit underneath; if a unit is also

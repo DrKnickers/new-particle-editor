@@ -529,7 +529,7 @@ function FieldText({
   );
 }
 
-function FieldSpinner({
+export function FieldSpinner({
   label,
   value,
   min,
@@ -538,6 +538,7 @@ function FieldSpinner({
   decimals,
   unit,
   disabled,
+  displayInvertedPercent,
   onCommit,
 }: {
   label: string;
@@ -548,8 +549,27 @@ function FieldSpinner({
   decimals?: number;
   unit?: string;
   disabled?: boolean;
+  /** When true, displays `100 - value*100` (rounded to integer) and
+   *  commits `(100 - displayed) / 100`. Forces min=0, max=100. Used for
+   *  `randomLifetimePerc` and `randomScalePerc` per legacy IDC_SPINNER13/14
+   *  inverted convention (see Emitter.cpp:487, 492). */
+  displayInvertedPercent?: boolean;
   onCommit: (value: number) => void;
 }) {
+  const displayValue = displayInvertedPercent
+    ? Math.round(100 - value * 100)
+    : value;
+  const handleCommit = (next: number) => {
+    if (displayInvertedPercent) {
+      onCommit((100 - next) / 100);
+    } else {
+      onCommit(next);
+    }
+  };
+  const effectiveMin = displayInvertedPercent ? 0 : min;
+  const effectiveMax = displayInvertedPercent ? 100 : max;
+  const effectiveStep = displayInvertedPercent ? 1 : step;
+  const effectiveDecimals = displayInvertedPercent ? 0 : decimals;
   return (
     <div className="form-row">
       <span className="lbl">{label}</span>
@@ -557,12 +577,12 @@ function FieldSpinner({
           hint, so we suppress the Spinner's inline trailing-unit overlay
           here. Outside .form-row callers still get the inline unit. */}
       <Spinner
-        value={value}
-        onChange={onCommit}
-        min={min}
-        max={max}
-        step={step}
-        decimals={decimals}
+        value={displayValue}
+        onChange={handleCommit}
+        min={effectiveMin}
+        max={effectiveMax}
+        step={effectiveStep}
+        decimals={effectiveDecimals}
         disabled={disabled}
         aria-label={label}
       />
