@@ -245,11 +245,11 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         <TabTrigger value="appearance" label="Appearance" />
         <TabTrigger value="physics" label="Physics" />
       </Tabs.List>
-      {/* Basic tab uses .inspector inside (BasicTab renders
-          <div className="inspector">), so the Tabs.Content wrapper
-          omits Tailwind padding to avoid doubling. Appearance + Physics
-          keep p-3 until B2 wires them through the same .inspector
-          wrapper. */}
+      {/* Basic + Appearance tabs use .inspector inside (BasicTab /
+          AppearanceTab render <div className="inspector">), so the
+          Tabs.Content wrapper omits Tailwind padding to avoid
+          doubling. Physics keeps p-3 until B2 wires it through the
+          same .inspector wrapper. */}
       <Tabs.Content
         value="basic"
         className="flex-1 min-h-0 overflow-y-auto outline-none"
@@ -259,7 +259,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
       </Tabs.Content>
       <Tabs.Content
         value="appearance"
-        className="flex-1 min-h-0 overflow-y-auto p-3 outline-none"
+        className="flex-1 min-h-0 overflow-y-auto outline-none"
         data-testid="tab-appearance-content"
       >
         <AppearanceTab properties={properties} onCommit={commit} />
@@ -807,6 +807,28 @@ function FieldSelect({
 // Exported for direct testing — Radix Tabs in jsdom doesn't reliably
 // switch via fireEvent (the known pointer-event flake noted in the
 // Fix dispatch 1 tests), so vitest mounts AppearanceTab directly.
+//
+// B1.3-P5 restructure — five sections matching legacy
+// IDD_EMITTER_PROPS2 (`src/UI/EmitterEditor.rc:381-385`):
+//   Textures / Random color addition / Tail / Rotation / Rendering.
+//
+// Field moves vs the prior layout:
+//   - Rotation block (random rotation direction, fixed rotation,
+//     average, variance) moved IN from the Basic tab.
+//   - `affectedByWind` moved OUT to Physics > Initial speed (P6).
+//   - `nTriangles` dropped from the inspector entirely (Q2 decision);
+//     the schema field is retained on the wire.
+//
+// Semantic flip on "Always face camera" (legacy IDC_CHECK16,
+// `.rc:404`): the checkbox label and meaning are inverted from
+// `isWorldOriented`. Checkbox checked = "always face camera = yes" =
+// `isWorldOriented = false`. When `blendMode === BLEND_BUMP` the
+// cascade forces the camera-facing orientation, so the checkbox
+// displays as checked + disabled (mirrors the legacy WM_COMMAND
+// handler at [src/UI/Emitter.cpp:522-525] which flips
+// `isWorldOriented = false` the moment the user picks bump-map; we
+// keep the property untouched here so toggling back restores the
+// user's prior choice, but the UI reflects the forced state).
 export function AppearanceTab({
   properties,
   onCommit,
@@ -814,17 +836,9 @@ export function AppearanceTab({
   properties: EmitterPropertiesDto;
   onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
 }) {
-  // BLEND_BUMP forces face-camera orientation — disables the
-  // `isWorldOriented` checkbox and shows it as unchecked. Mirrors
-  // [src/UI/Emitter.cpp:167-168] which disables IDC_CHECK16 when
-  // `blendMode == BLEND_BUMP`. The legacy WM_COMMAND handler (line
-  // 522-525) also flips `isWorldOriented = false` on the model the
-  // moment the user picks the bump-map blend mode. We don't auto-mutate
-  // the property here (the user may switch blend modes back and forth),
-  // but the UI presents the field as unchecked + disabled while the
-  // bump-map cascade is active.
   const forceFace = properties.blendMode === BLEND_BUMP;
   const tailEnabled = properties.hasTail;
+  const rotationEnabled = properties.randomRotation;
 
   // Display 0..1 random-colour values as 0..100% in the spinners
   // (matches the legacy IDC_SPINNER19-26 percentage spinners at
@@ -841,130 +855,180 @@ export function AppearanceTab({
   };
 
   return (
-    <div className="space-y-3">
-      {/* TODO(MT-1): wire the TexturePalette popup (legacy IDC_BUTTON_PALETTE
-          at [src/UI/Emitter.cpp:411]) — text-input + commit-on-blur for
-          now, deferred to a polish batch. */}
-      <FieldText
-        label="Colour Texture"
-        value={properties.colorTexture}
-        onCommit={(v) => onCommit({ colorTexture: v })}
-      />
-      <FieldText
-        label="Normal Texture"
-        value={properties.normalTexture}
-        onCommit={(v) => onCommit({ normalTexture: v })}
-      />
-      <FieldSelect
-        label="Blend Mode"
-        value={properties.blendMode}
-        options={BLEND_MODE_OPTIONS}
-        onCommit={(v) => onCommit({ blendMode: v })}
-        testId="appearance-blend-mode-trigger"
-      />
-      <FieldSpinner
-        label="Texture Size"
-        value={properties.textureSize}
-        min={1}
-        step={1}
-        decimals={0}
-        onCommit={(v) => onCommit({ textureSize: Math.max(1, Math.round(v)) })}
-      />
-      <FieldSpinner
-        label="Triangles"
-        value={properties.nTriangles}
-        min={1}
-        step={1}
-        decimals={0}
-        onCommit={(v) => onCommit({ nTriangles: Math.max(1, Math.round(v)) })}
-      />
-      <FieldCheckbox
-        label="Add Grayscale"
-        checked={properties.doColorAddGrayscale}
-        onCheckedChange={(v) => onCommit({ doColorAddGrayscale: v })}
-      />
-      {/* Random Colours — 4-spinner cluster (R/G/B/A as 0..100%).
-          Uses the `.form-row` label column but the spinner grid spans
-          the input + unit columns since 4 spinners don't fit in the
-          design's 92px input slot. */}
-      <div className="form-row items-start">
-        <span className="lbl pt-1">Random Colours</span>
-        <div
-          className="grid grid-cols-2 gap-1"
-          style={{ gridColumn: "2 / span 2" }}
-        >
-          <Spinner
-            value={properties.randomColors[0] * 100}
-            min={0}
-            max={100}
-            step={1}
-            unit="%"
-            onChange={(v) => updateRandomColors(0, v)}
-            aria-label="Random Colour R"
-          />
-          <Spinner
-            value={properties.randomColors[1] * 100}
-            min={0}
-            max={100}
-            step={1}
-            unit="%"
-            onChange={(v) => updateRandomColors(1, v)}
-            aria-label="Random Colour G"
-          />
-          <Spinner
-            value={properties.randomColors[2] * 100}
-            min={0}
-            max={100}
-            step={1}
-            unit="%"
-            onChange={(v) => updateRandomColors(2, v)}
-            aria-label="Random Colour B"
-          />
-          <Spinner
-            value={properties.randomColors[3] * 100}
-            min={0}
-            max={100}
-            step={1}
-            unit="%"
-            onChange={(v) => updateRandomColors(3, v)}
-            aria-label="Random Colour A"
-          />
+    <div className="inspector">
+      <Section title="Textures">
+        {/* TODO(MT-1): wire the TexturePalette popup (legacy
+            IDC_BUTTON_PALETTE at [src/UI/Emitter.cpp:411]) —
+            text-input + commit-on-blur for now, deferred to a polish
+            batch. */}
+        <FieldText
+          label="Color texture:"
+          value={properties.colorTexture}
+          onCommit={(v) => onCommit({ colorTexture: v })}
+        />
+        <FieldText
+          label="Bump texture:"
+          value={properties.normalTexture}
+          onCommit={(v) => onCommit({ normalTexture: v })}
+        />
+        <FieldSpinner
+          label="Texture elements:"
+          value={properties.textureSize}
+          min={1}
+          step={1}
+          decimals={0}
+          onCommit={(v) => onCommit({ textureSize: Math.max(1, Math.round(v)) })}
+        />
+        {/* Minimum scale: adopts displayInvertedPercent (B1.3-P2) —
+            matches legacy IDC_SPINNER13 inversion at
+            [src/UI/Emitter.cpp:492]. The stored ratio (0..1) displays
+            as `100 - val*100` and commits `(100 - displayed)/100`. */}
+        <FieldSpinner
+          label="Minimum scale:"
+          value={properties.randomScalePerc}
+          displayInvertedPercent
+          unit="%"
+          onCommit={(v) => onCommit({ randomScalePerc: v })}
+        />
+      </Section>
+
+      <Section title="Random color addition">
+        {/* RGBA — 4-spinner cluster (R/G/B/A as 0..100%). Uses the
+            `.form-row` label column but the spinner grid spans the
+            input + unit columns since 4 spinners don't fit in the
+            design's 92px input slot. */}
+        <div className="form-row items-start">
+          <span className="lbl pt-1">RGBA:</span>
+          <div
+            className="grid grid-cols-2 gap-1"
+            style={{ gridColumn: "2 / span 2" }}
+          >
+            <Spinner
+              value={properties.randomColors[0] * 100}
+              min={0}
+              max={100}
+              step={1}
+              unit="%"
+              onChange={(v) => updateRandomColors(0, v)}
+              aria-label="Red"
+            />
+            <Spinner
+              value={properties.randomColors[1] * 100}
+              min={0}
+              max={100}
+              step={1}
+              unit="%"
+              onChange={(v) => updateRandomColors(1, v)}
+              aria-label="Green"
+            />
+            <Spinner
+              value={properties.randomColors[2] * 100}
+              min={0}
+              max={100}
+              step={1}
+              unit="%"
+              onChange={(v) => updateRandomColors(2, v)}
+              aria-label="Blue"
+            />
+            <Spinner
+              value={properties.randomColors[3] * 100}
+              min={0}
+              max={100}
+              step={1}
+              unit="%"
+              onChange={(v) => updateRandomColors(3, v)}
+              aria-label="Alpha"
+            />
+          </div>
         </div>
-      </div>
-      <FieldCheckbox
-        label="Has Tail"
-        checked={properties.hasTail}
-        onCheckedChange={(v) => onCommit({ hasTail: v })}
-      />
-      <FieldSpinner
-        label="Tail Size"
-        value={properties.tailSize}
-        min={0}
-        step={0.1}
-        disabled={!tailEnabled}
-        onCommit={(v) => onCommit({ tailSize: v })}
-      />
-      <FieldCheckbox
-        label="Heat Particle"
-        checked={properties.isHeatParticle}
-        onCheckedChange={(v) => onCommit({ isHeatParticle: v })}
-      />
-      <FieldCheckbox
-        label="World Oriented"
-        checked={forceFace ? false : properties.isWorldOriented}
-        disabled={forceFace}
-        onCheckedChange={(v) => onCommit({ isWorldOriented: v })}
-      />
-      <FieldCheckbox
-        label="No Depth Test"
-        checked={properties.noDepthTest}
-        onCheckedChange={(v) => onCommit({ noDepthTest: v })}
-      />
-      <FieldCheckbox
-        label="Affected by Wind"
-        checked={properties.affectedByWind}
-        onCheckedChange={(v) => onCommit({ affectedByWind: v })}
-      />
+        <FieldCheckbox
+          label="Grayscale"
+          checked={properties.doColorAddGrayscale}
+          onCheckedChange={(v) => onCommit({ doColorAddGrayscale: v })}
+        />
+      </Section>
+
+      <Section title="Tail">
+        <FieldCheckbox
+          label="Has tail"
+          checked={properties.hasTail}
+          onCheckedChange={(v) => onCommit({ hasTail: v })}
+        />
+        {/* Tail length uses unit="x" per legacy .rc:421. */}
+        <FieldSpinner
+          label="Tail length:"
+          value={properties.tailSize}
+          min={0}
+          step={0.1}
+          unit="x"
+          disabled={!tailEnabled}
+          onCommit={(v) => onCommit({ tailSize: v })}
+        />
+      </Section>
+
+      <Section title="Rotation">
+        {/* Rotation block moved in from the Basic tab in B1.3-P5.
+            The Average/Variance fields are disabled when
+            `randomRotation === false` — mirrors legacy
+            [src/UI/Emitter.cpp:201-206]. Variance carries a `± °`
+            unit prefix per legacy .rc:423. */}
+        <FieldCheckbox
+          label="Random rotation direction"
+          checked={properties.randomRotationDirection}
+          onCheckedChange={(v) => onCommit({ randomRotationDirection: v })}
+        />
+        <FieldCheckbox
+          label="Fixed random rotation:"
+          checked={properties.randomRotation}
+          onCheckedChange={(v) => onCommit({ randomRotation: v })}
+        />
+        <FieldSpinner
+          label="Rotation average:"
+          value={properties.randomRotationAverage}
+          step={0.1}
+          unit="°"
+          disabled={!rotationEnabled}
+          onCommit={(v) => onCommit({ randomRotationAverage: v })}
+        />
+        <FieldSpinner
+          label="Rotation variance:"
+          value={properties.randomRotationVariance}
+          step={0.1}
+          unit="± °"
+          disabled={!rotationEnabled}
+          onCommit={(v) => onCommit({ randomRotationVariance: v })}
+        />
+      </Section>
+
+      <Section title="Rendering">
+        {/* "Always face camera" — semantic flip from the legacy "World
+            Oriented" checkbox. Checked = "yes, always face camera" =
+            `isWorldOriented === false`. BLEND_BUMP cascade forces the
+            checkbox checked + disabled. */}
+        <FieldCheckbox
+          label="Always face camera"
+          checked={forceFace ? true : !properties.isWorldOriented}
+          disabled={forceFace}
+          onCheckedChange={(v) => onCommit({ isWorldOriented: !v })}
+        />
+        <FieldCheckbox
+          label="Heat particle"
+          checked={properties.isHeatParticle}
+          onCheckedChange={(v) => onCommit({ isHeatParticle: v })}
+        />
+        <FieldCheckbox
+          label="No depth test"
+          checked={properties.noDepthTest}
+          onCheckedChange={(v) => onCommit({ noDepthTest: v })}
+        />
+        <FieldSelect
+          label="Blend mode:"
+          value={properties.blendMode}
+          options={BLEND_MODE_OPTIONS}
+          onCommit={(v) => onCommit({ blendMode: v })}
+          testId="appearance-blend-mode-trigger"
+        />
+      </Section>
     </div>
   );
 }

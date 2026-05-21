@@ -155,34 +155,47 @@ describe("EmitterPropertyTabs", () => {
   // pointer-event flake from Fix dispatch 1), so we test the panel
   // content in isolation.
 
-  it("AppearanceTab renders all 13 field labels", () => {
+  it("AppearanceTab renders the expected post-P5 field labels", () => {
     const props = makeFixtureProperties(0);
     render(<AppearanceTab properties={props} onCommit={() => {}} />);
+    // Post-B1.3-P5: five sections (Textures / Random color addition /
+    // Tail / Rotation / Rendering) with renamed labels per spec §5.5.
+    // `Triangles` and `Affected by Wind` are dropped (former
+    // permanently from the inspector, latter relocated to Physics in
+    // P6).
     const expectedLabels = [
-      "Colour Texture",
-      "Normal Texture",
-      "Blend Mode",
-      "Texture Size",
-      "Triangles",
-      "Add Grayscale",
-      "Random Colours",
-      "Has Tail",
-      "Tail Size",
-      "Heat Particle",
-      "World Oriented",
-      "No Depth Test",
-      "Affected by Wind",
+      // Textures
+      "Color texture:",
+      "Bump texture:",
+      "Texture elements:",
+      "Minimum scale:",
+      // Random color addition
+      "RGBA:",
+      "Grayscale",
+      // Tail
+      "Has tail",
+      "Tail length:",
+      // Rotation (moved in from Basic)
+      "Random rotation direction",
+      "Fixed random rotation:",
+      "Rotation average:",
+      "Rotation variance:",
+      // Rendering
+      "Always face camera",
+      "Heat particle",
+      "No depth test",
+      "Blend mode:",
     ];
     for (const label of expectedLabels) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
-  it("AppearanceTab: editing Tail Size fires onCommit with patch.tailSize", async () => {
+  it("AppearanceTab: editing Tail length fires onCommit with patch.tailSize", async () => {
     const onCommit = vi.fn();
     const props = { ...makeFixtureProperties(0), hasTail: true, tailSize: 0.5 };
     render(<AppearanceTab properties={props} onCommit={onCommit} />);
-    const tailSizeInput = screen.getByLabelText("Tail Size") as HTMLInputElement;
+    const tailSizeInput = screen.getByLabelText("Tail length:") as HTMLInputElement;
     fireEvent.focus(tailSizeInput);
     fireEvent.change(tailSizeInput, { target: { value: "1.25" } });
     fireEvent.blur(tailSizeInput);
@@ -191,20 +204,23 @@ describe("EmitterPropertyTabs", () => {
     });
   });
 
-  it("AppearanceTab: hasTail === false disables Tail Size spinner", () => {
+  it("AppearanceTab: hasTail === false disables Tail length spinner", () => {
     const props = { ...makeFixtureProperties(0), hasTail: false, tailSize: 2 };
     render(<AppearanceTab properties={props} onCommit={() => {}} />);
-    const tailSizeInput = screen.getByLabelText("Tail Size") as HTMLInputElement;
+    const tailSizeInput = screen.getByLabelText("Tail length:") as HTMLInputElement;
     expect(tailSizeInput.disabled).toBe(true);
   });
 
-  it("AppearanceTab: blendMode === 11 (BLEND_BUMP) unchecks + disables World Oriented", () => {
-    const props = { ...makeFixtureProperties(0), blendMode: 11, isWorldOriented: true };
-    render(<AppearanceTab properties={props} onCommit={() => {}} />);
-    const worldOriented = screen.getByLabelText("World Oriented");
-    expect(worldOriented.getAttribute("data-state")).toBe("unchecked");
-    expect(worldOriented.getAttribute("data-disabled")).not.toBeNull();
-  });
+  // `Triangles` and `Affected by Wind` were removed from Appearance
+  // in B1.3-P5: Triangles dropped from the inspector entirely
+  // (schema-only), Affected by Wind moves to Physics > Initial speed
+  // in B1.3-P6.
+  it.todo(
+    "Triangles field is no longer rendered in Appearance — dropped from inspector per B1.3 Q2 decision",
+  );
+  it.todo(
+    "Affected by Wind moves to Physics > Initial speed in B1.3-P6 — re-add Physics-side spec when it lands",
+  );
 
   // ─── Physics tab specs (Fix dispatch 3) ────────────────────────
   // PhysicsTab is exported and mounted directly for the same reason
