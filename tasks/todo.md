@@ -1,350 +1,640 @@
-# B1.3.2 — Unify collapsible-section styling via shared CSS class
+# tasks/todo.md — B1.4 [NT-8] Resizable splitters via `react-resizable-panels`
 
-**Status:** planning — pending user sign-off before execution.
-
-**Started:** 2026-05-22
-**HEAD at planning:** `37a99fb` (B1.3.1.1 docs commit, on `origin/lt-4`). Session branch is clean / in sync.
-**Goal:** Adopt the Spawner-panel section aesthetic (uppercase, muted, right-chevron, bordered-box) for the inspector tabs by extracting a **shared CSS class** consumed by both `Section.tsx` and `ToolPanel.Section`. Aligns with the project's "reuse classes where possible for maintainability" principle.
-
-**Tech stack:** React + TypeScript + Tailwind v4 + CSS-first (`@theme` + custom utilities in `components.css`).
+**Status:** plan drafted, awaiting user OK before any code.
+**Predecessor session:** B1.3.2 (75081b4 on `origin/lt-4`).
+**Difficulty estimate:** ★★★ (medium — single new dep, four splitters, conditional column, occlusion ripple is already free).
 
 ---
 
 ## 1. Goal + scope
 
-### Goal
+When this ships, the user can drag any of four boundaries in the editor
+shell and the new sizes survive a page reload:
 
-The inspector tabs (Basic / Appearance / Physics) currently render section headers with one visual treatment (title-case, full-color text, left chevron, flat divider); the Spawner / Lighting / Bloom tool panels render them with another (uppercase, muted text, right chevron, bordered-box). The user wants the Spawner aesthetic everywhere. Rather than restyling `Section.tsx` in place and leaving two parallel implementations, this dispatch **extracts the common visual to a shared CSS class** consumed by both component shapes. Single source of truth; future style tweaks land in one place.
+1. **Left column ↔ centre column** — `Particle System` panel vs viewport stack.
+2. **Centre column ↔ Spawner column** — viewport stack vs Spawner panel (only when Spawner is visible).
+3. **Viewport ↔ Curve editor** — inside the centre column.
+4. **Emitter tree ↔ Property tabs** — inside the left column's `.panel-body`.
 
-### In scope
+Defaults match B1.3.2's resting state on first load and after a "reset
+layout" gesture: left column 320 px, Spawner 320 px when on, curve editor
+290 px, inner tree/tabs 25/75. Persistence is per-user via
+`localStorage` under the `alo:layout:*` namespace (matches existing
+`alo:theme` convention).
 
-1. **Shared CSS** (`web/apps/editor/src/styles/components.css`): new `.panel-section` / `.panel-section-header` / `.panel-section-body` rules covering the bordered-box container, uppercase muted header, right-aligned chevron with rotation. Targets both the controlled `<div>` shape and the native `<details>` shape via two-selector rotation rule.
-2. **`Section.tsx` migration**: swap `.section` / `.section-header` / `.section-divider` / `.section-body` → new classes; move chevron from before-title to after-title with `justify-content: space-between`; flip rotation semantics so the chevron points down when expanded; switch the rotation source from a `.collapsed` modifier class to a `data-open={open}` attribute on the outer `.panel-section` element.
-3. **`ToolPanel.Section` migration**: drop the inline Tailwind utility classes (`mb-3 rounded-md border …`); consume the shared class; swap ASCII `›` glyph for Lucide `<ChevronDown>` for visual consistency with the inspector side.
-4. **Deletion of legacy CSS**: remove `.section`, `.section-header`, `.section-divider`, `.section-body` and the now-stale "20px chevron-aligned indent" comment block; update the `.form-row.name-row` comment that referenced the old indent.
-5. **Vitest spec audit** for any selector references to `.section-header` / `.section-body` / `[data-testid^="section-"]` etc. Update spec selectors if needed (likely a trivial data-testid bump if anything).
+**In**
 
-### Out of scope
+- Library: `react-resizable-panels` (chosen in pre-plan; confirmed during
+  this plan's Task 1 by installing the latest 2.x and verifying API).
+- Four draggable splitters per the list above, with min/max constraints.
+- Persistence via the library's built-in `autoSaveId` (writes JSON to
+  `localStorage`).
+- Sensible min sizes so the user cannot drag any pane to unusable widths
+  (see §3.4 for numbers).
+- "Reset layout" hidden behind a View-menu item *Reset panel layout*
+  that clears the layout keys.
+- ARIA + keyboard nav (Tab → splitter focusable, arrow keys nudge size
+  by 1 %). Library ships this for free; verified during Task 1.
+- All existing `data-testid="quadrant-*"` testIDs preserved on the same
+  semantic nodes (Modal portal lookup + Playwright specs depend on them).
 
-- Any change to `Section`'s reset-on-mount state behavior (the `Section.tsx:9-12` comment documents this as intentional — preserved).
-- Any change to `ToolPanel.Section`'s native `<details>` state model (browser-managed; preserved).
-- Restyling of other inspector surfaces (`.form-row`, axis-cell, panel-header, etc.) — out of scope here, separate dispatch if wanted.
-- Lighting / Bloom panel internals beyond the section header (their content rows stay unchanged).
-- Width-tuning of the inspector column (B1.4 will make the column draggable; default split stays at 25/75).
-- Refactoring `Section` and `ToolPanel.Section` into a single primitive — kept as two thin shells over shared CSS so each can keep its distinct state model. (Convergence at the visual layer; divergence at the state layer.)
+**Out**
+
+- No C++ changes. No bridge schema changes. (`ResizeObserver` on the
+  existing `ViewportSlot` and `useViewportOcclusion` callsites already
+  fans drag-state out to the host without further plumbing — see §2.4.)
+- No per-project persistence (deliberate — user picked per-user; bundling
+  layout into the `.alo` file is a separate dispatch if it ever lands).
+- No collapsible-to-zero animation for the Spawner column — toggling the
+  Spawner panel from its existing toolbar button continues to mount /
+  unmount the panel (we just teach the surrounding `PanelGroup` to
+  recompose). Reason: animation is out of scope for B1.4, and the
+  library handles mount/unmount cleanly.
+- No splitter on the bottom curve-editor row's *horizontal* axis (it
+  already spans the centre column's full width — no second axis to
+  resize).
+- No reset gesture beyond the menu item (no double-click-handle reset
+  for v1 — easy follow-up if requested).
 
 ---
 
 ## 2. What the codebase already gives us
 
-| Surface | Where | What it provides |
-|---|---|---|
-| Current `Section` component | [`src/components/Section.tsx`](../web/apps/editor/src/components/Section.tsx) | Controlled-by-`useState` collapsible; Lucide `ChevronDown` on left; `role="button"` + `tabIndex` + Enter/Space keyboard + `aria-expanded` + `data-testid` derived from title. Single consumer: `EmitterPropertyTabs.tsx`. |
-| Current `ToolPanel.Section` | [`src/components/ToolPanel.tsx:96-129`](../web/apps/editor/src/components/ToolPanel.tsx) | Native `<details>` collapsible; ASCII `›` glyph rotating 90° on open; uppercase 11px muted title via inline Tailwind. Consumers: Spawner, Lighting, Bloom. |
-| Legacy section CSS | [`src/styles/components.css:444-478`](../web/apps/editor/src/styles/components.css) | `.section`, `.section-header`, `.section-divider`, `.section-body` rules plus the 20px chevron-alignment indent comment. Inspector-only today. |
-| Design tokens | `src/styles/tokens.css` | `--border`, `--bg-2`, `--text`, `--text-2`, `--text-3` — already cover everything the bordered-box + uppercase-muted style needs. No new tokens required. |
-| Lucide `ChevronDown` | Already imported by `Section.tsx` | Reused as the unified chevron icon. Removes ASCII `›` from `ToolPanel.Section`. |
-| Vitest test setup | `src/test-setup.ts` | ResizeObserver / matchMedia / localStorage stubs in place. No new stubs needed. |
-| Existing inspector specs | `src/screens/__tests__/EmitterPropertyTabs*.test.tsx` etc. | Anchor on `getByText("Emitter Timing")` etc. — text content stays the same (uppercase via CSS, not JSX), so these specs survive without changes. |
-| Existing Spawner / Lighting / Bloom specs | `src/screens/__tests__/SpawnerPanel.test.tsx` etc. | Anchor on `getByText` for section titles too. Same survival argument. |
+### 2.1 Existing layout (`web/apps/editor/src/App.tsx`)
 
-Per `grep`, `Section` is consumed only by [`EmitterPropertyTabs.tsx`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx) — clean restyle.
+The relevant region is at [App.tsx:188-286](web/apps/editor/src/App.tsx:188-286).
+
+- Outer wrapper: `<div className="flex flex-1 min-h-0 overflow-hidden">`.
+- **Left column**: `<div className="panel w-80 shrink-0">` (320 px fixed)
+  with header *"Particle System"*. Body is `panel-body flex min-h-0
+  flex-col overflow-hidden`, with `EmitterTree` (`flex-1`) and
+  `EmitterPropertyTabs` (`flex-[3_1_0%]`) yielding the 25 / 75 split that
+  B1.3.1 introduced. The comment at
+  [App.tsx:219](web/apps/editor/src/App.tsx:219) already says *"B1.4
+  will make the boundary draggable via react-resizable-panels."*
+- **Centre column**: `<div className="flex flex-1 min-w-0 flex-col">`.
+  `ViewportSlot` is `flex-1`, curve editor is `h-[290px] shrink-0
+  border-t border-border`.
+- **Right (Spawner) column**: `<aside className="w-80 shrink-0 …
+  border-l border-border bg-panel">` — only mounted when
+  `spawnerVisible === true` from
+  [lib/spawner-visibility.ts](web/apps/editor/src/lib/spawner-visibility.ts).
+
+### 2.2 Existing testIDs (load-bearing — must be preserved)
+
+- `quadrant-emitter-tree` — referenced by Playwright
+  [property-tabs.spec.ts:57](web/apps/editor/tests/property-tabs.spec.ts:57).
+- `quadrant-property-tabs` — Playwright + vitest.
+- `quadrant-viewport` — Modal portal target in
+  [Modal.tsx:84-90](web/apps/editor/src/components/Modal.tsx:84-90)
+  (`document.querySelector('[data-testid="quadrant-viewport"]')`),
+  Modal vitest, Playwright.
+- `quadrant-curve-editor` — Playwright + CurveEditor vitest.
+- `quadrant-spawner` — Playwright.
+
+All five must remain on **DOM nodes whose `getBoundingClientRect`
+semantically matches the rendered pane** (i.e. the testID goes on the
+`Panel`'s inner div, not the `PanelResizeHandle` or any wrapping
+component the library inserts).
+
+### 2.3 Existing `localStorage` convention
+
+The only key in use today is `alo:theme`
+([App.tsx:70](web/apps/editor/src/App.tsx:70)). The plan adopts the
+same prefix: `alo:layout` (single key — the library writes a JSON blob
+keyed by panel group id when `autoSaveId` is set).
+
+### 2.4 ResizeObserver wiring already covers drag-state propagation
+
+- [ViewportSlot.tsx:11-37](web/apps/editor/src/components/ViewportSlot.tsx:11-37)
+  attaches a `ResizeObserver` to its outer div and fires
+  `layout/viewport-rect` on every resize. Splitter drags will fire it
+  for free.
+- [lib/viewport-occlusion.ts:46-92](web/apps/editor/src/lib/viewport-occlusion.ts:46-92)
+  attaches `ResizeObserver` to every occlusion target. Splitter drags
+  on a column boundary will resize the spawner / tool-panel
+  occlusion-target divs and fire `viewport/occlude` updates for free.
+
+This is the key risk-killer for the plan: **we do not need a single
+new bridge call.** All host-side compositing stays correct because the
+host already reacts to per-element resize.
+
+### 2.5 Existing tests we will need to update or add
+
+- [components/__tests__/Modal.test.tsx](web/apps/editor/src/components/__tests__/Modal.test.tsx)
+  manually adds `<div data-testid="quadrant-viewport" />` to the DOM
+  — no change needed unless we accidentally move the testID.
+- [tests/property-tabs.spec.ts](web/apps/editor/tests/property-tabs.spec.ts)
+  asserts all five quadrant testIDs are visible — no change needed.
+- New: `tests/splitters.spec.ts` (Playwright) — drag each splitter,
+  reload, assert sizes persist. **No new vitest spec needed** because
+  the library's behaviour is library-tested; we test the *integration*
+  end-to-end where the layout actually mounts.
+- New: `src/components/__tests__/PanelLayout.test.tsx` (vitest) —
+  smoke test that `<PanelLayout />` mounts, exposes the five
+  testIDs, and reads/writes the `alo:layout` key.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-### Phase 1 — Shared CSS
+### 3.1 New components
 
-Add to [`components.css`](../web/apps/editor/src/styles/components.css) (replacing the legacy `.section-*` rules):
+```
+web/apps/editor/src/components/
+  PanelLayout.tsx        # Outer 2- or 3-column PanelGroup wrapping
+                         # all of AppShell's main row. Renders the
+                         # nested left-column + centre-column PanelGroups.
+                         # Drives spawner mount/unmount based on
+                         # useSpawnerVisible(), preserving testIDs.
+```
+
+App.tsx's main `<div className="flex flex-1 min-h-0 overflow-hidden">`
+section becomes `<PanelLayout bridge={bridge} openPanel={openPanel} />`.
+The five quadrant `data-testid` attributes move into `PanelLayout`, on
+the same semantic nodes they sit on today.
+
+### 3.2 Group nesting (post-T1 — adjusted for 4.x API)
+
+**T1 finding:** `react-resizable-panels@4.11.1` is the installed version
+(latest at time of plan). 4.x renames + reshapes the API. Corrections:
+
+- `PanelGroup` → `Group`, with prop `direction` → `orientation`.
+- `PanelResizeHandle` → `Separator`.
+- `autoSaveId` is **gone** — persistence is DIY via `defaultLayout`
+  (passed in on mount) + `onLayoutChanged` (called after pointer
+  release). We use a small `usePersistedLayout(key, defaults)` hook.
+- `Layout` type is `{[panelId: string]: number}` (percentages 0-100).
+- `Panel` accepts `defaultSize`, `minSize`, `maxSize`, `collapsible`,
+  `collapsedSize`, `id` — props the plan already used.
+- `Separator` accepts `disableDoubleClick?: boolean`. Default
+  behaviour is **double-click resets to default size** — a gesture the
+  original plan §3.6 deferred to a follow-up. Now ships free; we
+  leave `disableDoubleClick` unset.
+- `data-resize-handle-active` attribute is **not** a 4.x thing. CSS
+  uses `:hover` + `:active` pseudo-classes on `[data-separator]`
+  instead.
+- ARIA (`aria-orientation`, `aria-valuemax/min/now`, etc.) is auto-
+  applied to the `Separator` — we don't add it ourselves.
+- `Panel`'s `className` lands on a **nested** div, not the root div,
+  to "avoid styles that interfere with Flex layout". The data-testid
+  attribute is passed through to that same root div alongside
+  `data-panel`. **For our quadrant testIDs we place them on a
+  manually-rendered inner div** inside `Panel`'s children, not on
+  the `Panel` element itself — keeps the rect semantics identical
+  to today.
+
+```tsx
+<Group orientation="horizontal"
+       defaultLayout={outerLayout}
+       onLayoutChanged={persistOuter}>
+  <Panel id="left" minSize={15} maxSize={40}>
+    <div className="panel h-full"><div className="panel-header">…</div>
+      <div className="panel-body flex min-h-0 flex-col overflow-hidden">
+        <Group orientation="vertical"
+               defaultLayout={leftLayout}
+               onLayoutChanged={persistLeft}
+               style={{ flex: 1, minHeight: 0 }}>
+          <Panel id="tree" minSize={10}>
+            <aside data-testid="quadrant-emitter-tree" …>
+              <EmitterTree />
+            </aside>
+          </Panel>
+          <Separator className="ce-splitter ce-splitter-h" />
+          <Panel id="tabs" minSize={20}>
+            <div data-testid="quadrant-property-tabs" …>
+              <EmitterPropertyTabs />
+            </div>
+          </Panel>
+        </Group>
+      </div>
+    </div>
+  </Panel>
+
+  <Separator className="ce-splitter ce-splitter-v" />
+
+  <Panel id="center" minSize={30}>
+    <Group orientation="vertical"
+           defaultLayout={centerLayout}
+           onLayoutChanged={persistCenter}>
+      <Panel id="viewport" minSize={30}>
+        <div data-testid="quadrant-viewport" className="relative h-full">
+          <ViewportSlot /><ViewportPill />…tool-panels…
+        </div>
+      </Panel>
+      <Separator className="ce-splitter ce-splitter-h" />
+      <Panel id="curve" minSize={10}>
+        <div data-testid="quadrant-curve-editor" …>
+          <CurveEditorPanel />
+        </div>
+      </Panel>
+    </Group>
+  </Panel>
+
+  {spawnerVisible && (
+    <>
+      <Separator className="ce-splitter ce-splitter-v" />
+      <Panel id="spawner" minSize={12} maxSize={40}>
+        <aside data-testid="quadrant-spawner" …><SpawnerPanel /></aside>
+      </Panel>
+    </>
+  )}
+</Group>
+```
+
+Persistence hook:
+
+```ts
+function usePersistedLayout(key: string, defaults: Layout) {
+  const initial = useMemo(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw) as Layout;
+      // Defensive: if any id is missing or ratios don't sum to ~100,
+      // fall back to defaults (corrupted state, e.g. DevTools tampering).
+      const sum = Object.values(parsed).reduce((a, b) => a + b, 0);
+      const allKeys = Object.keys(defaults).every((k) => k in parsed);
+      if (!allKeys || Math.abs(sum - 100) > 0.5) return defaults;
+      return parsed;
+    } catch {
+      return defaults;
+    }
+  }, [key]);
+  const onLayoutChanged = useCallback((layout: Layout) => {
+    try { localStorage.setItem(key, JSON.stringify(layout)); }
+    catch { /* localStorage full / disabled — drop silently */ }
+  }, [key]);
+  return { defaultLayout: initial, onLayoutChanged };
+}
+```
+
+**2-col vs 3-col Spawner state.** Because we're DIY now, we use **two
+separate outer keys** to avoid ratio drift between the states:
+`alo:layout:outer:2col` (mounted when `spawnerVisible === false`) and
+`alo:layout:outer:3col` (mounted when `true`). Picked at render time.
+This was the fallback path in the original plan; with `autoSaveId`
+gone we just take that path directly.
+
+### 3.3 CSS — handle visuals (post-T1 adjusted)
+
+New CSS rules in [web/apps/editor/src/styles/components.css](web/apps/editor/src/styles/components.css):
 
 ```css
-/* Collapsible section primitive — shared by Section.tsx (controlled via
- * useState + data-open) and ToolPanel.Section (native <details>). The
- * rotation rule covers both state representations so each consumer
- * keeps its own state model while sharing the visual. */
-.panel-section {
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  border-radius: 6px;
-  margin-bottom: 12px;
+[data-separator].ce-splitter {
+  --ce-splitter-thickness: 4px;
+  background: transparent;
+  position: relative;
+  transition: background 120ms ease;
 }
-
-.panel-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
-  outline: none;
+[data-separator].ce-splitter:hover,
+[data-separator].ce-splitter:active {
+  background: var(--accent-soft);
 }
-/* Hide native <details> disclosure marker on Blink/Webkit + everywhere else. */
-.panel-section-header::-webkit-details-marker { display: none; }
-.panel-section-header { list-style: none; }
-
-.panel-section-header:hover { color: var(--text); }
-.panel-section-header:focus-visible { color: var(--text); }
-
-.panel-section-header .chev {
-  color: var(--text-3);
-  flex-shrink: 0;
-  transition: transform 0.12s;
+[data-separator].ce-splitter-v {
+  width: var(--ce-splitter-thickness); cursor: col-resize;
 }
-/* Two selectors cover both consumer shapes: `[data-open="false"]` for the
- * controlled <div> in Section.tsx; `:not([open])` for native <details>. */
-.panel-section[data-open="false"] .chev,
-.panel-section:not([open]) .chev {
-  transform: rotate(-90deg);
+[data-separator].ce-splitter-h {
+  height: var(--ce-splitter-thickness); cursor: row-resize;
 }
-
-.panel-section-body {
-  padding: 12px;
+[data-separator].ce-splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 ```
 
-Drop the legacy `.section`, `.section-header`, `.section-divider`, `.section-body` rules entirely. Update the `.form-row.name-row` comment that referenced the "20px chevron indent" — the new sections have their own internal `padding: 12px` so the name row's prior alignment story changes (the name row sits OUTSIDE any section, so it now uses 12px from the panel edge for consistency; verify visually).
+4 px thickness matches the existing 1 px-border-region; hover affordance
+uses the existing `--accent-soft` token (already present in
+`tokens.css`). Active-drag state piggybacks on the `:active`
+pseudo-class because 4.x doesn't expose a `data-resize-handle-active`
+attribute — `:active` while the user holds the pointer down works
+equivalently for our visual.
 
-### Phase 2 — `Section.tsx` migration
+### 3.4 Min/max sizing rationale
 
-```tsx
-export function Section({ title, defaultOpen = true, children }: Props) {
-  const [open, setOpen] = useState(defaultOpen);
-  const toggle = () => setOpen((o) => !o);
-  return (
-    <div className="panel-section" data-open={open}>
-      <div
-        className="panel-section-header"
-        role="button"
-        tabIndex={0}
-        onClick={toggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
-          }
-        }}
-        aria-expanded={open}
-        data-testid={`section-${title.toLowerCase().replace(/\s+/g, "-")}`}
-      >
-        <span>{title}</span>
-        <ChevronDown className="chev size-3" />
-      </div>
-      {open && <div className="panel-section-body">{children}</div>}
-    </div>
-  );
-}
-```
+Percentages, because the library's `Panel` API takes percentages by
+default and that's what `autoSaveId` persists.
 
-Changes from current shape:
-- Outer `<div>` becomes `.panel-section` with `data-open={open}` attribute (replaces the `.collapsed` modifier class).
-- Header is `.panel-section-header` instead of `.section-header`.
-- Chevron moves AFTER the title `<span>` (right side, `justify-content: space-between` does the rest).
-- `.section-divider` `<div>` removed (the bordered-box header's `border-bottom` from `.panel-section-header` handles the separation).
-- Body is `.panel-section-body` instead of `.section-body`.
-- Same `role="button"`, `tabIndex={0}`, keyboard handler, `aria-expanded`, `data-testid` — vitest specs and a11y unaffected.
+| Pane         | default | min   | max  | Rationale (computed against a 1920-wide window)                         |
+|--------------|---------|-------|------|--------------------------------------------------------------------------|
+| left col     | 20 %    | 15 %  | 40 % | 15 % ≈ 288 px (legacy `w-80` = 320 px). Floor: tabs still readable.       |
+| spawner col  | 20 %    | 12 %  | 40 % | 12 % ≈ 230 px (legacy `w-80` minus paddings → Spawner still usable).     |
+| centre col   | (rest)  | 30 %  | —    | Min 30 % ≈ 576 px — viewport still wide enough to render a sane scene.  |
+| inner tree   | 25 %    | 10 %  | —    | Tree of 1-2 emitters still visible.                                      |
+| inner tabs   | 75 %    | 20 %  | —    | Smallest tab strip we want to allow.                                     |
+| inner vp     | 75 %    | 30 %  | —    | Tied to centre min — viewport must stay usable.                          |
+| inner curve  | 25 %    | 10 %  | —    | ≈ 100 px — fits one channel row, matches "below this it's pointless"     |
 
-### Phase 3 — `ToolPanel.Section` migration
+The library clamps drags to these bounds; the user cannot drag past min.
 
-```tsx
-function ToolPanelSection({
-  title,
-  defaultOpen = false,
-  alwaysOpen = false,
-  children,
-}: ToolPanelSectionProps) {
-  if (alwaysOpen) {
-    return (
-      <section className="panel-section">
-        <div className="panel-section-header" style={{ cursor: "default" }}>
-          {title}
-        </div>
-        <div className="panel-section-body">{children}</div>
-      </section>
-    );
-  }
-  return (
-    <details className="panel-section" open={defaultOpen}>
-      <summary className="panel-section-header">
-        <span>{title}</span>
-        <ChevronDown className="chev size-3" />
-      </summary>
-      <div className="panel-section-body">{children}</div>
-    </details>
-  );
-}
-```
+### 3.5 Reset layout (post-T1 adjusted)
 
-Changes from current shape:
-- Outer `<details>` / `<section>` gets `.panel-section` (replaces inline `mb-3 rounded-md border …`).
-- Header `<summary>` / `<div>` gets `.panel-section-header` (replaces inline `flex cursor-pointer …`).
-- Chevron switches from ASCII `›` to Lucide `<ChevronDown>` — visual unification with the inspector side.
-- Body `<div>` gets `.panel-section-body` (replaces inline `space-y-2 p-3`).
-- The `alwaysOpen` branch (used by sections like Lighting's Ambient / Shadow that don't collapse) renders without a chevron and with `cursor: default` override on the header. The `<section>` element naturally lacks the `open` attribute, so the rotation selector won't trigger on it — but there's no chevron to rotate either, so safe.
+New View-menu item *Reset panel layout* clears the four DIY
+`localStorage` entries (`alo:layout:outer:2col`,
+`alo:layout:outer:3col`, `alo:layout:left`, `alo:layout:center`) and
+forces a re-render with the in-code defaults. Implementation: bump a
+`useState` counter passed as `key={n}` to the outer `<Group>` so React
+remounts the tree. `usePersistedLayout` on next mount sees an empty
+key and returns the in-code `defaults`.
 
-Note: lose the `space-y-2` rhythm between items inside ToolPanel.Section's body. The current Spawner spec for vertical rhythm may want a follow-up `.panel-section-body > * + * { margin-top: 8px }` (or similar). **Decide during smoke-test** — if rows feel too tight without `space-y-2`, add a body-child margin rule to the shared CSS.
+Note: 4.x also ships **double-click-handle reset for free** (the
+`Separator` resets *its* panels to default size on double-click).
+That's per-splitter; the menu item resets all four at once.
 
-### Phase 4 — Delete legacy CSS
+### 3.6 Out-of-scope items deliberately deferred
 
-Remove from `components.css`:
-
-- `.section { … }`
-- `.section-header { … }` + `.section-header .chev` + `.section-header.collapsed .chev` + `.section-header:hover` 
-- `.section-divider { … }`
-- `.section-body { padding-left: 20px; padding-right: 12px; }`
-- The "Inspector contents indent" comment block (24-ish lines explaining the 20px chevron-alignment).
-
-Update the `.form-row.name-row` comment in the same file — it references the deleted 20px indent. New behavior: Name row sits at the panel's natural left edge (12px from `.panel-body`'s padding); section bodies start their inner padding at 12px from the `.panel-section` border. Verify visually that this still reads cleanly; if it looks misaligned, add a small `.form-row.name-row { padding-left: 12px }` to match.
-
-### Phase 5 — Test audit + adjust
-
-Pre-flight grep:
-
-```bash
-grep -rn "section-header\|section-body\|\.section[ \"'>]" web/apps/editor/src/
-```
-
-For each hit:
-- CSS rules in `components.css` — deleted by Phase 4.
-- TSX class consumers — covered by Phase 2 / 3.
-- Vitest selectors — if any spec queries `.section-header` directly (`container.querySelector('.section-header')` etc.), update to `.panel-section-header`.
-- Playwright selectors — same audit on `tests/`.
-
-The `[data-testid="section-…"]` selector on the inspector survives unchanged (the data-testid logic in `Section.tsx` stays).
+- **~~Reset gesture on the handle itself~~** — 4.x ships this by
+  default. Promoted in scope; no work required.
+- **Per-window-size scaling.** A user with a 4K monitor who sets
+  ratios then plugs into a laptop will see those ratios honoured
+  (because we store percentages, not pixels) — no extra work.
+- **Cross-tab sync.** Two editor windows open at once won't see each
+  other's drags. We don't expect dual windows in practice; if it ever
+  matters, `StorageEvent` listener is a small follow-up.
 
 ---
 
 ## 4. Risks named up front + mitigations
 
-1. **Width pressure on the inspector at narrow column widths.**
-   - **Hazard:** Each section gains ~14px of horizontal cost from the 1px border + 12px inner padding × 2. The inspector column at the default 25/75 split is ~25% of the workspace minus the left tree pane — roughly 250-300px in a typical window. The current `.form-row` grid (`1fr 58px 40px`) was tuned for the no-border layout; the inner-width shrink may push spinner cells against unit suffixes.
-   - **Mitigation:** Visual smoke-test the inspector at default and minimum realistic column widths before committing. If form rows truncate or wrap, tune `.panel-section-body` padding down (e.g. `8px` instead of `12px`) or adjust the `.form-row` grid columns. Worst case: keep the bordered visual but drop the body padding to match the legacy chevron-aligned width.
+### Risk 1 — `react-resizable-panels` API drift ✅ caught in T1
 
-2. **Spawner / Lighting / Bloom visual regression.**
-   - **Hazard:** Migrating `ToolPanel.Section`'s inline Tailwind to shared CSS changes the precise pixel padding, color, and chevron glyph. A pre-shipping panel that worked might pixel-shift. Particularly Lighting (which uses the `alwaysOpen` branch for Ambient / Shadow) — the inline Tailwind included `border-b border-border` on the alwaysOpen header that we'd replicate via the shared CSS, but the body's `space-y-2 p-3` rhythm doesn't carry over.
-   - **Mitigation:** Side-by-side screenshot diff each tool panel before/after. If `space-y-2` is load-bearing, add `.panel-section-body > * + * { margin-top: 8px }` to the shared CSS. If the alwaysOpen path needs different padding, add a `.panel-section[data-always-open] .panel-section-header { padding: …; cursor: default }` modifier and set it from the `alwaysOpen` branch.
+T1 found 4.11.1 is the installed version (4.x is a major reshape from
+the 1.x/2.x API I sketched against). Names + persistence model
+changed; §3.2 / §3.3 / §3.5 / §3.6 above rewritten to match. The
+risk fired and the mitigation worked — caught at install time, not
+at debug time.
 
-3. **Vitest selector collisions.**
-   - **Hazard:** Specs that grep on `.section-*` selectors break when the classes are renamed. Pre-flight grep in §3 Phase 5 catches them, but the audit must actually run.
-   - **Mitigation:** Run `grep -rn "section-header\|section-body" web/apps/editor/src/__tests__ web/apps/editor/tests` before TSX changes; update selectors as the first sub-step of Phase 5. Vitest 281/281 must hold post-migration; any failure means an audit gap.
+Residual risk: persistence is now DIY, so `localStorage` corruption
+handling moves from "library does it" to "our `usePersistedLayout`
+hook does it". Hook validates: parses JSON, checks all default keys
+present, checks ratios sum to ~100, otherwise returns defaults. T3
+adds a unit test for the corrupted-blob branch.
 
-4. **`<details>` indent / inset quirk.**
-   - **Hazard:** Native `<summary>` elements have an inner indent for the disclosure marker. `list-style: none` plus the Webkit pseudo-marker hide cover the visible glyph, but some browsers still reserve a small inset before the summary's content box (~15px). On Chrome/WebView2 specifically, `summary { padding: 0 }` may not be enough — needs `display: flex` on the summary to override the default `display: list-item`.
-   - **Mitigation:** `.panel-section-header` already declares `display: flex` which overrides `list-item`. Verify by inspecting in WebView2's DevTools post-migration; if a leading inset persists, add an explicit `margin-left: 0; padding-inline-start: 12px` to the summary.
+### Risk 2 — `data-testid="quadrant-viewport"` rect semantics shift, breaking Modal.tsx
 
-5. **Chevron icon swap regression in Spawner.**
-   - **Hazard:** Spawner users (= the user) are accustomed to the ASCII `›` chevron rotating 90° on open. The migration to Lucide `<ChevronDown>` rotates -90° on close. Same visual semantics (chevron points right when collapsed, down when expanded) but a slightly different glyph shape.
-   - **Mitigation:** Confirm during smoke-test that the Lucide chevron at `size-3` (12px) renders crisply at the Spawner's typical font size. If it looks worse, revert to ASCII `›` in the shared CSS — both shapes have equivalent rotation behavior so either works; the unification target is the *position*, not the glyph.
+`Modal.tsx` does
+`document.querySelector('[data-testid="quadrant-viewport"]')`
+([Modal.tsx:90](web/apps/editor/src/components/Modal.tsx:90)) to find
+the portal target for the frosted-glass snapshot
+backdrop (NT-9 / B1.3.1.1, shipped this session). If splitters add
+an intermediate wrapper that shifts the rect (e.g. a 4-px handle
+counted as part of the viewport quadrant), the snapshot occlude rect
+will be misaligned by a hair.
 
-6. **Visual rhythm loss in tool-panel bodies.**
-   - **Hazard:** `ToolPanel.Section` currently applies `space-y-2` to its body (8px gap between direct children). The shared `.panel-section-body { padding: 12px }` doesn't include child-margin rules, so consumers like Spawner's vertical Vec3 row stack may collapse to touching siblings.
-   - **Mitigation:** Add `.panel-section-body > * + * { margin-top: 8px }` to the shared CSS upfront — matches the existing Tailwind `space-y-2` semantic and applies uniformly to both consumers. The inspector tabs use `.form-row` which has its own grid layout, so a sibling margin won't conflict.
+**Mitigation:** Place the testID on the **innermost** div that wraps
+the `<ViewportSlot />` + `<ViewportPill />` stack — same node it sits
+on today. The `Panel` from the library renders its own outer div; the
+testID lives one level inside, identical to the current
+`flex-1 min-h-0` div. Vitest's Modal test
+([Modal.test.tsx:103-149](web/apps/editor/src/components/__tests__/Modal.test.tsx:103-149))
+already pins the contract; pass it without modification.
 
-7. **Plan-deviation discovery during execution.**
-   - **Hazard:** Any of the above mitigations may need to land as a sub-task during execution rather than as a clean upfront change. The dispatch could end up touching more lines than estimated.
-   - **Mitigation:** If a risk fires beyond a 5-minute fix, STOP and re-plan per CLAUDE.md's "if something goes sideways, STOP and re-plan" guidance. Better to capture the divergence in the plan than to soldier on against shifted assumptions.
+### Risk 3 — Spawner mount/unmount mid-drag
+
+The Spawner can be toggled off via the toolbar button while the user
+is actively dragging the centre↔spawner handle. The library's
+`onLayout` callback could fire after the spawner `Panel` has
+unmounted, producing a "stale handle" warning.
+
+**Mitigation:** Spawner toggle is a user gesture distinct from a drag
+— they cannot both be in-flight. But to be defensive, the toolbar
+button handler reads the library's `onLayoutChange` callback's last
+sizes, commits them to `localStorage` synchronously, *then* flips
+`spawnerVisible`. Confirm during Task 5 manual smoke.
+
+### Risk 4 — Inner `PanelGroup` percentage drift on outer drag
+
+When the user drags the *outer* left↔centre splitter, the **inner**
+tree↔tabs `PanelGroup` keeps the same percentages — which means the
+absolute pixel sizes of the tree and tabs both shrink proportionally.
+This is the library's default and is the right behaviour, but worth
+naming so the test plan checks it (rather than asserting absolute
+pixel counts).
+
+**Mitigation:** Playwright spec asserts *percentages within ±1 %* of
+the post-drag layout, not absolute pixels.
+
+### Risk 5 — Inner curve-editor `min-h-0` propagation
+
+The curve editor's SVG canvas relies on its parent having `min-h-0`
+so flex layout doesn't blow it up vertically. The library's
+`Panel` element renders a wrapper that may or may not propagate
+`flex` semantics — needs verifying in Task 1.
+
+**Mitigation:** Library exposes a `className` prop on `Panel` that
+threads onto the rendered div. Apply `min-h-0 min-w-0` as needed.
+Task 4's smoke is "drag viewport↔curve to extremes; does the curve
+canvas render without overflow?" — explicit check.
+
+### Risk 6 — `localStorage` quota / corruption
+
+`localStorage` is per-origin and tiny. Three layout blobs of <500 bytes
+each is fine, but a corrupted JSON write (e.g. user opens DevTools and
+manually writes garbage) would crash `PanelGroup`'s deserialise step.
+
+**Mitigation:** Library's `autoSaveId` handles bad JSON gracefully
+(falls back to `defaultSize`). Confirm during Task 1 by writing
+garbage into the key and reloading. If it crashes, wrap the layout
+in an error boundary that calls *Reset panel layout*.
+
+### Risk 7 — Test selector regressions
+
+CurveEditor and EmitterTree vitests use the inner testIDs of the
+panels they render — those don't move. But any test that asserts a
+quadrant's `getBoundingClientRect` will need to be re-checked, and
+Playwright specs that rely on column widths could shift.
+
+**Mitigation:** Pre-flight grep (Task 0) for every quadrant testID
+and `getBoundingClientRect` usage; list each callsite the plan needs
+to re-verify. Run full vitest + Playwright after Task 5 and before
+Task 6 docs.
 
 ---
 
 ## 5. Testing & verification
 
-### Pre-flight (before any code change)
+### Manual checklist (happy paths)
 
-- [ ] Confirm baseline green: vitest 281/281, Playwright 83/83, MSBuild Debug x64 clean.
-- [ ] Grep audit: `grep -rn "section-header\|section-body\|\.section[ \"'>]" web/apps/editor/src/ web/apps/editor/tests/` — produces the complete list of selectors that will need updates.
+- [ ] Drag left↔centre, see live resize, release, sizes hold.
+- [ ] Drag centre↔spawner with spawner visible, see live resize, release.
+- [ ] Drag viewport↔curve, see canvas redraw at new size.
+- [ ] Drag tree↔tabs, see tab strip resize without horizontal scroll.
+- [ ] Reload page — all four sizes restored.
+- [ ] Toggle Spawner off (toolbar button) — centre column expands;
+      previous outer ratio for the *2-col* state restored if it had
+      been touched.
+- [ ] Toggle Spawner on — 3-col ratio restored.
+- [ ] *Reset panel layout* menu item restores all four to defaults
+      and persists the reset.
 
-### Per-phase verification
+### Edge cases
 
-- [ ] After Phase 1 (shared CSS added, legacy CSS still in place): nothing visible yet. `pnpm build` clean.
-- [ ] After Phase 2 (`Section.tsx` migrated): launch the editor, open the inspector tabs, confirm sections render with bordered-box + uppercase title + right chevron. No regression in the test counts. Spawner UNCHANGED at this point.
-- [ ] After Phase 3 (`ToolPanel.Section` migrated): Spawner / Lighting / Bloom now also use the shared class. Confirm all three render with the same visual as the inspector tabs.
-- [ ] After Phase 4 (legacy CSS deleted): full regression sweep — every panel that previously consumed `.section-*` must now look correct. The inspector + the tool panels are the only consumers; verify both.
-- [ ] After Phase 5 (test audit complete): vitest 281/281, Playwright 83/83 — same counts as baseline.
+- [ ] Drag a handle until it hits its min; library refuses further.
+- [ ] Drag a handle until it hits its max (left col, spawner col);
+      library refuses further.
+- [ ] Drag handle while a modal (e.g. About) is open — handle remains
+      inert (library cancels its own pointer events when document
+      pointer-events are blocked? confirm and document; if not, add a
+      `pointerEvents: none` to handles when `aria-modal` is active).
+- [ ] Drag rapidly back and forth — no flicker, no stutter, viewport
+      occlusion stays glued to the moving rect (relies on
+      `ResizeObserver` from §2.4).
+- [ ] Drag while Spawner is invisible — only the left↔centre handle
+      is present; viewport↔curve still works.
+- [ ] Drag a column splitter while a tool panel (Lighting / Bloom) is
+      open over the viewport — occlusion follows the viewport rect.
+      (The tool panel itself is absolutely positioned over the
+      `quadrant-viewport` node; it tracks via its own ResizeObserver.)
+- [ ] Open Modal (e.g. About) — snapshot backdrop captures the
+      *current* viewport rect at the moment of open (not the post-drag
+      one if a drag is in-flight; modal blocks during dragging).
 
-### Manual smoke-test checklist (per L-013 / CLAUDE.md pre-handoff discipline)
+### Cancellation / undo
 
-- [ ] Inspector → Basic tab: 3 sections (Emitter Timing / Generation / Connection), all collapsible, render uppercase muted titles with right chevron, bordered-box container, no overflow against the form-row spinners at the default 25/75 column split.
-- [ ] Inspector → Appearance tab: 5 sections (Textures / Random color / Tail / Rotation / Rendering).
-- [ ] Inspector → Physics tab: 4 sections (Initial position / Initial speed / Acceleration / Ground interaction).
-- [ ] Spawner pane: 5 sections (Position / Velocity / Lifetime / Jitter position / Jitter velocity), all render same visual as the inspector tabs. Lifetime stays alwaysOpen (no chevron).
-- [ ] Lighting panel: Sun / Fill 1 / Fill 2 / Ambient / Shadow sections all render correctly. alwaysOpen branches (Ambient / Shadow) render without chevron.
-- [ ] Bloom panel: section structure preserved.
-- [ ] Keyboard: Tab focus moves into each section header; Enter / Space toggles collapse; focus indicator visible.
-- [ ] At minimum realistic inspector column width (drag the eventual splitter, or just narrow the window): form rows still fit, no horizontal scroll.
-- [ ] Modal-over-engine: open Help → About while inspector is visible behind. Sections in the inspector should be visible (dimmed by Dialog.Overlay's `bg-black/60`) and the frosted-glass backdrop from B1.3.1.1 still works. The new bordered-box style should integrate cleanly with the dim — no harsh borders showing through.
+- [ ] Resizing a splitter has no undo entry — confirm it's not piped
+      through the bridge undo stack (it shouldn't be — no bridge call
+      is made by the library; only `localStorage` writes happen).
+
+### Refused inputs
+
+- [ ] Manually write `"not json"` to `alo:layout:outer` in DevTools,
+      reload — library falls back to defaults, no crash.
+- [ ] Set a `Panel`'s persisted size to 200 — library clamps to max
+      on next render.
 
 ### Cleanup
 
-- [ ] No dead CSS (`grep -n "section-header\|section-divider\|section-body" components.css` returns zero hits in the rules section, only the deletion-history comment if any).
-- [ ] No orphaned references to the old class names anywhere in `src/`.
+- [ ] Unmount AppShell (e.g. `?demo=primitives` route) — no leftover
+      `ResizeObserver` warnings in console.
+- [ ] *Reset panel layout* — confirm `alo:layout:*` keys are
+      removed from `localStorage` after the reset.
+
+### Test suites
+
+- [ ] `pnpm -F @particle-editor/editor test` — full vitest run; expect
+      281 + 3 (new tests in `PanelLayout.test.tsx`) passing.
+- [ ] `pnpm -F @particle-editor/editor playwright test` — full
+      Playwright run; expect 83 + 1 = 84 (`splitters.spec.ts` adds
+      one new spec asserting drag + reload).
+- [ ] MSBuild Debug x64 — should be untouched (no C++), expect the
+      same preexisting LIBCMTD warning.
+
+### Debug instrumentation
+
+`#ifndef NDEBUG` is C++-only and not applicable here. JS-side,
+`[splitter]` log prefix: any console.log added during development gets
+prefixed `[splitter]` so a quick grep cleans up before commit. Two
+deliberate breadcrumbs likely:
+
+- `[splitter] onLayout outer=[20.1, 60.2, 19.7]`
+- `[splitter] persist write alo:layout:outer = {…}`
+
+Strip both before merging.
 
 ---
 
-## 6. Implementation steps
+## 6. Task list (execution order, ~2-5 min each)
 
-- [ ] **P1 — Pre-flight.** Baseline verification + grep audit. Confirm `Section.tsx` has exactly one consumer.
-- [ ] **P2 — Shared CSS.** Add `.panel-section` / `.panel-section-header` / `.panel-section-body` + child-margin rule + rotation selectors to `components.css`. Legacy `.section-*` rules STAY in this commit — no consumer touches them yet.
-- [ ] **P3 — `Section.tsx` migration.** Swap class names, move chevron to right, switch from `.collapsed` modifier to `data-open` attribute. `pnpm build` + vitest. Manual smoke-test the inspector tabs visually.
-- [ ] **P4 — `ToolPanel.Section` migration.** Replace inline Tailwind utilities with shared classes; swap ASCII `›` for Lucide `<ChevronDown>`. `pnpm build` + vitest + Playwright. Manual smoke-test Spawner / Lighting / Bloom.
-- [ ] **P5 — Legacy CSS deletion.** Remove `.section`, `.section-header`, `.section-divider`, `.section-body` rules from `components.css`; update the `.form-row.name-row` comment. `pnpm build` + vitest + Playwright. Visual smoke-test once more to confirm nothing slipped.
-- [ ] **P6 — Test selector updates** (if any surfaced in P1 grep). Most likely none.
-- [ ] **P7 — Docs.** CHANGELOG entry describing the unification. ROADMAP doesn't need touching (no [TIER-K] tag for this polish-style change). HANDOFF refresh on session-end.
-- [ ] **P8 — FF + push** when user signs off.
+> Plan author note: the writing-plans skill would prefer tight
+> TDD-per-task bites. CLAUDE.md's plan structure prefers a numbered
+> list at the foot. Compromise: tasks are tight, each calls out
+> *write the test first* where applicable, and each ends with a
+> commit.
 
-**Commit slicing:** one focused commit covering P2-P6 (CSS addition + both component migrations + legacy deletion + test updates) — they're internally coherent and shouldn't be bisected separately. Plus a docs commit (P7) on top. Two commits total.
+- [ ] **T0 — Pre-flight grep.** Audit current quadrant-testID +
+  `getBoundingClientRect` usage. Output: a short note appended below
+  this section listing each consumer and whether splitter restructure
+  affects it. No commit (planning only).
+- [x] **T1 — Install + verify `react-resizable-panels`.** `pnpm -F
+  editor add react-resizable-panels` → 4.11.1. **API drift caught
+  via type declarations** (`dist/react-resizable-panels.d.ts`):
+  `PanelGroup` → `Group`, `PanelResizeHandle` → `Separator`,
+  `autoSaveId` removed. §3.2 / §3.3 / §3.5 / §3.6 / Risk 1 rewritten
+  in place. `?demo=splitter` throwaway route dropped — the
+  type-declaration walk-through covered every prop the plan needs.
+  Commit: `chore(LT-4): B1.4 T1 — add react-resizable-panels@4.11.1`.
+- [ ] **T2 — Write the vitest first.** New
+  `src/components/__tests__/PanelLayout.test.tsx`:
+  - mounts `<PanelLayout />` inside a MockBridge provider,
+  - asserts five `quadrant-*` testIDs present in the DOM,
+  - asserts `alo:layout:outer` is written on mount (library writes
+    the default sizes immediately) — uses jsdom's `localStorage`.
+  Run; expect failures. Commit: `test(LT-4): B1.4 T2 — PanelLayout
+  vitest skeleton (failing)`.
+- [ ] **T3 — Implement `PanelLayout.tsx`.** Build the three-PanelGroup
+  structure from §3.2. Move quadrant testIDs onto the same semantic
+  inner divs they live on today. Wire spawner mount/unmount via
+  `useSpawnerVisible()`. Add CSS to `components.css`. Get vitest
+  passing. Commit: `feat(LT-4): B1.4 T3 — PanelLayout with four
+  draggable splitters`.
+- [ ] **T4 — Swap `PanelLayout` into `App.tsx`.** Replace the existing
+  main-row block at [App.tsx:188-286](web/apps/editor/src/App.tsx:188-286)
+  with `<PanelLayout bridge={bridge} openPanel={openPanel} />`. Run
+  vitest (281 + 3 = 284 expected), run dev server, manually smoke
+  every checklist item in §5. Commit: `feat(LT-4): B1.4 T4 — wire
+  PanelLayout into AppShell`.
+- [ ] **T5 — Playwright spec.** New `tests/splitters.spec.ts` that
+  drags each splitter via `page.mouse.down/move/up`, reloads, and
+  asserts panel widths within ±1 % of the post-drag layout. Run
+  full Playwright suite (84 expected). Commit: `test(LT-4): B1.4 T5
+  — splitter persistence Playwright spec`.
+- [ ] **T6 — *Reset panel layout* menu item.** Add to View menu via
+  the existing menu plumbing. Clears the three `alo:layout:*` keys
+  and bumps a `key={n}` on `<PanelLayout />` to force re-render with
+  defaults. Vitest covers the clear-and-rerender behaviour. Commit:
+  `feat(LT-4): B1.4 T6 — Reset panel layout View-menu item`.
+- [ ] **T7 — Strip dev breadcrumbs.** `git grep '[splitter]'` and
+  remove. Run full test suite once more. Commit only if anything was
+  stripped.
+- [ ] **T8 — Docs.** `CHANGELOG.md` entry per the project's three-part
+  template, `ROADMAP.md` strikethrough + position move + tag
+  vacation for `[NT-8]`, `HANDOFF.md` refresh for next session,
+  review section appended at the foot of this `tasks/todo.md`.
+  Commit: `docs(LT-4): B1.4 — resizable splitters shipped`.
 
-**Estimated effort:** ~1-2 hours, ~100 lines net (60 CSS + 30 TSX + 10 deletions).
+Estimated total: 2-3 hours of focused work, plus manual smoke time.
 
 ---
 
-## Review (filled in during execution)
+## T0 pre-flight audit (output)
 
-**Status:** ✅ shipped on session branch `claude/bold-volhard-e0e0f0`, pending FF to `origin/lt-4`.
+### Quadrant testID consumers
 
-**Commits landed (2):**
+| Consumer                                                                    | Kind        | Affected by restructure?                                                                                      |
+|-----------------------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------------------------|
+| [App.tsx:208,221,234,260,280](web/apps/editor/src/App.tsx)                  | Production  | **Yes** — these are the source. They move into `PanelLayout.tsx` in T3 on the same semantic inner divs.       |
+| [Modal.tsx:90](web/apps/editor/src/components/Modal.tsx:90)                 | Production  | **Critical** — `document.querySelector('[data-testid="quadrant-viewport"]')` portal lookup. Risk-2 mitigation in §4 applies. |
+| [property-tabs.spec.ts:57-60](web/apps/editor/tests/property-tabs.spec.ts)  | Playwright  | No — only asserts `.toBeVisible()`, which holds.                                                              |
+| [Modal.test.tsx:110,149](web/apps/editor/src/components/__tests__/Modal.test.tsx) | Vitest | No — fixture stub stays unchanged.                                                                            |
+| [ViewportSlot.tsx:47](web/apps/editor/src/components/ViewportSlot.tsx)      | Comment     | No — code reference; update if comment becomes wrong.                                                         |
 
-| Commit | Phase | Summary |
-|---|---|---|
-| [`65a5eae`](https://github.com/DrKnickers/new-particle-editor/commit/65a5eae) | P2+P3+P4+P5+P6 squashed | Shared `.panel-section` CSS + Section.tsx migration + ToolPanel.Section migration + legacy CSS deletion + test-selector update — landed as one focused implementation commit. 15 inspector polish items folded in across three smoke-test rounds. |
-| `TODO-HASH` | P7 | Docs (CHANGELOG + HANDOFF + todo.md review). |
+### `getBoundingClientRect` production callsites
 
-**Plan deviations:**
+| Callsite                                                                                  | Target               | Affected?                                                                |
+|--------------------------------------------------------------------------------------------|----------------------|---------------------------------------------------------------------------|
+| [ViewportSlot.tsx:16](web/apps/editor/src/components/ViewportSlot.tsx:16)                  | quadrant-viewport    | Already `ResizeObserver`-wrapped — splitter drags fire it for free.       |
+| [viewport-occlusion.ts:52](web/apps/editor/src/lib/viewport-occlusion.ts:52)               | occluding elements   | Already `ResizeObserver`-wrapped — same story.                            |
+| [EmitterTree.tsx:412](web/apps/editor/src/screens/EmitterTree.tsx:412)                     | tree row             | Inner-row math, not quadrant boundary. Unaffected.                        |
+| [CurveEditor.tsx:319,1106](web/apps/editor/src/screens/CurveEditor.tsx)                    | SVG canvas / overlay | Inner SVG; redraws naturally on Panel size change. Unaffected semantically. |
+| [Modal.tsx](web/apps/editor/src/components/Modal.tsx)                                      | (via Modal portal)   | Driven by quadrant-viewport rect — relies on Risk-2 mitigation.           |
 
-- **Single commit instead of "one impl + one docs" upfront slicing.** The plan said P2 keeps legacy CSS in place; I rolled the deletion into the same commit because the legacy `.section-*` rules and the new `.panel-section-*` rules can't coexist without consumer-side switching, and the consumer (Section.tsx) switches in the same commit. Three intermediate states (legacy CSS + old consumer / both CSS / new CSS + new consumer / new CSS only) didn't have intermediate utility. The actual progression was: edit components.css (legacy → shared), edit Section.tsx, edit ToolPanel.tsx, edit Section.test.tsx, single commit.
-- **Polish items folded in.** The plan was strictly the section-header unification (Out of scope: any restyling beyond the section header). When the user smoke-tested the unification, they surfaced 8 polish items in round 1; I executed them. The user then surfaced 5 more in round 2; I executed those too. And then 2 alignment-fix iterations in round 3. All folded into the same commit because they touch the same files (components.css + EmitterPropertyTabs.tsx + SpawnerPanel.tsx) and the same conceptual surface (inspector visual polish). Per CLAUDE.md "if something goes sideways, STOP and re-plan" — but these weren't structural shifts, just visual fine-tuning; the dispatch shape didn't need to change.
-- **Three smoke-test rounds, not one.** Original plan §5 expected one smoke-test pass. Actual was three: (1) initial unification + first 8 polish items pass; (2) second-round widening / RGBA layout changes; (3) third-round checkbox right-edge alignment (two attempts — first aligned to unit-cell right edge, second corrected to spinner-input right edge per user clarification). Each round took ~5 minutes of edit + verify + smoke-test.
+### Other risk callsites
 
-**Risks status:**
+- `w-80` classes only appear at the **two sites being replaced**
+  ([App.tsx:193](web/apps/editor/src/App.tsx:193) and
+  [App.tsx:281](web/apps/editor/src/App.tsx:281)) plus
+  [ToolPanel.tsx:55](web/apps/editor/src/components/ToolPanel.tsx:55) — the
+  latter is an `absolute right-0` overlay tool panel inside the viewport
+  region, not part of the workspace grid. Unaffected.
+- No Playwright spec asserts absolute column widths (only
+  `viewport-resize.spec.ts:48` references the literal `320`, which is an
+  engine viewport rect fixture).
 
-- §4.1 Width pressure — didn't fire. Section bordered-box at the default 25/75 inspector split fits all form rows cleanly. Body padding stayed at 12 px (the plan's mitigation of dropping to 8 px wasn't needed).
-- §4.2 Spawner / Lighting / Bloom visual regression — didn't fire. Migration from inline Tailwind to shared CSS rendered visually identical (modulo the deliberate Lucide chevron swap). User's smoke-test of the Spawner showed it consistent with the inspector tabs.
-- §4.3 Vitest selector collisions — partial fire. The pre-flight grep audit caught `.section-divider` (kept as standalone) but missed the `.collapsed` modifier-class assertion in Section.test.tsx (which is a JS string, not a CSS selector). Caught by post-migration vitest run; fix was one assertion rewrite. **Procedural takeaway** worth carrying forward: grep for modifier-class names as JS strings too, not just as CSS selectors.
-- §4.4 `<details>` indent quirk — didn't fire. `display: flex` + `list-style: none` + `::-webkit-details-marker { display: none }` together fully suppress the native disclosure marker on Chrome/WebView2.
-- §4.5 Chevron icon swap regression in Spawner — didn't fire. User's smoke-test accepted the Lucide chevron at `size-3` as visually equivalent.
-- §4.6 Visual rhythm loss in tool-panel bodies — didn't fire. The shared `.panel-section-body > * + * { margin-top: 8px }` rule preserves Spawner's previous `space-y-2` semantics.
+**Conclusion:** Pre-flight clean. Plan §3.2 + §4 mitigations cover every
+identified consumer. Proceed to T1.
 
-**Test counts:**
+---
 
-- vitest **281 / 281** (no count change — Section.test.tsx's "collapsed state" assertion reshaped from class-presence to attribute-presence)
-- Playwright **83 / 83**
-- MSBuild Debug x64 clean (no C++ touched)
+## Review (filled in after T8)
 
-**Cleanup performed:**
-
-- Legacy `.section`, `.section-header`, `.section-divider` rules deleted from components.css.
-- `.section-divider` retained as standalone hairline primitive (used by `CurveEditorPanel.tsx:1138`).
-- ASCII `›` glyph removed from `ToolPanel.Section`; Lucide ChevronDown used everywhere.
-- CHANGELOG entry added at top.
-- HANDOFF refreshed for next session.
-
-**Procedural patterns worth carrying:**
-
-- **Folding polish into the same dispatch.** Three rounds of smoke-test-surfaced polish (8 + 5 + 2 items) all landed in the same commit because they touch the same files and the same conceptual surface. Mid-session smoke-test-driven iteration is a high-yield shape for inspector visual work; the alternative (separate "polish" dispatches per round) would have produced ~3 commits with no architectural difference.
-- **Grep audits for class-rename dispatches: include modifier-class JS string references.** The `.collapsed` miss in pre-flight grep was a one-line oversight that cost a one-line test fix — cheap to recover but cheaper to anticipate. Future dispatch checklists: grep for the modifier class name as a JS string, in addition to grep for it as a CSS selector.
-- **Width-boost prop scaffolding scales linearly.** Adding `widthBoost?: "mid" | "wide" | "x2"` to FieldSelect + FieldSpinner gave us 6 distinct width variants (default 58, mid 73, wide 87, x2 116; plus the Basic-tab-scoped 73) without proliferating per-call props. The CSS modifier-class pattern (`form-row-mid-input` etc.) matches the existing modifier family (`.full`, `.name-row`, `.form-row-cluster`, `.form-row-text`).
-- **Checkbox right-edge alignment via `grid-column: 2; justify-self: end`.** Single CSS rule pins every checkbox's right edge to the spinner-input column right edge across every form-row width variant — the alignment is structural, not per-case. The `grid-column: 2 / -1` first attempt aligned to a different column (unit cell right edge); the one-character swap to `grid-column: 2` corrected to the spinner column right edge. Worth remembering as the canonical pattern for "align this single-cell content to the right of a multi-cell row layout."
+*Empty — to be filled in after work completes.*
