@@ -24,7 +24,9 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import type { ReactNode, MouseEventHandler } from "react";
+import { useRef, type ReactNode, type MouseEventHandler } from "react";
+import type { Bridge } from "@particle-editor/bridge-schema";
+import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 
 export type ModalSize = "sm" | "md" | "lg";
 
@@ -49,10 +51,27 @@ export function Modal({
   size = "md",
   children,
 }: ModalProps) {
+  // FD9b: the engine viewport renders as a layered window on top of
+  // WebView2. Without registering the modal's full-screen overlay with
+  // the AlphaCompositor, the viewport paints over the modal and only
+  // the modal's bottom edge (outside the viewport quadrant) shows.
+  // Read bridge from window.bridge — set unconditionally by App.tsx
+  // at startup — so we don't have to drill `bridge` through every
+  // modal caller for what's a UI-layer concern. useViewportOcclusion
+  // early-returns when bridge is undefined (test envs without the
+  // bridge expose), so this is safe in vitest too.
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const bridge =
+    typeof window !== "undefined"
+      ? (window as Window & { bridge?: Bridge }).bridge
+      : undefined;
+  useViewportOcclusion(open ? bridge : undefined, "modal", overlayRef, 0, 0);
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
+          ref={overlayRef}
           data-testid="modal-overlay"
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0"
         />
