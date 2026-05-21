@@ -24,7 +24,46 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-5] Engine-side single-member link-group enforcement
+### 1.1 [NT-7] Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow
+
+*Estimate: small.*
+
+Three layout findings from B1.3's smoke test that the user explicitly
+deferred to a separate brainstorm + plan rather than bundling into
+B1.3's polish rounds:
+
+1. **Tabs hidden until an emitter is selected.** Today the property
+   tabs only render when an emitter is selected; with no selection
+   the centre column is empty. Should always render with a
+   placeholder inside (e.g. "Select an emitter to edit its
+   properties") so the user sees the tab strip and can navigate
+   before any selection.
+2. **Tab strip too short.** Currently a small slice at the top of
+   the centre column. Should be roughly 50% of the left column's
+   vertical extent so the tab strip dominates the visual hierarchy
+   and the inspector body has more breathing room.
+3. **Emitter list doesn't adjust to content.** The tree's `<ul>`
+   container has a fixed-ish height; should `flex-grow` to fill the
+   space above the tabs so long emitter lists scroll within a
+   generous viewport rather than spilling tight.
+
+No bridge schema changes anticipated. No C++ work. Estimated ~3–5
+commits.
+
+### 1.2 [NT-8] Resizable splitters for left / centre / right column boundaries
+
+*Estimate: small.*
+
+Make the left / centre / right column boundaries in the new UI
+draggable so users can size panes to taste. Target library is
+`react-resizable-panels` (battle-tested, accessible drag handles,
+persistence hooks). Persistence target is `localStorage` like the
+theme toggle; default sizes match the current fixed widths.
+
+Queued behind [NT-7] (inspector layout follow-ups) so the layout is
+stable before splitters land on top.
+
+### 1.3 [NT-5] Engine-side single-member link-group enforcement
 
 *Estimate: small.*
 
@@ -47,7 +86,7 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.2 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+### 1.4 [NT-6] Visual-stability lane assignment for bracket gutter (option)
 
 *Estimate: small.*
 

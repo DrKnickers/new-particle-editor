@@ -609,3 +609,67 @@ falsify the theory you've been chasing in one screenshot.
   where `clampedTime` is a JS-double user input. Same drift
   potential on the next refetch. Apply `Math.fround` if a similar
   bug surfaces there.
+
+---
+
+## L-010 — Inspector field labels are public API; sweep BOTH vitest and Playwright on every rename
+
+**Rule.** When renaming any inspector field label (or any
+user-facing label that DOM queries might key off), the rename
+sweep must include BOTH the vitest spec corpus under
+`web/apps/editor/src/**/__tests__/` AND the Playwright native
+suite under `web/apps/editor/tests/`. The two run via different
+harnesses (Vitest+jsdom vs Playwright-CDP-into-`ParticleEditor.exe`)
+and their failures look different — vitest fails locally on
+`pnpm test`, Playwright fails on `pnpm test:native` only — but
+both harnesses can hard-code field labels as DOM selectors via
+`getByLabel(...)` / `getByLabelText(...)`.
+
+**Trigger.** Any dispatch that renames an inspector field label
+(or any aria-label exposed to assistive tech). Examples:
+"Lifetime" -> "Maximum lifetime:", "Gravity" -> "Gravity
+acceleration:", "World Oriented" -> "Always face camera".
+
+**Why this is sneaky.** A dispatch spec that says "the Playwright
+suite asserts at structural / selection level, no label updates
+needed" sounds true and IS true for most Playwright specs in this
+project — they navigate by tab name, click coordinates, or
+data-testid attributes. But a handful of specs reach inside the
+inspector with `getByLabel(...)` (because that's the most stable
+way to find a specific spinner among many). Those specs are the
+exception and they're easy to miss in a scope-check that only
+samples the suite at the navigation level.
+
+**How to apply.**
+- **Before renaming, grep both directories** for every old label
+  string:
+  ```bash
+  cd web/apps/editor
+  grep -rn "getByLabel.*\"<old-label>\"" src tests
+  grep -rn "getByLabelText.*\"<old-label>\"" src tests
+  ```
+- **Update both corpora in the same commit (or two commits in
+  the same dispatch)** so neither half goes red on its own.
+- **Run both gates after the rename**: `pnpm test` (vitest) and
+  `pnpm test:native` (Playwright). The vitest red is loud; the
+  Playwright red is sneaky because the suite only runs against
+  the bundled `dist/` and needs the native host launched.
+- **If a dispatch spec says "Playwright untouched"**, treat that
+  as a hypothesis to verify with grep, not a fact. The cost of
+  the grep is 30 seconds; the cost of catching it at P7 instead
+  of P3 is a re-run of the verification phases.
+
+**Source incident (2026-05-21, B1.3 P7).** The B1.3 spec's §5
+and §8 both stated "Playwright native tests untouched" because
+the suite "asserts at structural / selection level". P3 renamed
+"Lifetime:" to "Maximum lifetime:" and P6 renamed "Gravity:" to
+"Gravity acceleration:". Both renames passed vitest cleanly. P7
+then ran `pnpm test:native` for the first time post-rename and
+got two failures in `tests/property-tabs.spec.ts` — both specs
+were using `getByLabel("Lifetime")` and `getByLabel("Gravity")`
+to find specific spinners within the inspector for value-set
+assertions. Fixed in the same P7 commit (`49544d6`) by updating
+both label strings to the new text. Cost: one extra round-trip
+through the verification gate. Cheap, but a 30-second grep at
+the dispatch-prep stage would have caught it before P3 / P6 ever
+landed.

@@ -255,7 +255,7 @@ Eight tasks, each with bite-sized steps. Mark `- [x]` as you go. Each task ends 
 
 **Files:** none modified.
 
-- [ ] **Step 1: Lineage check.**
+- [x] **Step 1: Lineage check.**
 
 Run:
 ```bash
@@ -266,7 +266,7 @@ git status --short
 
 Expected: HEAD-ahead-of-lt-4 list shows `5dd9d75` (spec commit). HEAD-behind-of-lt-4 is empty. `git status` clean.
 
-- [ ] **Step 2: NuGet restore** (only if the worktree is fresh — check `packages/` exists at repo root before deciding).
+- [x] **Step 2: NuGet restore** (only if the worktree is fresh — check `packages/` exists at repo root before deciding).
 
 Run:
 ```bash
@@ -278,7 +278,7 @@ If empty/absent:
 "/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" "ParticleEditor.sln" //t:Restore //v:m
 ```
 
-- [ ] **Step 3: pnpm install + L-005 check.**
+- [x] **Step 3: pnpm install + L-005 check.**
 
 Run:
 ```bash
@@ -288,7 +288,7 @@ pnpm install
 
 Then verify `pnpm-workspace.yaml` doesn't have the L-005 placeholder string. Read `web/pnpm-workspace.yaml`; the `allowBuilds` block should have explicit `true`/`false` per package, never a literal placeholder.
 
-- [ ] **Step 4: Baseline gates.**
+- [x] **Step 4: Baseline gates.**
 
 Run from `web/apps/editor`:
 ```bash
@@ -304,7 +304,7 @@ Expected:
 
 If anything is red, **STOP** — don't proceed to P2 on a broken baseline. Diagnose first.
 
-- [ ] **Step 5: MSBuild Debug x64 check** (optional sanity; no C++ change expected).
+- [x] **Step 5: MSBuild Debug x64 check** (optional sanity; no C++ change expected).
 
 Run:
 ```bash
@@ -313,7 +313,7 @@ Run:
 
 Expected: `Build succeeded.` with the preexisting `LIBCMTD` warning only.
 
-- [ ] **Step 6: Mark P1 complete in this file** (`- [x]` the checkboxes above). No commit — P1 is verification only.
+- [x] **Step 6: Mark P1 complete in this file** (`- [x]` the checkboxes above). No commit — P1 is verification only.
 
 ---
 
@@ -1674,4 +1674,108 @@ Per CLAUDE.md: pushing to `origin/lt-4` needs explicit user OK each time. **Do n
 
 ## Review (append after work)
 
-*(Filled in at the end of the dispatch per CLAUDE.md plan structure. Leave blank during execution.)*
+### Plan vs reality
+
+Plan called for 8 tasks (P1 pre-flight → P8 docs). Reality landed
+**ten implementation commits + two docs commits (spec, plan) + this
+P8 docs commit** — fourteen commits total on the dispatch:
+
+| Plan | Reality | Notes |
+|---|---|---|
+| P1 pre-flight | P1 pre-flight (no commit; checkboxes flipped in todo.md, committed with P8) | As planned. |
+| P2 `displayInvertedPercent` | `109125a` | As planned. |
+| P3 tri-state mutex | `6a5df27` + `b929e47` (P3-fix) | Code review caught missing a11y; added a follow-up commit extracting `RadioRow` with `role="radiogroup"` + roving tabIndex + arrow-key cycling. |
+| P4 Basic tab restructure | `07c88c4` | As planned. |
+| P5 Appearance tab restructure | `c894a2b` | As planned. |
+| P6 Physics tab restructure | `8b41ea5` + `3b191fd` (P6-fix) | Code review caught the weather-disable cascade inverted on three fields vs legacy `src/UI/Emitter.cpp:175-190`; fixed in a follow-up. |
+| P7 spec corpus reconciliation | `49544d6` + `3ae940e` (polish round 1) + `82917f0` (polish round 2) | P7 itself caught two label-coupled Playwright specs the spec hadn't anticipated (now L-010). Then user smoke-tested and surfaced five visual issues; folded into two CSS-only polish commits (dark scrollbar + form-row template; Vec3 axis labels + cluster widening + texture inputs + Spawner scroll fix). |
+| P8 docs | *this commit* | As planned. |
+
+### Test count evolution
+
+- vitest **254 -> 277** (+23 net) across the dispatch:
+  - +7 from P2 `displayInvertedPercent` math (focused unit specs).
+  - +7 from P3 + P3-fix tri-state mutex specs.
+  - +12 from P4 / P5 / P6 tab-restructure specs (section presence,
+    field counts, label assertions for renamed fields).
+  - -4 from P7 reconciliation: 1 `.todo` marker promoted to a real
+    absence-assertion (`Triangles` net +1), plus consolidation /
+    label substitutions (~-4 from spec dedupe).
+  - +1 from the polish rounds (axis-label test for Vec3 clusters).
+- Playwright **83 / 83 throughout.** Two specs in
+  `tests/property-tabs.spec.ts` updated for label renames in P7
+  (now L-010), but the spec count stayed flat.
+
+### What worked
+
+- **Two-stage review on P3, P5, P6 caught real issues** that would
+  have shipped silently otherwise. P3's missing a11y (no radiogroup
+  role, no arrow cycling, no roving tabIndex) and P6's inverted
+  weather-disable cascade were both invisible against the green
+  test gates — they only fell out of code review against the legacy
+  source line-by-line.
+- **Source-resolving Q2 + Q3 before brainstorm avoided a lot of
+  guesswork.** Reading `src/UI/Emitter.cpp:480-560` and
+  `src/ParticleEditor.en.rc` directly mapped every IDC_SPINNER to a
+  schema field in a single pass. Brainstorm then ran in a single
+  confirmation pass rather than a multi-round Q-and-A.
+- **`displayInvertedPercent` bundling caught a pre-existing
+  correctness bug.** While reading legacy source for Q2, the
+  "Minimum lifetime:" semantic (`displayedPercent = 100 - perc *
+  100`) became visible — and immediately surfaced that the new UI
+  was displaying `0.25` as `0.25%` instead of `75%`. Bundling the
+  fix into B1.3 (rather than filing as a separate dispatch) kept
+  the new and corrected UI in lockstep from day one.
+- **Bottom-up phase ordering kept each P-checkpoint green.** P2
+  landed `displayInvertedPercent` standalone before any consumer
+  reached for it; P3 landed the mutex on the unchanged tab
+  structure before the restructure diffs began; restructures
+  followed one tab at a time. Spec corpus reconciliation (P7)
+  swept the label-coupled tests in a single intermediate
+  red-then-green pass rather than chasing N intermediate reds.
+
+### What surprised
+
+- **The Playwright suite WAS label-coupled** in two specs the spec
+  had explicitly stated would be untouched. Now L-010. Cost: one
+  extra round-trip through `pnpm test:native` at P7. Cheap, but
+  the 30-second grep at dispatch-prep would have caught it before
+  P3 / P6 ever landed.
+- **P6 code review caught the inverted cascade pattern.** Looked
+  right at a glance ("weather mode disables physics inputs"), but
+  legacy `Emitter.cpp:175-190` explicitly leaves Inward speed and
+  Affected by wind enabled under weather. Three fields wrong out of
+  three — the diff was symmetric on the inversion. The reviewer
+  cross-referenced against the legacy source rather than against
+  the spec's prose summary.
+- **The user's smoke test caught five legitimate layout issues not
+  covered by tests.** Dark scrollbar inside Tabs.Content, form-row
+  truncation, Vec3 cluster cramping, texture input filename
+  truncation, SpawnerPanel non-scrolling. None visible from
+  `pnpm test` (specs query by aria-label, not by pixel layout). The
+  manual smoke-test step is load-bearing.
+
+### What deferred
+
+- **B1.3.1 — Inspector layout follow-ups** (tabs always visible
+  with placeholder; tab strip height; emitter list flex-grow).
+  Three smoke-test issues that the user explicitly deferred to a
+  separate brainstorm + plan rather than bundling inline. Filed as
+  the next dispatch.
+- **MT-1 texture picker "..." buttons** — legacy `IDC_BUTTON1` /
+  `IDC_BUTTON2` at `.rc:387-389` still unimplemented in the new
+  UI. `TODO(MT-1)` comment marker added to `EmitterPropertyTabs.tsx`
+  for grep-ability.
+- **B1.4 splitters** — queued behind B1.3.1.
+- **B2 obsolescence verification** — the B1.3 restructure wired
+  every Appearance + Physics field through the existing `commit()`
+  helper, so B2 may be largely obsolete. Next session should diff
+  current implementations against B2's target spec and confirm
+  before re-scoping.
+
+### Lessons captured this session
+
+- **L-010** — Inspector field labels are public API; sweep BOTH
+  vitest and Playwright on every rename. Filed during P7 when
+  `pnpm test:native` went red on two label-coupled specs the
+  dispatch spec hadn't anticipated.
