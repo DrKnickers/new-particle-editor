@@ -55,22 +55,10 @@ struct AlphaCompositor::Impl
 
     std::unordered_map<std::string, Occlusion> occlusions;
 
-    // B1.3.1 modal mask. Identity values (1.0f, 0) skip the post-
-    // process entirely so the per-frame cost is zero when no modal is
-    // open.
-    float    globalAlpha = 1.0f;
-    int      blurRadius  = 0;
-    // Scratch buffer for the separable box-blur. Lazily allocated to
-    // the DIB's pixel-count when blur becomes active, never freed
-    // until destruction — modal toggle is interactive, so the
-    // alloc-once approach avoids GC churn during open/close cycles.
-    std::vector<uint8_t> blurScratch;
-
     // B1.3.1.1 snapshot cache. Holds the engine-rendered BGRA pixels
-    // captured each frame BEFORE the occlusion stamps and modal-mask
-    // post-process. CaptureSnapshotPng reads from here. Reallocated
-    // lazily inside Composite when the cached dims don't match the
-    // current DIB.
+    // captured each frame BEFORE the occlusion stamps. CaptureSnapshotPng
+    // reads from here. Reallocated lazily inside Composite when the
+    // cached dims don't match the current DIB.
     std::vector<uint8_t> lastRawDib;
     int      lastRawW    = 0;
     int      lastRawH    = 0;
@@ -169,16 +157,6 @@ void AlphaCompositor::RemoveOcclusion(const std::string& id)
     m_impl->occlusions.erase(id);
 }
 
-void AlphaCompositor::SetModalMask(float alpha, int blurRadius)
-{
-    if (alpha < 0.0f) alpha = 0.0f;
-    if (alpha > 1.0f) alpha = 1.0f;
-    if (blurRadius < 0)  blurRadius = 0;
-    if (blurRadius > 32) blurRadius = 32; // hard cap; larger is a perf cliff
-    m_impl->globalAlpha = alpha;
-    m_impl->blurRadius  = blurRadius;
-}
-
 namespace {
 
 // smoothstep(0, w, x) — classic cubic, clamped.
@@ -260,138 +238,6 @@ void ApplyOcclusion(uint8_t* dib, int dibW, int dibH,
                 px[2] = static_cast<uint8_t>(px[2] * weight);
                 px[3] = static_cast<uint8_t>(px[3] * weight);
             }
-        }
-    }
-}
-
-// B1.3.1 modal mask helpers.
-//
-// Separable box blur on a BGRA DIB. Two passes: horizontal then
-// vertical. Each output pixel = average of source pixels in
-// [-radius, +radius] along the pass axis, with hard clamping at the
-// borders. Box blur instead of Gaussian because three iterations of
-// box blur visually approximate Gaussian at a fraction of the cost,
-// and we only need one for a soft modal-mask look.
-//
-// Runs on the engine-side DIB BEFORE the occlusion stamps so the
-// chrome holes get a crisp edge against the blurred engine (the
-// shadow of the modal renders against a blurred background, matching
-// the panel-side `backdrop-blur-sm` treatment).
-void BoxBlurDibBgra(uint8_t* dib, int w, int h, int radius,
-                    std::vector<uint8_t>& scratch)
-{
-    if (radius <= 0 || w <= 0 || h <= 0) return;
-    const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-    if (scratch.size() < pixels * 4) scratch.resize(pixels * 4);
-
-    // Horizontal pass: dib → scratch.
-    const int rowBytes = w * 4;
-    for (int y = 0; y < h; ++y)
-    {
-        const uint8_t* srcRow = dib     + y * rowBytes;
-        uint8_t*       dstRow = scratch.data() + y * rowBytes;
-        for (int x = 0; x < w; ++x)
-        {
-            const int x0 = (std::max)(x - radius, 0);
-            const int x1 = (std::min)(x + radius, w - 1);
-            const int n  = x1 - x0 + 1;
-            int b = 0, g = 0, r = 0, a = 0;
-            for (int sx = x0; sx <= x1; ++sx)
-            {
-                const uint8_t* p = srcRow + sx * 4;
-                b += p[0]; g += p[1]; r += p[2]; a += p[3];
-            }
-            uint8_t* d = dstRow + x * 4;
-            d[0] = static_cast<uint8_t>(b / n);
-            d[1] = static_cast<uint8_t>(g / n);
-            d[2] = static_cast<uint8_t>(r / n);
-            d[3] = static_cast<uint8_t>(a / n);
-        }
-    }
-
-    // Vertical pass: scratch → dib.
-    for (int y = 0; y < h; ++y)
-    {
-        uint8_t* dstRow = dib + y * rowBytes;
-        const int y0 = (std::max)(y - radius, 0);
-        const int y1 = (std::min)(y + radius, h - 1);
-        const int n  = y1 - y0 + 1;
-        for (int x = 0; x < w; ++x)
-        {
-            int b = 0, g = 0, r = 0, a = 0;
-            for (int sy = y0; sy <= y1; ++sy)
-            {
-                const uint8_t* p = scratch.data() + sy * rowBytes + x * 4;
-                b += p[0]; g += p[1]; r += p[2]; a += p[3];
-            }
-            uint8_t* d = dstRow + x * 4;
-            d[0] = static_cast<uint8_t>(b / n);
-            d[1] = static_cast<uint8_t>(g / n);
-            d[2] = static_cast<uint8_t>(r / n);
-            d[3] = static_cast<uint8_t>(a / n);
-        }
-    }
-}
-
-// Multiply per-pixel RGB + A by `alpha` (premultiplied invariant
-// preserved). Runs AFTER the occlusion stamps so the chrome holes
-// (already alpha=0) stay holes — multiplying 0 by 0.4 is still 0.
-// In the non-occluded engine pixels, this scales the popup's overall
-// opacity, letting WebView2's Dialog.Overlay `bg-black/60` blend in
-// from underneath via UpdateLayeredWindow.
-void MultiplyDibAlphaBgra(uint8_t* dib, int w, int h, float alpha)
-{
-    if (alpha >= 0.999f || w <= 0 || h <= 0) return;
-    const int total = w * h;
-    for (int i = 0; i < total; ++i)
-    {
-        uint8_t* p = dib + i * 4;
-        p[0] = static_cast<uint8_t>(p[0] * alpha);
-        p[1] = static_cast<uint8_t>(p[1] * alpha);
-        p[2] = static_cast<uint8_t>(p[2] * alpha);
-        p[3] = static_cast<uint8_t>(p[3] * alpha);
-    }
-}
-
-inline float Smoothstep01Edge(float x)
-{
-    if (x <= 0.0f) return 0.0f;
-    if (x >= 1.0f) return 1.0f;
-    return x * x * (3.0f - 2.0f * x);
-}
-
-// Fade the popup's per-pixel alpha to 0 in a `featherPx`-wide band
-// along the popup's outer rectangle. Smooths the visible seam between
-// the popup (engine pixels, blurred+dimmed by modal-mask) and the
-// WebView2 panels beyond it (CSS-dimmed by Dialog.Overlay) — without
-// this, the popup's hard rectangular HWND boundary draws a visible
-// line where the two compositing surfaces meet. Runs AFTER occlusion
-// stamps + global-alpha so the inner alpha-cuts and the dim are
-// already baked in; this just additionally tapers the outer ring.
-void FadePopupEdges(uint8_t* dib, int w, int h, int featherPx)
-{
-    if (featherPx <= 0 || w <= 0 || h <= 0) return;
-    const int rowBytes = w * 4;
-    for (int y = 0; y < h; ++y)
-    {
-        const int dyTop = y;
-        const int dyBot = (h - 1) - y;
-        const int dy    = (dyTop < dyBot) ? dyTop : dyBot;
-        uint8_t* row = dib + y * rowBytes;
-        for (int x = 0; x < w; ++x)
-        {
-            const int dxLeft  = x;
-            const int dxRight = (w - 1) - x;
-            const int dx      = (dxLeft < dxRight) ? dxLeft : dxRight;
-            const int d       = (dx < dy) ? dx : dy;
-            if (d >= featherPx) continue;
-            const float weight = Smoothstep01Edge(
-                static_cast<float>(d) / static_cast<float>(featherPx));
-            uint8_t* px = row + x * 4;
-            px[0] = static_cast<uint8_t>(px[0] * weight);
-            px[1] = static_cast<uint8_t>(px[1] * weight);
-            px[2] = static_cast<uint8_t>(px[2] * weight);
-            px[3] = static_cast<uint8_t>(px[3] * weight);
         }
     }
 }
@@ -558,10 +404,9 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
 
     // B1.3.1.1: cache the pre-stamp engine pixels for snapshot capture.
     // This must run AFTER the readback memcpy but BEFORE the occlusion
-    // stamps + modal-mask post-process — the snapshot is the engine's
-    // raw output, so CSS effects above the resulting <img> backdrop
-    // can dim + blur it uniformly with the panels without seeing the
-    // chrome cut-outs or the dim applied here.
+    // stamps — the snapshot is the engine's raw output, so CSS effects
+    // above the resulting <img> backdrop can dim + blur it uniformly
+    // with the panels without seeing the chrome cut-outs.
     {
         const size_t bytes = static_cast<size_t>(m_impl->width) *
                              static_cast<size_t>(m_impl->height) * 4u;
@@ -574,16 +419,6 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
         m_impl->lastRawH = m_impl->height;
     }
 
-    // B1.3.1 modal-mask: blur the engine pixels FIRST so the chrome
-    // holes stamp crisply against a blurred background. Identity
-    // skip (radius=0) keeps the per-frame cost at zero when no modal
-    // is open.
-    if (m_impl->blurRadius > 0)
-    {
-        BoxBlurDibBgra(dst, m_impl->width, m_impl->height,
-                       m_impl->blurRadius, m_impl->blurScratch);
-    }
-
     // Stamp the alpha (and premultiplied RGB) for each occluded
     // chrome rect. Outside occlusions the DIB keeps the engine's
     // fully-opaque pixels.
@@ -591,27 +426,6 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
     {
         ApplyOcclusion(dst, m_impl->width, m_impl->height,
                        kv.second.rect, kv.second.feather);
-    }
-
-    // B1.3.1 modal-mask: scale the popup's overall alpha so the
-    // engine viewport dims to match Dialog.Overlay's `bg-black/60`
-    // dim of the WebView2 panels. Runs AFTER occlusion stamps so
-    // chrome holes stay holes. Identity (alpha=1.0) is skipped
-    // inside MultiplyDibAlphaBgra via a fast-path check.
-    MultiplyDibAlphaBgra(dst, m_impl->width, m_impl->height,
-                         m_impl->globalAlpha);
-
-    // B1.3.1 modal-mask edge-feather: smooth the seam between the
-    // popup (engine + my dim/blur) and the WebView2 panels beyond it
-    // (CSS dim+blur from Dialog.Overlay). Only when modal-mask is
-    // active — without it, the rectangular popup HWND has crisp edges
-    // by design and the engine paints opaque content right up to its
-    // boundary. 24 px feather matches the design's general chrome-
-    // shadow extent and is plenty to blend the dim engine into the
-    // dim panel underneath.
-    if (m_impl->globalAlpha < 0.999f)
-    {
-        FadePopupEdges(dst, m_impl->width, m_impl->height, 24);
     }
 
     POINT srcPoint = { 0, 0 };

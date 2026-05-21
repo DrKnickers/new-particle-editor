@@ -431,10 +431,6 @@ export class MockBridge implements Bridge {
         // Mock: no native HWND to clip. Acknowledge silently.
         return {};
 
-      case "viewport/set-modal-mask":
-        // Mock: no AlphaCompositor to dim/blur. Acknowledge silently.
-        return {};
-
       case "viewport/capture-snapshot":
         // Mock: no engine to snapshot. Empty PNG + zero dims so the
         // React Modal's render guard (`snapshot && snapshot.pngBase64`)

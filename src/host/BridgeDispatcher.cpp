@@ -791,30 +791,6 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
-    // -------- viewport/set-modal-mask --------
-    // B1.3.1: React's Modal primitive calls this on open/close to
-    // dim + blur the engine viewport, matching Dialog.Overlay's
-    // `bg-black/60 backdrop-blur-sm` treatment of the WebView2
-    // panels (which can't reach the engine layer via CSS). On open:
-    // alpha ≈ 0.4, blurRadius ≈ 6. On close: alpha=1.0, blurRadius=0
-    // (identity, free).
-    if (kind == "viewport/set-modal-mask")
-    {
-        float alpha = 1.0f;
-        int   blurRadius = 0;
-        if (auto it = params.find("alpha"); it != params.end() && it->is_number())
-        {
-            alpha = it->get<float>();
-        }
-        if (auto it = params.find("blurRadius"); it != params.end() && it->is_number())
-        {
-            blurRadius = it->get<int>();
-        }
-        m_layout.SetModalMask(alpha, blurRadius);
-        sendOk(json::object());
-        return res;
-    }
-
     // -------- viewport/capture-snapshot --------
     // B1.3.1.1: React's Modal primitive calls this on open to grab a
     // frozen image of the engine viewport. It then renders the PNG as

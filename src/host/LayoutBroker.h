@@ -85,13 +85,6 @@ public:
     void SetOcclusion(const std::string& id, int x, int y, int w, int h, int feather = 0);
     void RemoveOcclusion(const std::string& id);
 
-    // B1.3.1: forward the modal-mask state (engine dim + blur) to the
-    // AlphaCompositor. React calls this via `viewport/set-modal-mask`
-    // when a Modal opens/closes. Identity (alpha=1.0, blurRadius=0)
-    // restores the no-effect state. No-op when no compositor is
-    // attached (legacy --legacy-ui mode).
-    void SetModalMask(float alpha, int blurRadius);
-
     // B1.3.1.1: forward a viewport snapshot request to the compositor.
     // Returns `false` (and leaves outputs untouched) when no
     // compositor is attached or the compositor has no cached frame

@@ -629,15 +629,6 @@ export type Request =
   // layout/viewport-rect. `feather` defaults to 0 (hard cut) when
   // omitted — match it to the chrome's shadow extent.
   | { kind: "viewport/occlude";           params: { id: string; rect: { x: number; y: number; w: number; h: number } | null; feather?: number } }
-  // B1.3.1: dim + blur the engine viewport while a Modal is open.
-  // The AlphaCompositor blurs the engine pixels (separable box-blur,
-  // radius in physical px) then multiplies the popup's per-pixel
-  // alpha by `alpha` so WebView2's Dialog.Overlay `bg-black/60` blends
-  // through. Identity (alpha=1.0, blurRadius=0) restores no-op. Bridge
-  // surface separate from viewport/occlude because modals carve their
-  // own occlusion rect AND set the global mask — atomic per-call
-  // semantics avoid an "occlude before mask" tear.
-  | { kind: "viewport/set-modal-mask";    params: { alpha: number; blurRadius: number } }
   // B1.3.1.1: capture the current engine viewport as a base64-encoded
   // PNG. React's Modal calls this on open to grab a frozen snapshot
   // of the engine output, renders the PNG as an <img> portaled into
@@ -802,7 +793,6 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
   R extends { kind: "viewport/occlude" }          ? Record<string, never> :
-  R extends { kind: "viewport/set-modal-mask" }   ? Record<string, never> :
   R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
   R extends { kind: "spawner/start" }             ? Record<string, never> :
   R extends { kind: "spawner/trigger" }           ? Record<string, never> :
