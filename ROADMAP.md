@@ -24,7 +24,26 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-8] Resizable splitters for left / centre / right column boundaries
+### 1.1 [NT-9] Frosted-glass modal backdrop via engine-snapshot capture
+
+*Estimate: small.*
+
+Replace the interim modal-mask compositor pipeline (which produces a visible
+inner-shadow halo at the popup boundary — known structural artifact, see
+B1.3.1 polish round 9 entry in CHANGELOG) with a captured engine-snapshot
+approach. New `viewport/capture-snapshot` bridge surface returns the current
+engine DIB as a base64 PNG; React Modal renders it as an `<img>` portaled
+into the viewport-quadrant DOM; engine popup is fully alpha-cut while modal
+is open; CSS `backdrop-filter` then blurs panels + snapshot uniformly via
+the existing `Dialog.Overlay backdrop-blur-sm`. No layer boundary visible.
+
+Phase 3 of the dispatch deletes the modal-mask C++ machinery that B1.3.1
+landed as interim work (`SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`,
+`FadePopupEdges`, the `viewport/set-modal-mask` bridge surface).
+
+Full plan at [`tasks/todo.md`](tasks/todo.md). Three commits expected.
+
+### 1.2 [NT-8] Resizable splitters for left / centre / right column boundaries
 
 *Estimate: small.*
 
@@ -38,7 +57,7 @@ the 50/50 inner left-column split B1.3.1 established.
 [NT-7] (inspector layout follow-ups) has shipped — this is the
 natural next step.
 
-### 1.2 [NT-5] Engine-side single-member link-group enforcement
+### 1.3 [NT-5] Engine-side single-member link-group enforcement
 
 *Estimate: small.*
 
@@ -61,7 +80,7 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.3 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+### 1.4 [NT-6] Visual-stability lane assignment for bracket gutter (option)
 
 *Estimate: small.*
 

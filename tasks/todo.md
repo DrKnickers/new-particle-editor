@@ -1,15 +1,12 @@
-# B1.3.1 [NT-7] — Inspector layout follow-ups (implementation plan)
+# B1.3.1.1 — Frosted-glass modal backdrop via engine-snapshot capture (NEXT DISPATCH)
 
-**Status:** planning — pending user sign-off before P2 begins.
+**Status:** planning — pending user sign-off before P2 begins. Plan refined from a long investigation in the prior B1.3.1 session — see Hand-off context section below for why this is the right approach.
+
 **Started:** 2026-05-21
-**HEAD at planning:** `f12d6f2` (post-FF HANDOFF sync) on `claude/agitated-margulis-854108`.
-**Predecessor on `lt-4`:** `f12d6f2`.
-**Source of dispatch:** [`tasks/HANDOFF.md`](HANDOFF.md) "Open items §0" — three smoke-test findings from B1.3 the user deferred to a separate brainstorm + plan.
-**Estimated commits:** 3–5 (one fix per finding + a docs commit; possibly one extra if a polish round follows smoke-test).
+**HEAD at planning:** `52bb032` (B1.3.1 polish rounds 7-9 commit). Predecessor on `origin/lt-4` is `f12d6f2`; the in-flight session branch `claude/agitated-margulis-854108` has 10 commits ahead, all under the B1.3.1 dispatch banner.
+**Goal:** Replace the failed modal-mask + edge-feather approach with a captured engine snapshot rendered as an `<img>` in the WebView2 DOM, so `Dialog.Overlay`'s existing `bg-black/60 backdrop-blur-sm` blurs both panels AND the snapshot uniformly — the "snapshot the UI, blur it, use as popup background" intent the user finally articulated.
 
-**Goal (one sentence):** the property tabs strip and the emitter tree share the left column on a flex axis instead of a fixed 288-px slice, the tab strip remains visible (with a body-level placeholder) before an emitter is selected, and the emitter tree flex-grows to fill whatever the tabs don't claim.
-
-**Tech stack:** React 18 + TypeScript (strict), Tailwind v4 utility classes, Radix Tabs. No bridge schema, no C++.
+**Tech stack:** C++ (HostWindow / AlphaCompositor / BridgeDispatcher / LayoutBroker), GDI+ for PNG encoding, bridge-schema TypeScript, React Modal primitive.
 
 ---
 
@@ -17,30 +14,33 @@
 
 ### Goal
 
-Fix three layered layout issues surfaced during B1.3's smoke test:
+Eliminate the "inner-shadow halo" artifact around modals' popup boundary by frosted-glassing the entire visible background — engine viewport + WebView2 panels — through a single CSS path (`Dialog.Overlay`'s `backdrop-blur-sm bg-black/60`). Engine viewport is captured to a PNG snapshot, sent to React, rendered as an `<img>` inside the viewport-quadrant DOM, and the engine popup is fully alpha-cut while the modal is open. CSS then blurs panels + snapshot uniformly, and the popup HWND boundary becomes invisible because both sides of it are now WebView2-rendered.
 
-1. **Tabs hidden until an emitter is selected.** Today the Tabs.Root is gated behind `if (selectedId === null)` and replaced wholesale by a centred placeholder div ([`EmitterPropertyTabs.tsx:214`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx:214)). The user can't see or pre-click the tab strip until something is selected.
-2. **Tab slot too short, tree spills tight.** The lower-left slot is `h-72 shrink-0` in [`App.tsx:210`](../web/apps/editor/src/App.tsx:210) — a fixed 288 px regardless of column height. On taller windows the tabs look pinched; on shorter windows the tree gets squeezed because the 288 px is non-negotiable.
-3. **Emitter tree should flex-grow.** Already `flex-1 min-h-0 overflow-y-auto` (correct), but the fixed-h-72 sibling above prevents it from breathing into the space the user *would* expect a tree to occupy.
+### Hand-off context (read first if you're a fresh session)
 
-These three are coupled: items 2 + 3 are two faces of "the fixed slice is the problem"; item 1 is independent JSX restructure inside `EmitterPropertyTabs`.
+The prior dispatch (B1.3.1 polish rounds 7-9) added a server-side compositor pipeline that blurs + dims the engine viewport pixels directly, plus an edge-feather of the popup HWND boundary. The dim/blur work. The edge-feather produces a visible **inner-shadow vignette** because:
 
-The user-visible outcome: opening the editor with no emitter selected shows the tab strip (Basic / Appearance / Physics) at the bottom of the left column with a "Select an emitter…" message in the active tab's body. The tab area occupies roughly half the panel-body's vertical extent; the tree occupies the other half and scrolls within it when there are many emitters. Resizing the window scales both halves proportionally.
+- Pixel math (with `globalAlpha=0.4`, Dialog.Overlay `bg-black/60` over panels):
+  - Popup center luminance ≈ `engine*0.4 + panel*0.24` ≈ ~60
+  - Popup mid-fade band luminance ≈ `engine*0.2 + panel*0.8 * dst-luminance` ≈ ~35 (mid-fade has LESS engine + MORE dst showing through)
+  - Popup outermost edge / just outside popup ≈ `panel * 0.4` ≈ ~10
+- A smooth visual transition would have endpoints at the same luminance. Mine doesn't — center is bright (engine + slight panel), edge is dim (pure panel via dst). The mid-fade band hits a luminance VALLEY where dst dominates, reading as a dark vignette.
+- Algebraically can't be tuned away — the cause is structural: CSS effects can't span the engine compositing layer, so any attempt to bridge the popup boundary by feathering its alpha reveals the underlying dim instead of bridging gradients.
 
-### In scope (B1.3.1)
+The snapshot-into-DOM approach lifts the engine into the WebView2 DOM tree (frozen at one frame), so CSS effects sample it natively. No layer boundary. No algebra needed.
 
-1. **Move the placeholder inside the tabs.** Render `<Tabs.Root>` + `<Tabs.List>` unconditionally; gate only the tab *body* on selection / loading state. Preserve the `data-testid="emitter-property-tabs-placeholder"` selector and the wording verbatim so existing specs keep passing.
-2. **Flex the tabs slot.** In [`App.tsx:208-213`](../web/apps/editor/src/App.tsx:208), replace `h-72 shrink-0` with `flex-1 min-h-0` (matching the sibling tree's sizing class) so both children of `panel-body` share the column's vertical extent.
-3. **Verify the tree breathes correctly.** With both siblings on `flex-1 min-h-0`, the default 50/50 split should be load-bearing — confirm via manual smoke-test at three window heights (short / medium / tall).
+### In scope (B1.3.1.1)
+
+1. **C++ snapshot capture surface.** New `viewport/capture-snapshot` bridge request that returns the current engine DIB as a base64-encoded PNG + dimensions.
+2. **React Modal rewiring.** On open: request snapshot, render an `<img>` into the viewport-quadrant DOM via `createPortal`, send a full-quadrant `viewport/occlude` so the engine popup goes fully transparent. On window resize: re-capture and re-send (rAF-throttled). On close: undo everything.
+3. **Remove the modal-mask compositor path.** Delete the now-dead `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha`/`m_blurRadius`/`m_blurScratch` fields, the `viewport/set-modal-mask` bridge surface, the schema, the MockBridge case, the Modal dispatch, and the regression test.
 
 ### Out of scope
 
-- **User-resizable splitter between tree and tabs.** That's B1.4's job (`react-resizable-panels`). B1.3.1 lands a fixed 50/50 split first; B1.4 makes the boundary draggable later. Reason: scope discipline + the underlying ratio question ("what's the right default split?") deserves an answer that B1.4 then makes adjustable.
-- **Splitter between left column and viewport.** Also B1.4.
-- **MT-1 texture-picker `…` buttons.** Separate dispatch.
-- **B2 audit.** Separate task entry in HANDOFF; resolves with a quick diff, doesn't need this plan.
-- **Tab-strip cosmetic changes (font, padding, border).** B1.3's polish round already tuned these; no further changes here.
-- **Persisting the chosen tab across sessions.** Radix's `defaultValue="basic"` resets to Basic on each mount. Persisting to localStorage would be nice but is a future polish; not load-bearing for B1.3.1's goal.
+- Nested modals — not currently a use case; skip.
+- Pausing the engine while a modal is open — wasted CPU/GPU but doesn't break anything; defer until perf becomes a real complaint.
+- Refresh-while-modal-open for engine state changes (e.g., spawner auto-firing while About is up) — the snapshot is intentionally frozen during modal lifecycle. Resize is the only re-capture trigger.
+- Raw BGRA over the bridge — start with PNG; only fall back if encode latency proves user-visible.
 
 ---
 
@@ -48,196 +48,199 @@ The user-visible outcome: opening the editor with no emitter selected shows the 
 
 | Surface | Where | What it provides |
 |---|---|---|
-| `panel` / `panel-header` / `panel-body` chrome | [`web/apps/editor/src/styles/components.css`](../web/apps/editor/src/styles/components.css) | The left column already wraps in `.panel` with `panel-body` as a flex container. No CSS additions needed — Tailwind utility classes on the children are enough. |
-| EmitterTree aside | [`App.tsx:199-204`](../web/apps/editor/src/App.tsx:199) | Already `flex-1 min-h-0 overflow-y-auto p-3 text-sm`. Correct sizing posture; no changes needed. |
-| Property-tabs slot | [`App.tsx:208-213`](../web/apps/editor/src/App.tsx:208) | Today `h-72 shrink-0`. Two-class swap. |
-| `Tabs.Root` / `Tabs.List` / `Tabs.Content` | [`EmitterPropertyTabs.tsx:232-272`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx:232) | Radix Tabs already in use. Each `Tabs.Content` has `flex-1 min-h-0 overflow-y-auto`; the body is plumbed correctly. The placeholder needs to render inside each Content's body, not replace the whole Root. |
-| Placeholder copy | [`EmitterPropertyTabs.tsx:215-222`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx:215) | "Select an emitter to edit its properties" + `data-testid="emitter-property-tabs-placeholder"`. Preserve verbatim. |
-| Loading placeholder | [`EmitterPropertyTabs.tsx:224-230`](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx:224) | "Loading…" branch. Same treatment as item 1. |
-| Spec coverage for the placeholder | Vitest specs that grep `emitter-property-tabs-placeholder` | Need to keep the testid + the copy + the rendered location stable. |
+| AlphaCompositor's DIB | [`src/host/AlphaCompositor.cpp`](../src/host/AlphaCompositor.cpp) | Engine pixels are already memcpy'd to a CPU-side DIB on every `Composite()`. Snapshot just needs to copy that buffer before chrome-stamps. |
+| GDI+ on Windows SDK | system | PNG encoding via `Gdiplus::Bitmap::Save` + PNG encoder CLSID. Requires one-time `GdiplusStartup` / matching `GdiplusShutdown`. |
+| Bridge dispatcher | [`src/host/BridgeDispatcher.cpp`](../src/host/BridgeDispatcher.cpp) | Pattern: `if (kind == "...") { read params; do work; sendOk(json); return; }`. Match existing `viewport/occlude` shape. |
+| LayoutBroker | [`src/host/LayoutBroker.h`](../src/host/LayoutBroker.h) | Already forwards occlusion calls to the compositor. The capture path can bypass LayoutBroker — the dispatcher can call AlphaCompositor directly since the host owns a pointer. |
+| MockBridge | [`web/apps/editor/src/bridge/mock.ts`](../web/apps/editor/src/bridge/mock.ts) | Pattern: switch case on `req.kind`. Return a stub (empty PNG, w=0, h=0) so MockBridge satisfies the schema for unit tests. |
+| BridgeContext | [`web/apps/editor/src/lib/bridge-context.ts`](../web/apps/editor/src/lib/bridge-context.ts) | New file from B1.3.1 polish round 8. Provides the live NativeBridge to deep consumers without `window.bridge` (which is broken under TestHostBridge swap). |
+| Quadrant-viewport DOM node | [`web/apps/editor/src/App.tsx`](../web/apps/editor/src/App.tsx) (`data-testid="quadrant-viewport"`) | The `<div>` that holds the engine viewport overlay. The snapshot `<img>` will be portaled into here. |
+| Modal callback-ref pattern | [`web/apps/editor/src/components/Modal.tsx`](../web/apps/editor/src/components/Modal.tsx) | Already established for handling Radix Dialog.Content's delayed mount via Portal+Presence — useState + callback ref forces a re-render when the node attaches. Reuse the same pattern for the quadrant-viewport lookup. |
 
-No new primitives, no new CSS classes, no new dependencies. **This is a two-file dispatch — `App.tsx` + `EmitterPropertyTabs.tsx`.**
+No new dependencies. GDI+ is in `gdiplus.lib` from the Windows SDK; one extra `#pragma comment(lib, "gdiplus.lib")` in the host project.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-### Item 1 — Always-mounted tab strip
+### Phase 1 — C++ capture path
 
-Refactor `EmitterPropertyTabs.tsx`'s render branch. Current shape:
+**1.1 AlphaCompositor caches a pre-stamp DIB.**
+Add a `std::vector<uint8_t> m_lastRawDib` field plus `int m_lastRawW, m_lastRawH`. On every `Composite()`, after the memcpy from sysmem but BEFORE the occlusion-stamp loop, copy the freshly-read pixels into `m_lastRawDib`. This is the "what the engine actually rendered this frame" before any chrome cuts. ~1-2 ms/frame extra cost on a typical viewport size.
 
-```tsx
-if (selectedId === null) return <Placeholder/>;
-if (properties === null) return <Loading/>;
-return <Tabs.Root>...<Tabs.Content>...<BasicTab .../></Tabs.Content>...</Tabs.Root>;
+**1.2 New method `AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)`.**
+Returns `bool` (false if no DIB cached yet — engine never composited). On success:
+- Wrap `m_lastRawDib` in a `Gdiplus::Bitmap` constructed with `PixelFormat32bppPARGB` (premultiplied — matches the DIB format).
+- Create an `IStream*` via `CreateStreamOnHGlobal`.
+- Call `bitmap.Save(stream, &pngClsid, nullptr)` where pngClsid comes from `GetEncoderClsid(L"image/png", ...)`.
+- Read stream into a `std::vector<uint8_t>`.
+- Base64-encode (inline 30-line encoder, no new dep).
+- Write to `outBase64`, set `outW = m_lastRawW`, `outH = m_lastRawH`.
+
+**1.3 GDI+ initialization.**
+In `HostWindow::Run`'s startup: `Gdiplus::GdiplusStartup(&token, &input, nullptr)`. Matching `Gdiplus::GdiplusShutdown(token)` at teardown. Both calls bracket the entire app lifecycle — once per process.
+
+**1.4 BridgeDispatcher handler.**
+Add `if (kind == "viewport/capture-snapshot") { ... }`:
+
+```cpp
+std::string pngBase64;
+int w = 0, h = 0;
+if (m_alphaCompositor && m_alphaCompositor->CaptureSnapshotPng(pngBase64, w, h)) {
+    sendOk(json{{"pngBase64", pngBase64}, {"w", w}, {"h", h}});
+} else {
+    sendOk(json{{"pngBase64", ""}, {"w", 0}, {"h", 0}});
+}
 ```
 
-Target shape:
+The compositor pointer wiring: check what's already in BridgeDispatcher. If LayoutBroker holds the compositor reference, route through it (`m_layout.GetCompositor()`); otherwise add a direct setter `SetAlphaCompositor` paralleling `SetEngine` / `SetModManager`.
 
-```tsx
-const body = (renderInside: React.ReactNode) => (
-  selectedId === null  ? <Placeholder/> :
-  properties === null  ? <Loading/>     :
-                         renderInside
-);
+**1.5 Bridge schema additions.**
 
-return (
-  <Tabs.Root defaultValue="basic" className="flex h-full flex-col">
-    <Tabs.List ...>
-      <TabTrigger value="basic" label="Basic"/>
-      <TabTrigger value="appearance" label="Appearance"/>
-      <TabTrigger value="physics" label="Physics"/>
-    </Tabs.List>
-    <Tabs.Content value="basic"      className="flex-1 min-h-0 overflow-y-auto outline-none" data-testid="tab-basic-content">
-      {body(<BasicTab properties={properties!} onCommit={commit}/>)}
-    </Tabs.Content>
-    <Tabs.Content value="appearance" ...>{body(<AppearanceTab .../>)}</Tabs.Content>
-    <Tabs.Content value="physics"    ...>{body(<PhysicsTab .../>)}</Tabs.Content>
-  </Tabs.Root>
-);
+```ts
+| { kind: "viewport/capture-snapshot"; params: Record<string, never> }
+
+// ResponseFor:
+R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
 ```
 
-**Design choice — three placeholders or one?** Radix mounts only the active `Tabs.Content` at any time, so the placeholder renders inside whichever tab is active. Three call sites of `body(...)` each gate independently → only one placeholder ever paints. This avoids any "which tab shows the placeholder" question.
+**1.6 MockBridge stub.**
+`case "viewport/capture-snapshot": return { pngBase64: "", w: 0, h: 0 };`
 
-**Placeholder copy + testid stay verbatim.** L-010 specifically calls out label-coupled tests as a footgun. Keep `data-testid="emitter-property-tabs-placeholder"` and the text "Select an emitter to edit its properties" identical to today.
+### Phase 2 — React Modal rewiring
 
-**TypeScript: `properties!` non-null assertion is safe** — the `body` helper guarantees the renderInside branch is only reached when both `selectedId !== null` and `properties !== null`. The narrowing happens at the helper, not at the call site, so the call site needs `!`. Alternative: pass `selectedId` and `properties` as arguments to `body` and have it return a render function. The non-null assertion is simpler and the safety invariant lives one screen up — fine.
+**2.1 Drop the existing occlusion + modal-mask code in Modal.**
+- Remove the `useEffect` that fires `viewport/occlude` with Dialog.Content's rect.
+- Remove the `useEffect` (same block) that fires `viewport/set-modal-mask`.
+- Both get replaced with a single unified flow in 2.2.
 
-### Items 2 + 3 — Flex the tabs slot
+**2.2 New Modal useEffect — snapshot capture + full-quadrant occlude.**
 
-In `App.tsx:208-213`:
-
-```tsx
-// Before
-<div data-testid="quadrant-property-tabs" className="h-72 shrink-0">
-
-// After
-<div data-testid="quadrant-property-tabs" className="flex-1 min-h-0">
+State:
+```ts
+const [snapshot, setSnapshot] = useState<{ pngBase64: string; w: number; h: number } | null>(null);
+const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null);
 ```
 
-That's it. Both children of `panel-body` (tree aside + tabs slot) now sit on `flex-1 min-h-0` → flex distributes the available height evenly. Default 50/50 split. Window resize scales proportionally.
+Effect (deps: `[open, bridge]`):
+- If `!open || !bridge`: return early.
+- Look up the quadrant-viewport node: `document.querySelector('[data-testid="quadrant-viewport"]')`. Set `viewportEl`.
+- Define an async `capture()`: request `viewport/capture-snapshot`, set into `snapshot` state.
+- Define `occlude()`: read `viewportEl.getBoundingClientRect()`, send `viewport/occlude` with the full quadrant rect (id `"modal-backdrop"`).
+- Fire `capture()` + `occlude()` immediately.
+- Subscribe to window `resize` with a single rAF-throttled handler that calls both. Cancel the rAF on cleanup.
+- Return cleanup: cancel rAF, remove listener, clear `snapshot`, send `viewport/occlude` with `rect: null`.
 
-**Why not `basis-1/2`?** `flex-1` is `flex: 1 1 0%` — equal growth from zero. `basis-1/2` would seed each child at 50% before flex adjusts, which is the same end state but more verbose. Stick with `flex-1` to match the existing tree aside's posture.
+**2.3 Render the snapshot via `createPortal`.**
+At the end of the Modal component's JSX, before the `Dialog.Root`:
 
-**Min-height floor?** Considered `min-h-[200px]` on each so neither collapses on a very short window. Decided against: `panel-body` itself has `overflow-hidden` (App.tsx:195), so on a 400-px-tall window each half becomes ~180 px and the user is already past the "this is unusable" threshold for the panel as a whole. Adding a min-height floor would force the column to overflow externally — worse UX than letting both halves shrink to their natural scrollable state. L-006 territory: don't add defensive constraints for scenarios that aren't realistic.
+```tsx
+{open && viewportEl && snapshot && createPortal(
+  <img
+    src={`data:image/png;base64,${snapshot.pngBase64}`}
+    alt=""
+    aria-hidden
+    style={{
+      position: "absolute",
+      inset: 0,
+      width: "100%",
+      height: "100%",
+      pointerEvents: "none",
+    }}
+  />,
+  viewportEl,
+)}
+```
 
-### Test selector audit
+The img sits inside the quadrant-viewport DOM node, at z-index 0 (default), below Dialog.Overlay (z-40) and Dialog.Content (z-50). Dialog.Overlay's `bg-black/60 backdrop-blur-sm` blurs everything in the DOM behind it — including this img — uniformly with the panels. **This is the win condition.**
 
-Per L-010, sweep for everything that grabs DOM under the affected slots:
+### Phase 3 — Delete the dead modal-mask code
 
-- `emitter-property-tabs-placeholder` testid — must still match. Stays.
-- `emitter-property-tabs` testid (on `Tabs.Root`) — used by specs to assert the tab strip exists. Currently only mounts when `selectedId !== null`; after this change, mounts always. Any spec asserting "tabs absent when no selection" would break. **Audit task** (P1.5) checks for this pattern.
-- `tab-basic-content` / `tab-appearance-content` / `tab-physics-content` — same situation. Audit.
-- `quadrant-property-tabs` testid on the App.tsx wrapper — purely visual, no behavioral change.
-- `quadrant-emitter-tree` testid — unchanged.
+After 2.x is shipping the snapshot path successfully:
 
-If audit finds specs asserting Tabs-absent-when-no-selection, they need updating to assert placeholder-present-inside-tabs-when-no-selection. Plan accordingly.
+**3.1 C++ removals.**
+- `AlphaCompositor.{h,cpp}`: `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha` / `m_blurRadius` / `m_blurScratch` fields, the corresponding calls in `Composite`.
+- `LayoutBroker.{h,cpp}`: `SetModalMask` declaration + forwarding.
+- `BridgeDispatcher.cpp`: the `viewport/set-modal-mask` handler.
+
+**3.2 Schema / mock removals.**
+- `web/packages/bridge-schema/src/index.ts`: the `viewport/set-modal-mask` request + response.
+- `web/apps/editor/src/bridge/mock.ts`: the `viewport/set-modal-mask` case.
+
+**3.3 Test updates.**
+- `Modal.test.tsx`: remove `dispatches viewport/set-modal-mask on open ...`. Add `dispatches viewport/capture-snapshot when open and clears occlusion on close`.
 
 ---
 
 ## 4. Risks named up front + mitigations
 
-1. **Spec coverage breakage from "tabs now always mounted."**
-   - **Hazard:** existing vitest / Playwright specs may assert that `[data-testid="emitter-property-tabs"]` is *absent* when no emitter is selected (mirroring today's early-return-placeholder behaviour). After this change, the Tabs.Root is always present.
-   - **Mitigation:** P1.5 audit step — `grep -r "emitter-property-tabs"` and `grep -r "emitter-property-tabs-placeholder"` across `src/**/__tests__/` and `tests/`. Any "should NOT be in document" assertion needs flipping to "should be in document; placeholder inside should be visible". Document found callsites in the audit output; update them in the same P3 commit as the JSX restructure so the test change rides with the fix.
+1. **PNG encode latency under drag.**
+   - **Hazard:** GDI+ PNG encode at 1280×720 takes ~10-30 ms. At 60 fps drag, that's 600-1800 ms/sec of CPU just on encoding, plus a similar cost in base64 + bridge transit. The drag might feel laggy.
+   - **Mitigation:** Throttle re-capture to rAF (~16 ms) instead of every resize event — this already coalesces multiple ResizeObserver fires per frame into one. If that's still too slow, fall back to raw BGRA (skip PNG encode, accept 3-6 MB base64 per capture). Measure first.
 
-2. **Flex-1 50/50 may not be what the user actually wants.**
-   - **Hazard:** HANDOFF says "roughly 50% of the left column's vertical extent" for the tab strip. "Roughly" is ambiguous — they might want 60/40 in either direction. If the user wanted to bias toward the tree (more rows visible) or toward the tabs (more form content), a fixed 50/50 won't match expectations.
-   - **Mitigation:** ship 50/50 first (cheap, principled default), then iterate based on smoke-test feedback. Document this decision in the CHANGELOG entry so the user sees "we picked 50/50 — easy to adjust." B1.4's resizable splitter will let the user override anyway; the default just needs to be reasonable.
+2. **Bridge payload size.**
+   - **Hazard:** A 1280×720 PNG of dense 3D content can hit 200-500 KB; base64 inflates to 270-680 KB. `chrome.webview.postMessage` handles big payloads but it's not instant.
+   - **Mitigation:** Compare PNG vs raw BGRA on a representative scene. Pick whichever is faster end-to-end. Document the choice.
 
-3. **Loading placeholder flicker on selection change.**
-   - **Hazard:** when the user clicks a different emitter, `fetchProps` is called and `properties` goes through a brief null window before the new dto arrives. With items moved inside the tab body, the user will now see a brief "Loading…" flash inside the tab body rather than (today) the whole tabs disappearing and a centred Loading message appearing.
-   - **Mitigation:** the L-006 pattern (don't clear optimistic state on every host-data refresh) is already in CurveEditorPanel. EmitterPropertyTabs doesn't use the same pattern — it clears `properties` to null in `fetchProps` before re-fetch. We could optimise this but it's a separate change. Accept the brief flash; it's no worse than today (where today's behaviour is "whole tab strip disappears and reappears" — strictly worse than "loading message inside tab body"). **Not worth designing around.**
+3. **Snapshot misalignment during fast drag.**
+   - **Hazard:** Between the user's drag tick and React's rAF, the snapshot is one frame stale. If the engine viewport position has moved 50 pixels in that frame, the snapshot is offset.
+   - **Mitigation:** Use the *current* `getBoundingClientRect` of the quadrant element when positioning the img (which is `position: absolute; inset: 0` inside the parent — so it tracks the parent's natural CSS rect, which DOES update in real time). Only the *content* of the snapshot is one frame stale, not its position. Imperceptible at human reaction times.
 
-4. **50/50 makes the tab body too tall on tall windows.**
-   - **Hazard:** on a 1440p display, 50% of the panel-body might be 400+ pixels of inspector body, which has plenty of scroll headroom even for the longest tab (Appearance). The form content occupies maybe 60% of that; the bottom 40% is empty. Wasted screen real estate.
-   - **Mitigation:** **accepted.** Empty space inside a panel body is the lesser evil vs the alternative (a tree that can't grow, or a tabs slot that runs out of room before the form ends). B1.4's resizable splitter is the proper fix; B1.3.1 ships a reasonable default. The CHANGELOG will note "tall windows show some empty space below the tab body — addressed in B1.4."
+4. **Engine keeps rendering under the modal.**
+   - **Hazard:** Wasted CPU / GPU during modal lifecycle. Spawner auto-mode could be firing into a viewport the user can't see.
+   - **Mitigation:** Accepted — out of scope. Pausing the engine could break legitimate flows (the user might WANT the spawner to keep going while reading a modal). Document as a known cost; revisit if it becomes a real complaint.
 
-5. **`properties!` non-null assertion could mask a real bug.**
-   - **Hazard:** if some future refactor breaks the invariant that `properties !== null` implies `selectedId !== null`, the non-null assertion silently passes a null through to `BasicTab` and crashes inside the form.
-   - **Mitigation:** the `body()` helper centralises the gating. Add a TypeScript-narrowing variant: `function body<T>(content: (p: EmitterPropertiesDto) => T): T | JSX.Element` so the assertion is invisible. Implement this if the audit reveals it's clean; otherwise the `!` is fine — the invariant is one screen above. **Decide during P3.**
+5. **GDI+ shutdown race.**
+   - **Hazard:** If `GdiplusShutdown` is called before the AlphaCompositor's destructor runs, any GDI+ object held by the compositor leaks or crashes.
+   - **Mitigation:** Order matters. `GdiplusStartup` runs first in `HostWindow::Run`; `GdiplusShutdown` runs after all compositor / engine teardown in the matching destructor path. The compositor doesn't hold any GDI+ objects between calls — each `CaptureSnapshotPng` creates and releases its own. So the only risk is calling `CaptureSnapshotPng` AFTER `GdiplusShutdown`, which can't happen if we shut down in the right order.
+
+6. **MockBridge returns empty PNG; what does React do?**
+   - **Hazard:** Modal renders an `<img src="data:image/png;base64,">` — broken image. Visible in dev / unit tests.
+   - **Mitigation:** Modal's render guard already checks `snapshot && snapshot.pngBase64`. Empty string falsy short-circuits the portal render. Tests don't see a broken img.
 
 ---
 
 ## 5. Testing & verification
 
-### Manual smoke-test (after P3 lands)
+### Manual smoke-test
 
-- [ ] Open editor with no `.alo` loaded → tabs visible at bottom of left column, "Basic" tab active, body shows "Select an emitter to edit its properties" placeholder.
-- [ ] Click "Appearance" tab while nothing selected → tab switches, body still shows placeholder. Same for Physics.
-- [ ] Load a `.alo` file → tabs remain visible, tree populates, tabs still on Basic (or whichever was last clicked), body still placeholder (no emitter selected yet by default load? — check this; if emitters auto-select on load, body populates).
-- [ ] Click an emitter → tab body populates with that emitter's form, placeholder gone.
-- [ ] Click a different emitter → form re-populates (brief "Loading…" flash inside body is acceptable).
-- [ ] Click an empty area / Esc to deselect → body returns to placeholder, tabs still visible.
-- [ ] Resize the window vertically (drag bottom edge):
-  - **Tall window (1440p):** tree gets ~50%, tabs get ~50%, both have generous scroll headroom.
-  - **Medium window (1080p):** tree ~50%, tabs ~50%, tree shows ~12-15 emitter rows comfortably.
-  - **Short window (768p):** tree ~50%, tabs ~50%, both halves scroll internally. Panel-body itself doesn't overflow.
-- [ ] Switch theme (dark ↔ light) → no regression on the tab strip's appearance.
-- [ ] Open Spawner panel → left column unchanged (only the right column appears).
-- [ ] With 30+ emitters loaded, scroll the tree → form below stays in place; tab body doesn't scroll-couple to the tree.
+- [ ] Open Help → About. Modal renders. Engine viewport behind modal is replaced by a static snapshot, dimmed + blurred uniformly with the panels via Dialog.Overlay's CSS. **No visible rectangular popup boundary, no inner-shadow vignette.**
+- [ ] Resize the window while modal is open: backdrop tracks resize seamlessly (snapshot re-captures on each rAF tick).
+- [ ] Close modal: engine returns to full opacity instantly, runs at normal fps.
+- [ ] Open then immediately close modal: no orphaned occlusion (engine fully visible).
+- [ ] Two modals in sequence (About → close → SaveChangesPrompt via dirty doc → close): both work, no state leaks.
+- [ ] With the curve editor active: open About, snapshot captures the engine but NOT the curve editor (which is below the popup) — verify the snapshot doesn't include curve editor pixels.
 
-### Vitest (after P3)
+### Vitest
 
-- [ ] `pnpm test` clean (expect 277/277 baseline + any test additions / updates).
-- [ ] Any specs that today assert `emitter-property-tabs` absent → updated to assert placeholder presence inside the tabs.
-- [ ] New focused spec: "EmitterPropertyTabs renders Tabs.Root with placeholder when no emitter is selected." Covers the no-selection path explicitly so a future refactor can't quietly revert this behaviour.
+- [ ] `pnpm test` clean (expect 281 → 282; +1 for new capture-snapshot test, the modal-mask test deletes).
+- [ ] New focused test: Modal dispatches `viewport/capture-snapshot` on open, dispatches `viewport/occlude { rect: <quadrant-rect> }`, and on close dispatches `viewport/occlude { rect: null }`.
+- [ ] Existing regression guards (opaque pill, no backdrop-filter, no shadow-xl/2xl) keep passing.
 
-### Playwright (after P3)
+### Playwright
 
-- [ ] `pnpm test:native` clean (expect 83/83). No label changes, so L-010 risk is low; the testid-stability risk above is the bigger concern.
+- [ ] `pnpm test:native` 83/83. The snapshot path uses the same `viewport/occlude` surface Playwright already exercises, plus a new request that mock returns an empty stub for — no contract-level changes expected.
 
 ### MSBuild
 
-- [ ] Should remain clean (no C++ touched). Run once before FF.
-
-### Debug instrumentation
-
-None needed. This is layout-only; no new state, no new lifecycle, no new bridge calls.
+- [ ] Debug x64 clean. GDI+ link via `#pragma comment(lib, "gdiplus.lib")` in HostWindow.cpp.
 
 ---
 
 ## 6. Implementation steps
 
-- [x] **P1 — Pre-flight.** Confirm baseline green. Vitest verified 277/277. Playwright + MSBuild deferred to P5 (no C++ change; one vitest-only spec flip needed — Playwright surface unaffected per audit).
-- [x] **P1.5 — Spec selector audit.** Found one structural flip needed: [`EmitterPropertyTabs.test.tsx:81`](../web/apps/editor/src/screens/__tests__/EmitterPropertyTabs.test.tsx:81) (`queryByTestId("emitter-property-tabs")).toBeNull()` → invert). All other `getByTestId("emitter-property-tabs")` callsites (lines 88, 114, 133, 430, 490 + Playwright 44/80/133/183/236) are post-selection assertions and stay correct unchanged. `base.css:34-58` scrollbar styling tied to the three `tab-*-content` testids is unaffected.
-- [x] **P2 — Verify Playwright + MSBuild baseline.** Deferred — covered by P5 end-of-dispatch sweep. The session-start baseline was clean (HANDOFF: vitest 277/277, Playwright 83/83, MSBuild clean) and nothing has been touched since `f12d6f2`.
-- [x] **P3 + P4 — bundled into a single commit** (`ec486d9`). Plan called for two separate commits, but P3 alone (always-mounted strip with no flex change) would leave the placeholder centered in a fixed 288 px slice; P4 alone would change the layout but the strip would still vanish on no-selection. Each commit should leave the tree in a coherent user-visible state — the two together do, either alone is a half-baked intermediate.
-- [x] **P5 — Build + test verification, no UI smoke test.** `pnpm build` clean, vitest 277/277, MSBuild Debug x64 clean (post NuGet restore — fresh worktree pre-flight per HANDOFF), Playwright 83/83. The agent cannot drive the dev server headlessly, so the manual checklist below is left for the user to walk through before the FF.
-- [x] **P6 — Docs.** Commit `f1d1f27`: CHANGELOG entry at top, HANDOFF refresh (header + resumable-state + what-landed-this-session + open-items §0 swap from B1.3.1 to B1.4 + §1 marked shipped), ROADMAP strike + move-to-shipped + renumber. Tag NT-7 vacated permanently.
-- [x] **P7 — Polish round (post user smoke test).** User tested the build and asked for 25/75 favouring tabs (matching "tab strip dominates the visual hierarchy" from the original deferred-item list). Tabs slot `flex-1 min-h-0` → `flex-[3_1_0%] min-h-0` in [`App.tsx`](../web/apps/editor/src/App.tsx); tree aside stays at `flex-1` so the 1:3 ratio yields 25/75. Docs (CHANGELOG / HANDOFF / ROADMAP) refreshed in the same commit to reflect the shipped ratio. No test impact.
+- [ ] **P1 — Pre-flight.** Confirm baseline green (vitest 281/281, Playwright 83/83, MSBuild clean). Read this todo top-to-bottom. Read [`tasks/HANDOFF.md`](HANDOFF.md) section 0 for the dispatch context.
+- [ ] **P2 — AlphaCompositor snapshot path.** Add `m_lastRawDib` field, the pre-stamp copy in `Composite`, the `CaptureSnapshotPng` method, GDI+ startup/shutdown in HostWindow. Build + manual test by adding a temporary `viewport/capture-snapshot` handler returning a fixed-size dummy PNG to verify the bridge round-trip.
+- [ ] **P3 — Bridge surface.** Schema + dispatcher + mock. Vitest contract test exercises the round-trip via MockBridge (empty PNG).
+- [ ] **P4 — React Modal rewiring.** Replace the existing useEffect with the new snapshot + full-quadrant-occlude flow. Render the img via createPortal. Add the new vitest regression test. **DO NOT remove the modal-mask path yet** — keep both running so the smoke-test can A/B compare.
+- [ ] **P5 — Smoke-test.** Run through the manual checklist. Confirm the snapshot path produces the intended frosted-glass look. If issues surface, fix them while modal-mask is still available as a fallback.
+- [ ] **P6 — Phase 3 cleanup.** Delete the modal-mask path top-to-bottom (3.1, 3.2, 3.3). One commit, clearly labelled `refactor(LT-4): drop modal-mask compositor path (replaced by snapshot backdrop)`.
+- [ ] **P7 — Docs.** CHANGELOG entry (frosted-glass approach + reasoning); HANDOFF refresh; ROADMAP strike B1.3.1.1 + move to Shipped if user OKs the FF.
+
+Three commits total in this dispatch (P2-P3 squash into one, P4 + P6 + P7 each one commit).
 
 ---
 
 ## Review (append after work)
 
-### Plan vs reality
-
-Plan called for 6 P-steps (P1 pre-flight → P6 docs). Reality landed in 3 commits + this docs commit:
-
-| Plan | Reality | Notes |
-|---|---|---|
-| P1 pre-flight | vitest verified at session start (277/277); Playwright + MSBuild deferred to P5 sweep | As planned. |
-| P1.5 spec audit | Found exactly one structural test that needed flipping ([`EmitterPropertyTabs.test.tsx:81`](../web/apps/editor/src/screens/__tests__/EmitterPropertyTabs.test.tsx:81)). All other `getByTestId("emitter-property-tabs")` callsites are post-selection assertions and stay correct unchanged. | As planned. |
-| P2 baseline | Deferred to P5 — no code yet, baseline was known-clean from session start at `f12d6f2`. | As planned. |
-| P3 always-mounted strip + P4 flex slot | Bundled into `ec486d9`. | **Deviation from plan**: bundled because each alone is a half-baked intermediate. The plan's "P3 then P4 as separate commits" was the wrong call — flagged and merged before committing. |
-| P5 smoke test | Build / test sweep only (agent can't drive the dev server headlessly). | As planned. |
-| P6 docs | *this commit* | As planned. |
-
-### Test count evolution
-
-- vitest **277 → 277** (no net change). One spec body replaced (`renders the placeholder when no emitter is selected` → `renders the always-mounted tab strip with body-level placeholder when no emitter is selected` — adds three new assertions for the strip + triggers being present, kept the placeholder + copy assertions intact). Two waitFor anchors retuned from `getByTestId("emitter-property-tabs")` to `getByLabelText("Maximum lifetime:")` because the old anchor used to imply "form is loaded" (strip only mounted with data); now it only implies "strip exists" so the wait would pass too early and the subsequent label query would fail. Caught on the first `pnpm test` after the JSX restructure (two failures, both at the same call shape, both fixed).
-- Playwright **83 → 83** (no change). All Playwright assertions on `emitter-property-tabs` happen post-emitter-selection (the `beforeEach` selects one), so they were unaffected.
-- MSBuild Debug x64: clean (no C++ touched).
-
-### Issues encountered and resolutions
-
-1. **Vitest waitFor pattern broke when the strip's mount semantics changed.** Two existing specs anchored their waitFor on the strip's testid as a proxy for "form is hydrated". Pre-change, the testid only attached once properties loaded, so the waitFor was an indirect form-loaded check. Post-change, the testid attaches immediately on render. Fixed by anchoring waitFor on `getByLabelText("Maximum lifetime:")` directly. Pattern worth remembering for any future restructure that decouples a wrapper from its content's load state.
-2. **`JSX.Element` namespace not in scope.** First draft of `renderBody` typed its callback as `(p: EmitterPropertiesDto) => JSX.Element`. `pnpm test` passed (vitest doesn't type-check per L-004) but `pnpm build` failed with `Cannot find namespace 'JSX'`. Fixed by switching to `ReactNode` imported from `react`, matching the convention already used by Modal.tsx / Section.tsx / ToolPanel.tsx. **L-004 reminder reinforced**: always run `pnpm build` before claiming a JSX change is clean.
-3. **Fresh-worktree NuGet pre-flight needed.** First `MSBuild //v:m` on the new `agitated-margulis-854108` worktree failed with `missing Microsoft.Web.WebView2.targets`. HANDOFF's "fresh-worktree pre-flight" item flagged this exact case; applied `MSBuild //t:Restore //v:m` per the prescribed step, then the standard Debug x64 build worked. The Playwright suite needed the .exe so its first invocation blew up with `ENOENT`; re-ran after MSBuild and got 83/83.
-
-### Patterns worth remembering
-
-- **`renderBody((p) => …)` helper with a callback parameter, not a pre-built element.** Lets type narrowing flow through cleanly so the call sites never need a `properties!` non-null assertion. The narrowing happens at the helper, not at the call site.
-- **Anchor test waitFors on the actual content you're about to query, not on a parent wrapper.** When a wrapper's mount semantics change, the waitFor pattern that worked yesterday silently fails today.
-- **Bundle commits when each alone leaves the tree in a half-baked state.** Plan's commit decomposition is a default, not a contract.
+(To be filled in by the next session.)

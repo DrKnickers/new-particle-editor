@@ -673,3 +673,104 @@ both label strings to the new text. Cost: one extra round-trip
 through the verification gate. Cheap, but a 30-second grep at
 the dispatch-prep stage would have caught it before P3 / P6 ever
 landed.
+
+## L-011 — HTML CSS effects (backdrop-filter, large box-shadow, translucent bg) cannot reach the engine compositing layer; design chrome that overlaps the engine viewport to be opaque, or capture engine pixels into the WebView2 DOM
+
+**The rule.** In `--new-ui` mode the engine viewport is a `WS_POPUP`
+layered Win32 window composited *above* WebView2 by the desktop
+window manager. HTML elements that visually overlap the engine
+viewport area cannot sample engine pixels via CSS:
+
+- `backdrop-filter: blur(...)` on a panel above the engine will blur
+  whatever WebView2 has BEHIND the panel — which is usually nothing
+  useful (the viewport quadrant in WebView2 is empty), producing a
+  near-solid dark smudge instead of the frosted-glass effect.
+- `box-shadow` that extends past the alpha-cut occlusion pad will be
+  hidden by the popup's opaque pixels, producing a hard halo edge
+  where the shadow gets clipped.
+- Semi-transparent backgrounds (`rgba(...,0.85)` etc.) need backdrop
+  content to look right; they look solid-dark over the engine area.
+
+**The trigger.** Surfaced multiple times in the B1.3.1 polish rounds
+when various chrome surfaces overlapped the engine viewport. Most
+visibly: `.vp-tools` (the ViewportPill) had `backdrop-filter: blur(8px)`
++ `rgba(20,24,33,0.85)` — looked great over panels but rendered as
+a near-solid dark smudge over the engine because WebView2 had nothing
+useful behind it. Same root cause: Modal's `shadow-2xl` drew a
+visible halo where the popup hid the outer shadow extent.
+
+**Two valid patterns:**
+
+1. **Opaque-chrome design.** For surfaces that overlap the engine
+   viewport, use solid backgrounds (`var(--panel)` etc.) and small
+   shadows (≤ `shadow-md`'s ~8 px extent). The chrome looks
+   consistent regardless of what's behind it because nothing
+   behind it ever shows through. ViewportPill + Modal adopt this
+   in polish round 7. Regression-guard vitest tests assert the
+   CSS doesn't contain `rgba(...,0.N)`, `backdrop-filter`, or
+   `shadow-(xl|2xl)`.
+2. **Snapshot-into-DOM.** For surfaces that genuinely need the
+   underlying engine content (a frosted-glass modal backdrop is the
+   canonical example), capture the engine viewport to a PNG via the
+   `viewport/capture-snapshot` bridge surface, render it as an
+   `<img>` portaled into the viewport-quadrant DOM, full-occlude the
+   engine popup. CSS effects on top then sample the snapshot
+   uniformly with the panels. Architecturally cleaner; cost is
+   one capture per modal-open + per resize tick.
+
+**Anti-pattern that doesn't work:** server-side dim+blur of the
+engine pixels via an AlphaCompositor pipeline (separable box-blur +
+per-pixel alpha multiply + popup-edge feather). The dim/blur work,
+but the popup HWND's rectangular outer edge is structurally
+unfeatherable — any attempt to fade the popup's outer alpha reveals
+Dialog.Overlay's `bg-black/60` which is darker than the dim engine,
+producing a luminance valley that reads as an inner-shadow halo.
+Pixel math: center luminance ≈ 60 (engine * 0.4 + panel * 0.24);
+mid-fade ≈ 35 (where dst dominates); edge ≈ 10 (panel * 0.4). A
+smooth visual transition would have endpoints at the same luminance;
+this one doesn't and can't (algebraically) be tuned to match unless
+engine_color ≈ panel * 0.4 which isn't true for realistic content.
+
+The B1.3.1 modal-mask compositor pipeline that produced this
+artifact lives at commit `52bb032` and is removed in B1.3.1.1
+Phase 3. Don't re-implement it.
+
+## L-012 — `window.bridge` may be `TestHostBridge` in non-`--test-host` runs; use `BridgeContext` for deep consumers that need the real `NativeBridge`
+
+**The rule.** `exposeBridgeForTests(bridge)` at
+[`src/bridge/expose.ts`](../web/apps/editor/src/bridge/expose.ts) sets
+`window.bridge` to a `TestHostBridge` whenever
+`chrome.webview.hostObjects.hostBridge` is truthy. WebView2 returns
+a Proxy for the `hostObjects.hostBridge` property access even when
+no host object is registered, so `if (hostObj)` is truthy in
+production runs too — and TestHostBridge then calls `dispatchRequest`
+on an unregistered host object, which rejects with HRESULT
+0x80070490 ("Element not found").
+
+Components that get the bridge from React props (or context, since
+B1.3.1) hold the actual `NativeBridge` reference from App.tsx's
+`useMemo` closure — that works. Components that reach for
+`window.bridge` get the broken TestHostBridge.
+
+**The trigger.** Modal needed bridge access for its
+`useViewportOcclusion` call; using `window.bridge` was tempting to
+avoid prop-drilling through 9 modal callers. The
+`viewport/occlude` request rejected with 0x80070490 while other
+identical requests from menus / pills / panels (which got bridge
+via prop) succeeded — the inconsistency was the diagnostic clue
+that pinned the root cause.
+
+**The fix.** New [`lib/bridge-context.ts`](../web/apps/editor/src/lib/bridge-context.ts)
+exposes the live `NativeBridge` via React Context. App.tsx wraps
+the tree in `BridgeContext.Provider`. Modal uses `useBridge()` to
+get the same instance the rest of the tree has. Tests that mount
+Modal in isolation (no Provider) get `null` — `useViewportOcclusion`
+early-returns on a null bridge, so the test assertion path is
+unaffected.
+
+**Could fix `exposeBridgeForTests` instead.** Yes — detect
+host-object availability via an actual probe call wrapped in
+try/catch, fall back to NativeBridge on rejection. But that's an
+invasive change to a load-bearing utility, and BridgeContext is
+the React-idiomatic carrier for this kind of dependency. Worth
+revisiting if other consumers hit the same trap.
