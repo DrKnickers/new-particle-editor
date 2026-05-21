@@ -1038,12 +1038,37 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_LBUTTONDOWN:
     {
         if (!engine) return 0;
+        SetFocus(hwnd);
+        // LT-4 polish: Shift+LMB also triggers cursor-bound spawn. The
+        // legacy keydown-only path (case WM_KEYDOWN below) requires the
+        // viewport HWND to have focus when Shift is pressed, but
+        // WebView2 holds focus from the React UI by default — the
+        // user's typical "shift-then-click" gesture swallows the
+        // initial WM_KEYDOWN in WebView2 and the spawn never fires.
+        // By trapping the click while MK_SHIFT is set, we provide a
+        // click-based entry point that doesn't depend on WM_KEYDOWN
+        // routing. Skip the camera drag so the spawn doesn't compete
+        // with a MOVE drag. Release on Shift-keyup or LBUTTONUP — the
+        // existing WM_KEYUP handler kills the attached instance.
+        if ((wp & MK_SHIFT) && particleSystem && !particleSystem->getEmitters().empty()
+            && m_attachedParticleSystem == nullptr)
+        {
+            int cx = (short)LOWORD(lp);
+            int cy = (short)HIWORD(lp);
+            m_lastCursorX = cx;
+            m_lastCursorY = cy;
+            D3DXVECTOR3 pos;
+            GetCursorPos3D(engine.get(), (short)cx, (short)cy, pos);
+            m_mouseCursor.SetPosition(pos);
+            m_attachedParticleSystem =
+                engine->SpawnParticleSystem(*particleSystem, &m_mouseCursor);
+            return 0;
+        }
         m_dragMode     = (wp & MK_CONTROL) ? DragMode::ZOOM : DragMode::MOVE;
         m_dragStartCam = engine->GetCamera();
         m_dragStartX   = (short)LOWORD(lp);
         m_dragStartY   = (short)HIWORD(lp);
         SetCapture(hwnd);
-        SetFocus(hwnd);
         return 0;
     }
     case WM_RBUTTONDOWN:
