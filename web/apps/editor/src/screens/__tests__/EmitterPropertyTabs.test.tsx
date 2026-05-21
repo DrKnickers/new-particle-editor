@@ -213,9 +213,14 @@ describe("EmitterPropertyTabs", () => {
 
   // `Triangles` was removed from Appearance in B1.3-P5 (dropped from
   // the inspector per Q2 decision; schema field retained on the wire).
-  it.todo(
-    "Triangles field is no longer rendered in Appearance — dropped from inspector per B1.3 Q2 decision",
-  );
+  // Executable absence-assertion: fails if anyone re-adds Triangles to
+  // the Appearance tab.
+  it("AppearanceTab does not render the Triangles field (dropped per B1.3 Q2 decision)", () => {
+    const props = makeFixtureProperties(0);
+    render(<AppearanceTab properties={props} onCommit={() => {}} />);
+    expect(screen.queryByLabelText("Triangles")).toBeNull();
+    expect(screen.queryByLabelText("Triangles:")).toBeNull();
+  });
 
   // ─── Physics tab specs (B1.3-P6 restructure) ───────────────────
   // PhysicsTab is exported and mounted directly for the same reason

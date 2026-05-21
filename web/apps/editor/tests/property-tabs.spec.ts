@@ -81,9 +81,9 @@ test("editing the Lifetime spinner in the Basic tab fires emitters/set-propertie
   await expect(tabs).toBeVisible({ timeout: 5_000 });
 
   // Lifetime spinner is in the Basic tab (active by default).
-  // Use exact match — "Random Lifetime" is a separate field that
-  // matches the substring otherwise.
-  const lifetime = page.getByLabel("Lifetime", { exact: true });
+  // Post-B1.3-P3: "Lifetime" was relabelled to "Maximum lifetime:"
+  // inside the Generation section. Use exact match.
+  const lifetime = page.getByLabel("Maximum lifetime:", { exact: true });
   await expect(lifetime).toBeVisible({ timeout: 5_000 });
 
   // Drive the spinner by firing the bridge call directly — keystroke
@@ -134,7 +134,9 @@ test("switching to Physics tab and changing gravity round-trips via get-properti
   await page.locator('[data-testid="tab-trigger-physics"]').click();
 
   // The gravity spinner renders inside the Physics tab content.
-  const gravity = page.getByLabel("Gravity", { exact: true });
+  // Post-B1.3-P6: "Gravity" was relabelled to "Gravity acceleration:"
+  // inside the Acceleration section.
+  const gravity = page.getByLabel("Gravity acceleration:", { exact: true });
   await expect(gravity).toBeVisible({ timeout: 5_000 });
 
   // Same pattern as the Appearance Fix dispatch 2 test — drive via the
