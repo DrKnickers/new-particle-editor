@@ -289,6 +289,67 @@ function TabTrigger({ value, label }: { value: string; label: string }) {
 
 // ─── Basic tab ──────────────────────────────────────────────────────
 
+// Tri-state Generation mode — declared at module scope so MODE_ORDER /
+// navigate can reference the type without re-declaring it inside the
+// component body.
+type GenerationMode = "bursts" | "continuous" | "weather";
+
+// Roving-tabindex navigation order for the Generation radiogroup. The
+// arrow handlers cycle through this list (ArrowUp = -1, ArrowDown = +1)
+// with modulo wrap so Bursts ↔ Continuous ↔ Weather is a closed loop.
+const MODE_ORDER: GenerationMode[] = ["bursts", "continuous", "weather"];
+const navigate = (from: GenerationMode, dir: -1 | 1): GenerationMode => {
+  const idx = MODE_ORDER.indexOf(from);
+  const next = (idx + dir + MODE_ORDER.length) % MODE_ORDER.length;
+  return MODE_ORDER[next];
+};
+
+// Local RadioRow helper — captures the per-radio chrome (role,
+// aria-checked, roving tabIndex, the dot+label spans, and the
+// keyboard handler) so each radio site in BasicTab is a five-line
+// usage instead of a 17-line block. ArrowUp/ArrowDown delegate to
+// `onArrowNav` (`-1` for previous, `+1` for next); Enter/Space
+// preserve the existing selection behaviour.
+function RadioRow({
+  checked,
+  label,
+  tabIndex,
+  onSelect,
+  onArrowNav,
+}: {
+  checked: boolean;
+  label: string;
+  tabIndex: number;
+  onSelect: () => void;
+  /** Called with -1 for ArrowUp (previous), +1 for ArrowDown (next). */
+  onArrowNav: (direction: -1 | 1) => void;
+}) {
+  return (
+    <div
+      role="radio"
+      aria-checked={checked}
+      tabIndex={tabIndex}
+      className="radio-row"
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          onArrowNav(-1);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          onArrowNav(1);
+        }
+      }}
+    >
+      <span className="radio-dot" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
 export function BasicTab({
   properties,
   onCommit,
@@ -302,7 +363,6 @@ export function BasicTab({
   // the remaining axis. See spec §5.1 + Risk #1 for the atomic-patch
   // rationale — each setMode call fires ONE patch carrying both keys so
   // the engine never observes a transient inconsistent state pair.
-  type GenerationMode = "bursts" | "continuous" | "weather";
   const mode: GenerationMode = properties.isWeatherParticle
     ? "weather"
     : properties.useBursts
@@ -319,6 +379,11 @@ export function BasicTab({
       case "weather":    onCommit({ isWeatherParticle: true }); break;
     }
   };
+
+  // Roving tabIndex — only the active mode is in the tab cycle so
+  // shift+Tab doesn't have to step through three radios to escape
+  // the group. Matches the WAI-ARIA radio group pattern.
+  const tabIndexFor = (m: GenerationMode) => (m === mode ? 0 : -1);
 
   const burstsEnabled = mode === "bursts";
   const continuousEnabled = mode === "continuous";
@@ -369,125 +434,104 @@ export function BasicTab({
       <Section title="Generation">
         {/* Hand-rolled radio rows (not Radix RadioGroup) per spec §5.1
             — keeps the visual fidelity tight to the legacy three-row
-            stack while still being keyboard-accessible (Enter / Space).
-            Space gets preventDefault to suppress page scroll. */}
-        <div
-          role="radio"
-          aria-checked={burstsEnabled}
-          tabIndex={0}
-          className="radio-row"
-          onClick={() => setMode("bursts")}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setMode("bursts");
-            }
-          }}
-        >
-          <span className="radio-dot" />
-          <span>Bursts</span>
-        </div>
-        <FieldSpinner
-          label="Bursts:"
-          value={properties.nBursts}
-          min={1}
-          step={1}
-          decimals={0}
-          disabled={!burstsEnabled}
-          onCommit={(v) => onCommit({ nBursts: Math.round(v) })}
-        />
-        <FieldSpinner
-          label="Burst delay:"
-          value={properties.burstDelay}
-          min={0}
-          step={0.1}
-          unit="s"
-          disabled={!burstsEnabled}
-          onCommit={(v) => onCommit({ burstDelay: v })}
-        />
-        <FieldSpinner
-          label="Particles/burst:"
-          value={properties.nParticlesPerBurst}
-          min={1}
-          step={1}
-          decimals={0}
-          disabled={!burstsEnabled}
-          onCommit={(v) => onCommit({ nParticlesPerBurst: Math.round(v) })}
-        />
+            stack while still being keyboard-accessible. The wrapper
+            div carries role="radiogroup" so screen readers announce
+            the three radios as a group; the inner FieldSpinner
+            sub-fields aren't role="radio" and so don't interfere with
+            ARIA semantics. Roving tabIndex + ArrowUp/ArrowDown matches
+            the WAI-ARIA radio group pattern. */}
+        <div role="radiogroup" aria-label="Generation mode">
+          <RadioRow
+            checked={burstsEnabled}
+            label="Bursts"
+            tabIndex={tabIndexFor("bursts")}
+            onSelect={() => setMode("bursts")}
+            onArrowNav={(d) => setMode(navigate("bursts", d))}
+          />
+          <FieldSpinner
+            label="Bursts:"
+            value={properties.nBursts}
+            min={1}
+            step={1}
+            decimals={0}
+            disabled={!burstsEnabled}
+            onCommit={(v) => onCommit({ nBursts: Math.round(v) })}
+          />
+          <FieldSpinner
+            label="Burst delay:"
+            value={properties.burstDelay}
+            min={0}
+            step={0.1}
+            unit="s"
+            disabled={!burstsEnabled}
+            onCommit={(v) => onCommit({ burstDelay: v })}
+          />
+          <FieldSpinner
+            label="Particles/burst:"
+            value={properties.nParticlesPerBurst}
+            min={1}
+            step={1}
+            decimals={0}
+            disabled={!burstsEnabled}
+            onCommit={(v) => onCommit({ nParticlesPerBurst: Math.round(v) })}
+          />
 
-        <div
-          role="radio"
-          aria-checked={continuousEnabled}
-          tabIndex={0}
-          className="radio-row"
-          onClick={() => setMode("continuous")}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setMode("continuous");
-            }
-          }}
-        >
-          <span className="radio-dot" />
-          <span>Continuous stream</span>
-        </div>
-        <FieldSpinner
-          label="Particles/second:"
-          value={properties.nParticlesPerSecond}
-          min={0}
-          step={1}
-          decimals={0}
-          disabled={!continuousEnabled}
-          onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
-        />
+          <RadioRow
+            checked={continuousEnabled}
+            label="Continuous stream"
+            tabIndex={tabIndexFor("continuous")}
+            onSelect={() => setMode("continuous")}
+            onArrowNav={(d) => setMode(navigate("continuous", d))}
+          />
+          <FieldSpinner
+            label="Particles/second:"
+            value={properties.nParticlesPerSecond}
+            min={0}
+            step={1}
+            decimals={0}
+            disabled={!continuousEnabled}
+            onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
+          />
 
-        <div
-          role="radio"
-          aria-checked={weatherEnabled}
-          tabIndex={0}
-          className="radio-row"
-          onClick={() => setMode("weather")}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setMode("weather");
-            }
-          }}
-        >
-          <span className="radio-dot" />
-          <span>Weather particle</span>
+          <RadioRow
+            checked={weatherEnabled}
+            label="Weather particle"
+            tabIndex={tabIndexFor("weather")}
+            onSelect={() => setMode("weather")}
+            onArrowNav={(d) => setMode(navigate("weather", d))}
+          />
+          {/* NOTE: Continuous and Weather both bind to nParticlesPerSecond
+              but carry distinct aria-labels ("Particles/second:" vs
+              "Particles:") so getByLabelText still distinguishes them.
+              Per spec Risk #3. */}
+          <FieldSpinner
+            label="Particles:"
+            value={properties.nParticlesPerSecond}
+            min={0}
+            step={1}
+            decimals={0}
+            disabled={!weatherEnabled}
+            onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
+          />
+          <FieldSpinner
+            label="Distance from camera:"
+            value={properties.weatherCubeDistance}
+            min={0}
+            step={0.1}
+            unit="units"
+            disabled={!weatherEnabled}
+            onCommit={(v) => onCommit({ weatherCubeDistance: v })}
+          />
+          <FieldSpinner
+            label="Cube size:"
+            value={properties.weatherCubeSize}
+            min={0}
+            step={0.1}
+            unit="units"
+            disabled={!weatherEnabled}
+            onCommit={(v) => onCommit({ weatherCubeSize: v })}
+          />
         </div>
-        {/* NOTE: Continuous and Weather both bind to nParticlesPerSecond
-            but carry distinct aria-labels ("Particles/second:" vs
-            "Particles:") so getByLabelText still distinguishes them.
-            Per spec Risk #3. */}
-        <FieldSpinner
-          label="Particles:"
-          value={properties.nParticlesPerSecond}
-          min={0}
-          step={1}
-          decimals={0}
-          disabled={!weatherEnabled}
-          onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
-        />
-        <FieldSpinner
-          label="Distance from camera:"
-          value={properties.weatherCubeDistance}
-          min={0}
-          step={0.1}
-          unit="units"
-          disabled={!weatherEnabled}
-          onCommit={(v) => onCommit({ weatherCubeDistance: v })}
-        />
-        <FieldSpinner
-          label="Cube size:"
-          value={properties.weatherCubeSize}
-          min={0}
-          step={0.1}
-          unit="units"
-          disabled={!weatherEnabled}
-          onCommit={(v) => onCommit({ weatherCubeSize: v })}
-        />
 
         {/* Lifetime fields moved here from Emitter Timing to match
             legacy IDD_EMITTER_PROPS1 (.rc:449,461,466). Minimum lifetime

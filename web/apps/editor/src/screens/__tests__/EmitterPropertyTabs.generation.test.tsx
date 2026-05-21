@@ -44,9 +44,18 @@ describe("BasicTab — tri-state Generation mutex", () => {
     expect(screen.getByRole("radio", { name: /Weather/i }).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("active radio reflects (useBursts=*, isWeather=true) → weather", () => {
+  it("active radio reflects (useBursts=true, isWeather=true) → weather", () => {
     renderWithMode(true, true);
     expect(screen.getByRole("radio", { name: /Weather/i }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: /Bursts/i }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("radio", { name: /Continuous/i }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("active radio reflects (useBursts=false, isWeather=true) → weather", () => {
+    renderWithMode(false, true);
+    expect(screen.getByRole("radio", { name: /Weather/i }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: /Bursts/i }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("radio", { name: /Continuous/i }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("clicking Bursts commits both keys atomically", () => {
@@ -80,5 +89,16 @@ describe("BasicTab — tri-state Generation mutex", () => {
     renderWithMode(false, false);
     expect((screen.getByLabelText(/Cube size:/i) as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByLabelText(/Distance from camera:/i) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("ArrowDown on Bursts cycles forward to Continuous", () => {
+    // Roving-tabindex + arrow-nav per WAI-ARIA radio group pattern.
+    // ArrowDown from bursts → continuous; from continuous → weather;
+    // from weather → bursts (cyclical). We assert one hop here and
+    // trust the modulo math to handle the rest.
+    renderWithMode(true, false);
+    fireEvent.keyDown(screen.getByRole("radio", { name: /Bursts/i }), { key: "ArrowDown" });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith({ useBursts: false, isWeatherParticle: false });
   });
 });
