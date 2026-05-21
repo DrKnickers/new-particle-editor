@@ -894,12 +894,9 @@ export function AppearanceTab({
             `.form-row` label column but the spinner grid spans the
             input + unit columns since 4 spinners don't fit in the
             design's 92px input slot. */}
-        <div className="form-row items-start">
+        <div className="form-row form-row-cluster items-start">
           <span className="lbl pt-1" title="RGBA:">RGBA:</span>
-          <div
-            className="grid grid-cols-2 gap-1"
-            style={{ gridColumn: "2 / span 2" }}
-          >
+          <div className="grid grid-cols-2 gap-1">
             <Spinner
               value={properties.randomColors[0] * 100}
               min={0}
@@ -1136,33 +1133,39 @@ export function PhysicsTab({
             input + unit columns since 3 spinners don't fit in 92px.
             Combined "X / Y / Z:" label per legacy IDD_EMITTER_PROPS3
             (.rc:350). */}
-        <div className="form-row items-start">
+        <div className="form-row form-row-cluster items-start">
           <span className="lbl pt-1" title="X / Y / Z:">X / Y / Z:</span>
-          <div
-            className="grid grid-cols-3 gap-1"
-            style={{ gridColumn: "2 / span 2" }}
-          >
-            <Spinner
-              value={properties.acceleration[0]}
-              step={0.1}
-              disabled={!nonWeather}
-              onChange={(v) => updateAcceleration(0, v)}
-              aria-label="Acceleration X"
-            />
-            <Spinner
-              value={properties.acceleration[1]}
-              step={0.1}
-              disabled={!nonWeather}
-              onChange={(v) => updateAcceleration(1, v)}
-              aria-label="Acceleration Y"
-            />
-            <Spinner
-              value={properties.acceleration[2]}
-              step={0.1}
-              disabled={!nonWeather}
-              onChange={(v) => updateAcceleration(2, v)}
-              aria-label="Acceleration Z"
-            />
+          <div className="grid grid-cols-3 gap-1">
+            <div className="axis-cell">
+              <span className="axis-lbl">X</span>
+              <Spinner
+                value={properties.acceleration[0]}
+                step={0.1}
+                disabled={!nonWeather}
+                onChange={(v) => updateAcceleration(0, v)}
+                aria-label="Acceleration X"
+              />
+            </div>
+            <div className="axis-cell">
+              <span className="axis-lbl">Y</span>
+              <Spinner
+                value={properties.acceleration[1]}
+                step={0.1}
+                disabled={!nonWeather}
+                onChange={(v) => updateAcceleration(1, v)}
+                aria-label="Acceleration Y"
+              />
+            </div>
+            <div className="axis-cell">
+              <span className="axis-lbl">Z</span>
+              <Spinner
+                value={properties.acceleration[2]}
+                step={0.1}
+                disabled={!nonWeather}
+                onChange={(v) => updateAcceleration(2, v)}
+                aria-label="Acceleration Z"
+              />
+            </div>
           </div>
         </div>
         <FieldSpinner
@@ -1346,30 +1349,36 @@ function Vec3Row({
   onChange: (axis: 0 | 1 | 2, v: number) => void;
 }) {
   return (
-    <div className="form-row items-start">
-      <span className="lbl pt-1">{label}</span>
-      <div
-        className="grid grid-cols-3 gap-1"
-        style={{ gridColumn: "2 / span 2" }}
-      >
-        <Spinner
-          value={value[0]}
-          step={step}
-          onChange={(v) => onChange(0, v)}
-          aria-label={`${ariaPrefix} X`}
-        />
-        <Spinner
-          value={value[1]}
-          step={step}
-          onChange={(v) => onChange(1, v)}
-          aria-label={`${ariaPrefix} Y`}
-        />
-        <Spinner
-          value={value[2]}
-          step={step}
-          onChange={(v) => onChange(2, v)}
-          aria-label={`${ariaPrefix} Z`}
-        />
+    <div className="form-row form-row-cluster items-start">
+      <span className="lbl pt-1" title={label}>{label}</span>
+      <div className="grid grid-cols-3 gap-1">
+        <div className="axis-cell">
+          <span className="axis-lbl">X</span>
+          <Spinner
+            value={value[0]}
+            step={step}
+            onChange={(v) => onChange(0, v)}
+            aria-label={`${ariaPrefix} X`}
+          />
+        </div>
+        <div className="axis-cell">
+          <span className="axis-lbl">Y</span>
+          <Spinner
+            value={value[1]}
+            step={step}
+            onChange={(v) => onChange(1, v)}
+            aria-label={`${ariaPrefix} Y`}
+          />
+        </div>
+        <div className="axis-cell">
+          <span className="axis-lbl">Z</span>
+          <Spinner
+            value={value[2]}
+            step={step}
+            onChange={(v) => onChange(2, v)}
+            aria-label={`${ariaPrefix} Z`}
+          />
+        </div>
       </div>
     </div>
   );

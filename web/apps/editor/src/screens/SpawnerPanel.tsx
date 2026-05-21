@@ -164,7 +164,7 @@ export function SpawnerPanel({ bridge }: Props) {
   const isAuto = config.mode === "auto";
 
   return (
-    <div className="panel" aria-label="Spawner">
+    <div className="panel h-full" aria-label="Spawner">
       <div className="panel-header">
         <span>Spawner</span>
         <div className="panel-actions">
@@ -280,47 +280,65 @@ export function SpawnerPanel({ bridge }: Props) {
 
       <ToolPanel.Section title="Position" defaultOpen>
         <div className="grid grid-cols-3 gap-1">
-          <Spinner
-            value={config.position[0]}
-            onChange={(v) => setPositionAxis(0, v)}
-            step={0.1}
-            aria-label="Position X"
-          />
-          <Spinner
-            value={config.position[1]}
-            onChange={(v) => setPositionAxis(1, v)}
-            step={0.1}
-            aria-label="Position Y"
-          />
-          <Spinner
-            value={config.position[2]}
-            onChange={(v) => setPositionAxis(2, v)}
-            step={0.1}
-            aria-label="Position Z"
-          />
+          <div className="axis-cell">
+            <span className="axis-lbl">X</span>
+            <Spinner
+              value={config.position[0]}
+              onChange={(v) => setPositionAxis(0, v)}
+              step={0.1}
+              aria-label="Position X"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Y</span>
+            <Spinner
+              value={config.position[1]}
+              onChange={(v) => setPositionAxis(1, v)}
+              step={0.1}
+              aria-label="Position Y"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Z</span>
+            <Spinner
+              value={config.position[2]}
+              onChange={(v) => setPositionAxis(2, v)}
+              step={0.1}
+              aria-label="Position Z"
+            />
+          </div>
         </div>
       </ToolPanel.Section>
 
       <ToolPanel.Section title="Velocity" defaultOpen>
         <div className="grid grid-cols-3 gap-1">
-          <Spinner
-            value={config.velocity[0]}
-            onChange={(v) => setVelocityAxis(0, v)}
-            step={0.1}
-            aria-label="Velocity X"
-          />
-          <Spinner
-            value={config.velocity[1]}
-            onChange={(v) => setVelocityAxis(1, v)}
-            step={0.1}
-            aria-label="Velocity Y"
-          />
-          <Spinner
-            value={config.velocity[2]}
-            onChange={(v) => setVelocityAxis(2, v)}
-            step={0.1}
-            aria-label="Velocity Z"
-          />
+          <div className="axis-cell">
+            <span className="axis-lbl">X</span>
+            <Spinner
+              value={config.velocity[0]}
+              onChange={(v) => setVelocityAxis(0, v)}
+              step={0.1}
+              aria-label="Velocity X"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Y</span>
+            <Spinner
+              value={config.velocity[1]}
+              onChange={(v) => setVelocityAxis(1, v)}
+              step={0.1}
+              aria-label="Velocity Y"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Z</span>
+            <Spinner
+              value={config.velocity[2]}
+              onChange={(v) => setVelocityAxis(2, v)}
+              step={0.1}
+              aria-label="Velocity Z"
+            />
+          </div>
         </div>
       </ToolPanel.Section>
 
@@ -340,47 +358,65 @@ export function SpawnerPanel({ bridge }: Props) {
 
       <ToolPanel.Section title="Jitter position">
         <div className="grid grid-cols-3 gap-1">
-          <Spinner
-            value={config.jitterPosition[0]}
-            onChange={(v) => setJitterPosAxis(0, v)}
-            step={0.05}
-            aria-label="Jitter position X"
-          />
-          <Spinner
-            value={config.jitterPosition[1]}
-            onChange={(v) => setJitterPosAxis(1, v)}
-            step={0.05}
-            aria-label="Jitter position Y"
-          />
-          <Spinner
-            value={config.jitterPosition[2]}
-            onChange={(v) => setJitterPosAxis(2, v)}
-            step={0.05}
-            aria-label="Jitter position Z"
-          />
+          <div className="axis-cell">
+            <span className="axis-lbl">X</span>
+            <Spinner
+              value={config.jitterPosition[0]}
+              onChange={(v) => setJitterPosAxis(0, v)}
+              step={0.05}
+              aria-label="Jitter position X"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Y</span>
+            <Spinner
+              value={config.jitterPosition[1]}
+              onChange={(v) => setJitterPosAxis(1, v)}
+              step={0.05}
+              aria-label="Jitter position Y"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Z</span>
+            <Spinner
+              value={config.jitterPosition[2]}
+              onChange={(v) => setJitterPosAxis(2, v)}
+              step={0.05}
+              aria-label="Jitter position Z"
+            />
+          </div>
         </div>
       </ToolPanel.Section>
 
       <ToolPanel.Section title="Jitter velocity">
         <div className="grid grid-cols-3 gap-1">
-          <Spinner
-            value={config.jitterVelocity[0]}
-            onChange={(v) => setJitterVelAxis(0, v)}
-            step={0.05}
-            aria-label="Jitter velocity X"
-          />
-          <Spinner
-            value={config.jitterVelocity[1]}
-            onChange={(v) => setJitterVelAxis(1, v)}
-            step={0.05}
-            aria-label="Jitter velocity Y"
-          />
-          <Spinner
-            value={config.jitterVelocity[2]}
-            onChange={(v) => setJitterVelAxis(2, v)}
-            step={0.05}
-            aria-label="Jitter velocity Z"
-          />
+          <div className="axis-cell">
+            <span className="axis-lbl">X</span>
+            <Spinner
+              value={config.jitterVelocity[0]}
+              onChange={(v) => setJitterVelAxis(0, v)}
+              step={0.05}
+              aria-label="Jitter velocity X"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Y</span>
+            <Spinner
+              value={config.jitterVelocity[1]}
+              onChange={(v) => setJitterVelAxis(1, v)}
+              step={0.05}
+              aria-label="Jitter velocity Y"
+            />
+          </div>
+          <div className="axis-cell">
+            <span className="axis-lbl">Z</span>
+            <Spinner
+              value={config.jitterVelocity[2]}
+              onChange={(v) => setJitterVelAxis(2, v)}
+              step={0.05}
+              aria-label="Jitter velocity Z"
+            />
+          </div>
         </div>
       </ToolPanel.Section>
 

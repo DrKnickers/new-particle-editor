@@ -473,11 +473,12 @@
 
 .form-row {
   display: grid;
-  /* Spinner cell trimmed 56→52px and unit cell bumped 32→40px so
-     "units/s²" (Acceleration / Gravity / Inward acceleration) fits
-     without truncation. The unit also gets overflow:visible below so
-     it can spill into the gap if a longer suffix ever shows up. */
-  grid-template-columns: 1fr 52px 40px;
+  /* Spinner cell 58px (post-polish: bumped from 52 per user smoke
+     test) and unit cell 40px so "units/s²" (Acceleration / Gravity /
+     Inward acceleration) fits without truncation. The unit also gets
+     overflow:visible below so it can spill into the gap if a longer
+     suffix ever shows up. */
+  grid-template-columns: 1fr 58px 40px;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
@@ -500,17 +501,51 @@
 .form-row.with-check {
   grid-template-columns: 16px 1fr 92px 56px;
 }
-/* Text-input rows have no unit cell, so the input slot expands to
-   span the combined spinner+unit width (52+40=92px) — keeps texture
-   filenames like "p_particle_default.tga" visible instead of
-   truncating at the 52px spinner column. minmax(0,…) lets the row
+/* Text-input rows have no unit cell, so the input slot expands well
+   beyond the spinner column to keep texture filenames like
+   "p_particle_default.tga" mostly visible instead of truncating at
+   the spinner width. 180px cap (second smoke-test bump from 160)
+   plus 11px font (one notch tighter than the 12px standard) so the
+   long underscore-heavy texture names fit. minmax(0,…) lets the row
    shrink gracefully if the panel narrows. */
 .form-row.form-row-text {
-  grid-template-columns: 1fr minmax(0, 92px);
+  grid-template-columns: 1fr minmax(0, 180px);
 }
 .form-row.form-row-text .text-input {
   min-width: 0;
   width: 100%;
+  font-size: 11px;
+}
+
+/* Multi-spinner clusters (Vec3 Value/Min/Max, Acceleration X/Y/Z,
+   RGBA randomColors). Standard .form-row gives the cluster only the
+   spinner+unit columns (98px), which divides to ~33px per spinner —
+   far too narrow for numbers like "100.0". This modifier drops the
+   label column to a fixed 60px (enough for "Value:" / "Min:" / "Max:"
+   / "RGBA:" / "X / Y / Z:") and gives the cluster the remaining 1fr,
+   so each spinner gets ~60px after gap distribution. */
+.form-row.form-row-cluster {
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+
+/* Per-axis micro-label above each spinner in a Vec3 cluster (X / Y /
+   Z labels stacked above their Spinner). Matches legacy IDD_EMITTER_PROPS3
+   (.rc:352-354) which puts individual "X" / "Y" / "Z" LTEXTs above
+   the acceleration spinners; the same convention reads through for
+   Min/Max/Value rows in the RandomParam clusters. */
+.axis-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.axis-cell .axis-lbl {
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1;
+  padding-bottom: 2px;
+  color: var(--text-3);
+  user-select: none;
 }
 
 /* Tri-state Generation radio rows (B1.3 P3). Hand-rolled radio chrome
