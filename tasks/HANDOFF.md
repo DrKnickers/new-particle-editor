@@ -1,9 +1,11 @@
-# Session Handoff — AloParticleEditor / LT-4 (left-pane polish B1.2)
+# Session Handoff — AloParticleEditor / LT-4 (B1.2 polish + B1.2.1 label-truncation fix + B1.3 reorg proposal drafted)
 
-**Last updated:** 2026-05-20 (end-of-session — B1.2 left-pane polish shipped: Section primitive, BasicTab restructured into Emitter Timing / Generation / Connection, `.name-row` modifier class, Name input full-width, toolbar Duplicate button, Show/Hide icon swap)
-**Last conversation context:** Polish dispatch executing the B1.2 plan on top of B1. All five implementation P-tasks landed plus brainstorm spec + plan + this docs commit (P1 audit was a no-op — no commit). New `Section` primitive at `src/components/Section.tsx` gives BasicTab three collapsible groupings (Emitter Timing / Generation / Connection) matching the design source's `left_panel.jsx`. Name field gets a custom `60px 1fr` grid via a new `.form-row.name-row` modifier class in `components.css` so the input fills available width; `FieldText` learns a `wide?: boolean` prop for embedding in custom-grid rows. Tree toolbar gains a Duplicate button between New ▾ and Delete (dispatches existing `emitters/duplicate`). Show All / Hide All become Lucide `Eye` / `EyeOff` icon buttons. Cumulative vitest delta 239 → **254** (+15); Playwright stable at 83/83. Next dispatch is **B1.3** — resizable splitters via `react-resizable-panels`. **B2** (Appearance + Physics wiring) is the secondary follow-up.
+**Last updated:** 2026-05-20 (end-of-session — B1.2 left-pane polish shipped + a follow-up B1.2.1 polish round fixing inspector label truncation, then a pre-brainstorm proposal drafted for B1.3 — tab reorganization to match legacy parity)
+**Last conversation context:** Long session in three phases. **Phase 1:** executed the full B1.2 plan (Section primitive, BasicTab restructure, `.name-row` class, toolbar Duplicate, Show/Hide icon swap). FF'd to `origin/lt-4` (HEAD reached `e99e7b5` after partial-backfill). **Phase 2:** user-driven polish round caught label truncation in the inspector — three sources combined (Tabs.Content `p-3` double-padded with `.inspector`, form-row template tuned for design source's shorter labels, section bodies + Name row not indented to align with section title text). All three resolved in a single commit `3a7a159` ("inspector label-truncation polish"). User accepted the fix ("yes this is better, but we can continue polishing later"). **Phase 3:** user shared legacy Win32 screenshots of Basic / Appearance / Physics and asked for a reorganization plan to match legacy parity. Proposal drafted inline + saved to disk at `tasks/b1.3_legacy_parity_reorg_proposal.md`. Five open questions need owner decisions (Index field handling, schema mapping for Texture elements / Minimum scale / Triangles, Weather "Particles" schema mapping, `groups[1]` Lifetime random-param disposition, trailing-colons label style). User asked to prep for handoff into a new session that will pick up B1.3.
 
-Test counts: vitest **254 / 254**, Playwright **83 / 83**, MSBuild Debug x64 clean (no C++ change this dispatch).
+**Test counts:** vitest **254 / 254**, Playwright **83 / 83**, MSBuild Debug x64 clean (no C++ change this dispatch).
+
+**Next dispatch:** **B1.3** — tab reorganization to match legacy parity (proposal at [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md)). Resizable splitters (previously labelled B1.3) **renamed to B1.4** and deferred behind the parity reorg. B2 (Appearance + Physics wiring) is now downstream of B1.4.
 
 ---
 
@@ -29,13 +31,13 @@ If you are a fresh Claude session resuming this project:
 |---|---|
 | **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\sweet-vaughan-dc78c1` (this session's; next session gets a fresh `claude/<random>` path) |
 | **Branch** | `claude/sweet-vaughan-dc78c1` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | This docs commit at the top of the session branch (B1.2 P6). Top non-docs commit is `a2d1fb6` (`feat(LT-4): Show All / Hide All become Eye / EyeOff icon buttons`). |
-| **Working tree** | clean. |
-| **Ahead of origin/lt-4** | The B1 trailing commits (FF'd at session start, see below) plus the B1.2 stack: brainstorm spec + plan + 5 implementation commits (P2 Section, P3 BasicTab restructure, P3-fix `.name-row` refactor, P4 Duplicate button, P5 Show/Hide icons) + this P6 docs commit. Needs FF + push at end of this session OR start of next. |
+| **HEAD (committed)** | This handoff-refresh docs commit at the top of the session branch. Top non-docs commit is `3a7a159` (`fix(LT-4): inspector label-truncation polish`). Above that is `e99e7b5` (B1.2 CHANGELOG backfill) on `origin/lt-4`. |
+| **Working tree** | clean (after this handoff-refresh commit). |
+| **Ahead of origin/lt-4** | `3a7a159` (B1.2.1 polish — label truncation fix) + this handoff-refresh docs commit + the B1.3 proposal doc commit. All three to be pushed in the handoff push. |
 | **Behind master** | `lt-4` is ~353+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
 | **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning; no C++ change this dispatch). Vitest **254 / 254**. Playwright **83 / 83**. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment + B1.2 left-pane polish shipped. Phase 3 not started; next dispatch is B1.3 (resizable splitters via `react-resizable-panels`); B2 (Appearance + Physics wiring) is the secondary follow-up.** Legacy `--legacy-ui` mode is untouched throughout. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment + B1.2 left-pane polish + B1.2.1 label-truncation polish shipped. Phase 3 not started.** Next dispatch is **B1.3 (tab reorganization to match legacy parity)** — proposal at [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md). After that: **B1.4 (resizable splitters via `react-resizable-panels`)** and then **B2 (Appearance + Physics wiring)**. Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session is in `sweet-vaughan-dc78c1`, succeeding `charming-williams-0efd47`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 
@@ -64,8 +66,17 @@ In execution order (oldest → newest):
 | `a79086a` | **refactor(LT-4): Name row uses `.form-row.name-row` modifier class** (P3-fix) — caught in code review: the inline `style={{ gridTemplateColumns: "60px 1fr" }}` on the Name row broke the established `.form-row.full` / `.with-radio` / `.with-check` modifier-class convention. Refactored to a new `.form-row.name-row` class in `components.css`; `FieldText` gained a `wide?: boolean` prop so callers can embed in custom-grid rows without the default `.form-row` wrapper. |
 | `12d01c4` | **feat(LT-4): Duplicate button on tree toolbar** (P4) — between New ▾ and Delete. Dispatches the existing `emitters/duplicate` bridge surface (consumed by the context-menu Duplicate item before this). Disabled when no primary is selected. Uses the existing `TOOLBAR_BTN` className. 3 specs covering presence, dispatch, disabled-state. |
 | `a2d1fb6` | **feat(LT-4): Show All / Hide All become Eye / EyeOff icon buttons** (P5) — swap from custom text-button classNames to `TOOLBAR_BTN` with Lucide `Eye` / `EyeOff` icons. Tooltips preserve the full text. Toolbar disambiguates from per-row eye via size (`size-4` vs `size-3`), brightness (`text-text-2` vs `text-text-3`), and cardinality (paired action vs per-row toggle). 1 spec covering icon presence + tooltip text. |
+| `d69e7cc` | **docs(LT-4): CHANGELOG + HANDOFF for B1.2 left-pane polish** (P6) — the B1.2 wrap-up docs commit. CHANGELOG gains the B1.2 entry with partial-backfill placeholders. HANDOFF refreshed with B1.2 commits + next-moves ordering. |
+| `e99e7b5` | **docs(LT-4): backfill B1.2 CHANGELOG date + lt-4 commit hash** — partial-backfill commit replacing `TODO-DATE` / `TODO-HASH` in the B1.2 CHANGELOG entry with `2026-05-20` / `d69e7cc`. PR# stays TODO until master merge. FF'd to `origin/lt-4` (current `origin/lt-4` HEAD). |
 
-Plus this P6 docs commit refreshing CHANGELOG + HANDOFF.
+### B1.2.1 polish (user-driven post-ship fix; this session) + B1.3 proposal
+
+| Commit | What |
+|---|---|
+| `3a7a159` | **fix(LT-4): inspector label-truncation polish** — three layered fixes for label truncation caught by user testing of B1.2: (a) Basic-tab `Tabs.Content` had Tailwind `p-3` double-padded with `.inspector` (~44px lost) — dropped `p-3` from Basic only; Appearance + Physics keep it until B2; (b) `.form-row` template tightened to `1fr 56px 32px` (was `1fr 92px 56px` from design source which assumed shorter labels); (c) `.section-body` + `.form-row.name-row` gain `padding-left: 20px` so field labels visually align with section title text (chevron 12px + gap 6px + section-header pad 2px = 20px). No test count delta (specs query by aria-label). |
+| *(no commit)* | **B1.3 reorg proposal drafted.** User shared legacy Basic / Appearance / Physics screenshots and asked for a reorganization plan to match legacy parity. Full proposal at [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md) — 5 open questions remain for owner resolution before brainstorm + spec + plan can begin. Splitter dispatch (was B1.3) renamed to **B1.4** and deferred behind the parity reorg. |
+
+Plus this handoff-refresh docs commit.
 
 ### B1 trailing commits (FF'd to `origin/lt-4` at session start, kept for context)
 
@@ -114,13 +125,32 @@ The earlier Phase 1 + Phase 2 + curve-editor-polish dispatches are still the str
 
 ## Open items (load-bearing — read before resuming)
 
-### 0. B1.3 — Resizable splitters via `react-resizable-panels` (next dispatch)
+### 0. B1.3 — Tab reorganization to match legacy parity (NEXT DISPATCH — start in new session)
 
-The next move. B1 finished the structural realignment, B1.2 tightened the interior fidelity; B1.3 makes the left / centre / right column boundaries draggable so users can size the panes to taste. Target library is `react-resizable-panels` (battle-tested, accessible drag handles, persistence hooks). Specifics will be defined in a separate brainstorm + plan pair. Standard CLAUDE.md plan structure expected. Persistence target is `localStorage` like the theme toggle; default sizes match the current fixed widths.
+**Proposal drafted** at [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md). User compared the new-UI Basic / Appearance / Physics tabs against the legacy Win32 editor and found section structure, field placement (rotation fields on the wrong tab, emit-mode fields on the wrong tab, affected-by-wind on the wrong tab), and Generation mode (we use two checkboxes; legacy uses tri-state radio) diverge from legacy. The proposal locks in the target structure for all three tabs and identifies five open questions the next session must resolve before drafting an implementation plan:
 
-### 0b. B2 — Appearance + Physics tab wiring (secondary follow-up)
+1. **Index field disposition** — drop / relocate / keep at Basic > Generation?
+2. **`textureSize` / `nTriangles` / `randomScalePerc` schema mapping** — three fields, two legacy labels in Appearance > Textures. Resolve by reading `src/UI/Emitter.cpp`'s `WM_INITDIALOG` to map IDC_SPINNER2 + IDC_SPINNER13 to model fields.
+3. **Weather "Particles" schema mapping** — same — IDC_SPINNER35 needs identifying.
+4. **`groups[1]` (Lifetime random-param)** — not in legacy. Drop / move / keep visible?
+5. **Trailing colons on labels** — match legacy ("Lifetime:") or keep colon-less?
 
-After B1.3. B1.2 finished the BasicTab restructure; B2 wires the Appearance and Physics inspector tabs to the live model so the form-row controls actually drive engine state through the bridge instead of being placeholder visuals. Specifics will be defined in a separate brainstorm + plan pair; the spec source is the design bundle's `appearance.html` + `physics.html`. Standard CLAUDE.md plan structure expected.
+**Recommended next-session opening moves** (also in the proposal doc):
+1. Read [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md) end to end.
+2. Open `src/UI/Emitter.cpp` and grep for `IDC_SPINNER2`, `IDC_SPINNER13`, `IDC_SPINNER35` to resolve Q2 + Q3 from source (~5–10 min).
+3. Ask the user for decisions on Q1, Q4, Q5 (one `AskUserQuestion` round).
+4. Invoke `superpowers:brainstorming` with this proposal as context — brainstorm should be quick since most decisions are pre-baked.
+5. Write spec → plan → execute via subagent-driven-development.
+
+No bridge schema changes anticipated. No C++ work (unless Q2/Q3 surface a missing schema field — unlikely). Estimated ~8–10 commits.
+
+### 0b. B1.4 — Resizable splitters via `react-resizable-panels` (deferred behind B1.3)
+
+Previously labeled B1.3; renamed B1.4 and deferred behind the parity reorg. B1 finished the structural realignment, B1.2 tightened the interior fidelity, B1.3 will align tab structure with legacy; B1.4 then makes the left / centre / right column boundaries draggable so users can size panes to taste. Target library is `react-resizable-panels` (battle-tested, accessible drag handles, persistence hooks). Standard CLAUDE.md plan structure expected. Persistence target is `localStorage` like the theme toggle; default sizes match the current fixed widths.
+
+### 0c. B2 — Appearance + Physics tab wiring (further follow-up)
+
+After B1.4. B1.2 finished the BasicTab restructure; B2 wires the Appearance and Physics inspector tabs to the live model so the form-row controls actually drive engine state through the bridge instead of being placeholder visuals. Note that B1.3 will partially overlap here — it touches the structure of Appearance + Physics — so the B2 brainstorm should sit AFTER B1.3 lands. Standard CLAUDE.md plan structure expected.
 
 ### 1. ~~Ground-texture engine bug~~ ✅ FIXED 2026-05-20 (commit `92ed1db`)
 
@@ -154,9 +184,15 @@ Two ROADMAP follow-ups filed for B1 work that's worth doing later but deliberate
 - **[NT-5] Engine-side single-member link-group enforcement.** B1 ships a render-layer filter; the data layer can still carry single-member groups. NT-5 makes the data layer match the rendered view end-to-end across the three C++ mutation paths.
 - **[NT-6] Visual-stability lane assignment for bracket gutter (option).** B1 uses aggressive-reuse greedy first-fit; a setting that opts the user into `lane = (groupId - 1) % maxLanes` would keep lanes stable across renders. Only worth doing if the bouncing turns out to be a real ergonomic issue.
 
-### 1d. ~~B1.2 left-pane polish~~ ✅ SHIPPED this session (uncommitted FF — needs FF into `lt-4` + push)
+### 1d. ~~B1.2 left-pane polish~~ ✅ SHIPPED earlier this session (FF'd to `origin/lt-4` at `e99e7b5`)
 
-P2 Section + P3 BasicTab restructure + P3-fix `.name-row` refactor + P4 Duplicate + P5 Show/Hide icon swap, plus brainstorm + plan + this P6 docs commit (P1 audit was a no-op). Per CLAUDE.md branch workflow, fast-forward into `lt-4` and push to `origin/lt-4` with explicit user OK. Full breakdown in the "What landed this session" table above and the top CHANGELOG entry.
+P2 Section + P3 BasicTab restructure + P3-fix `.name-row` refactor + P4 Duplicate + P5 Show/Hide icon swap + P6 CHANGELOG/HANDOFF + partial-backfill commit. Full breakdown in the "What landed this session" table above and the second CHANGELOG entry from the top.
+
+### 1e. ~~B1.2.1 inspector label-truncation polish~~ ✅ SHIPPED this session (uncommitted FF + handoff docs — needs push)
+
+Single follow-up fix commit `3a7a159` ("inspector label-truncation polish") catching three layered causes of label truncation that user-testing surfaced after B1.2 landed: double padding on Basic-tab Tabs.Content + design-source form-row template tuned for shorter labels + section bodies missing the indent needed to align with section title text. No new tests, no test count delta. User accepted the fix mid-session.
+
+This handoff-refresh docs commit + the `tasks/b1.3_legacy_parity_reorg_proposal.md` commit are the docs for this round; all three (polish fix + proposal doc + this HANDOFF) push together to `origin/lt-4` at session close.
 
 ### 2. Phase 2 / 3 references to `tailwind.config.ts` in the plan still need v4 translation
 
@@ -230,9 +266,9 @@ Run these in order before touching code:
 #    desktop app provisions a fresh worktree each session.)
 cd "/c/Modding/Particle Editor/.claude/worktrees/$WORKTREE_NAME"
 git worktree list
-git log --oneline -5    # HEAD should be the B1.2 P6 docs commit (this one) or the next dispatch's
+git log --oneline -5    # HEAD should include this handoff-refresh docs commit + `3a7a159` polish fix
 git status              # clean
-git log --oneline lt-4..HEAD   # 0 if session branched cleanly from lt-4 (assuming B1 FF'd)
+git log --oneline lt-4..HEAD   # 0 if session branched cleanly from lt-4
 git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
 
 # 2. Restore NuGet (ONLY needed on a fresh worktree — see header note).
@@ -300,13 +336,13 @@ If anything regressed (no known failing specs at session end), the most likely c
 
 ## Recommended next moves
 
-0. **FF + push the B1.2 dispatch.** Brainstorm + plan + 5 implementation commits + this docs commit ahead of `origin/lt-4`. Standard CLAUDE.md flow: fast-forward into `lt-4`, push to `origin/lt-4` with explicit user OK. Do this before anything else so the work doesn't get lost.
-1. **Execute B1.3 — Resizable splitters via `react-resizable-panels`** (next dispatch). Make the left / centre / right column boundaries draggable so users can size the panes to taste. Persistence to `localStorage` like the theme toggle; defaults match current fixed widths. Specifics defined in a separate brainstorm + plan pair.
-2. **Execute B2 — Appearance + Physics tab wiring** (secondary follow-up). The form rows are in place from Phase 2.5; B2 makes them drive engine state through the bridge. Specifics defined in a separate brainstorm + plan pair; spec source is the design bundle's `appearance.html` + `physics.html`.
-3. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Can run in parallel with B1.3 / B2 if helpful.
+0. **Execute B1.3 — Tab reorganization to match legacy parity** (NEXT DISPATCH). Proposal at [`tasks/b1.3_legacy_parity_reorg_proposal.md`](b1.3_legacy_parity_reorg_proposal.md) — read it first. Resolve the 5 open questions (Q2 + Q3 from `src/UI/Emitter.cpp` source; Q1, Q4, Q5 via owner question round), then brainstorm → spec → plan → execute via subagent-driven-development. ~8–10 commits estimated. No bridge schema changes anticipated.
+1. **Execute B1.4 — Resizable splitters via `react-resizable-panels`** (deferred behind B1.3). Was previously B1.3; renamed when the parity reorg took priority. Make the left / centre / right column boundaries draggable so users can size the panes to taste. Persistence to `localStorage` like the theme toggle; defaults match current fixed widths.
+2. **Execute B2 — Appearance + Physics tab wiring** (follow-up). The form rows are in place from Phase 2.5; B2 makes them drive engine state through the bridge. Note: B1.3 partially overlaps here (touches Appearance + Physics structure), so B2's brainstorm should sit AFTER B1.3 lands. Spec source is the design bundle's `appearance.html` + `physics.html`.
+3. **Execute Phase 3** (Tasks 3.1–3.6). Mostly mechanical (dialog re-skins + a sweep + a Playwright spec). Should fit in one session. **Remember to translate Phase 3 plan references to `tailwind.config.ts` to the v4 CSS-first equivalent before dispatching.** Can run in parallel with B1.3 / B1.4 / B2 if helpful.
 4. **Phase 4.2 cutover** comes after Phase 3 ships and the user signs off on parity acceptance (`tasks/lt4_phase_4_1_acceptance.md` §17).
 5. **ROADMAP follow-ups from B1 (NT-5, NT-6).** Engine-side single-member link-group enforcement (NT-5) and the visual-stability lane assignment option (NT-6). Both small. NT-6 only worth doing if the bouncing-gutter turns out to be a real ergonomic issue in daily use.
-6. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's B1.2 dispatch is a good example of the shape.
+6. **Organic find-and-fix runs continue to be high-yield.** Visual issues discovered during the user's daily use of the build fold cleanly into small fix commits on `lt-4`. This session's B1.2.1 polish round is the latest example of the shape.
 7. **(Watch-list)** If the `abort()` dialog the user observed pre-2026-05-20 resurfaces during a Playwright run, capture the assertion text immediately — it was *not* the same bug as `:192` (engine resource-leak fixed in `92ed1db`), so it's still unknown what fires it.
 
 ---
