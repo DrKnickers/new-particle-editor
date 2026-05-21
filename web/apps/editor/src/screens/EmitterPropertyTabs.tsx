@@ -245,9 +245,14 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         <TabTrigger value="appearance" label="Appearance" />
         <TabTrigger value="physics" label="Physics" />
       </Tabs.List>
+      {/* Basic tab uses .inspector inside (BasicTab renders
+          <div className="inspector">), so the Tabs.Content wrapper
+          omits Tailwind padding to avoid doubling. Appearance + Physics
+          keep p-3 until B2 wires them through the same .inspector
+          wrapper. */}
       <Tabs.Content
         value="basic"
-        className="flex-1 min-h-0 overflow-y-auto p-3 outline-none"
+        className="flex-1 min-h-0 overflow-y-auto outline-none"
         data-testid="tab-basic-content"
       >
         <BasicTab properties={properties} onCommit={commit} />

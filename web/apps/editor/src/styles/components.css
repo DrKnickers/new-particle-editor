@@ -464,9 +464,16 @@
 .section-header:hover { color: var(--text); }
 .section-divider { height: 1px; background: var(--border); margin: 2px 0 6px; }
 
+/* Inspector contents indent so field labels align with the
+ * section-header title text. Section header is:
+ *   padding-left 2px + chevron 12px + gap 6px = 20px from section's left.
+ * Apply the same 20px indent to .section-body and .form-row.name-row
+ * (the Name row sits outside any Section). */
+.section-body { padding-left: 20px; }
+
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 92px 56px;
+  grid-template-columns: 1fr 56px 32px;
   align-items: center;
   gap: 8px;
   padding: 3px 0;
@@ -481,6 +488,7 @@
 }
 .form-row.name-row {
   grid-template-columns: 60px 1fr;
+  padding-left: 20px;
 }
 .form-row.with-radio {
   grid-template-columns: 16px 1fr 92px 56px;
