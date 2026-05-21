@@ -202,13 +202,41 @@ None needed. This is layout-only; no new state, no new lifecycle, no new bridge 
 - [x] **P1 — Pre-flight.** Confirm baseline green. Vitest verified 277/277. Playwright + MSBuild deferred to P5 (no C++ change; one vitest-only spec flip needed — Playwright surface unaffected per audit).
 - [x] **P1.5 — Spec selector audit.** Found one structural flip needed: [`EmitterPropertyTabs.test.tsx:81`](../web/apps/editor/src/screens/__tests__/EmitterPropertyTabs.test.tsx:81) (`queryByTestId("emitter-property-tabs")).toBeNull()` → invert). All other `getByTestId("emitter-property-tabs")` callsites (lines 88, 114, 133, 430, 490 + Playwright 44/80/133/183/236) are post-selection assertions and stay correct unchanged. `base.css:34-58` scrollbar styling tied to the three `tab-*-content` testids is unaffected.
 - [x] **P2 — Verify Playwright + MSBuild baseline.** Deferred — covered by P5 end-of-dispatch sweep. The session-start baseline was clean (HANDOFF: vitest 277/277, Playwright 83/83, MSBuild clean) and nothing has been touched since `f12d6f2`.
-- [ ] **P3 — Item 1: always-mounted tab strip.** Refactor `EmitterPropertyTabs.tsx`'s render branch to lift `Tabs.Root` + `Tabs.List` out of the early-return; gate only the tab bodies via a `body()` helper. Preserve placeholder testid + copy verbatim. Update any specs the audit found. Commit message: `feat(LT-4): EmitterPropertyTabs strip always visible with body-level placeholder (B1.3.1 P3)`.
-- [ ] **P4 — Items 2+3: flex the tabs slot.** Two-class swap in `App.tsx:210`. `h-72 shrink-0` → `flex-1 min-h-0`. Commit message: `feat(LT-4): inspector slot flexes alongside emitter tree on the left column axis (B1.3.1 P4)`.
-- [ ] **P5 — Smoke-test pass.** Build + serve; walk through the manual checklist above. Any visual surprises → minimal polish commit, not scope creep.
-- [ ] **P6 — Docs.** Update CHANGELOG (1 entry following the established 3-section structure), HANDOFF (replace the §0 next-dispatch block, add a §1 shipped block), ROADMAP (strike NT-7 + move to Shipped, renumber). Commit message: `docs(LT-4): CHANGELOG + HANDOFF + ROADMAP for B1.3.1 inspector layout follow-ups`.
+- [x] **P3 + P4 — bundled into a single commit** (`ec486d9`). Plan called for two separate commits, but P3 alone (always-mounted strip with no flex change) would leave the placeholder centered in a fixed 288 px slice; P4 alone would change the layout but the strip would still vanish on no-selection. Each commit should leave the tree in a coherent user-visible state — the two together do, either alone is a half-baked intermediate.
+- [x] **P5 — Build + test verification, no UI smoke test.** `pnpm build` clean, vitest 277/277, MSBuild Debug x64 clean (post NuGet restore — fresh worktree pre-flight per HANDOFF), Playwright 83/83. The agent cannot drive the dev server headlessly, so the manual checklist below is left for the user to walk through before the FF.
+- [x] **P6 — Docs.** This commit: CHANGELOG entry at top, HANDOFF refresh (header + resumable-state + what-landed-this-session + open-items §0 swap from B1.3.1 to B1.4 + §1 marked shipped), ROADMAP strike + move-to-shipped + renumber. Tag NT-7 vacated permanently.
 
 ---
 
 ## Review (append after work)
 
-(To be filled in after P6.)
+### Plan vs reality
+
+Plan called for 6 P-steps (P1 pre-flight → P6 docs). Reality landed in 3 commits + this docs commit:
+
+| Plan | Reality | Notes |
+|---|---|---|
+| P1 pre-flight | vitest verified at session start (277/277); Playwright + MSBuild deferred to P5 sweep | As planned. |
+| P1.5 spec audit | Found exactly one structural test that needed flipping ([`EmitterPropertyTabs.test.tsx:81`](../web/apps/editor/src/screens/__tests__/EmitterPropertyTabs.test.tsx:81)). All other `getByTestId("emitter-property-tabs")` callsites are post-selection assertions and stay correct unchanged. | As planned. |
+| P2 baseline | Deferred to P5 — no code yet, baseline was known-clean from session start at `f12d6f2`. | As planned. |
+| P3 always-mounted strip + P4 flex slot | Bundled into `ec486d9`. | **Deviation from plan**: bundled because each alone is a half-baked intermediate. The plan's "P3 then P4 as separate commits" was the wrong call — flagged and merged before committing. |
+| P5 smoke test | Build / test sweep only (agent can't drive the dev server headlessly). | As planned. |
+| P6 docs | *this commit* | As planned. |
+
+### Test count evolution
+
+- vitest **277 → 277** (no net change). One spec body replaced (`renders the placeholder when no emitter is selected` → `renders the always-mounted tab strip with body-level placeholder when no emitter is selected` — adds three new assertions for the strip + triggers being present, kept the placeholder + copy assertions intact). Two waitFor anchors retuned from `getByTestId("emitter-property-tabs")` to `getByLabelText("Maximum lifetime:")` because the old anchor used to imply "form is loaded" (strip only mounted with data); now it only implies "strip exists" so the wait would pass too early and the subsequent label query would fail. Caught on the first `pnpm test` after the JSX restructure (two failures, both at the same call shape, both fixed).
+- Playwright **83 → 83** (no change). All Playwright assertions on `emitter-property-tabs` happen post-emitter-selection (the `beforeEach` selects one), so they were unaffected.
+- MSBuild Debug x64: clean (no C++ touched).
+
+### Issues encountered and resolutions
+
+1. **Vitest waitFor pattern broke when the strip's mount semantics changed.** Two existing specs anchored their waitFor on the strip's testid as a proxy for "form is hydrated". Pre-change, the testid only attached once properties loaded, so the waitFor was an indirect form-loaded check. Post-change, the testid attaches immediately on render. Fixed by anchoring waitFor on `getByLabelText("Maximum lifetime:")` directly. Pattern worth remembering for any future restructure that decouples a wrapper from its content's load state.
+2. **`JSX.Element` namespace not in scope.** First draft of `renderBody` typed its callback as `(p: EmitterPropertiesDto) => JSX.Element`. `pnpm test` passed (vitest doesn't type-check per L-004) but `pnpm build` failed with `Cannot find namespace 'JSX'`. Fixed by switching to `ReactNode` imported from `react`, matching the convention already used by Modal.tsx / Section.tsx / ToolPanel.tsx. **L-004 reminder reinforced**: always run `pnpm build` before claiming a JSX change is clean.
+3. **Fresh-worktree NuGet pre-flight needed.** First `MSBuild //v:m` on the new `agitated-margulis-854108` worktree failed with `missing Microsoft.Web.WebView2.targets`. HANDOFF's "fresh-worktree pre-flight" item flagged this exact case; applied `MSBuild //t:Restore //v:m` per the prescribed step, then the standard Debug x64 build worked. The Playwright suite needed the .exe so its first invocation blew up with `ENOENT`; re-ran after MSBuild and got 83/83.
+
+### Patterns worth remembering
+
+- **`renderBody((p) => …)` helper with a callback parameter, not a pre-built element.** Lets type narrowing flow through cleanly so the call sites never need a `properties!` non-null assertion. The narrowing happens at the helper, not at the call site.
+- **Anchor test waitFors on the actual content you're about to query, not on a parent wrapper.** When a wrapper's mount semantics change, the waitFor pattern that worked yesterday silently fails today.
+- **Bundle commits when each alone leaves the tree in a half-baked state.** Plan's commit decomposition is a default, not a contract.

@@ -24,33 +24,7 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-7] Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow
-
-*Estimate: small.*
-
-Three layout findings from B1.3's smoke test that the user explicitly
-deferred to a separate brainstorm + plan rather than bundling into
-B1.3's polish rounds:
-
-1. **Tabs hidden until an emitter is selected.** Today the property
-   tabs only render when an emitter is selected; with no selection
-   the centre column is empty. Should always render with a
-   placeholder inside (e.g. "Select an emitter to edit its
-   properties") so the user sees the tab strip and can navigate
-   before any selection.
-2. **Tab strip too short.** Currently a small slice at the top of
-   the centre column. Should be roughly 50% of the left column's
-   vertical extent so the tab strip dominates the visual hierarchy
-   and the inspector body has more breathing room.
-3. **Emitter list doesn't adjust to content.** The tree's `<ul>`
-   container has a fixed-ish height; should `flex-grow` to fill the
-   space above the tabs so long emitter lists scroll within a
-   generous viewport rather than spilling tight.
-
-No bridge schema changes anticipated. No C++ work. Estimated ~3–5
-commits.
-
-### 1.2 [NT-8] Resizable splitters for left / centre / right column boundaries
+### 1.1 [NT-8] Resizable splitters for left / centre / right column boundaries
 
 *Estimate: small.*
 
@@ -58,12 +32,13 @@ Make the left / centre / right column boundaries in the new UI
 draggable so users can size panes to taste. Target library is
 `react-resizable-panels` (battle-tested, accessible drag handles,
 persistence hooks). Persistence target is `localStorage` like the
-theme toggle; default sizes match the current fixed widths.
+theme toggle; default sizes match the current fixed widths and
+the 50/50 inner left-column split B1.3.1 established.
 
-Queued behind [NT-7] (inspector layout follow-ups) so the layout is
-stable before splitters land on top.
+[NT-7] (inspector layout follow-ups) has shipped — this is the
+natural next step.
 
-### 1.3 [NT-5] Engine-side single-member link-group enforcement
+### 1.2 [NT-5] Engine-side single-member link-group enforcement
 
 *Estimate: small.*
 
@@ -86,7 +61,7 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.4 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+### 1.3 [NT-6] Visual-stability lane assignment for bracket gutter (option)
 
 *Estimate: small.*
 
@@ -299,7 +274,14 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#77)
+### 5.1 [NT-7] ~~Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow~~ ✅ Shipped (#TODO)
+
+*Estimate: small.*
+*Actual: ~1 hour, 3 commits (plan + bundled implementation + docs). Two architectural decisions confirmed up-front via a question chip (50/50 split over biased ratios; free tab clicking over disabled-when-no-selection) so brainstorm ran in a single confirmation pass.*
+
+Single bundled implementation commit covering all three findings the user deferred from B1.3's smoke test: (1) tab strip always visible — Tabs.Root + Tabs.List lifted out of the early-return, with a body-level placeholder via a `renderBody((p) => …)` helper inside each Tabs.Content; (2) tabs slot flexes alongside the EmitterTree on the panel-body axis — `h-72 shrink-0` → `flex-1 min-h-0` on the lower-left slot in App.tsx; (3) tree breathes into the space the fixed slice used to claim — falls out of the flex change since the tree was already `flex-1 min-h-0`. Placeholder testid + copy preserved verbatim per L-010; two existing vitest waitFor patterns retuned from the now-too-eager `getByTestId("emitter-property-tabs")` to `getByLabelText("Maximum lifetime:")`. No bridge schema, no C++.
+
+### 5.2 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#77)
 
 New **File → Import Emitters from File…** entry opens an `.alo` picker and a modal dialog showing the source file's emitter tree with `TVS_CHECKBOXES`. Tick whichever emitters you want — *Auto-include children* is on by default so ticking a parent picks up its descendants — hit OK, and the selected emitters land as new root emitters in the current particle system. *Select all* / *Clear* / *Browse…* buttons round out the dialog; *Browse…* swaps the source file in place without cancelling. OK is disabled until at least one emitter is ticked.
 
@@ -313,7 +295,7 @@ New **File → Import Emitters from File…** entry opens an `.alo` picker and a
 - **Estimated effort**: 8–14 hours
 - **Actual**: ~6 hours including the plan + risk pass + the menu-rebuild-eats-static-entry detour. Drove directly without `subagent-driven-development` — the feature scope was small enough that a single focused plan + per-pass implementation was the right cadence.
 
-### 5.2 [MT-3] ~~Selectable skydome backgrounds via the unified Background button~~ ✅ Shipped (#73)
+### 5.3 [MT-3] ~~Selectable skydome backgrounds via the unified Background button~~ ✅ Shipped (#73)
 
 The toolbar's existing **Background:** colour button is now the single entry point for all background settings. Click it to open a modeless **Background** picker dialog — a 12-slot icon-mode `SysListView32` laid out as a 4×3 grid of 192×192 thumbnails. Slot 0 is **Solid colour** (click to open the standard Win32 colour picker); slots 1–8 are bundled scenes (Space / Atmosphere / Sunset / Dawn / Night / Overcast / Studio / Indoor); slots 9–11 are user-customisable. The toolbar preview itself is a hybrid 24×24 button: a flat colour swatch when the picker's slot 0 is active, a skydome thumbnail otherwise. There is no longer a separate standalone skydome preview button — the unified Background button covers both modes.
 
@@ -331,7 +313,7 @@ The toolbar's existing **Background:** colour button is now the single entry poi
 - **Estimated effort**: 8–14 hours
 - **Actual**: ~10 hours across two stages on the same branch — Stage 1 (~7h, 16 commits) built the engine pass + standalone skydome preview + picker dialog via the `subagent-driven-development` skill; Stage 2 (~3h) reworked the toolbar surface into the unified Background button, deleted the standalone skydome button, added the slot-0 `BackgroundPicker_PickSolidColor` helper, and switched the picker to sticky-on-commit behaviour.
 
-### 5.3 [MT-4] ~~Adjustable environment lighting in the preview~~ ✅ Shipped (#71)
+### 5.4 [MT-4] ~~Adjustable environment lighting in the preview~~ ✅ Shipped (#71)
 
 A new **View → Lighting…** modeless dialog exposes the engine's three directional lights (Sun + Fill 1 + Fill 2) and the scene-global ambient and shadow colours. Layout emulates the Petroglyph map editor's Sun / Fill panel — Sun gets Intensity, Z Angle, Tilt Angle, plus Ambient / Specular / Diffuse / Shadow ColorButtons; each Fill gets Intensity, Z Angle, Tilt Angle, and a single Diffuse ColorButton. Two binding controls live in the Sun group: **Force Fill Light Alignment** (default on — drives Fill 1 Z = Sun Z + 120°, Fill 2 Z = Sun Z + 210°, both Tilts fixed at −10°; greys out the fill-angle spinners and the Mirror Sun button) and **Mirror Sun** (one-shot copy of the Sun's Diffuse colour to both Fills). A **Reset to defaults** button at the bottom restores everything to the canonical map-editor values after a confirmation prompt.
 
@@ -353,7 +335,7 @@ Side-quests in the same PR:
 - **Estimated effort**: 4–6 hours
 - **Actual**: ~6 hours. Core implementation (engine getters, dialog template, registry I/O, `LightingDlgProc`, force-align math) landed quickly; the bulk of the iteration was on the read-only spinner UX (one false start through `WM_CTLCOLOREDIT`, then the `WM_PAINT` subclass) and the taskbar-icon fix.
 
-### 5.4 [MT-1] ~~Frequently-used textures palette~~ ✅ Shipped (#69)
+### 5.5 [MT-1] ~~Frequently-used textures palette~~ ✅ Shipped (#69)
 
 A new palette popup, opened by a small painter's-palette button in the Textures groupbox header on the Appearance tab, surfaces the textures the user has recently picked or explicitly pinned — per mod — as 140×160 thumbnail cells (thumb + filename strip). Double-click a thumb to apply it to the slot indicated by the Color/Bump filter toggle; the popup closes after a commit so the viewport is unobscured. Hovering a cell reveals a thumbtack badge in the top-right; clicking it pins the entry into the Pinned section (separate from Recent, capped at 8 each, status strip surfaces "Pins full" when overflow is attempted). Recents auto-track every successful texture load — file-picker pick, palette double-click, and `EN_KILLFOCUS` on the edit fields (debounced so typing doesn't pollute Recent with intermediate filename fragments).
 
@@ -375,7 +357,7 @@ Window-level: modeless, owned by the main editor window so it dies cleanly with 
 - **Estimated effort**: 5–8 hours
 - **Actual**: ~25 hours across 35 commits. The data layer + initial popup landed quickly; the bulk of the time was iterating on visuals (hover state, pin badge bitmap, cell sizing, popup geometry) and then porting the same visual model into the ground-texture picker, which required a ListView WM_PAINT subclass to fully escape native paint interference. The pre-handoff testing principle was carved out of this iteration cycle.
 
-### 5.5 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#67)
+### 5.6 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#67)
 
 The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground Texture:`** label + 24×24 owner-drawn preview button in the top toolbar shows the currently-selected texture as a thumbnail; clicking it opens a modal **Ground Texture** picker with a 4×2 grid of slot thumbnails (each 64×64). Bundled defaults are **Dirt** (preserved from pre-MT-2), **Grass** / **Sand** / **Snow** (vanilla EaW textures `W_TEMPGRND00.DDS` / `W_SAND00.DDS` / `W_SNOW_RGH.DDS` bundled via RCDATA), and a special **Solid Color** slot that's procedurally generated from a user-chosen `COLORREF` (default flat grey RGB(128,128,128)). The remaining three slots (Custom 1 / Custom 2 / Custom 3) start empty.
 
@@ -396,7 +378,7 @@ The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground
 - **Estimated effort**: 2–4 hours (original plan)
 - **Actual**: ~6 hours. The original combobox-only design built quickly; the slot-table redesign + picker dialog + owner-drawn toolbar button + thumbnail generation via D3DX-into-DIB + tooltip via ComCtl32 v5-compatible `TTTOOLINFOW_V2_SIZE` was the bulk of the time. Two live-test bugs caught: uninitialized `m_pGroundTexture` causing access violation on the very first `SAFE_RELEASE`, and the "Custom 1" slot showing a pink load-failure placeholder because the placeholder-decision hardcoded the old bundled count.
 
-### 5.6 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#65)
+### 5.7 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#65)
 
 The hard-coded v1 exempt set (textures + atlas-index curve + name) is now a per-group default, overridable via a new **Group settings…** dialog reached from the right-click menu when a linked emitter is selected. The dialog lists ~50 emitter fields grouped by category (Textures / Curves / Lifetime / Physics / Appearance / Weather / Rotation / Misc); checking a row marks that field per-emitter (exempt from propagation), unchecking marks it shared. A *Reset to defaults* button restores the v1 set without leaving the dialog.
 
@@ -418,7 +400,7 @@ The propagation hook in `CaptureUndo` consults `ParticleSystem::getLinkExemptFla
   ("checked = shared" instead of "checked = exempt") — UI-only inversion
   at the data/UI boundary, so the data model stayed intact.
 
-### 5.7 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
+### 5.8 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
 
 A coloured bracket painted in the emitter tree's right margin makes
 link-group membership legible at scroll-speed. Each link group claims a
@@ -463,7 +445,7 @@ have every reviewer ask about it.
   invalidated the renamed row — fixed by detecting bracket geometry
   shifts between paints and queuing a full-tree invalidate.
 
-### 5.8 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
+### 5.9 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
 
 Multi-emitter selection via **Ctrl-click** (toggle individual emitters),
 **Shift-click** (select tree-order range from the anchor), and **click-
@@ -505,7 +487,7 @@ user intended.
   resolutions* in the CHANGELOG so the next contributor working with
   layered overlays or marquee selection has a paper trail.
 
-### 5.9 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
+### 5.10 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
 
 Two or more emitters in a particle system can be linked into a *link
 group*. Editing any non-exempt field on a linked emitter propagates the
@@ -544,7 +526,7 @@ designed so each can land as a UI-only addition.
   removing the need to add an explicit pre-action capture in every
   link-menu handler.
 
-### 5.10 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
+### 5.11 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
 
 Two new entries in the emitter right-click context menu directly below
 *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the
@@ -560,7 +542,7 @@ right-click-duplicate through the full sprite sheet in seconds.
   added to `EmitterList_DuplicateEmitter`, menu items + dialog template in
   both `.en.rc` and `.de.rc`, and four resource IDs in both headers.
 
-### 5.11 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
+### 5.12 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
 Press F8 to freeze the preview at the current simulation tick; press
 it again to resume from exactly where time left off. While paused, F9
 steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
@@ -598,7 +580,7 @@ was relabeled to match.
   frame-stepping done during the pause; fixed by re-deriving the
   offset from the current anchor at resume time.
 
-### 5.12 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
+### 5.13 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
@@ -624,7 +606,7 @@ No new ROADMAP entry filed; no UI change needed.
   one pointer per slot anyway. Reused the Ghidra + JDK install from
   MT-6; auto-analysis on both binaries was the dominant cost.
 
-### 5.13 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
+### 5.14 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
@@ -661,7 +643,7 @@ listing exactly what was found.
   count is engine-side and hardcoded to 4 in our build pending
   further empirical tuning.
 
-### 5.14 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.15 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -679,7 +661,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.15 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.16 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -701,7 +683,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.16 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.17 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -724,7 +706,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.17 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.18 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -743,7 +725,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.18 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.19 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
@@ -779,7 +761,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.19 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.20 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -801,7 +783,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.20 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.21 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -815,7 +797,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.21 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.22 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.
