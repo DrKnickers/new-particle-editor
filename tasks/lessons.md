@@ -774,3 +774,86 @@ try/catch, fall back to NativeBridge on rejection. But that's an
 invasive change to a load-bearing utility, and BridgeContext is
 the React-idiomatic carrier for this kind of dependency. Worth
 revisiting if other consumers hit the same trap.
+
+## L-013 — The Win32 drag-resize modal sizing loop starves WebView2 IPC; design host-durable state for anything that must survive a drag
+
+**The rule.** Any state the engine viewport popup depends on while a
+modal is open — alpha cuts, occlusion rects, dim/blur params — must
+be encoded so it survives the Win32 modal sizing loop without
+needing a fresh renderer→host bridge message during the drag.
+When the user holds the mouse on a resize edge, Windows runs a
+separate WM_SIZING / WM_SIZE dispatch loop on the host thread.
+That loop calls [`LayoutBroker::PredictAndApply`](../src/host/LayoutBroker.cpp)
+synchronously to resize the popup + re-emit cached occlusion rects
+to the new popup-client coords, but does NOT pump WebView2 IPC
+messages — so any [`bridge.request(...)`](../web/apps/editor/src/bridge/native.ts)
+the renderer dispatches in response to ResizeObserver firing sits
+in the queue until release. The popup is "ahead" of the renderer's
+view of the world for the duration of the drag.
+
+**The trigger.** Any renderer-side resize handler that updates
+host state with geometry dependent on the current window size.
+Modal occlude rects are the canonical case. Any future "follow
+the popup during resize" surface (HUD overlays, picture-in-picture
+secondary viewports, scoped per-region effects) will hit the same
+trap.
+
+**Two valid patterns for resize-resilience:**
+
+1. **Host-state-durable encoding.** Send ONE message at open time
+   that encodes the user intent durably enough to survive any
+   popup geometry. The modal occlude uses a deliberately-enormous
+   sentinel rect `(-100000, -100000, 200000, 200000)` — `ApplyOcclusion`
+   clips iteration to the DIB bounds, so the rect ALWAYS covers
+   the entire current popup regardless of resize timing.
+   `ReemitOcclusions`' main-client → popup-client translation
+   produces another huge rect that still clips to the full new
+   popup. Resize-resilient by construction.
+
+2. **One-shot capture, no re-capture.** Don't re-fetch state from
+   the host during the modal lifecycle. The snapshot img sits at
+   `position:absolute; inset:0` inside the viewport-quadrant DOM,
+   so CSS scales it automatically when the parent grows during
+   drag. Content goes mildly stale (engine keeps rendering, we
+   don't re-encode), but it's behind Dialog.Overlay's
+   `bg-black/60 backdrop-blur-sm` — particle motion blurs to mush
+   at that treatment, so staleness is invisible.
+
+**Anti-patterns:**
+
+- `window.addEventListener("resize", ...)` to drive re-emit. The
+  event may not fire at all during the Win32 drag-resize modal
+  loop (Chrome/WebView2 reliability varies by build); even if it
+  does, the message can't reach the host.
+- `ResizeObserver` on the quadrant element to drive re-emit.
+  Fires reliably on the renderer side (the DOM box updates every
+  frame during drag) but the dispatched bridge message still
+  can't land at the host. The signal is fine; the channel isn't.
+- rAF-throttled re-capture during drag. Even when bridge messages
+  DO get through (intermittent during the loop), each capture
+  costs ~10-30 ms of GDI+ PNG encode stacked on top of the
+  engine's per-WM_SIZE D3D9 device `Reset` (already expensive).
+  Visible stutter results.
+
+**Source incident (2026-05-21, B1.3.1.1 P5 smoke-tests).** The
+B1.3.1.1 Modal rewiring originally used the actual quadrant
+`getBoundingClientRect()` as the occlude rect and re-captured via
+rAF on every resize event. First smoke-test surfaced opaque
+engine pixels leaking outside the modal occlude during drag (the
+popup at the new size, occlude rect at the old smaller value).
+Attempted fix swapping `window.resize` for `ResizeObserver` made
+no difference — confirmed the issue wasn't the renderer-side
+signal but the IPC starvation. Second iteration switched to the
+sentinel rect + one-shot capture. Drag-resize now leaves the
+modal backdrop visually correct AND no longer stutters. Full
+algebraic + diagnostic trail in B1.3.1.1's CHANGELOG entry. The
+mental shift from "fix the trigger" to "encode the state
+durably" was the key insight worth preserving.
+
+**Cross-reference.** L-011 explains why CSS effects can't span
+the engine compositing layer (the underlying reason a snapshot-
+into-DOM approach is necessary at all); L-012 explains why
+`window.bridge` may be `TestHostBridge` in non-`--test-host`
+runs (also relevant when the modal needs bridge access). L-013
+is specifically about resize-time IPC starvation on the same
+modal path.

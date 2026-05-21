@@ -241,6 +241,55 @@ Three commits total in this dispatch (P2-P3 squash into one, P4 + P6 + P7 each o
 
 ---
 
-## Review (append after work)
+## Review (filled in during execution)
 
-(To be filled in by the next session.)
+**Dispatch:** B1.3.1.1 [NT-9] — Frosted-glass modal backdrop via engine-snapshot capture.
+**Status:** ✅ shipped on session branch `claude/bold-volhard-e0e0f0`, pending FF to `origin/lt-4` at user's OK.
+
+**Commits landed (4):**
+
+| Commit | Phase | Summary |
+|---|---|---|
+| [`1e49d37`](https://github.com/DrKnickers/new-particle-editor/commit/1e49d37) | P2 + P3 | AlphaCompositor snapshot path (pre-stamp DIB cache, GDI+ PNG encode, inline base64) + bridge surface (schema + dispatcher + LayoutBroker forwarding + MockBridge stub) + GDI+ startup/shutdown in HostWindow. |
+| [`f3570d3`](https://github.com/DrKnickers/new-particle-editor/commit/f3570d3) | P4 | React Modal rewiring — snapshot capture + full-quadrant occlude + `createPortal` `<img>` backdrop. Modal regression test pivoted from `set-modal-mask` assertion to the new contract + `expect.not.toHaveBeenCalledWith` lock against set-modal-mask. |
+| [`cb7b4c7`](https://github.com/DrKnickers/new-particle-editor/commit/cb7b4c7) | P5 polish | Sentinel-rect occlude + one-shot capture. Driven by two smoke-test findings (drag-resize leaks opaque engine pixels; drag stutter from per-frame PNG encodes). Mental shift from "fix the trigger" to "encode the state durably" — captured as L-013. |
+| [`c287033`](https://github.com/DrKnickers/new-particle-editor/commit/c287033) | P6 | Drop modal-mask compositor pipeline — `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `m_globalAlpha`/`blurRadius`/`blurScratch` fields, the `viewport/set-modal-mask` bridge surface + schema + dispatcher + mock. 256 lines deleted from `AlphaCompositor.cpp`. |
+
+**Plan deviations from original §6 commit slicing:**
+
+- Original plan said three commits (P2-P3 squash + P4 + P6). Actual is four because P5's smoke-test surfaced two structural fixes worth their own traceable commit (sentinel rect + one-shot capture), not just polish on top of P4.
+- The plan's mention of keeping the modal-mask path live during P5 ("DO NOT remove the modal-mask path yet — keep both running so the smoke-test can A/B compare") wasn't load-bearing in practice — the snapshot path worked on first smoke-test, the only fallback need was the in-binary code (not a runtime A/B), and P6 deleted it cleanly without ever needing the fallback. The plan note was a safety hedge that turned out unnecessary; recording for future plans considering similar hedges.
+
+**Risks status:**
+
+- §4.1 PNG encode latency under drag — INVALIDATED by P5's one-shot capture. No per-frame encode at all.
+- §4.2 Bridge payload size — observed PNG sizes during smoke-test were ~50-150 KB (base64 ~70-200 KB) for the default skydome scene. Well under the 270-680 KB risk band; rAF coalescing wasn't needed because we don't re-capture at all. PNG encoding choice validated.
+- §4.3 Snapshot misalignment during fast drag — IRRELEVANT under one-shot capture. The img tracks the parent's CSS rect in real time; only the content is frozen, which is intentional.
+- §4.4 Engine keeps rendering under the modal — accepted as documented. No complaint surfaced.
+- §4.5 GDI+ shutdown race — no incident; the ordering (Startup after CoInitializeEx + WebView2 check, Shutdown right before CoUninitialize after the message pump drains) held cleanly.
+- §4.6 MockBridge empty-PNG render guard — exercised by all vitest specs that mount Modal in isolation (MockBridge returns `{ pngBase64: "", w: 0, h: 0 }`, render guard short-circuits the portal). No broken-img warnings in test output.
+
+**New risk surfaced (not in original §4):** the Win32 modal sizing loop starves WebView2 IPC for the duration of a drag-resize. Renderer→host bridge messages can't land until release. Documented in L-013; the fix (host-state-durable design) is the same pattern any future "follow the popup during resize" surface should adopt.
+
+**Test counts:**
+
+- vitest **281 / 281** (no count change — Modal.test.tsx's modal-mask spec reshaped to the new contract; +1 `expect.not.toHaveBeenCalledWith` assertion to lock the deletion).
+- Playwright **83 / 83** (no spec touched the deleted `viewport/set-modal-mask` surface).
+- MSBuild Debug x64 clean (preexisting LIBCMTD warning only).
+
+**Smoke-test verdicts:**
+
+- ✅ Help → About: modal renders, frosted-glass backdrop blurs panels + snapshot uniformly, no popup-boundary seam, no inner-shadow vignette.
+- ✅ Drag-resize while modal open: no opaque engine bands, no stutter.
+- ✅ Modal close: engine returns to full opacity instantly.
+
+**Lessons added:** L-013 (Win32 modal sizing loop starves WebView2 IPC).
+**Lessons reinforced:** L-011 (CSS effects can't span engine compositing layer — the whole reason this dispatch exists).
+
+**Cleanup performed:**
+
+- modal-mask C++ machinery deleted (P6).
+- `viewport/set-modal-mask` schema entry + MockBridge case + dispatcher handler removed (P6).
+- ROADMAP NT-9 struck, *Actual:* line added, moved to position 5.1 in Shipped; 22 existing Shipped entries shifted to 5.2 - 5.23; Near-term entries 1.2 / 1.3 / 1.4 renumbered to 1.1 / 1.2 / 1.3.
+- CHANGELOG entry added at top.
+- HANDOFF refreshed for next session.
