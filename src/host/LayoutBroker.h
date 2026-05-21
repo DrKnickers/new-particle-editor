@@ -92,6 +92,16 @@ public:
     // attached (legacy --legacy-ui mode).
     void SetModalMask(float alpha, int blurRadius);
 
+    // B1.3.1.1: forward a viewport snapshot request to the compositor.
+    // Returns `false` (and leaves outputs untouched) when no
+    // compositor is attached or the compositor has no cached frame
+    // (engine never composited, just-reset device, etc.). React's
+    // Modal calls this through `viewport/capture-snapshot` so it can
+    // render the engine output as a frozen <img> backdrop while the
+    // modal is open and CSS effects blur it uniformly with the
+    // panels.
+    bool CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH);
+
 private:
     // FD9b: forward all currently-registered occlusions to the
     // compositor, translated to popup-client coords using the current

@@ -638,6 +638,16 @@ export type Request =
   // own occlusion rect AND set the global mask — atomic per-call
   // semantics avoid an "occlude before mask" tear.
   | { kind: "viewport/set-modal-mask";    params: { alpha: number; blurRadius: number } }
+  // B1.3.1.1: capture the current engine viewport as a base64-encoded
+  // PNG. React's Modal calls this on open to grab a frozen snapshot
+  // of the engine output, renders the PNG as an <img> portaled into
+  // the viewport DOM, and full-occludes the engine popup — so
+  // Dialog.Overlay's `backdrop-blur-sm` can blur engine + panels
+  // uniformly without any popup-boundary seam. The compositor reads
+  // its cached pre-stamp DIB, encodes via GDI+, and returns base64;
+  // the host's "no frame yet" path returns an empty string + zero
+  // dims so the caller can short-circuit.
+  | { kind: "viewport/capture-snapshot";  params: Record<string, never> }
   | { kind: "spawner/start";              params: SpawnerParamsDto }
   | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }
@@ -793,6 +803,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
   R extends { kind: "viewport/occlude" }          ? Record<string, never> :
   R extends { kind: "viewport/set-modal-mask" }   ? Record<string, never> :
+  R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
   R extends { kind: "spawner/start" }             ? Record<string, never> :
   R extends { kind: "spawner/trigger" }           ? Record<string, never> :
   R extends { kind: "spawner/stop" }              ? Record<string, never> :

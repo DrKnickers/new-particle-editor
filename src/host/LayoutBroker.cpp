@@ -188,6 +188,12 @@ void LayoutBroker::SetModalMask(float alpha, int blurRadius)
     if (m_compositor) m_compositor->SetModalMask(alpha, blurRadius);
 }
 
+bool LayoutBroker::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
+{
+    if (!m_compositor) return false;
+    return m_compositor->CaptureSnapshotPng(outBase64, outW, outH);
+}
+
 void LayoutBroker::ReemitOcclusions()
 {
     if (!m_compositor) return;

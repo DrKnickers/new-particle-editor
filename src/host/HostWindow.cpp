@@ -40,6 +40,9 @@
 
 #include "AcceleratorBridge.h"
 #include "AlphaCompositor.h"
+
+#include <objbase.h>
+#include <gdiplus.h>
 #include "BridgeDispatcher.h"
 #include "HostBridgeProxy.h"
 #include "LayoutBroker.h"
@@ -1380,6 +1383,17 @@ int HostWindowImpl::Run(int nCmdShow)
     }
     Log("[host] WebView2 runtime detected — proceeding\n");
 
+    // B1.3.1.1: GDI+ init for AlphaCompositor::CaptureSnapshotPng (the
+    // modal frosted-glass backdrop). One-time per process; matching
+    // Gdiplus::GdiplusShutdown runs right before CoUninitialize at the
+    // bottom of this function. The two earlier early-return paths
+    // (CreateWindowEx failure, InitWebView2 failure) skip shutdown
+    // because the process is dying anyway and the leaked allocation
+    // is bounded.
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+
     g_self = this;
 
     WNDCLASSEXW wc{};
@@ -1539,6 +1553,10 @@ int HostWindowImpl::Run(int nCmdShow)
     }
 
     g_self = nullptr;
+    // B1.3.1.1: matching shutdown for the GdiplusStartup above. Safe
+    // here because the message pump has drained: no dispatcher
+    // handlers (CaptureSnapshotPng et al) can run after WM_QUIT.
+    if (gdiplusToken) Gdiplus::GdiplusShutdown(gdiplusToken);
     CoUninitialize();
     CloseLog();
     return static_cast<int>(m.wParam);

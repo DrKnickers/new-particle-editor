@@ -6,6 +6,11 @@
 #include <d3d9.h>
 #include <wrl/client.h>
 
+#include <objbase.h>
+#include <gdiplus.h>
+#include <gdiplusimaging.h>
+#pragma comment(lib, "gdiplus.lib")
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -60,6 +65,15 @@ struct AlphaCompositor::Impl
     // until destruction — modal toggle is interactive, so the
     // alloc-once approach avoids GC churn during open/close cycles.
     std::vector<uint8_t> blurScratch;
+
+    // B1.3.1.1 snapshot cache. Holds the engine-rendered BGRA pixels
+    // captured each frame BEFORE the occlusion stamps and modal-mask
+    // post-process. CaptureSnapshotPng reads from here. Reallocated
+    // lazily inside Composite when the cached dims don't match the
+    // current DIB.
+    std::vector<uint8_t> lastRawDib;
+    int      lastRawW    = 0;
+    int      lastRawH    = 0;
 };
 
 AlphaCompositor::AlphaCompositor(IDirect3DDevice9* device)
@@ -382,7 +396,136 @@ void FadePopupEdges(uint8_t* dib, int w, int h, int featherPx)
     }
 }
 
+// B1.3.1.1: find the PNG encoder CLSID via Gdiplus::GetImageEncoders.
+// The encoder list is enumerated once on first use; the CLSID is then
+// cached statically. Returns false (and leaves outClsid untouched) if
+// the PNG encoder isn't available — should never happen on a system
+// with GDI+ initialized, but we fail soft anyway.
+bool GetPngEncoderClsid(CLSID& outClsid)
+{
+    static CLSID cached = {};
+    static bool  found  = false;
+    if (found) { outClsid = cached; return true; }
+
+    UINT numEncoders = 0;
+    UINT bytes       = 0;
+    if (Gdiplus::GetImageEncodersSize(&numEncoders, &bytes) != Gdiplus::Ok || bytes == 0)
+        return false;
+
+    std::vector<uint8_t> buf(bytes);
+    auto* info = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+    if (Gdiplus::GetImageEncoders(numEncoders, bytes, info) != Gdiplus::Ok)
+        return false;
+
+    for (UINT i = 0; i < numEncoders; ++i)
+    {
+        if (wcscmp(info[i].MimeType, L"image/png") == 0)
+        {
+            cached  = info[i].Clsid;
+            outClsid = cached;
+            found   = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+// B1.3.1.1: standard base64 encoder. 30 lines, no dep. Encodes the
+// PNG bytes the GDI+ encoder produced into the ASCII string the
+// React side reads via `data:image/png;base64,<payload>`.
+std::string Base64Encode(const uint8_t* data, size_t len)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    size_t i = 0;
+    for (; i + 2 < len; i += 3)
+    {
+        const uint32_t v = (uint32_t(data[i]) << 16) |
+                           (uint32_t(data[i + 1]) << 8) |
+                           (uint32_t(data[i + 2]));
+        out.push_back(alphabet[(v >> 18) & 0x3F]);
+        out.push_back(alphabet[(v >> 12) & 0x3F]);
+        out.push_back(alphabet[(v >>  6) & 0x3F]);
+        out.push_back(alphabet[ v        & 0x3F]);
+    }
+    if (i < len)
+    {
+        uint32_t v = uint32_t(data[i]) << 16;
+        if (i + 1 < len) v |= uint32_t(data[i + 1]) << 8;
+        out.push_back(alphabet[(v >> 18) & 0x3F]);
+        out.push_back(alphabet[(v >> 12) & 0x3F]);
+        out.push_back((i + 1 < len) ? alphabet[(v >> 6) & 0x3F] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
 } // namespace
+
+bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
+{
+    if (m_impl->lastRawDib.empty() || m_impl->lastRawW <= 0 || m_impl->lastRawH <= 0)
+        return false;
+
+    CLSID pngClsid = {};
+    if (!GetPngEncoderClsid(pngClsid)) return false;
+
+    const int w = m_impl->lastRawW;
+    const int h = m_impl->lastRawH;
+    const int stride = w * 4;
+
+    // The DIB pixels are BGRA in memory (D3DFMT_A8R8G8B8 + BI_RGB).
+    // Pre-stamp pixels all have alpha = 255 (the engine renders fully
+    // opaque), so PARGB vs ARGB pick is moot for storage but PARGB
+    // matches the layered-window convention; we use ARGB for the
+    // GDI+ Bitmap so PNG encoding writes straight sRGB without any
+    // premultiplied → straight conversion step.
+    Gdiplus::Bitmap bmp(
+        w, h, stride, PixelFormat32bppARGB,
+        const_cast<BYTE*>(m_impl->lastRawDib.data()));
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
+
+    // Encode to PNG into an in-memory IStream so we can read the byte
+    // payload back out. CreateStreamOnHGlobal(nullptr, TRUE, ...) lets
+    // the stream own its HGLOBAL — released when the IStream releases.
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) || !stream)
+        return false;
+
+    if (bmp.Save(stream, &pngClsid, nullptr) != Gdiplus::Ok)
+    {
+        stream->Release();
+        return false;
+    }
+
+    // Read the encoded PNG out of the stream. Seek to start, read into
+    // a temporary buffer, then base64-encode.
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    STATSTG stat = {};
+    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)))
+    {
+        stream->Release();
+        return false;
+    }
+    const size_t pngBytes = static_cast<size_t>(stat.cbSize.QuadPart);
+    std::vector<uint8_t> png(pngBytes);
+    ULONG read = 0;
+    if (FAILED(stream->Read(png.data(), static_cast<ULONG>(pngBytes), &read)) || read != pngBytes)
+    {
+        stream->Release();
+        return false;
+    }
+    stream->Release();
+
+    outBase64 = Base64Encode(png.data(), png.size());
+    outW = w;
+    outH = h;
+    return true;
+}
 
 void AlphaCompositor::Composite(HWND layeredHwnd)
 {
@@ -412,6 +555,24 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
     }
 
     m_impl->sysMemSurface->UnlockRect();
+
+    // B1.3.1.1: cache the pre-stamp engine pixels for snapshot capture.
+    // This must run AFTER the readback memcpy but BEFORE the occlusion
+    // stamps + modal-mask post-process — the snapshot is the engine's
+    // raw output, so CSS effects above the resulting <img> backdrop
+    // can dim + blur it uniformly with the panels without seeing the
+    // chrome cut-outs or the dim applied here.
+    {
+        const size_t bytes = static_cast<size_t>(m_impl->width) *
+                             static_cast<size_t>(m_impl->height) * 4u;
+        if (m_impl->lastRawDib.size() != bytes)
+        {
+            m_impl->lastRawDib.resize(bytes);
+        }
+        memcpy(m_impl->lastRawDib.data(), dst, bytes);
+        m_impl->lastRawW = m_impl->width;
+        m_impl->lastRawH = m_impl->height;
+    }
 
     // B1.3.1 modal-mask: blur the engine pixels FIRST so the chrome
     // holes stamp crisply against a blurred background. Identity

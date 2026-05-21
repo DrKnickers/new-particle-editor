@@ -92,6 +92,21 @@ public:
     // fast-path that runs every frame when no modal is open.
     void SetModalMask(float alpha, int blurRadius);
 
+    // B1.3.1.1: capture the most recent pre-stamp engine frame as a
+    // base64-encoded PNG. `outBase64` is filled with the PNG payload
+    // (no "data:image/png;base64," prefix — the caller adds that).
+    // `outW` / `outH` are the snapshot pixel dimensions. Returns
+    // `false` and leaves outputs untouched when no frame has been
+    // composited yet (e.g. the engine never rendered or the device
+    // just reset). Safe to call from the UI thread between frames;
+    // GDI+ must have been initialized by the host (HostWindow::Run).
+    //
+    // The snapshot reflects the engine's raw output BEFORE chrome
+    // occlusion stamps and BEFORE modal-mask dim/blur — exactly the
+    // pixels React's <img src=...> backdrop wants to see, so CSS
+    // effects above can dim + blur it uniformly with the panels.
+    bool CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH);
+
     // Per-frame readback + occlusion stamp + UpdateLayeredWindow push.
     // No-op if Resize hasn't run or the HWND is null.
     void Composite(HWND layeredHwnd);

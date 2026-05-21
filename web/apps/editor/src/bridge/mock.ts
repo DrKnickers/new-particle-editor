@@ -435,6 +435,12 @@ export class MockBridge implements Bridge {
         // Mock: no AlphaCompositor to dim/blur. Acknowledge silently.
         return {};
 
+      case "viewport/capture-snapshot":
+        // Mock: no engine to snapshot. Empty PNG + zero dims so the
+        // React Modal's render guard (`snapshot && snapshot.pngBase64`)
+        // short-circuits the <img> portal in unit tests.
+        return { pngBase64: "", w: 0, h: 0 };
+
       // ---------------- file ops (Phase 3 Screen 8 Batch 3) ----------
       //
       // The mock implementations are deliberately UI-free: there's no

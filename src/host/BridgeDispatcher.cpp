@@ -815,6 +815,36 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- viewport/capture-snapshot --------
+    // B1.3.1.1: React's Modal primitive calls this on open to grab a
+    // frozen image of the engine viewport. It then renders the PNG as
+    // an <img> portaled into the WebView2 viewport DOM and full-occludes
+    // the engine popup — so Dialog.Overlay's `backdrop-blur-sm` can
+    // blur engine + panels uniformly without any popup-boundary seam.
+    // The compositor caches the most-recent pre-stamp frame, so the
+    // capture sees the raw engine output without chrome cut-outs and
+    // without any modal-mask dim that might already be active.
+    //
+    // Returns `{ pngBase64, w, h }`. When the compositor has no frame
+    // yet (engine never composited, device just reset), returns an
+    // empty string + zero dims so the React side can short-circuit
+    // its <img> render.
+    if (kind == "viewport/capture-snapshot")
+    {
+        std::string pngBase64;
+        int w = 0;
+        int h = 0;
+        if (m_layout.CaptureSnapshotPng(pngBase64, w, h))
+        {
+            sendOk(json{{"pngBase64", std::move(pngBase64)}, {"w", w}, {"h", h}});
+        }
+        else
+        {
+            sendOk(json{{"pngBase64", ""}, {"w", 0}, {"h", 0}});
+        }
+        return res;
+    }
+
     // -------- register-accelerators --------
     if (kind == "register-accelerators")
     {
