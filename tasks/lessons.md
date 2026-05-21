@@ -857,3 +857,74 @@ into-DOM approach is necessary at all); L-012 explains why
 runs (also relevant when the modal needs bridge access). L-013
 is specifically about resize-time IPC starvation on the same
 modal path.
+
+---
+
+## L-014 — `react-resizable-panels` 4.x: numeric size props are PIXELS, not percentages; `Panel.defaultSize` is the canonical knob, not `Group.defaultLayout`
+
+**Rule.** When wiring `react-resizable-panels` 4.x:
+
+1. **Size props (`defaultSize`, `minSize`, `maxSize`) — numeric is pixels.**
+   `defaultSize={20}` means **20 pixels**, not 20 percent. For
+   percentages either write the string with a `%` suffix
+   (`defaultSize="20%"`) or without any unit (`defaultSize="20"`).
+   The docstring at
+   `node_modules/.pnpm/react-resizable-panels@*/.../dist/react-resizable-panels.d.ts:200-212`
+   is explicit: *"Numeric values are assumed to be pixels.
+   Strings without explicit units are assumed to be percentages."*
+2. **`Group.defaultLayout` is effectively an SSR hint, not the
+   client-mount source of truth.** On a nested flex layout where
+   the Group's parent has `groupSize === 0` at first paint, the
+   library sets `defaultLayoutDeferred: true` and, on the first
+   ResizeObserver tick once the group acquires real size, calls
+   `We(panels)` — which reads each Panel's `defaultSize` and
+   IGNORES `Group.defaultLayout`. So the per-Panel `defaultSize`
+   prop is the only knob that reliably works for client-mounted
+   layouts. Belt-and-suspenders is fine (pass both) but treat
+   `defaultLayout` as advisory.
+3. **`onLayoutChanged` writes the current layout back to your
+   persistence store after pointer release.** If you write that
+   back, then read it on next mount, you'll restore the user's
+   ratios — but only if step 1 + step 2 are correct, otherwise
+   the first paint will write the *wrong* (library-computed)
+   layout over your defaults and you'll be stuck.
+4. **Reset path.** When recovering from a corrupted /
+   library-computed-wrong persisted layout, clear the
+   `localStorage` key AND reload — the lazy reader (`useMemo`
+   with `[key]`) only re-reads on key change or remount.
+
+**Trigger.** Any new `react-resizable-panels@4+` integration where
+the rendered layout doesn't match what you passed to
+`Group.defaultLayout`, especially when nested inside a flex
+container that's `display:flex; min-height: 0` and small enough
+that the inner Group could be sized 0 at first React commit.
+Symptom: panel widths collapse to look like their content's
+intrinsic width (small) or to equal shares of leftover space,
+ignoring your stated percentages. Library-internal flex-grow on
+`[data-panel]` shows weird numbers (e.g. `flex: 3.145 1 0px`)
+that are *derived from rendered widths*, not from your
+`defaultLayout`.
+
+**Source incident (2026-05-21, B1.4 T4 manual smoke).** The
+B1.4 PanelLayout dispatch wired the outer horizontal Group with
+`Group.defaultLayout={left: 20, center: 60, spawner: 20}` and
+no per-Panel `defaultSize`. First dev-server smoke showed left
+and spawner each 40 px wide while centre took 1192 px (flex:
+3.145/93.71/3.145). Reading the bundled library source
+(`dist/react-resizable-panels.js:1432-1454` for the RO callback,
+`:1319-1336` for `We`, `:200-212` for the docstring) revealed
+both quirks above. Fix:
+
+- All sizing props pass through `${value}%` template strings.
+- Per-Panel `defaultSize` derived from the loaded layout,
+  matching `Group.defaultLayout` for redundancy.
+- localStorage `alo:layout:*` keys cleared once to discard the
+  library-computed-wrong values that persistence had captured.
+
+After the fix, defaults render at `flex: 20 1 0px` / `60 1 0px` /
+`20 1 0px` exactly. Drag persists. Reload restores. Spawner
+toggle round-trips between 2col and 3col layouts.
+
+**Cross-reference.** None — first integration of this library in
+the project. CHANGELOG entry for B1.4 cites this lesson; future
+splitter-related dispatches should grep for L-014.

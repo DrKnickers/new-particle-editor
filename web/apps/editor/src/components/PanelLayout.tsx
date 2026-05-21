@@ -126,6 +126,14 @@ export function PanelLayout({ bridge }: Props) {
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
 
+  // 4.x quirk: when a Group mounts with `groupSize === 0` (typical
+  // for nested flex containers on first paint), the library flips
+  // `defaultLayoutDeferred = true` and, on the first ResizeObserver
+  // tick once the group gains real size, calls `We(panels)` —
+  // which reads each Panel's `defaultSize` prop and IGNORES the
+  // Group's `defaultLayout`. The Group prop is effectively an
+  // SSR-hydration hint only. So per-Panel `defaultSize` is the
+  // canonical knob — pull it from the loaded layout.
   return (
     <Group
       key={spawnerVisible ? "3col" : "2col"}
@@ -134,8 +142,13 @@ export function PanelLayout({ bridge }: Props) {
       onLayoutChanged={outer.onLayoutChanged}
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
     >
-      <Panel id="left" minSize={15} maxSize={40}>
-        <div className="panel h-full">
+      <Panel
+        id="left"
+        defaultSize={`${outer.defaultLayout.left}%`}
+        minSize="15%"
+        maxSize="40%"
+      >
+        <div className="panel h-full w-full">
           <div className="panel-header">
             <span>Particle System</span>
           </div>
@@ -146,19 +159,27 @@ export function PanelLayout({ bridge }: Props) {
               onLayoutChanged={left.onLayoutChanged}
               style={{ flex: 1, minHeight: 0 }}
             >
-              <Panel id="tree" minSize={10}>
+              <Panel
+                id="tree"
+                defaultSize={`${left.defaultLayout.tree}%`}
+                minSize="10%"
+              >
                 <aside
                   data-testid="quadrant-emitter-tree"
-                  className="h-full min-h-0 overflow-hidden flex flex-col p-3 text-sm"
+                  className="h-full w-full min-h-0 overflow-hidden flex flex-col p-3 text-sm"
                 >
                   <EmitterTree bridge={bridge} />
                 </aside>
               </Panel>
               <Separator className="ce-splitter ce-splitter-h" />
-              <Panel id="tabs" minSize={20}>
+              <Panel
+                id="tabs"
+                defaultSize={`${left.defaultLayout.tabs}%`}
+                minSize="20%"
+              >
                 <div
                   data-testid="quadrant-property-tabs"
-                  className="h-full min-h-0"
+                  className="h-full w-full min-h-0"
                 >
                   <EmitterPropertyTabs bridge={bridge} />
                 </div>
@@ -170,17 +191,25 @@ export function PanelLayout({ bridge }: Props) {
 
       <Separator className="ce-splitter ce-splitter-v" />
 
-      <Panel id="center" minSize={30}>
+      <Panel
+        id="center"
+        defaultSize={`${outer.defaultLayout.center}%`}
+        minSize="30%"
+      >
         <Group
           orientation="vertical"
           defaultLayout={center.defaultLayout}
           onLayoutChanged={center.onLayoutChanged}
-          style={{ flex: 1, minHeight: 0 }}
+          style={{ flex: 1, minHeight: 0, width: "100%" }}
         >
-          <Panel id="viewport" minSize={30}>
+          <Panel
+            id="viewport"
+            defaultSize={`${center.defaultLayout.viewport}%`}
+            minSize="30%"
+          >
             <div
               data-testid="quadrant-viewport"
-              className="relative h-full min-h-0"
+              className="relative h-full w-full min-h-0"
             >
               <ViewportSlot bridge={bridge} />
               <ViewportPill bridge={bridge} />
@@ -199,10 +228,14 @@ export function PanelLayout({ bridge }: Props) {
             </div>
           </Panel>
           <Separator className="ce-splitter ce-splitter-h" />
-          <Panel id="curve" minSize={10}>
+          <Panel
+            id="curve"
+            defaultSize={`${center.defaultLayout.curve}%`}
+            minSize="10%"
+          >
             <div
               data-testid="quadrant-curve-editor"
-              className="h-full min-h-0 border-t border-border"
+              className="h-full w-full min-h-0 border-t border-border"
             >
               <CurveEditorPanel bridge={bridge} />
             </div>
@@ -213,10 +246,15 @@ export function PanelLayout({ bridge }: Props) {
       {spawnerVisible && (
         <>
           <Separator className="ce-splitter ce-splitter-v" />
-          <Panel id="spawner" minSize={12} maxSize={40}>
+          <Panel
+            id="spawner"
+            defaultSize={`${outer.defaultLayout.spawner}%`}
+            minSize="12%"
+            maxSize="40%"
+          >
             <aside
               data-testid="quadrant-spawner"
-              className="h-full overflow-hidden border-l border-border bg-panel"
+              className="h-full w-full overflow-hidden border-l border-border bg-panel"
             >
               <SpawnerPanel bridge={bridge} />
             </aside>

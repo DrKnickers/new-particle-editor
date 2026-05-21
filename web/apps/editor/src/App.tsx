@@ -1,17 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
-import { ViewportSlot } from "@/components/ViewportSlot";
-import { ViewportPill } from "@/components/ViewportPill";
+import { PanelLayout } from "@/components/PanelLayout";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
-import { CurveEditorPanel } from "@/components/CurveEditorPanel";
-import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
-import { EmitterTree } from "@/screens/EmitterTree";
-import { LightingPanel } from "@/screens/LightingPanel";
-import { BloomPanel } from "@/screens/BloomPanel";
-import { SpawnerPanel } from "@/screens/SpawnerPanel";
 import { ImportEmittersDialog } from "@/screens/ImportEmittersDialog";
 import { ModNicknameDialog } from "@/screens/ModNicknameDialog";
 import { PrimitivesGallery } from "@/screens/PrimitivesGallery";
@@ -22,11 +15,7 @@ import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
 import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
-import {
-  setOpenToolPanel,
-  useOpenToolPanel,
-} from "@/lib/tool-panel";
-import { useSpawnerVisible } from "@/lib/spawner-visibility";
+import { setOpenToolPanel } from "@/lib/tool-panel";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
 import { BridgeContext } from "@/lib/bridge-context";
@@ -49,11 +38,10 @@ function AppShell() {
     return b;
   }, []);
 
-  // Screen 8 Batch 2: single-open-panel state. Replaces the per-panel
-  // `panelOpen` boolean that used to live here. Opening any panel from
-  // the menu / Background pill closes whichever was previously open.
-  const openPanel = useOpenToolPanel();
-  const spawnerVisible = useSpawnerVisible();
+  // B1.4 [NT-8]: tool-panel visibility + spawner visibility now live
+  // inside `PanelLayout`, which mounts the relevant child components
+  // directly. AppShell no longer subscribes to either store — only
+  // `setOpenToolPanel` (used by the MenuBar callbacks below) remains.
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
@@ -171,119 +159,14 @@ function AppShell() {
       {/* Toolbar — 4 groups (File · Edit · View · Render) */}
       <Toolbar bridge={bridge} />
 
-      {/* Main row — Task 2.6 layout:
-            ┌──────────────┬───────────────────┬─────────┐
-            │ Emitter tree │ Viewport          │ Spawner │
-            │ (upper-left) │                   │ (right, │
-            ├──────────────┼───────────────────┤ toggle) │
-            │ Property     │ Curve editor      │         │
-            │ tabs         │ (always-on, 260px)│         │
-            │ (lower-left) │                   │         │
-            └──────────────┴───────────────────┴─────────┘
-            Phase 2.6 (LT-4): the curve editor moved from a per-emitter
-            gated lower-right pane to an always-on 260px row at the
-            bottom of the center column. The CurveEditorPanel itself
-            handles the "no emitter selected" placeholder so the row
-            is mounted unconditionally. */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left column — Task 2.5: wrapped in the design's `.panel`
-            chrome (header "Particle System" + body) housing both the
-            EmitterTree (upper) and EmitterPropertyTabs (lower) as a
-            single visual unit. */}
-        <div className="panel w-80 shrink-0">
-          <div className="panel-header">
-            <span>Particle System</span>
-          </div>
-          <div className="panel-body flex min-h-0 flex-col overflow-hidden">
-            {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
-                Read-only tree view with click-to-select + Batches B/C
-                mutations (rename, drag/drop, context menus).
-                B1.3.1 polish: `overflow-hidden flex flex-col` instead of
-                `overflow-y-auto` so the scroll viewport is the tree's
-                inner `<ul>` container, not the whole pane. Lets
-                EmitterTreeToolbar pin to the pane's bottom regardless of
-                list length. The aside still owns padding (`p-3`) so the
-                tree + toolbar share consistent gutters. */}
-            <aside
-              data-testid="quadrant-emitter-tree"
-              className="flex-1 min-h-0 overflow-hidden flex flex-col p-3 text-sm"
-            >
-              <EmitterTree bridge={bridge} />
-            </aside>
-            {/* Lower-left — Property tabs (Basic / Appearance / Physics).
-                B1.3.1 (LT-4): switched from a fixed 288px slot (h-72) to
-                a flex axis shared with the EmitterTree aside above.
-                Tabs take `flex-[3_1_0%]` against the tree's `flex-1`,
-                yielding a 25/75 split — the tab strip dominates the
-                visual hierarchy per the deferred-item brief. B1.4 will
-                make the boundary draggable via react-resizable-panels. */}
-            <div
-              data-testid="quadrant-property-tabs"
-              className="flex-[3_1_0%] min-h-0"
-            >
-              <EmitterPropertyTabs bridge={bridge} />
-            </div>
-          </div>
-        </div>
-
-        {/* Right column */}
-        <div className="flex flex-1 min-w-0 flex-col">
-          {/* Upper-right — Viewport. Tool panels overlay this region
-              (positioned ancestor for absolute-positioned ToolPanels). */}
-          <div
-            data-testid="quadrant-viewport"
-            className="relative flex-1 min-h-0"
-          >
-            <ViewportSlot bridge={bridge} />
-            {/* Task 2.7: viewport-overlay pill with Show ground /
-                Toggle bloom / Leave particles toggles. Positioned
-                absolutely via `.vp-tools`. */}
-            <ViewportPill bridge={bridge} />
-            {/* Tool-panel host. Single panel mounted at a time, driven
-                by the `openToolPanel` Zustand atom (Screen 8 Batch 2). */}
-            {openPanel === "lighting" && (
-              <LightingPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-            )}
-            {openPanel === "bloom" && (
-              <BloomPanel bridge={bridge} onClose={() => setOpenToolPanel(null)} />
-            )}
-          </div>
-          {/* Lower — always-on Curve editor panel (Task 2.6). The
-              panel itself handles the "no emitter selected" placeholder
-              at the canvas level, so this row is always mounted at a
-              fixed height. 290px (was 260px) lets all 6 of the
-              default-on channel rows fit naturally; Index is the only
-              row that prompts a brief scroll. Viewport loses 30px of
-              vertical real estate, which the curve editor's
-              always-visible nature justifies. */}
-          <div
-            data-testid="quadrant-curve-editor"
-            className="h-[290px] shrink-0 border-t border-border"
-          >
-            <CurveEditorPanel bridge={bridge} />
-          </div>
-        </div>
-
-        {/* Right column — Spawner panel, permanent in the workspace
-            grid when spawnerVisible is true (Task 2.4). Hidden when
-            the user toggles the Spawner button off; the workspace
-            collapses back to two columns.
-
-            `bg-panel` on the aside is load-bearing: without it, any
-            area not painted by the SpawnerPanel `.panel` inside —
-            empty space below the panel content, or the briefly-
-            unpainted region during a window resize — shows the
-            FD9b layered viewport popup's clear colour. The aside's
-            `bg-panel` matches the `.panel` inside seamlessly. */}
-        {spawnerVisible && (
-          <aside
-            data-testid="quadrant-spawner"
-            className="w-80 shrink-0 overflow-hidden border-l border-border bg-panel"
-          >
-            <SpawnerPanel bridge={bridge} />
-          </aside>
-        )}
-      </div>
+      {/* Main row — B1.4 [NT-8]: PanelLayout owns the three-column +
+          two-inner-vertical-split structure with draggable separators
+          via react-resizable-panels@4.x. Sizes persist per-user under
+          alo:layout:{outer:{2col,3col},left,center}. The five
+          quadrant-* data-testids live on inner divs inside PanelLayout
+          (preserved exactly so Modal.tsx's querySelector portal
+          lookup and Playwright specs continue to work). */}
+      <PanelLayout bridge={bridge} />
 
       {/* Status bar */}
       <StatusBar bridge={bridge} />
