@@ -211,49 +211,85 @@ describe("EmitterPropertyTabs", () => {
     expect(tailSizeInput.disabled).toBe(true);
   });
 
-  // `Triangles` and `Affected by Wind` were removed from Appearance
-  // in B1.3-P5: Triangles dropped from the inspector entirely
-  // (schema-only), Affected by Wind moves to Physics > Initial speed
-  // in B1.3-P6.
+  // `Triangles` was removed from Appearance in B1.3-P5 (dropped from
+  // the inspector per Q2 decision; schema field retained on the wire).
   it.todo(
     "Triangles field is no longer rendered in Appearance — dropped from inspector per B1.3 Q2 decision",
   );
-  it.todo(
-    "Affected by Wind moves to Physics > Initial speed in B1.3-P6 — re-add Physics-side spec when it lands",
-  );
 
-  // ─── Physics tab specs (Fix dispatch 3) ────────────────────────
+  // ─── Physics tab specs (B1.3-P6 restructure) ───────────────────
   // PhysicsTab is exported and mounted directly for the same reason
   // AppearanceTab is: Radix Tabs in jsdom doesn't reliably switch on
   // fireEvent.click.
+  //
+  // Post-P6: four Sections (Initial position / Initial speed /
+  // Acceleration / Ground interaction). `Emit From Mesh*` moved to
+  // Basic > Connection (P4); Weather Particle / Cube Size / Cube
+  // Distance moved to Basic > Generation Weather radio (P3);
+  // Weather Fadeout Distance dropped (Q3); groups[1] not rendered
+  // (Q4); Parent speed inherit (Basic→Physics) and Affected by wind
+  // (Appearance→Physics) added under Initial speed.
 
-  it("PhysicsTab renders all 13 regular field labels", () => {
+  it("PhysicsTab renders the expected post-P6 field labels", () => {
     const props = makeFixtureProperties(0);
     render(<PhysicsTab properties={props} onCommit={() => {}} />);
-    // Acceleration is a single grouped row (label "Acceleration") with
-    // 3 spinners; check both the section label and the per-axis
-    // aria-label spinners.
-    expect(screen.getByText("Acceleration")).toBeInTheDocument();
+    // Acceleration row is a 3-spinner cluster with a combined
+    // "X / Y / Z:" label.
+    expect(screen.getByText("X / Y / Z:")).toBeInTheDocument();
     expect(screen.getByLabelText("Acceleration X")).toBeInTheDocument();
     expect(screen.getByLabelText("Acceleration Y")).toBeInTheDocument();
     expect(screen.getByLabelText("Acceleration Z")).toBeInTheDocument();
     const expectedLabels = [
-      "Gravity",
-      "Inward Speed",
-      "Inward Acceleration",
-      "Object Space Acceleration",
-      "Bounciness",
-      "Ground Behavior",
-      "Emit From Mesh",
-      "Emit From Mesh Offset",
-      "Weather Particle",
-      "Weather Cube Size",
-      "Weather Cube Distance",
-      "Weather Fadeout Distance",
+      // Initial speed
+      "Inward speed:",
+      "Parent speed inherit:",
+      "Affected by wind",
+      // Acceleration
+      "Gravity acceleration:",
+      "Inward acceleration:",
+      "Object space acceleration",
+      // Ground interaction
+      "Behavior:",
+      "Bounciness:",
     ];
     for (const label of expectedLabels) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("PhysicsTab renders four section headers in order: Initial position, Initial speed, Acceleration, Ground interaction", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    const pos      = screen.getByTestId("section-initial-position");
+    const speed    = screen.getByTestId("section-initial-speed");
+    const accel    = screen.getByTestId("section-acceleration");
+    const ground   = screen.getByTestId("section-ground-interaction");
+    expect(pos).toBeInTheDocument();
+    expect(speed).toBeInTheDocument();
+    expect(accel).toBeInTheDocument();
+    expect(ground).toBeInTheDocument();
+    // DOM order matches legacy IDD_EMITTER_PROPS3.
+    expect(pos.compareDocumentPosition(speed)   & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(speed.compareDocumentPosition(accel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(accel.compareDocumentPosition(ground) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("PhysicsTab: removed fields are not rendered (Emit From Mesh*, Weather*, weather fadeout)", () => {
+    const props = makeFixtureProperties(0);
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // Moved to Basic > Connection in P4:
+    expect(screen.queryByLabelText("Emit From Mesh")).toBeNull();
+    expect(screen.queryByLabelText("Emit From Mesh Offset")).toBeNull();
+    // Moved to Basic > Generation Weather radio in P3:
+    expect(screen.queryByLabelText("Weather Particle")).toBeNull();
+    expect(screen.queryByLabelText("Weather Cube Size")).toBeNull();
+    expect(screen.queryByLabelText("Weather Cube Distance")).toBeNull();
+    // Dropped per Q3 (schema field retained):
+    expect(screen.queryByLabelText("Weather Fadeout Distance")).toBeNull();
+    // Old PascalCase labels also gone:
+    expect(screen.queryByLabelText("Gravity")).toBeNull();
+    expect(screen.queryByLabelText("Inward Speed")).toBeNull();
+    expect(screen.queryByLabelText("Bounciness")).toBeNull();
   });
 
   it("PhysicsTab: Acceleration renders 3 spinners side-by-side", () => {
@@ -277,7 +313,7 @@ describe("EmitterPropertyTabs", () => {
     const trigger = screen.getByTestId("physics-ground-behavior-trigger");
     expect(trigger).toBeInTheDocument();
     // The aria-label on the Select.Trigger surfaces the field name.
-    expect(trigger.getAttribute("aria-label")).toBe("Ground Behavior");
+    expect(trigger.getAttribute("aria-label")).toBe("Behavior:");
     // The default value is groundBehavior=0 → "None".
     expect(trigger.textContent ?? "").toContain("None");
     // Opening the listbox in jsdom isn't reliable, but the option set
@@ -296,57 +332,61 @@ describe("EmitterPropertyTabs", () => {
     }
   });
 
-  it("PhysicsTab: Emit From Mesh dropdown lists Random Vertex and Every Vertex", () => {
+  it("PhysicsTab: Affected by wind commits affectedByWind on toggle", () => {
+    const onCommit = vi.fn();
+    const props = { ...makeFixtureProperties(0), isWeatherParticle: false, affectedByWind: false };
+    render(<PhysicsTab properties={props} onCommit={onCommit} />);
+    const checkbox = screen.getByLabelText("Affected by wind");
+    fireEvent.click(checkbox);
+    expect(onCommit).toHaveBeenCalledWith({ affectedByWind: true });
+  });
+
+  it("PhysicsTab: Affected by wind disabled when isWeatherParticle === true", () => {
+    const props = { ...makeFixtureProperties(0), isWeatherParticle: true, affectedByWind: false };
+    render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // Radix Checkbox renders a <button> for the input; query by role.
+    const checkbox = screen.getByRole("checkbox", { name: "Affected by wind" });
+    expect(checkbox).toHaveAttribute("data-disabled");
+  });
+
+  it("PhysicsTab: Parent speed inherit displays * 100 and commits / 100", async () => {
+    const onCommit = vi.fn();
+    const props = { ...makeFixtureProperties(0), parentLinkStrength: 0.5 };
+    render(<PhysicsTab properties={props} onCommit={onCommit} />);
+    const input = screen.getByLabelText("Parent speed inherit:") as HTMLInputElement;
+    expect(Number(input.value)).toBe(50);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "75" } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(onCommit).toHaveBeenCalledWith({ parentLinkStrength: 0.75 });
+    });
+  });
+
+  it("PhysicsTab: only groups[0] and groups[2] render — groups[1] is preserved on wire but absent from the DOM", () => {
     const props = makeFixtureProperties(0);
     render(<PhysicsTab properties={props} onCommit={() => {}} />);
-    // Same approach as Ground Behavior — render each value and assert
-    // the trigger label reflects the option set.
-    for (const [value, label] of [[1, "Random Vertex"], [3, "Every Vertex"]] as const) {
-      const altProps = { ...props, emitFromMesh: value };
-      const { unmount } = render(<PhysicsTab properties={altProps} onCommit={() => {}} />);
-      const altTriggers = screen.getAllByTestId("physics-emit-from-mesh-trigger");
-      const altTrigger = altTriggers[altTriggers.length - 1]!;
-      expect(altTrigger.textContent ?? "").toContain(label);
-      unmount();
-    }
+    expect(screen.queryByTestId("physics-group-0")).toBeTruthy();
+    expect(screen.queryByTestId("physics-group-1")).toBeNull();
+    expect(screen.queryByTestId("physics-group-2")).toBeTruthy();
+    // Their Type selectors are also present.
+    expect(screen.queryByTestId("physics-group-0-type-trigger")).toBeTruthy();
+    expect(screen.queryByTestId("physics-group-2-type-trigger")).toBeTruthy();
   });
 
-  it("PhysicsTab: Emit From Mesh Offset disabled when emitFromMesh === 0, enabled when !== 0", () => {
-    const disabledProps = {
-      ...makeFixtureProperties(0),
-      isWeatherParticle: false,
-      emitFromMesh: 0,
-    };
-    const { rerender } = render(
-      <PhysicsTab properties={disabledProps} onCommit={() => {}} />,
-    );
-    const offsetDisabled = screen.getByLabelText("Emit From Mesh Offset") as HTMLInputElement;
-    expect(offsetDisabled.disabled).toBe(true);
-
-    const enabledProps = { ...disabledProps, emitFromMesh: 1 };
-    rerender(<PhysicsTab properties={enabledProps} onCommit={() => {}} />);
-    const offsetEnabled = screen.getByLabelText("Emit From Mesh Offset") as HTMLInputElement;
-    expect(offsetEnabled.disabled).toBe(false);
-  });
-
-  it("PhysicsTab: Weather fields disabled when isWeatherParticle === false", () => {
-    const props = { ...makeFixtureProperties(0), isWeatherParticle: false };
-    render(<PhysicsTab properties={props} onCommit={() => {}} />);
-    expect((screen.getByLabelText("Weather Cube Size") as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByLabelText("Weather Cube Distance") as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByLabelText("Weather Fadeout Distance") as HTMLInputElement).disabled).toBe(true);
-  });
-
-  it("PhysicsTab: group type Select trigger renders for each of the 3 groups", () => {
+  it("PhysicsTab: GroupBody has no fieldset/legend chrome (parent Section carries the title)", () => {
     const props = makeFixtureProperties(0);
-    render(<PhysicsTab properties={props} onCommit={() => {}} />);
-    for (let i = 0; i < 3; i++) {
-      expect(screen.getByTestId(`physics-group-${i}`)).toBeInTheDocument();
-      expect(screen.getByTestId(`physics-group-${i}-type-trigger`)).toBeInTheDocument();
-    }
+    const { container } = render(<PhysicsTab properties={props} onCommit={() => {}} />);
+    // The old GroupSection wrapped each group in a <fieldset>; the new
+    // GroupBody is a plain <div>.
+    expect(container.querySelector("fieldset")).toBeNull();
+    expect(container.querySelector("legend")).toBeNull();
+    // But the Section header for the parent title is present.
+    expect(screen.getByText("Initial position")).toBeInTheDocument();
+    expect(screen.getByText("Initial speed")).toBeInTheDocument();
   });
 
-  it("PhysicsTab: group with type === GT_SPHERE renders sphereRadius + sphereEdge fields (no cylinder fields)", () => {
+  it("PhysicsTab: group with type === GT_SPHERE renders sphere radius + sphere edge fields (no cylinder fields)", () => {
     const base = makeFixtureProperties(0);
     const groups = base.groups.map((g, i) =>
       i === 0
@@ -354,13 +394,14 @@ describe("EmitterPropertyTabs", () => {
         : g,
     );
     render(<PhysicsTab properties={{ ...base, groups }} onCommit={() => {}} />);
-    // Sphere fields present.
-    expect(screen.getByLabelText("Sphere Radius")).toBeInTheDocument();
-    expect(screen.getByLabelText("Sphere Edge")).toBeInTheDocument();
-    // Cylinder fields absent (no other group is GT_CYLINDER).
-    expect(screen.queryByLabelText("Cylinder Radius")).toBeNull();
-    expect(screen.queryByLabelText("Cylinder Edge")).toBeNull();
-    expect(screen.queryByLabelText("Cylinder Height")).toBeNull();
+    // Sphere fields present (renamed to sentence-case + trailing colon).
+    expect(screen.getByLabelText("Sphere radius:")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sphere edge:")).toBeInTheDocument();
+    // Cylinder fields absent (no other rendered group is GT_CYLINDER;
+    // groups[1] isn't rendered, and groups[2] keeps the default type).
+    expect(screen.queryByLabelText("Cylinder radius:")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder edge:")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder height:")).toBeNull();
   });
 
   it("Tabs.Content outer elements carry overflow-y-auto for panel scroll", async () => {

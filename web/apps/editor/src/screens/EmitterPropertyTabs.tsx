@@ -112,18 +112,16 @@ const GT_CUBE = 2;
 const GT_SPHERE = 3;
 const GT_CYLINDER = 4;
 
-// Group semantic labels — `EmitterPropertiesDto.groups` is the on-wire
-// projection of `ParticleSystem::Emitter::groups[NUM_GROUPS]`. Engine
-// constants at [src/ParticleSystem.h:28-30]:
-//   GROUP_SPEED    = 0  → "Initial Speed"
-//   GROUP_LIFETIME = 1  → "Lifetime"
-//   GROUP_POSITION = 2  → "Initial Position"
-// Legacy's Physics dialog only renders 2 of the 3 (POSITION + SPEED;
-// see [src/UI/Emitter.cpp:849-852]); LIFETIME is unused by that
-// dialog. We surface all 3 so the panel is complete.
-// TODO(MT-2): confirm the lifetime group's intended label/UX placement
-// — legacy hides it but the engine carries it on the wire.
-const GROUP_LABELS = ["Initial Speed", "Lifetime", "Initial Position"];
+// Random-param group ordering — `EmitterPropertiesDto.groups` is the
+// on-wire projection of `ParticleSystem::Emitter::groups[NUM_GROUPS]`.
+// Engine constants at [src/ParticleSystem.h:28-30]:
+//   GROUP_SPEED    = 0  → "Initial speed"   (rendered in PhysicsTab)
+//   GROUP_LIFETIME = 1  → "Lifetime"        (NOT rendered — Q4 decision;
+//                                            schema retained for
+//                                            round-trip fidelity)
+//   GROUP_POSITION = 2  → "Initial position" (rendered in PhysicsTab)
+// PhysicsTab indexes groups[0] and groups[2] explicitly; index 1 is
+// preserved on the wire but absent from the inspector.
 
 type Props = {
   bridge: Bridge;
@@ -1040,17 +1038,31 @@ export function AppearanceTab({
 // pointer-event flake from Fix dispatch 1), so vitest mounts
 // PhysicsTab directly.
 //
+// B1.3-P6 restructure — four sections matching legacy
+// IDD_EMITTER_PROPS3 (`src/UI/EmitterEditor.rc:347-417`):
+//   Initial position / Initial speed / Acceleration / Ground
+//   interaction.
+//
+// Field moves vs the prior layout:
+//   - `parentLinkStrength` ("Parent speed inherit:") moved IN from
+//     Basic, now under Initial speed. Inline `* 100` / `/ 100` math
+//     since this is the only non-inverted display-percent consumer.
+//   - `affectedByWind` moved IN from Appearance, now under Initial
+//     speed (matches legacy IDD_EMITTER_PROPS3, .rc:350).
+//   - `emitFromMesh` + `emitFromMeshOffset` moved OUT to Basic >
+//     Connection (P4).
+//   - `isWeatherParticle` + `weatherCubeSize` + `weatherCubeDistance`
+//     moved OUT to Basic > Generation Weather radio (P3).
+//   - `weatherFadeoutDistance` dropped (Q3; schema retained).
+//   - `groups[1]` (Lifetime random-param) dropped from the render
+//     tree (Q4); schema array still carries 3 entries, we just don't
+//     render index 1.
+//
 // Cascade rules (cross-referenced against
 // [src/UI/Emitter.cpp:175-190]):
-//   - `isWeatherParticle === true` disables the entire
-//     position/speed/acceleration/ground-interaction block
-//     (acceleration X/Y/Z, gravity, inwardSpeed, inwardAcceleration,
-//     objectSpaceAcceleration, bounciness, groundBehavior,
-//     emitFromMesh, emitFromMeshOffset, and the position/speed
-//     random-param groups). Conversely, `isWeatherParticle === false`
-//     disables the 3 weather fields.
-//   - `emitFromMesh === EMIT_DISABLE` (==0) disables
-//     `emitFromMeshOffset`.
+//   - `isWeatherParticle === true` (weather mode in Basic) disables
+//     acceleration X/Y/Z, gravity, inwardSpeed, inwardAcceleration,
+//     objectSpaceAcceleration, groundBehavior, and `affectedByWind`.
 //   - `groundBehavior !== Bounce` (!= 2) disables `bounciness`
 //     ([src/UI/Emitter.cpp:190]).
 export function PhysicsTab({
@@ -1060,9 +1072,7 @@ export function PhysicsTab({
   properties: EmitterPropertiesDto;
   onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
 }) {
-  const isWeather = properties.isWeatherParticle;
-  const nonWeather = !isWeather;
-  const offsetEnabled = nonWeather && properties.emitFromMesh !== EMIT_FROM_MESH_DISABLE;
+  const nonWeather = !properties.isWeatherParticle;
   const bouncinessEnabled = nonWeather && properties.groundBehavior === GROUND_BEHAVIOR_BOUNCE;
 
   const updateAcceleration = (idx: 0 | 1 | 2, v: number) => {
@@ -1081,148 +1091,133 @@ export function PhysicsTab({
   };
 
   return (
-    <div className="space-y-3">
-      {/* Acceleration X/Y/Z — 3-spinner cluster. Spans the .form-row
-          input + unit columns since 3 spinners don't fit in 92px. */}
-      <div className="form-row items-start">
-        <span className="lbl pt-1">Acceleration</span>
-        <div
-          className="grid grid-cols-3 gap-1"
-          style={{ gridColumn: "2 / span 2" }}
-        >
-          <Spinner
-            value={properties.acceleration[0]}
-            step={0.1}
-            disabled={!nonWeather}
-            onChange={(v) => updateAcceleration(0, v)}
-            aria-label="Acceleration X"
-          />
-          <Spinner
-            value={properties.acceleration[1]}
-            step={0.1}
-            disabled={!nonWeather}
-            onChange={(v) => updateAcceleration(1, v)}
-            aria-label="Acceleration Y"
-          />
-          <Spinner
-            value={properties.acceleration[2]}
-            step={0.1}
-            disabled={!nonWeather}
-            onChange={(v) => updateAcceleration(2, v)}
-            aria-label="Acceleration Z"
-          />
-        </div>
-      </div>
-      <FieldSpinner
-        label="Gravity"
-        value={properties.gravity}
-        step={0.1}
-        disabled={!nonWeather}
-        onCommit={(v) => onCommit({ gravity: v })}
-      />
-      <FieldSpinner
-        label="Inward Speed"
-        value={properties.inwardSpeed}
-        step={0.1}
-        disabled={!nonWeather}
-        onCommit={(v) => onCommit({ inwardSpeed: v })}
-      />
-      <FieldSpinner
-        label="Inward Acceleration"
-        value={properties.inwardAcceleration}
-        step={0.1}
-        disabled={!nonWeather}
-        onCommit={(v) => onCommit({ inwardAcceleration: v })}
-      />
-      <FieldCheckbox
-        label="Object Space Acceleration"
-        checked={properties.objectSpaceAcceleration}
-        disabled={!nonWeather}
-        onCheckedChange={(v) => onCommit({ objectSpaceAcceleration: v })}
-      />
-      <FieldSpinner
-        label="Bounciness"
-        value={properties.bounciness}
-        min={0}
-        max={1}
-        step={0.05}
-        disabled={!bouncinessEnabled}
-        onCommit={(v) => onCommit({ bounciness: v })}
-      />
-      <FieldSelect
-        label="Ground Behavior"
-        value={properties.groundBehavior}
-        options={GROUND_BEHAVIOR_OPTIONS}
-        disabled={!nonWeather}
-        onCommit={(v) => onCommit({ groundBehavior: v })}
-        testId="physics-ground-behavior-trigger"
-      />
-      <FieldSelect
-        label="Emit From Mesh"
-        value={properties.emitFromMesh}
-        options={EMIT_FROM_MESH_OPTIONS}
-        disabled={!nonWeather}
-        onCommit={(v) => onCommit({ emitFromMesh: v })}
-        testId="physics-emit-from-mesh-trigger"
-      />
-      <FieldSpinner
-        label="Emit From Mesh Offset"
-        value={properties.emitFromMeshOffset}
-        step={0.1}
-        disabled={!offsetEnabled}
-        onCommit={(v) => onCommit({ emitFromMeshOffset: v })}
-      />
-      <FieldCheckbox
-        label="Weather Particle"
-        checked={properties.isWeatherParticle}
-        onCheckedChange={(v) => onCommit({ isWeatherParticle: v })}
-      />
-      <FieldSpinner
-        label="Weather Cube Size"
-        value={properties.weatherCubeSize}
-        min={0}
-        step={0.1}
-        disabled={!isWeather}
-        onCommit={(v) => onCommit({ weatherCubeSize: v })}
-      />
-      <FieldSpinner
-        label="Weather Cube Distance"
-        value={properties.weatherCubeDistance}
-        min={0}
-        step={0.1}
-        disabled={!isWeather}
-        onCommit={(v) => onCommit({ weatherCubeDistance: v })}
-      />
-      <FieldSpinner
-        label="Weather Fadeout Distance"
-        value={properties.weatherFadeoutDistance}
-        min={0}
-        step={0.1}
-        disabled={!isWeather}
-        onCommit={(v) => onCommit({ weatherFadeoutDistance: v })}
-      />
+    <div className="inspector">
+      <Section title="Initial position">
+        <GroupBody index={2} group={properties.groups[2]} onChange={(p) => updateGroup(2, p)} />
+      </Section>
 
-      {/* Random Param groups — inline at the bottom of the Physics tab.
-          Legacy ([src/UI/Emitter.cpp:849-852]) renders only POSITION
-          (groups[2]) + SPEED (groups[0]); we surface all three since
-          they're on the wire. The `RandomParam` Win32 primitive from
-          [src/UI/RandomParam.cpp] doesn't map 1:1 to this layout (it
-          drives a single value with min/max/mode), so the per-type
-          conditional fields are inlined here rather than wrapped in a
-          shared primitive. */}
-      {properties.groups.map((g, i) => (
-        <GroupSection
-          key={i}
-          index={i}
-          group={g}
-          onChange={(patch) => updateGroup(i, patch)}
+      <Section title="Initial speed">
+        <GroupBody index={0} group={properties.groups[0]} onChange={(p) => updateGroup(0, p)} />
+        <FieldSpinner
+          label="Inward speed:"
+          value={properties.inwardSpeed}
+          step={0.1}
+          unit="units/s"
+          disabled={!nonWeather}
+          onCommit={(v) => onCommit({ inwardSpeed: v })}
         />
-      ))}
+        {/* Parent speed inherit — schema field is float in [0,1]; legacy
+            displays as integer percent (Emitter.cpp:488 commits
+            `GetUIInteger(...) / 100.0f`). Inline `* 100` / `/ 100` math
+            here so we don't grow a new FieldSpinner prop for a single
+            consumer. If a third consumer emerges, hoist a
+            `displayPercentScale` primitive. */}
+        <FieldSpinner
+          label="Parent speed inherit:"
+          value={Math.round(properties.parentLinkStrength * 100)}
+          min={0}
+          max={100}
+          step={1}
+          decimals={0}
+          unit="%"
+          onCommit={(v) => onCommit({ parentLinkStrength: v / 100 })}
+        />
+        <FieldCheckbox
+          label="Affected by wind"
+          checked={properties.affectedByWind}
+          disabled={!nonWeather}
+          onCheckedChange={(v) => onCommit({ affectedByWind: v })}
+        />
+      </Section>
+
+      <Section title="Acceleration">
+        {/* Acceleration X/Y/Z — 3-spinner cluster. Spans the .form-row
+            input + unit columns since 3 spinners don't fit in 92px.
+            Combined "X / Y / Z:" label per legacy IDD_EMITTER_PROPS3
+            (.rc:350). */}
+        <div className="form-row items-start">
+          <span className="lbl pt-1">X / Y / Z:</span>
+          <div
+            className="grid grid-cols-3 gap-1"
+            style={{ gridColumn: "2 / span 2" }}
+          >
+            <Spinner
+              value={properties.acceleration[0]}
+              step={0.1}
+              disabled={!nonWeather}
+              onChange={(v) => updateAcceleration(0, v)}
+              aria-label="Acceleration X"
+            />
+            <Spinner
+              value={properties.acceleration[1]}
+              step={0.1}
+              disabled={!nonWeather}
+              onChange={(v) => updateAcceleration(1, v)}
+              aria-label="Acceleration Y"
+            />
+            <Spinner
+              value={properties.acceleration[2]}
+              step={0.1}
+              disabled={!nonWeather}
+              onChange={(v) => updateAcceleration(2, v)}
+              aria-label="Acceleration Z"
+            />
+          </div>
+        </div>
+        <FieldSpinner
+          label="Gravity acceleration:"
+          value={properties.gravity}
+          step={0.1}
+          unit="units/s²"
+          disabled={!nonWeather}
+          onCommit={(v) => onCommit({ gravity: v })}
+        />
+        <FieldSpinner
+          label="Inward acceleration:"
+          value={properties.inwardAcceleration}
+          step={0.1}
+          unit="units/s²"
+          disabled={!nonWeather}
+          onCommit={(v) => onCommit({ inwardAcceleration: v })}
+        />
+        <FieldCheckbox
+          label="Object space acceleration"
+          checked={properties.objectSpaceAcceleration}
+          disabled={!nonWeather}
+          onCheckedChange={(v) => onCommit({ objectSpaceAcceleration: v })}
+        />
+      </Section>
+
+      <Section title="Ground interaction">
+        <FieldSelect
+          label="Behavior:"
+          value={properties.groundBehavior}
+          options={GROUND_BEHAVIOR_OPTIONS}
+          disabled={!nonWeather}
+          onCommit={(v) => onCommit({ groundBehavior: v })}
+          testId="physics-ground-behavior-trigger"
+        />
+        <FieldSpinner
+          label="Bounciness:"
+          value={properties.bounciness}
+          min={0}
+          max={1}
+          step={0.05}
+          disabled={!bouncinessEnabled}
+          onCommit={(v) => onCommit({ bounciness: v })}
+        />
+      </Section>
     </div>
   );
 }
 
-function GroupSection({
+// GroupBody — renders a single random-param group's fields (Type
+// selector + type-conditional fields). The parent <Section> carries
+// the title; no fieldset/legend chrome here.
+//
+// `data-testid={`physics-group-${index}`}` is preserved for specs
+// that match on the group container.
+function GroupBody({
   index,
   group,
   onChange,
@@ -1231,7 +1226,6 @@ function GroupSection({
   group: GroupDto;
   onChange: (patch: Partial<GroupDto>) => void;
 }) {
-  const label = GROUP_LABELS[index] ?? `Group ${index + 1}`;
   const updateVec3 = (
     key: "min" | "max" | "val",
     axis: 0 | 1 | 2,
@@ -1244,15 +1238,9 @@ function GroupSection({
   };
 
   return (
-    <fieldset
-      data-testid={`physics-group-${index}`}
-      className="space-y-2 rounded border border-border bg-bg-2/40 p-2"
-    >
-      <legend className="px-1 text-xs font-medium text-text-2">
-        {label}
-      </legend>
+    <div data-testid={`physics-group-${index}`} className="space-y-2">
       <FieldSelect
-        label="Type"
+        label="Type:"
         value={group.type}
         options={GROUP_TYPE_OPTIONS}
         onCommit={(v) => onChange({ type: v })}
@@ -1260,7 +1248,7 @@ function GroupSection({
       />
       {group.type === GT_EXACT && (
         <Vec3Row
-          label="Value"
+          label="Value:"
           value={group.val}
           step={0.1}
           ariaPrefix={`Group ${index + 1} Value`}
@@ -1270,14 +1258,14 @@ function GroupSection({
       {group.type === GT_BOX && (
         <>
           <Vec3Row
-            label="Min"
+            label="Min:"
             value={group.min}
             step={0.1}
             ariaPrefix={`Group ${index + 1} Min`}
             onChange={(axis, v) => updateVec3("min", axis, v)}
           />
           <Vec3Row
-            label="Max"
+            label="Max:"
             value={group.max}
             step={0.1}
             ariaPrefix={`Group ${index + 1} Max`}
@@ -1287,7 +1275,7 @@ function GroupSection({
       )}
       {group.type === GT_CUBE && (
         <FieldSpinner
-          label="Side Length"
+          label="Side length:"
           value={group.sideLength}
           min={0}
           step={0.1}
@@ -1297,14 +1285,14 @@ function GroupSection({
       {group.type === GT_SPHERE && (
         <>
           <FieldSpinner
-            label="Sphere Radius"
+            label="Sphere radius:"
             value={group.sphereRadius}
             min={0}
             step={0.1}
             onCommit={(v) => onChange({ sphereRadius: v })}
           />
           <FieldSpinner
-            label="Sphere Edge"
+            label="Sphere edge:"
             value={group.sphereEdge}
             min={0}
             step={1}
@@ -1316,14 +1304,14 @@ function GroupSection({
       {group.type === GT_CYLINDER && (
         <>
           <FieldSpinner
-            label="Cylinder Radius"
+            label="Cylinder radius:"
             value={group.cylinderRadius}
             min={0}
             step={0.1}
             onCommit={(v) => onChange({ cylinderRadius: v })}
           />
           <FieldSpinner
-            label="Cylinder Edge"
+            label="Cylinder edge:"
             value={group.cylinderEdge}
             min={0}
             step={1}
@@ -1331,7 +1319,7 @@ function GroupSection({
             onCommit={(v) => onChange({ cylinderEdge: Math.max(0, Math.round(v)) })}
           />
           <FieldSpinner
-            label="Cylinder Height"
+            label="Cylinder height:"
             value={group.cylinderHeight}
             min={0}
             step={0.1}
@@ -1339,7 +1327,7 @@ function GroupSection({
           />
         </>
       )}
-    </fieldset>
+    </div>
   );
 }
 
