@@ -99,8 +99,16 @@ describe("EmitterPropertyTabs", () => {
     expect(physics.getAttribute("data-state")).toBe("inactive");
   });
 
-  it("Basic tab renders Lifetime + Name + Use Bursts form fields populated from get-properties", async () => {
-    const { bridge } = makeStubBridge(0, { lifetime: 2.5, name: "TestEmitter", useBursts: false });
+  it("Basic tab renders Maximum lifetime + Name + Bursts radio populated from get-properties", async () => {
+    // Post-B1.3-P3: "Lifetime" is now "Maximum lifetime:" inside the
+    // Generation section, and "Use Bursts" is the Bursts radio of a
+    // tri-state mutex (Bursts / Continuous / Weather).
+    const { bridge } = makeStubBridge(0, {
+      lifetime: 2.5,
+      name: "TestEmitter",
+      useBursts: false,
+      isWeatherParticle: false,
+    });
     render(<EmitterPropertyTabs bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
@@ -108,12 +116,14 @@ describe("EmitterPropertyTabs", () => {
     // Name input populated from properties.
     const nameInput = screen.getByLabelText("Name") as HTMLInputElement;
     expect(nameInput.value).toBe("TestEmitter");
-    // Lifetime spinner populated.
-    const lifetimeInput = screen.getByLabelText("Lifetime") as HTMLInputElement;
+    // Maximum lifetime spinner populated.
+    const lifetimeInput = screen.getByLabelText("Maximum lifetime:") as HTMLInputElement;
     expect(Number(lifetimeInput.value)).toBeCloseTo(2.5, 5);
-    // Use Bursts checkbox is present and unchecked.
-    const burstsCheckbox = screen.getByLabelText("Use Bursts");
-    expect(burstsCheckbox.getAttribute("data-state")).toBe("unchecked");
+    // Bursts radio is present and NOT active (useBursts=false → continuous).
+    const burstsRadio = screen.getByRole("radio", { name: /Bursts/i });
+    expect(burstsRadio.getAttribute("aria-checked")).toBe("false");
+    const continuousRadio = screen.getByRole("radio", { name: /Continuous/i });
+    expect(continuousRadio.getAttribute("aria-checked")).toBe("true");
   });
 
   it("Appearance and Physics tab triggers render with their data-state attribute", async () => {
@@ -372,12 +382,14 @@ describe("EmitterPropertyTabs", () => {
     await waitFor(() => {
       expect(screen.getByTestId("section-emitter-timing")).toBeInTheDocument();
     });
-    // Initially "Lifetime" (an Emitter Timing field) is visible.
-    expect(screen.getByLabelText("Lifetime")).toBeInTheDocument();
+    // Post-B1.3-P3: Lifetime moved into Generation, so test the
+    // collapse via an Emitter Timing field that still lives there
+    // (Initial Delay).
+    expect(screen.getByLabelText("Initial Delay")).toBeInTheDocument();
     // Collapse Emitter Timing.
     fireEvent.click(screen.getByTestId("section-emitter-timing"));
-    // Lifetime field is no longer in the DOM.
-    expect(screen.queryByLabelText("Lifetime")).not.toBeInTheDocument();
+    // Initial Delay field is no longer in the DOM.
+    expect(screen.queryByLabelText("Initial Delay")).not.toBeInTheDocument();
   });
 
   it("Name row uses the .name-row modifier class for its custom grid", async () => {
@@ -393,13 +405,15 @@ describe("EmitterPropertyTabs", () => {
     expect(row!.classList.contains("name-row")).toBe(true);
   });
 
-  it("editing Lifetime fires emitters/set-properties with patch.lifetime", async () => {
+  it("editing Maximum lifetime fires emitters/set-properties with patch.lifetime", async () => {
+    // Post-B1.3-P3: "Lifetime" relabelled to "Maximum lifetime:" and
+    // moved into Generation. The underlying `lifetime` key is unchanged.
     const { bridge } = makeStubBridge(0, { lifetime: 1.0 });
     render(<EmitterPropertyTabs bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
     });
-    const lifetimeInput = screen.getByLabelText("Lifetime") as HTMLInputElement;
+    const lifetimeInput = screen.getByLabelText("Maximum lifetime:") as HTMLInputElement;
     // Spinner commits on blur after a text edit. Type a new value and blur.
     fireEvent.focus(lifetimeInput);
     fireEvent.change(lifetimeInput, { target: { value: "3.5" } });

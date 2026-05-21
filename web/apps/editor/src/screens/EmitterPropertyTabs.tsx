@@ -289,17 +289,40 @@ function TabTrigger({ value, label }: { value: string; label: string }) {
 
 // ─── Basic tab ──────────────────────────────────────────────────────
 
-function BasicTab({
+export function BasicTab({
   properties,
   onCommit,
 }: {
   properties: EmitterPropertiesDto;
   onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
 }) {
-  // Mutex enabling per legacy: useBursts toggles between burst-mode
-  // fields and rate-mode field.
-  const burstsEnabled = properties.useBursts;
-  const rateEnabled = !properties.useBursts;
+  // Tri-state Generation mode derived from (useBursts, isWeatherParticle).
+  // Legacy parity: weather wins when set (the legacy UI surfaces weather
+  // mode regardless of useBursts), then bursts vs continuous splits on
+  // the remaining axis. See spec §5.1 + Risk #1 for the atomic-patch
+  // rationale — each setMode call fires ONE patch carrying both keys so
+  // the engine never observes a transient inconsistent state pair.
+  type GenerationMode = "bursts" | "continuous" | "weather";
+  const mode: GenerationMode = properties.isWeatherParticle
+    ? "weather"
+    : properties.useBursts
+      ? "bursts"
+      : "continuous";
+
+  const setMode = (next: GenerationMode) => {
+    switch (next) {
+      case "bursts":     onCommit({ useBursts: true, isWeatherParticle: false }); break;
+      case "continuous": onCommit({ useBursts: false, isWeatherParticle: false }); break;
+      // Weather only sets isWeatherParticle — useBursts is preserved so
+      // toggling weather off returns the user to whichever non-weather
+      // mode they came from. Matches legacy IDC_RADIO_WEATHER behaviour.
+      case "weather":    onCommit({ isWeatherParticle: true }); break;
+    }
+  };
+
+  const burstsEnabled = mode === "bursts";
+  const continuousEnabled = mode === "continuous";
+  const weatherEnabled = mode === "weather";
   const rotationEnabled = properties.randomRotation;
   return (
     <div className="inspector">
@@ -317,14 +340,6 @@ function BasicTab({
       </div>
 
       <Section title="Emitter Timing">
-        <FieldSpinner
-          label="Lifetime"
-          value={properties.lifetime}
-          min={0}
-          step={0.1}
-          unit="s"
-          onCommit={(v) => onCommit({ lifetime: v })}
-        />
         <FieldSpinner
           label="Initial Delay"
           value={properties.initialDelay}
@@ -349,25 +364,31 @@ function BasicTab({
           unit="s"
           onCommit={(v) => onCommit({ freezeTime: v })}
         />
-        <FieldSpinner
-          label="Random Lifetime"
-          value={properties.randomLifetimePerc}
-          min={0}
-          max={100}
-          step={1}
-          unit="%"
-          onCommit={(v) => onCommit({ randomLifetimePerc: v })}
-        />
       </Section>
 
       <Section title="Generation">
-        <FieldCheckbox
-          label="Use Bursts"
-          checked={properties.useBursts}
-          onCheckedChange={(v) => onCommit({ useBursts: v })}
-        />
+        {/* Hand-rolled radio rows (not Radix RadioGroup) per spec §5.1
+            — keeps the visual fidelity tight to the legacy three-row
+            stack while still being keyboard-accessible (Enter / Space).
+            Space gets preventDefault to suppress page scroll. */}
+        <div
+          role="radio"
+          aria-checked={burstsEnabled}
+          tabIndex={0}
+          className="radio-row"
+          onClick={() => setMode("bursts")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setMode("bursts");
+            }
+          }}
+        >
+          <span className="radio-dot" />
+          <span>Bursts</span>
+        </div>
         <FieldSpinner
-          label="Bursts"
+          label="Bursts:"
           value={properties.nBursts}
           min={1}
           step={1}
@@ -376,7 +397,7 @@ function BasicTab({
           onCommit={(v) => onCommit({ nBursts: Math.round(v) })}
         />
         <FieldSpinner
-          label="Burst Delay"
+          label="Burst delay:"
           value={properties.burstDelay}
           min={0}
           step={0.1}
@@ -385,7 +406,7 @@ function BasicTab({
           onCommit={(v) => onCommit({ burstDelay: v })}
         />
         <FieldSpinner
-          label="Particles / Burst"
+          label="Particles/burst:"
           value={properties.nParticlesPerBurst}
           min={1}
           step={1}
@@ -393,15 +414,105 @@ function BasicTab({
           disabled={!burstsEnabled}
           onCommit={(v) => onCommit({ nParticlesPerBurst: Math.round(v) })}
         />
+
+        <div
+          role="radio"
+          aria-checked={continuousEnabled}
+          tabIndex={0}
+          className="radio-row"
+          onClick={() => setMode("continuous")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setMode("continuous");
+            }
+          }}
+        >
+          <span className="radio-dot" />
+          <span>Continuous stream</span>
+        </div>
         <FieldSpinner
-          label="Particles / Second"
+          label="Particles/second:"
           value={properties.nParticlesPerSecond}
           min={0}
           step={1}
           decimals={0}
-          disabled={!rateEnabled}
+          disabled={!continuousEnabled}
           onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
         />
+
+        <div
+          role="radio"
+          aria-checked={weatherEnabled}
+          tabIndex={0}
+          className="radio-row"
+          onClick={() => setMode("weather")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setMode("weather");
+            }
+          }}
+        >
+          <span className="radio-dot" />
+          <span>Weather particle</span>
+        </div>
+        {/* NOTE: Continuous and Weather both bind to nParticlesPerSecond
+            but carry distinct aria-labels ("Particles/second:" vs
+            "Particles:") so getByLabelText still distinguishes them.
+            Per spec Risk #3. */}
+        <FieldSpinner
+          label="Particles:"
+          value={properties.nParticlesPerSecond}
+          min={0}
+          step={1}
+          decimals={0}
+          disabled={!weatherEnabled}
+          onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
+        />
+        <FieldSpinner
+          label="Distance from camera:"
+          value={properties.weatherCubeDistance}
+          min={0}
+          step={0.1}
+          unit="units"
+          disabled={!weatherEnabled}
+          onCommit={(v) => onCommit({ weatherCubeDistance: v })}
+        />
+        <FieldSpinner
+          label="Cube size:"
+          value={properties.weatherCubeSize}
+          min={0}
+          step={0.1}
+          unit="units"
+          disabled={!weatherEnabled}
+          onCommit={(v) => onCommit({ weatherCubeSize: v })}
+        />
+
+        {/* Lifetime fields moved here from Emitter Timing to match
+            legacy IDD_EMITTER_PROPS1 (.rc:449,461,466). Minimum lifetime
+            uses displayInvertedPercent: the stored ratio (0..1) displays
+            as `100 - val*100` rounded — matches IDC_SPINNER14 at
+            [Emitter.cpp:487,795]. */}
+        <FieldSpinner
+          label="Maximum lifetime:"
+          value={properties.lifetime}
+          min={0}
+          step={0.1}
+          unit="s"
+          onCommit={(v) => onCommit({ lifetime: v })}
+        />
+        <FieldSpinner
+          label="Minimum lifetime:"
+          value={properties.randomLifetimePerc}
+          displayInvertedPercent
+          unit="%"
+          onCommit={(v) => onCommit({ randomLifetimePerc: v })}
+        />
+
+        {/* Below are fields that stay in Generation for P3; P4 moves
+            rotation / random scale / parent link strength / Index out
+            to their own sections. */}
         <FieldSpinner
           label="Random Scale"
           value={properties.randomScalePerc}

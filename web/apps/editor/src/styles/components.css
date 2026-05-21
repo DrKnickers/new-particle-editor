@@ -497,6 +497,34 @@
   grid-template-columns: 16px 1fr 92px 56px;
 }
 
+/* Tri-state Generation radio rows (B1.3 P3). Hand-rolled radio chrome
+   rather than Radix RadioGroup so the layout sits tightly inside
+   `.section-body` alongside the FieldSpinner form-rows. Active state
+   fills the inner dot via the accent token. */
+.radio-row {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 4px 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.radio-row[aria-checked="true"] .radio-dot {
+  background: var(--accent);
+}
+.radio-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border-2);
+  background: transparent;
+}
+.radio-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Inputs */
 .num-input {
   display: flex;
