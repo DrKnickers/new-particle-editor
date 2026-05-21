@@ -1340,13 +1340,17 @@ export function EmitterTree({ bridge }: Props) {
       className="flex h-full flex-col outline-none"
     >
       {tree === null ? (
-        <div className="text-text-3 text-sm">(loading…)</div>
+        <div className="flex-1 min-h-0 text-text-3 text-sm">(loading…)</div>
       ) : rootChildren.length === 0 ? (
-        <div className="text-text-3 text-sm">(no emitters)</div>
+        <div className="flex-1 min-h-0 text-text-3 text-sm">(no emitters)</div>
       ) : (
         // Wrap the <ul> in a relative-positioned container so the
         // bracket gutter (absolute, right-aligned) can stack alongside.
-        <div className="relative flex">
+        // B1.3.1 polish: this container is the scroll viewport now —
+        // `flex-1 min-h-0 overflow-y-auto` so long emitter lists scroll
+        // inside it while EmitterTreeToolbar (sibling below) stays
+        // pinned at the pane's bottom.
+        <div className="relative flex flex-1 min-h-0 overflow-y-auto">
           <ul
             role="tree"
             aria-label="Emitters"

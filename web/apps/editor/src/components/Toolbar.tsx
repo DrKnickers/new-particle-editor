@@ -24,16 +24,11 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { BackgroundDropdown } from "@/components/BackgroundDropdown";
 import { GroundDropdown } from "@/components/GroundDropdown";
 import { useSpawnerVisibility } from "@/lib/spawner-visibility";
+import { promptSaveChanges } from "@/lib/file-state";
 
 type Props = { bridge: Bridge };
 
 const ICON = { className: "size-3.5" } as const;
-
-// File ops are scaffolds until Phase 3 wires them — keep the legacy
-// behaviour of logging a TODO for now (matches the current shape).
-const todoFile = (action: string) => () => {
-  console.log(`[Toolbar] ${action} — file ops land in Phase 3 Screen 8`);
-};
 
 export function Toolbar({ bridge }: Props) {
   const [state, setState] = useState<EngineStateDto | null>(null);
@@ -52,18 +47,49 @@ export function Toolbar({ bridge }: Props) {
 
   return (
     <div className="toolbar">
-      {/* Group 1: file actions */}
+      {/* Group 1: file actions. New / Open route through promptSaveChanges
+          so a dirty document gets the Save/Discard/Cancel prompt before
+          being replaced (same gate the MenuBar uses). Save + Save As are
+          themselves the save path so they don't need the gate. */}
       <div className="tb-group">
-        <button type="button" className="tb-btn" aria-label="New" onClick={todoFile("New")}>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="New"
+          onClick={() => {
+            promptSaveChanges(async () => {
+              await bridge.request({ kind: "file/new", params: {} });
+            });
+          }}
+        >
           <FilePlus {...ICON} />
         </button>
-        <button type="button" className="tb-btn" aria-label="Open" onClick={todoFile("Open")}>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Open"
+          onClick={() => {
+            promptSaveChanges(async () => {
+              await bridge.request({ kind: "file/open", params: {} });
+            });
+          }}
+        >
           <FolderOpen {...ICON} />
         </button>
-        <button type="button" className="tb-btn" aria-label="Save" onClick={todoFile("Save")}>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Save"
+          onClick={() => { void bridge.request({ kind: "file/save", params: {} }); }}
+        >
           <Save {...ICON} />
         </button>
-        <button type="button" className="tb-btn" aria-label="Save As" onClick={todoFile("Save As")}>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Save As"
+          onClick={() => { void bridge.request({ kind: "file/save-as", params: {} }); }}
+        >
           <SaveAll {...ICON} />
         </button>
       </div>

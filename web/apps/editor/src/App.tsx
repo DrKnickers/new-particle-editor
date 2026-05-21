@@ -195,10 +195,16 @@ function AppShell() {
           <div className="panel-body flex min-h-0 flex-col overflow-hidden">
             {/* Upper-left — Emitter tree (Phase 3 Screen 4 Batch A).
                 Read-only tree view with click-to-select + Batches B/C
-                mutations (rename, drag/drop, context menus). */}
+                mutations (rename, drag/drop, context menus).
+                B1.3.1 polish: `overflow-hidden flex flex-col` instead of
+                `overflow-y-auto` so the scroll viewport is the tree's
+                inner `<ul>` container, not the whole pane. Lets
+                EmitterTreeToolbar pin to the pane's bottom regardless of
+                list length. The aside still owns padding (`p-3`) so the
+                tree + toolbar share consistent gutters. */}
             <aside
               data-testid="quadrant-emitter-tree"
-              className="flex-1 min-h-0 overflow-y-auto p-3 text-sm"
+              className="flex-1 min-h-0 overflow-hidden flex flex-col p-3 text-sm"
             >
               <EmitterTree bridge={bridge} />
             </aside>

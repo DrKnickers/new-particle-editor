@@ -468,8 +468,14 @@
  * section-header title text. Section header is:
  *   padding-left 2px + chevron 12px + gap 6px = 20px from section's left.
  * Apply the same 20px indent to .section-body and .form-row.name-row
- * (the Name row sits outside any Section). */
-.section-body { padding-left: 20px; }
+ * (the Name row sits outside any Section).
+ *
+ * B1.3.1 polish: also a `padding-right: 12px` so form rows inside a
+ * Section keep a comfortable margin from the inspector scrollbar —
+ * matching the Physics tab's Tabs.Content `p-3` wrapper. The Name row
+ * + Section headers (which sit OUTSIDE .section-body) are unaffected
+ * and continue to extend to the inspector's edge. */
+.section-body { padding-left: 20px; padding-right: 12px; }
 
 .form-row {
   display: grid;
