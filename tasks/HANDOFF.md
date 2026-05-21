@@ -32,15 +32,17 @@ If you are a fresh Claude session resuming this project:
 |---|---|
 | **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\brave-buck-1295c8` (this session's; next session gets a fresh `claude/<random>` path) |
 | **Branch** | `claude/brave-buck-1295c8` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | This P8 docs commit at the top of the session branch. Top non-docs commit is `82917f0` (`fix(LT-4): inspector + Spawner polish round 2 — Vec3 axis labels, cluster widening, Spawner scroll`). |
-| **Working tree** | clean (after this P8 docs commit). |
-| **Ahead of origin/lt-4** | 13 commits — the full B1.3 stack: spec + plan + 10 implementation commits + this P8 docs commit. All 13 to be FF'd into `lt-4` and pushed at the user's explicit OK. |
+| **HEAD (committed)** | `9b3d77e` (`docs(LT-4): CHANGELOG + HANDOFF + ROADMAP + L-010 for B1.3`) — the P8 docs commit at the top of the session branch. Top non-docs commit is `82917f0` (`fix(LT-4): inspector + Spawner polish round 2 — Vec3 axis labels, cluster widening, Spawner scroll`). Session branch is in sync with `origin/lt-4`. |
+| **Working tree** | clean. |
+| **Ahead of origin/lt-4** | 0 — the full B1.3 stack (13 commits) was FF'd into `origin/lt-4` at the end of this session. `origin/lt-4` HEAD is `9b3d77e`. |
 | **Behind master** | `lt-4` is ~365+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
 | **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning; no C++ change this dispatch — last C++-touching commit was the prior session). Vitest **277 / 277**. Playwright **83 / 83**. |
 | **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 left-pane realignment + B1.2 left-pane polish + B1.2.1 label-truncation polish + B1.3 tab parity reorg shipped. Phase 3 not started.** Next dispatch is **B1.3.1 (inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow)**. After that: **B1.4 (resizable splitters via `react-resizable-panels`)**. **B2 (Appearance + Physics wiring)** is likely largely obsolete after B1.3 wired both tabs through the restructure — worth verifying before re-scoping. Legacy `--legacy-ui` mode is untouched throughout. |
 
-**Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session is in `sweet-vaughan-dc78c1`, succeeding `charming-williams-0efd47`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
+**Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session was in `brave-buck-1295c8`, succeeding `sweet-vaughan-dc78c1`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
+
+**Sister-worktree sync note.** `lt-4` is currently checked out at `C:/Modding/Particle Editor/.claude/worktrees/great-varahamihira-b66cf4`, where its local ref is stale (still at `4edcc3a` pre-B1.3). Next session in that worktree should `git fetch && git merge --ff-only origin/lt-4` before any work to bring the local ref up to `9b3d77e`. The fresh `claude/<random>` worktree the desktop app provisions for the next session will branch from current `origin/lt-4` (`9b3d77e`) and won't have this issue.
 
 **NuGet pre-flight (fresh worktrees only).** `.gitignore` excludes `packages/`, so the first MSBuild in a fresh worktree fails with *"missing Microsoft.Web.WebView2.targets"*. Restore explicitly before the first build:
 
