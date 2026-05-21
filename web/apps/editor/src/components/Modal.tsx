@@ -24,7 +24,8 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode, type MouseEventHandler } from "react";
+import { useEffect, useState, type ReactNode, type MouseEventHandler } from "react";
+import { createPortal } from "react-dom";
 import { useBridge } from "@/lib/bridge-context";
 
 export type ModalSize = "sm" | "md" | "lg";
@@ -50,132 +51,170 @@ export function Modal({
   size = "md",
   children,
 }: ModalProps) {
-  // FD9b: the engine viewport renders as a layered window on top of
-  // WebView2. Register the Dialog.Content's bounds with the
-  // AlphaCompositor so the engine punches a hole exactly where the
-  // modal body sits — viewport keeps rendering everywhere else.
+  // B1.3.1.1: frosted-glass modal backdrop via engine-snapshot capture.
+  // The engine viewport is a layered Win32 popup composited above
+  // WebView2 by DWM — its pixels can't be reached by CSS effects
+  // (backdrop-filter, opacity, blur) applied to HTML elements (see
+  // tasks/lessons.md L-011 for the structural reason and the failed
+  // server-side modal-mask approach this replaces). The fix lifts the
+  // engine output INTO the WebView2 DOM as a frozen <img>:
   //
-  // Why this inlines the occlusion logic instead of using
-  // useViewportOcclusion: Radix Dialog.Content mounts via a
-  // Portal+Presence wrapper that delays ref attachment by at least
-  // one render cycle past the parent's useEffect. The shared hook
-  // captures `ref.current` once at effect time and never re-runs
-  // when the target attaches later, so for Dialog.Content the
-  // effect early-returns on every open transition. Tracking the
-  // element via useState + a callback ref forces a re-render when
-  // the node attaches, the effect re-runs with the element ready,
-  // and the occlusion finally fires. Bridge comes from
-  // BridgeContext (NOT window.bridge — see bridge-context.ts).
+  //   1. Open: request a PNG snapshot from AlphaCompositor's pre-stamp
+  //      cache and render it as an <img> portaled into the viewport
+  //      quadrant DOM. Send `viewport/occlude` with the FULL quadrant
+  //      rect so the engine popup goes fully alpha-transparent — the
+  //      snapshot is the only thing the user sees behind Dialog.Overlay.
+  //   2. Dialog.Overlay's `bg-black/60 backdrop-blur-sm` then dims +
+  //      blurs everything in its DOM background uniformly (panels AND
+  //      the snapshot img), with no visible popup boundary because both
+  //      sides of it are now WebView2-rendered pixels.
+  //   3. Close: clear the snapshot state, restore the engine popup by
+  //      sending `viewport/occlude { rect: null }`. The engine keeps
+  //      rendering through the modal lifecycle (a known cost — see
+  //      todo.md §4 risk 4).
+  //
+  // Bridge comes from BridgeContext (NOT `window.bridge` — see L-012).
   const bridge = useBridge();
-  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
-  const contentRef = useCallback((node: HTMLDivElement | null) => {
-    setContentEl(node);
-  }, []);
+  const [snapshot, setSnapshot] = useState<{ pngBase64: string; w: number; h: number } | null>(null);
+  const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!open || !bridge || !contentEl) return;
-    // Tight alpha cut just around the modal chrome — 8 px pad + 8 px
-    // feather is enough soft-edge for clean alpha AA without exposing
-    // a visible ring of Dialog.Overlay's `bg-black/60` dim through
-    // the popup. (Wider pad widens the cut, which exposes more of
-    // the dim and produces a visible dark band around the modal —
-    // the dim's full-screen rect is what fills the transparent zone
-    // in the popup, not the modal's CSS shadow.) Tradeoff: the
-    // chrome's `shadow-2xl` won't render on the engine-viewport
-    // side, but the modal sits cleanly against the rendered scene.
-    const padPx = 8;
-    const featherPx = 8;
-    const send = () => {
-      const r = contentEl.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      void bridge
-        .request({
-          kind: "viewport/occlude",
-          params: {
-            id: "modal",
-            rect: {
-              x: Math.round((r.left - padPx) * dpr),
-              y: Math.round((r.top  - padPx) * dpr),
-              w: Math.round((r.width  + padPx * 2) * dpr),
-              h: Math.round((r.height + padPx * 2) * dpr),
+    if (!open || !bridge) return;
+
+    // Look up the quadrant-viewport node lazily on open — App.tsx's
+    // shell mounts it once at startup, so by the time any modal opens
+    // it's already in the DOM. The querySelector miss is the test-env
+    // path (Modal mounted in isolation without the App shell); in that
+    // case viewportEl stays null and the createPortal render guards
+    // skip the img output.
+    const el = document.querySelector<HTMLElement>('[data-testid="quadrant-viewport"]');
+    setViewportEl(el);
+
+    let rafId: number | null = null;
+    let cancelled = false;
+
+    const captureAndOcclude = () => {
+      // Engine popup → fully alpha-cut while the modal is open. The
+      // full-quadrant occlude has no padding and no feather: the
+      // snapshot img exactly fills the quadrant (inset:0 inside the
+      // position:relative parent), so the popup boundary and the img
+      // edge coincide. CSS effects above blend them.
+      if (el)
+      {
+        const r = el.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        void bridge
+          .request({
+            kind: "viewport/occlude",
+            params: {
+              id: "modal",
+              rect: {
+                x: Math.round(r.left * dpr),
+                y: Math.round(r.top  * dpr),
+                w: Math.round(r.width  * dpr),
+                h: Math.round(r.height * dpr),
+              },
+              feather: 0,
             },
-            feather: Math.round(featherPx * dpr),
-          },
+          })
+          .catch(() => { /* ignore — resize handler will retry */ });
+      }
+      void bridge
+        .request({ kind: "viewport/capture-snapshot", params: {} })
+        .then((res) => {
+          if (cancelled) return;
+          const snap = res as { pngBase64: string; w: number; h: number };
+          setSnapshot(snap);
         })
-        .catch(() => { /* ignore — ResizeObserver / resize will retry */ });
+        .catch(() => { /* MockBridge / test env — render guard short-circuits */ });
     };
-    send();
-    const ro = new ResizeObserver(send);
-    ro.observe(contentEl);
-    window.addEventListener("resize", send);
-    // B1.3.1 modal-mask: dim + blur the engine viewport so it matches
-    // Dialog.Overlay's `bg-black/60 backdrop-blur-sm` treatment of the
-    // WebView2 panels. HTML CSS can't reach the engine layer (separate
-    // compositing window), so the AlphaCompositor renders the effect
-    // server-side via per-pixel alpha multiply (dim) + a separable
-    // box-blur on the engine pixels. Magic numbers chosen to visually
-    // match the WebView2-side dim+blur: alpha=0.4 ≈ bg-black/60's
-    // 60% darkening; blurRadius=6 ≈ backdrop-blur-sm's 4px blur scaled
-    // up slightly to account for the engine's natural high-frequency
-    // content vs the panels' low-frequency content.
-    void bridge
-      .request({
-        kind: "viewport/set-modal-mask",
-        params: { alpha: 0.4, blurRadius: 6 },
-      })
-      .catch(() => { /* ignore — visual polish only, not required for modal function */ });
+
+    captureAndOcclude();
+
+    // rAF-throttled re-capture: drag-resize fires resize many times per
+    // frame; coalesce to one capture per frame to keep encode cost
+    // bounded (~10-30 ms per 1280×720 PNG via GDI+, per todo.md §4).
+    const onResize = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        captureAndOcclude();
+      });
+    };
+    window.addEventListener("resize", onResize);
+
     return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", send);
+      cancelled = true;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", onResize);
+      setSnapshot(null);
+      setViewportEl(null);
       void bridge
         .request({
           kind: "viewport/occlude",
           params: { id: "modal", rect: null },
         })
         .catch(() => { /* ignore */ });
-      // Restore identity (no effect) on close.
-      void bridge
-        .request({
-          kind: "viewport/set-modal-mask",
-          params: { alpha: 1.0, blurRadius: 0 },
-        })
-        .catch(() => { /* ignore */ });
     };
-  }, [open, bridge, contentEl]);
+  }, [open, bridge]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay
-          data-testid="modal-overlay"
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0"
-        />
-        <Dialog.Content
-          // aria-describedby={undefined} opts out of Radix's accessibility
-          // warning about a missing Dialog.Description. Sub-dialogs at the
-          // Screen 8 batch 1 scale (About, Rescale) have no separate body
-          // copy worth distinguishing from the title; the title alone is
-          // sufficient SR context.
-          aria-describedby={undefined}
-          ref={contentRef}
-          className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-border bg-bg-2 text-text shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
-        >
-          {/* Header */}
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-bg-2 px-4">
-            <Dialog.Title className="text-sm font-semibold text-text">
-              {title}
-            </Dialog.Title>
-            <Dialog.Close
-              aria-label="Close"
-              className="flex size-6 items-center justify-center rounded text-text-2 hover:bg-panel-2 hover:text-text outline-none"
-            >
-              <X className="size-4" />
-            </Dialog.Close>
-          </div>
-          {children}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <>
+      {/* B1.3.1.1 frosted-glass backdrop. Portal the snapshot <img>
+          into the viewport-quadrant DOM so it sits below Dialog.Overlay
+          in the same compositing tree — Dialog.Overlay's `bg-black/60
+          backdrop-blur-sm` then blurs panels + snapshot uniformly. The
+          render guard skips when the host returns an empty PNG
+          (MockBridge, fresh engine, just-reset device). */}
+      {open && viewportEl && snapshot && snapshot.pngBase64 ? createPortal(
+        <img
+          data-testid="modal-backdrop-snapshot"
+          src={`data:image/png;base64,${snapshot.pngBase64}`}
+          alt=""
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            pointerEvents: "none",
+          }}
+        />,
+        viewportEl,
+      ) : null}
+
+      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+        <Dialog.Portal>
+          <Dialog.Overlay
+            data-testid="modal-overlay"
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in-0"
+          />
+          <Dialog.Content
+            // aria-describedby={undefined} opts out of Radix's accessibility
+            // warning about a missing Dialog.Description. Sub-dialogs at the
+            // Screen 8 batch 1 scale (About, Rescale) have no separate body
+            // copy worth distinguishing from the title; the title alone is
+            // sufficient SR context.
+            aria-describedby={undefined}
+            className={`fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 ${SIZE_CLASS[size]} max-h-[80vh] overflow-hidden rounded-lg border border-border bg-bg-2 text-text shadow-md outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95`}
+          >
+            {/* Header */}
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-bg-2 px-4">
+              <Dialog.Title className="text-sm font-semibold text-text">
+                {title}
+              </Dialog.Title>
+              <Dialog.Close
+                aria-label="Close"
+                className="flex size-6 items-center justify-center rounded text-text-2 hover:bg-panel-2 hover:text-text outline-none"
+              >
+                <X className="size-4" />
+              </Dialog.Close>
+            </div>
+            {children}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
   );
 }
 

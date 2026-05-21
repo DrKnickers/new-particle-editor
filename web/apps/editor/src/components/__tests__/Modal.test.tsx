@@ -89,18 +89,25 @@ describe("Modal", () => {
     expect(content.className).not.toContain("shadow-2xl");
   });
 
-  it("dispatches viewport/set-modal-mask on open and clears it on close", async () => {
-    // B1.3.1: the AlphaCompositor reads this to dim+blur the engine
-    // viewport while the modal is open. Provide a stub bridge via
-    // BridgeContext (the same plumbing App.tsx uses in prod) so
-    // Modal's useEffect picks it up; verify both the open call and
-    // the cleanup-on-close call hit the bridge with the expected
-    // params. Magic numbers (0.4, 6 / 1.0, 0) are checked exactly —
-    // if a future tweak changes the dim intensity the test should
-    // be updated deliberately, not silently.
+  it("dispatches viewport/capture-snapshot + full-quadrant occlude on open and clears occlusion on close", async () => {
+    // B1.3.1.1: the frosted-glass backdrop replaces the old modal-mask
+    // approach (which dimmed engine pixels server-side and produced
+    // an inner-shadow seam at the popup boundary — see L-011). The new
+    // flow snapshots the engine into a portaled <img>, full-occludes
+    // the engine popup, and lets Dialog.Overlay's CSS effects blur
+    // panels + snapshot uniformly.
+    //
+    // We assert the bridge surface: both snapshot capture and
+    // full-quadrant occlude fire on open; cleanup fires occlude with
+    // rect:null on close. The quadrant rect must be provided by a
+    // data-testid="quadrant-viewport" element in the DOM tree —
+    // we render a stub for it so getBoundingClientRect doesn't
+    // collapse to zero. The exact rect numerics aren't pinned (jsdom
+    // returns 0,0,0,0 by default) but the request shape is.
     const bridge = makeStubBridge();
     const { rerender } = render(
       <BridgeContext.Provider value={bridge}>
+        <div data-testid="quadrant-viewport" style={{ width: 800, height: 600 }} />
         <Modal open onOpenChange={() => {}} title="Test Modal">
           <Modal.Body>body</Modal.Body>
         </Modal>
@@ -108,14 +115,38 @@ describe("Modal", () => {
     );
     await waitFor(() => {
       expect(bridge.request).toHaveBeenCalledWith({
-        kind: "viewport/set-modal-mask",
-        params: { alpha: 0.4, blurRadius: 6 },
+        kind: "viewport/capture-snapshot",
+        params: {},
       });
     });
-    // Close: re-render with open=false. The cleanup branch fires the
-    // identity restore.
+    await waitFor(() => {
+      expect(bridge.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "viewport/occlude",
+          params: expect.objectContaining({
+            id: "modal",
+            // rect is non-null on open; numerics depend on jsdom layout
+            // (likely zeros) but the SHAPE is what we lock.
+            rect: expect.objectContaining({
+              x: expect.any(Number),
+              y: expect.any(Number),
+              w: expect.any(Number),
+              h: expect.any(Number),
+            }),
+          }),
+        }),
+      );
+    });
+    // Lock: the deleted modal-mask surface MUST NOT be invoked any
+    // more. If a future refactor accidentally re-adds it, this catches.
+    expect(bridge.request).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "viewport/set-modal-mask" }),
+    );
+
+    // Close: cleanup branch fires occlude with rect:null.
     rerender(
       <BridgeContext.Provider value={bridge}>
+        <div data-testid="quadrant-viewport" style={{ width: 800, height: 600 }} />
         <Modal open={false} onOpenChange={() => {}} title="Test Modal">
           <Modal.Body>body</Modal.Body>
         </Modal>
@@ -123,8 +154,8 @@ describe("Modal", () => {
     );
     await waitFor(() => {
       expect(bridge.request).toHaveBeenCalledWith({
-        kind: "viewport/set-modal-mask",
-        params: { alpha: 1.0, blurRadius: 0 },
+        kind: "viewport/occlude",
+        params: { id: "modal", rect: null },
       });
     });
   });
