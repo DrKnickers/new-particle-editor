@@ -44,6 +44,7 @@ import type {
   Vec4,
 } from "@particle-editor/bridge-schema";
 import { Spinner } from "@/primitives/Spinner";
+import { Section } from "@/components/Section";
 
 // Blend mode dropdown options — mirrors the legacy `BlendModes[]` table
 // at [src/UI/Emitter.cpp:20-31]. The engine has additional blend mode
@@ -296,148 +297,167 @@ function BasicTab({
   const rateEnabled = !properties.useBursts;
   const rotationEnabled = properties.randomRotation;
   return (
-    <div className="space-y-3">
-      <FieldText
-        label="Name"
-        value={properties.name}
-        onCommit={(v) => onCommit({ name: v })}
-      />
-      <FieldSpinner
-        label="Lifetime"
-        value={properties.lifetime}
-        min={0}
-        step={0.1}
-        unit="s"
-        onCommit={(v) => onCommit({ lifetime: v })}
-      />
-      <FieldSpinner
-        label="Initial Delay"
-        value={properties.initialDelay}
-        min={0}
-        step={0.1}
-        unit="s"
-        onCommit={(v) => onCommit({ initialDelay: v })}
-      />
-      <FieldCheckbox
-        label="Use Bursts"
-        checked={properties.useBursts}
-        onCheckedChange={(v) => onCommit({ useBursts: v })}
-      />
-      <FieldSpinner
-        label="Bursts"
-        value={properties.nBursts}
-        min={1}
-        step={1}
-        decimals={0}
-        disabled={!burstsEnabled}
-        onCommit={(v) => onCommit({ nBursts: Math.round(v) })}
-      />
-      <FieldSpinner
-        label="Burst Delay"
-        value={properties.burstDelay}
-        min={0}
-        step={0.1}
-        unit="s"
-        disabled={!burstsEnabled}
-        onCommit={(v) => onCommit({ burstDelay: v })}
-      />
-      <FieldSpinner
-        label="Particles / Burst"
-        value={properties.nParticlesPerBurst}
-        min={1}
-        step={1}
-        decimals={0}
-        disabled={!burstsEnabled}
-        onCommit={(v) => onCommit({ nParticlesPerBurst: Math.round(v) })}
-      />
-      <FieldSpinner
-        label="Particles / Second"
-        value={properties.nParticlesPerSecond}
-        min={0}
-        step={1}
-        decimals={0}
-        disabled={!rateEnabled}
-        onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
-      />
-      <FieldSpinner
-        label="Random Lifetime"
-        value={properties.randomLifetimePerc}
-        min={0}
-        max={100}
-        step={1}
-        unit="%"
-        onCommit={(v) => onCommit({ randomLifetimePerc: v })}
-      />
-      <FieldSpinner
-        label="Random Scale"
-        value={properties.randomScalePerc}
-        min={0}
-        max={100}
-        step={1}
-        unit="%"
-        onCommit={(v) => onCommit({ randomScalePerc: v })}
-      />
-      <FieldCheckbox
-        label="Random Rotation"
-        checked={properties.randomRotation}
-        onCheckedChange={(v) => onCommit({ randomRotation: v })}
-      />
-      <FieldCheckbox
-        label="Random Rotation Direction"
-        checked={properties.randomRotationDirection}
-        disabled={!rotationEnabled}
-        onCheckedChange={(v) => onCommit({ randomRotationDirection: v })}
-      />
-      <FieldSpinner
-        label="Rotation Average"
-        value={properties.randomRotationAverage}
-        step={0.1}
-        disabled={!rotationEnabled}
-        onCommit={(v) => onCommit({ randomRotationAverage: v })}
-      />
-      <FieldSpinner
-        label="Rotation Variance"
-        value={properties.randomRotationVariance}
-        step={0.1}
-        disabled={!rotationEnabled}
-        onCommit={(v) => onCommit({ randomRotationVariance: v })}
-      />
-      <FieldSpinner
-        label="Freeze Time"
-        value={properties.freezeTime}
-        min={0}
-        step={0.1}
-        unit="s"
-        onCommit={(v) => onCommit({ freezeTime: v })}
-      />
-      <FieldSpinner
-        label="Skip Time"
-        value={properties.skipTime}
-        min={0}
-        step={0.1}
-        unit="s"
-        onCommit={(v) => onCommit({ skipTime: v })}
-      />
-      <FieldCheckbox
-        label="Link to System"
-        checked={properties.linkToSystem}
-        onCheckedChange={(v) => onCommit({ linkToSystem: v })}
-      />
-      <FieldSpinner
-        label="Parent Link Strength"
-        value={properties.parentLinkStrength}
-        min={0}
-        step={0.01}
-        onCommit={(v) => onCommit({ parentLinkStrength: v })}
-      />
-      <FieldSpinner
-        label="Index"
-        value={properties.index}
-        min={0}
-        step={1}
-        decimals={0}
-        onCommit={(v) => onCommit({ index: Math.round(v) })}
-      />
+    <div className="inspector">
+      {/* Name row — custom 60px 1fr grid per design source's
+          left_panel.jsx:100. Outside any Section so it always
+          shows at the top of the tab. */}
+      <div
+        className="form-row"
+        style={{ gridTemplateColumns: "60px 1fr" }}
+      >
+        <span className="lbl">Name</span>
+        <FieldText
+          value={properties.name}
+          onCommit={(v) => onCommit({ name: v })}
+          label="Name"
+          wide
+        />
+      </div>
+
+      <Section title="Emitter Timing">
+        <FieldSpinner
+          label="Lifetime"
+          value={properties.lifetime}
+          min={0}
+          step={0.1}
+          unit="s"
+          onCommit={(v) => onCommit({ lifetime: v })}
+        />
+        <FieldSpinner
+          label="Initial Delay"
+          value={properties.initialDelay}
+          min={0}
+          step={0.1}
+          unit="s"
+          onCommit={(v) => onCommit({ initialDelay: v })}
+        />
+        <FieldSpinner
+          label="Skip Time"
+          value={properties.skipTime}
+          min={0}
+          step={0.1}
+          unit="s"
+          onCommit={(v) => onCommit({ skipTime: v })}
+        />
+        <FieldSpinner
+          label="Freeze Time"
+          value={properties.freezeTime}
+          min={0}
+          step={0.1}
+          unit="s"
+          onCommit={(v) => onCommit({ freezeTime: v })}
+        />
+        <FieldSpinner
+          label="Random Lifetime"
+          value={properties.randomLifetimePerc}
+          min={0}
+          max={100}
+          step={1}
+          unit="%"
+          onCommit={(v) => onCommit({ randomLifetimePerc: v })}
+        />
+      </Section>
+
+      <Section title="Generation">
+        <FieldCheckbox
+          label="Use Bursts"
+          checked={properties.useBursts}
+          onCheckedChange={(v) => onCommit({ useBursts: v })}
+        />
+        <FieldSpinner
+          label="Bursts"
+          value={properties.nBursts}
+          min={1}
+          step={1}
+          decimals={0}
+          disabled={!burstsEnabled}
+          onCommit={(v) => onCommit({ nBursts: Math.round(v) })}
+        />
+        <FieldSpinner
+          label="Burst Delay"
+          value={properties.burstDelay}
+          min={0}
+          step={0.1}
+          unit="s"
+          disabled={!burstsEnabled}
+          onCommit={(v) => onCommit({ burstDelay: v })}
+        />
+        <FieldSpinner
+          label="Particles / Burst"
+          value={properties.nParticlesPerBurst}
+          min={1}
+          step={1}
+          decimals={0}
+          disabled={!burstsEnabled}
+          onCommit={(v) => onCommit({ nParticlesPerBurst: Math.round(v) })}
+        />
+        <FieldSpinner
+          label="Particles / Second"
+          value={properties.nParticlesPerSecond}
+          min={0}
+          step={1}
+          decimals={0}
+          disabled={!rateEnabled}
+          onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
+        />
+        <FieldSpinner
+          label="Random Scale"
+          value={properties.randomScalePerc}
+          min={0}
+          max={100}
+          step={1}
+          unit="%"
+          onCommit={(v) => onCommit({ randomScalePerc: v })}
+        />
+        <FieldCheckbox
+          label="Random Rotation"
+          checked={properties.randomRotation}
+          onCheckedChange={(v) => onCommit({ randomRotation: v })}
+        />
+        <FieldCheckbox
+          label="Random Rotation Direction"
+          checked={properties.randomRotationDirection}
+          disabled={!rotationEnabled}
+          onCheckedChange={(v) => onCommit({ randomRotationDirection: v })}
+        />
+        <FieldSpinner
+          label="Rotation Average"
+          value={properties.randomRotationAverage}
+          step={0.1}
+          disabled={!rotationEnabled}
+          onCommit={(v) => onCommit({ randomRotationAverage: v })}
+        />
+        <FieldSpinner
+          label="Rotation Variance"
+          value={properties.randomRotationVariance}
+          step={0.1}
+          disabled={!rotationEnabled}
+          onCommit={(v) => onCommit({ randomRotationVariance: v })}
+        />
+        <FieldSpinner
+          label="Index"
+          value={properties.index}
+          min={0}
+          step={1}
+          decimals={0}
+          onCommit={(v) => onCommit({ index: Math.round(v) })}
+        />
+      </Section>
+
+      <Section title="Connection">
+        <FieldCheckbox
+          label="Link to System"
+          checked={properties.linkToSystem}
+          onCheckedChange={(v) => onCommit({ linkToSystem: v })}
+        />
+        <FieldSpinner
+          label="Parent Link Strength"
+          value={properties.parentLinkStrength}
+          min={0}
+          step={0.01}
+          onCommit={(v) => onCommit({ parentLinkStrength: v })}
+        />
+      </Section>
     </div>
   );
 }
@@ -453,10 +473,16 @@ function FieldText({
   label,
   value,
   onCommit,
+  wide,
 }: {
   label: string;
   value: string;
   onCommit: (value: string) => void;
+  /** When true, render just the <input> (no .form-row wrapper, no
+   *  label span). Caller owns the outer row container and the label.
+   *  Used by the Name row, which needs the design source's custom
+   *  60px 1fr grid template. */
+  wide?: boolean;
 }) {
   // Local text state so the user can type freely; commit on blur or
   // Enter to avoid per-keystroke bridge spam.
@@ -467,29 +493,35 @@ function FieldText({
     lastProp.current = value;
     setText(value);
   }
+  const input = (
+    <input
+      type="text"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (text !== value) onCommit(text);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          (e.currentTarget as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          setText(value);
+          (e.currentTarget as HTMLInputElement).blur();
+        }
+      }}
+      className="text-input"
+      aria-label={label}
+      spellCheck={false}
+      autoComplete="off"
+    />
+  );
+  if (wide) {
+    return input;
+  }
   return (
     <div className="form-row">
       <span className="lbl">{label}</span>
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          if (text !== value) onCommit(text);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            (e.currentTarget as HTMLInputElement).blur();
-          } else if (e.key === "Escape") {
-            setText(value);
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
-        className="text-input"
-        aria-label={label}
-        spellCheck={false}
-        autoComplete="off"
-      />
+      {input}
       <span className="unit" />
     </div>
   );

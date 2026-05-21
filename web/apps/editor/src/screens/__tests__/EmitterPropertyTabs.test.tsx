@@ -349,6 +349,50 @@ describe("EmitterPropertyTabs", () => {
     }
   });
 
+  it("BasicTab renders three section headers in order: Emitter Timing, Generation, Connection", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<EmitterPropertyTabs bridge={bridge} />);
+    // Wait for Basic tab content to populate.
+    await waitFor(() => {
+      expect(screen.getByTestId("section-emitter-timing")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("section-generation")).toBeInTheDocument();
+    expect(screen.getByTestId("section-connection")).toBeInTheDocument();
+    // DOM order: Emitter Timing first, then Generation, then Connection.
+    const timing     = screen.getByTestId("section-emitter-timing");
+    const generation = screen.getByTestId("section-generation");
+    const connection = screen.getByTestId("section-connection");
+    expect(timing.compareDocumentPosition(generation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(generation.compareDocumentPosition(connection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("clicking a BasicTab section header collapses its children", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<EmitterPropertyTabs bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("section-emitter-timing")).toBeInTheDocument();
+    });
+    // Initially "Lifetime" (an Emitter Timing field) is visible.
+    expect(screen.getByLabelText("Lifetime")).toBeInTheDocument();
+    // Collapse Emitter Timing.
+    fireEvent.click(screen.getByTestId("section-emitter-timing"));
+    // Lifetime field is no longer in the DOM.
+    expect(screen.queryByLabelText("Lifetime")).not.toBeInTheDocument();
+  });
+
+  it("Name row uses the custom 60px 1fr grid template", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<EmitterPropertyTabs bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Name")).toBeInTheDocument();
+    });
+    // The Name field's <input> is inside a div with the custom grid template.
+    const nameInput = screen.getByLabelText("Name");
+    const row = nameInput.closest('div.form-row') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    expect(row!.style.gridTemplateColumns).toBe("60px 1fr");
+  });
+
   it("editing Lifetime fires emitters/set-properties with patch.lifetime", async () => {
     const { bridge } = makeStubBridge(0, { lifetime: 1.0 });
     render(<EmitterPropertyTabs bridge={bridge} />);
