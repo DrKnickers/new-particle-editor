@@ -31,7 +31,7 @@
 // Spinners commit per their existing semantics (Enter / blur / arrow /
 // wheel / drag-release). Checkboxes commit on change.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Select from "@radix-ui/react-select";
@@ -211,23 +211,31 @@ export function EmitterPropertyTabs({ bridge }: Props) {
     [bridge, selectedId, fetchProps],
   );
 
-  if (selectedId === null) {
-    return (
-      <div
-        data-testid="emitter-property-tabs-placeholder"
-        className="flex h-full items-center justify-center p-4 text-center text-xs text-text-3"
-      >
-        Select an emitter to edit its properties
-      </div>
-    );
-  }
-  if (properties === null) {
-    return (
-      <div className="flex h-full items-center justify-center p-4 text-xs text-text-3">
-        Loading…
-      </div>
-    );
-  }
+  // B1.3.1: the tab strip is always mounted so the user can see the
+  // Basic/Appearance/Physics structure (and pre-click a tab) before any
+  // emitter is selected. The per-Content `renderBody` helper swaps in a
+  // placeholder when no selection / loading, so only the active tab's
+  // body shows the placeholder — three call sites, never duplicated.
+  const renderBody = (content: (p: EmitterPropertiesDto) => ReactNode): ReactNode => {
+    if (selectedId === null) {
+      return (
+        <div
+          data-testid="emitter-property-tabs-placeholder"
+          className="flex h-full items-center justify-center p-4 text-center text-xs text-text-3"
+        >
+          Select an emitter to edit its properties
+        </div>
+      );
+    }
+    if (properties === null) {
+      return (
+        <div className="flex h-full items-center justify-center p-4 text-xs text-text-3">
+          Loading…
+        </div>
+      );
+    }
+    return content(properties);
+  };
 
   return (
     <Tabs.Root
@@ -253,21 +261,21 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         className="flex-1 min-h-0 overflow-y-auto outline-none"
         data-testid="tab-basic-content"
       >
-        <BasicTab properties={properties} onCommit={commit} />
+        {renderBody((p) => <BasicTab properties={p} onCommit={commit} />)}
       </Tabs.Content>
       <Tabs.Content
         value="appearance"
         className="flex-1 min-h-0 overflow-y-auto outline-none"
         data-testid="tab-appearance-content"
       >
-        <AppearanceTab properties={properties} onCommit={commit} />
+        {renderBody((p) => <AppearanceTab properties={p} onCommit={commit} />)}
       </Tabs.Content>
       <Tabs.Content
         value="physics"
         className="flex-1 min-h-0 overflow-y-auto p-3 outline-none"
         data-testid="tab-physics-content"
       >
-        <PhysicsTab properties={properties} onCommit={commit} />
+        {renderBody((p) => <PhysicsTab properties={p} onCommit={commit} />)}
       </Tabs.Content>
     </Tabs.Root>
   );

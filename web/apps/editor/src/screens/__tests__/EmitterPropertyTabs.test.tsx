@@ -67,7 +67,11 @@ function makeStubBridge(
 }
 
 describe("EmitterPropertyTabs", () => {
-  it("renders the placeholder when no emitter is selected", async () => {
+  it("renders the always-mounted tab strip with body-level placeholder when no emitter is selected", async () => {
+    // B1.3.1: the tab strip is mounted unconditionally so the user can
+    // see the Basic/Appearance/Physics structure (and pre-click a tab)
+    // before any emitter is selected. The placeholder sits inside the
+    // active tab's body, not in place of the whole component.
     const { bridge } = makeStubBridge(null);
     render(<EmitterPropertyTabs bridge={bridge} />);
     await waitFor(() => {
@@ -78,7 +82,12 @@ describe("EmitterPropertyTabs", () => {
     expect(
       screen.getByText(/Select an emitter to edit its properties/),
     ).toBeInTheDocument();
-    expect(screen.queryByTestId("emitter-property-tabs")).toBeNull();
+    // Strip is mounted (was previously absent on the no-selection branch).
+    expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
+    // All three triggers are present so the user can pre-pick a tab.
+    expect(screen.getByTestId("tab-trigger-basic")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-trigger-appearance")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-trigger-physics")).toBeInTheDocument();
   });
 
   it("renders three tab triggers with Basic active by default when an emitter is selected", async () => {
@@ -110,8 +119,10 @@ describe("EmitterPropertyTabs", () => {
       isWeatherParticle: false,
     });
     render(<EmitterPropertyTabs bridge={bridge} />);
+    // B1.3.1: the tab strip mounts immediately; wait specifically for the
+    // BasicTab form to hydrate (placeholder → loading → form transition).
     await waitFor(() => {
-      expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
+      expect(screen.getByLabelText("Maximum lifetime:")).toBeInTheDocument();
     });
     // Name input populated from properties.
     const nameInput = screen.getByLabelText("Name") as HTMLInputElement;
@@ -486,8 +497,9 @@ describe("EmitterPropertyTabs", () => {
     // moved into Generation. The underlying `lifetime` key is unchanged.
     const { bridge } = makeStubBridge(0, { lifetime: 1.0 });
     render(<EmitterPropertyTabs bridge={bridge} />);
+    // B1.3.1: tab strip mounts immediately; wait for the BasicTab form.
     await waitFor(() => {
-      expect(screen.getByTestId("emitter-property-tabs")).toBeInTheDocument();
+      expect(screen.getByLabelText("Maximum lifetime:")).toBeInTheDocument();
     });
     const lifetimeInput = screen.getByLabelText("Maximum lifetime:") as HTMLInputElement;
     // Spinner commits on blur after a text edit. Type a new value and blur.

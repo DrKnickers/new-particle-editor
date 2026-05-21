@@ -203,11 +203,14 @@ function AppShell() {
               <EmitterTree bridge={bridge} />
             </aside>
             {/* Lower-left — Property tabs (Basic / Appearance / Physics).
-                Phase 4.1 Fix dispatch 1: Basic tab wired; Appearance +
-                Physics placeholders. */}
+                B1.3.1 (LT-4): switched from a fixed 288px slot (h-72) to
+                `flex-1 min-h-0` so the tabs share the panel-body axis
+                with the EmitterTree aside above. Default split is 50/50
+                — B1.4 will make the boundary draggable via
+                react-resizable-panels. */}
             <div
               data-testid="quadrant-property-tabs"
-              className="h-72 shrink-0"
+              className="flex-1 min-h-0"
             >
               <EmitterPropertyTabs bridge={bridge} />
             </div>
