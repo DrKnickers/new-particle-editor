@@ -63,6 +63,32 @@ const OUTER_2COL_DEFAULTS: Layout = { left: 20, center: 80 };
 const LEFT_DEFAULTS: Layout = { tree: 25, tabs: 75 };
 const CENTER_DEFAULTS: Layout = { viewport: 75, curve: 25 };
 
+// B1.4 T6: every localStorage key PanelLayout owns. Exported so the
+// View → Reset panel layout menu item can clear them all in one shot
+// before AppShell bumps the key= that remounts PanelLayout with the
+// in-code defaults above.
+export const PANEL_LAYOUT_KEYS = [
+  "alo:layout:outer:2col",
+  "alo:layout:outer:3col",
+  "alo:layout:left",
+  "alo:layout:center",
+] as const;
+
+/** Clear every persisted panel-layout entry. Used by the View →
+ *  Reset panel layout menu item. Combined with a `key=` bump on the
+ *  PanelLayout mount, this forces every Group to re-read defaults on
+ *  the next mount. */
+export function resetPanelLayoutStorage(): void {
+  if (typeof localStorage === "undefined") return;
+  for (const key of PANEL_LAYOUT_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* localStorage disabled — drop silently */
+    }
+  }
+}
+
 /** Persisted-layout reader. Pure for unit-testability. */
 export function loadLayout(key: string, defaults: Layout): Layout {
   try {

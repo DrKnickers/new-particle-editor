@@ -28,6 +28,8 @@ import { PanelLayout } from "../PanelLayout";
 import {
   loadLayout,
   saveLayout,
+  resetPanelLayoutStorage,
+  PANEL_LAYOUT_KEYS,
   type Layout,
 } from "../PanelLayout";
 import { __resetSpawnerVisibilityForTests } from "@/lib/spawner-visibility";
@@ -76,6 +78,50 @@ describe("PanelLayout — persistence helpers", () => {
     expect(localStorage.getItem("alo:layout:test")).toBe(
       JSON.stringify({ a: 33, b: 67 }),
     );
+  });
+});
+
+describe("PanelLayout — Reset panel layout (T6)", () => {
+  it("resetPanelLayoutStorage clears every key listed in PANEL_LAYOUT_KEYS", () => {
+    // Seed every persisted-layout key with arbitrary content; the
+    // helper should wipe all four without touching unrelated keys.
+    for (const k of PANEL_LAYOUT_KEYS) {
+      localStorage.setItem(k, JSON.stringify({ stub: 1 }));
+    }
+    localStorage.setItem("alo:unrelated", "keep-me");
+
+    resetPanelLayoutStorage();
+
+    for (const k of PANEL_LAYOUT_KEYS) {
+      expect(localStorage.getItem(k)).toBeNull();
+    }
+    expect(localStorage.getItem("alo:unrelated")).toBe("keep-me");
+  });
+
+  it("loadLayout returns defaults for every key after resetPanelLayoutStorage", () => {
+    // End-to-end: a stored layout is honoured first, then the reset
+    // gesture restores defaults on the next read.
+    const DEFAULTS: Layout = { x: 30, y: 70 };
+    for (const k of PANEL_LAYOUT_KEYS) {
+      localStorage.setItem(k, JSON.stringify({ x: 60, y: 40 }));
+      expect(loadLayout(k, DEFAULTS)).toEqual({ x: 60, y: 40 });
+    }
+    resetPanelLayoutStorage();
+    for (const k of PANEL_LAYOUT_KEYS) {
+      expect(loadLayout(k, DEFAULTS)).toEqual(DEFAULTS);
+    }
+  });
+
+  it("PANEL_LAYOUT_KEYS covers every key PanelLayout writes (outer:2col/3col + left + center)", () => {
+    // Guards against drift: if a future change adds a new persisted
+    // Group, this test must be updated alongside PANEL_LAYOUT_KEYS or
+    // the menu item silently leaks state across resets.
+    expect([...PANEL_LAYOUT_KEYS].sort()).toEqual([
+      "alo:layout:center",
+      "alo:layout:left",
+      "alo:layout:outer:2col",
+      "alo:layout:outer:3col",
+    ]);
   });
 });
 

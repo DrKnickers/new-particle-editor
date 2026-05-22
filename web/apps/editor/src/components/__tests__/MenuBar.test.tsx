@@ -36,7 +36,10 @@ beforeEach(() => {
   });
 });
 
-function renderMenuBar(bridge: Bridge) {
+function renderMenuBar(
+  bridge: Bridge,
+  overrides: Partial<{ onResetPanelLayout: () => void }> = {},
+) {
   return render(
     <MenuBar
       bridge={bridge}
@@ -45,6 +48,7 @@ function renderMenuBar(bridge: Bridge) {
       onOpenImportEmittersDialog={() => {}}
       onOpenAboutDialog={() => {}}
       onOpenRescaleDialog={() => {}}
+      onResetPanelLayout={overrides.onResetPanelLayout ?? (() => {})}
     />,
   );
 }
@@ -160,6 +164,26 @@ describe("MenuBar — top-level structure (FD5)", () => {
       expect(screen.getByRole("menuitem", { name: /Lighting/ })).toBeTruthy();
     });
     expect(screen.getByRole("menuitem", { name: /Bloom Settings/ })).toBeTruthy();
+  });
+
+  it("View > Reset panel layout fires the onResetPanelLayout callback (B1.4 T6)", async () => {
+    const bridge = makeStubBridge();
+    const onResetPanelLayout = vi.fn();
+    renderMenuBar(bridge, { onResetPanelLayout });
+    const trigger = screen.getByRole("menuitem", { name: "View" });
+    fireEvent.pointerDown(trigger, { button: 0, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("menuitem", { name: /Reset panel layout/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Reset panel layout/ }),
+    );
+    await waitFor(() => {
+      expect(onResetPanelLayout).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("Emitters > Rename Emitter writes the primary id into the tree-action atom", async () => {

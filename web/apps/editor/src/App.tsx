@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { makeBridge } from "@/bridge";
 import { exposeBridgeForTests } from "@/bridge/expose";
-import { PanelLayout } from "@/components/PanelLayout";
+import { PanelLayout, resetPanelLayoutStorage } from "@/components/PanelLayout";
 import { StatusBar } from "@/components/StatusBar";
 import { Toolbar } from "@/components/Toolbar";
 import { MenuBar } from "@/components/MenuBar";
@@ -45,6 +45,18 @@ function AppShell() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
+
+  // B1.4 T6: View → Reset panel layout. Clearing the localStorage keys
+  // is necessary but not sufficient — the live PanelLayout still has
+  // each Group's `defaultLayout` baked into its first-mount memo. The
+  // epoch bump forces React to fully remount PanelLayout, and the new
+  // mount's `loadLayout` calls then read the cleared keys and return
+  // in-code defaults.
+  const [panelLayoutEpoch, setPanelLayoutEpoch] = useState(0);
+  const resetPanelLayout = useCallback(() => {
+    resetPanelLayoutStorage();
+    setPanelLayoutEpoch((n) => n + 1);
+  }, []);
 
   // Task 2.6 (Phase 2): the bottom row is now an always-on
   // CurveEditorPanel that owns its own selection subscription, so the
@@ -153,6 +165,7 @@ function AppShell() {
           onOpenImportEmittersDialog={() => setImportEmittersOpen(true)}
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}
+          onResetPanelLayout={resetPanelLayout}
         />
       </header>
 
@@ -166,7 +179,7 @@ function AppShell() {
           quadrant-* data-testids live on inner divs inside PanelLayout
           (preserved exactly so Modal.tsx's querySelector portal
           lookup and Playwright specs continue to work). */}
-      <PanelLayout bridge={bridge} />
+      <PanelLayout key={panelLayoutEpoch} bridge={bridge} />
 
       {/* Status bar */}
       <StatusBar bridge={bridge} />

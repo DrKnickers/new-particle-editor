@@ -99,6 +99,7 @@ type Props = {
   onOpenImportEmittersDialog: () => void;
   onOpenAboutDialog: () => void;
   onOpenRescaleDialog: () => void;
+  onResetPanelLayout: () => void;
 };
 
 // Style constants — shared across triggers and items so the Tailwind
@@ -146,6 +147,7 @@ export function MenuBar({
   onOpenImportEmittersDialog,
   onOpenAboutDialog,
   onOpenRescaleDialog,
+  onResetPanelLayout,
 }: Props) {
   const [state, setState] = useState<EngineStateDto | null>(null);
   // FD10 Group D: View → Reset View Settings prompt visibility.
@@ -730,6 +732,19 @@ export function MenuBar({
             >
               <CheckSlot active={false} />
               Reset View Settings
+            </Menubar.Item>
+            <Menubar.Separator className={SEPARATOR} />
+            {/* B1.4 T6: clears the four alo:layout:* localStorage keys
+                and remounts PanelLayout (via an epoch bump in App.tsx)
+                so every Group reads in-code defaults on next mount. No
+                confirm prompt — the gesture is cheap to recover from
+                (just drag the splitters back). */}
+            <Menubar.Item
+              className={ITEM}
+              onSelect={() => onResetPanelLayout()}
+            >
+              <CheckSlot active={false} />
+              Reset panel layout
             </Menubar.Item>
           </OccludingMenubarContent>
         </Menubar.Portal>
