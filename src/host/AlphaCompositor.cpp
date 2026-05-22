@@ -361,9 +361,32 @@ bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int&
     CLSID pngClsid = {};
     if (!GetPngEncoderClsid(pngClsid)) return false;
 
-    const int w = m_impl->lastRawW;
-    const int h = m_impl->lastRawH;
-    const int stride = w * 4;
+    const int srcW   = m_impl->lastRawW;
+    const int srcH   = m_impl->lastRawH;
+    const int stride = srcW * 4;
+
+    // B1.4 T4c.5: crop the cached DIB to the current scene rect before
+    // encoding. lastRawDib is full-popup-sized (main-row area post-T4c)
+    // but only the scene-rect sub-region holds pixels the user sees,
+    // so encoding the full DIB stretches outside-scene engine content
+    // into the modal's quadrant-viewport <img>. When no scene rect is
+    // set (boot state, or vitest harnesses that drive CaptureSnapshotPng
+    // without first dispatching layout/scene-rect), fall back to the
+    // full DIB — matches the pre-T4c contract.
+    int cropX = 0;
+    int cropY = 0;
+    int cropW = srcW;
+    int cropH = srcH;
+    if (m_impl->sceneW > 0 && m_impl->sceneH > 0)
+    {
+        cropX = (m_impl->sceneX < 0) ? 0 : m_impl->sceneX;
+        cropY = (m_impl->sceneY < 0) ? 0 : m_impl->sceneY;
+        const int maxW = srcW - cropX;
+        const int maxH = srcH - cropY;
+        cropW = (m_impl->sceneW < maxW) ? m_impl->sceneW : maxW;
+        cropH = (m_impl->sceneH < maxH) ? m_impl->sceneH : maxH;
+        if (cropW <= 0 || cropH <= 0) return false;
+    }
 
     // The DIB pixels are BGRA in memory (D3DFMT_A8R8G8B8 + BI_RGB).
     // Pre-stamp pixels all have alpha = 255 (the engine renders fully
@@ -371,9 +394,14 @@ bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int&
     // matches the layered-window convention; we use ARGB for the
     // GDI+ Bitmap so PNG encoding writes straight sRGB without any
     // premultiplied → straight conversion step.
-    Gdiplus::Bitmap bmp(
-        w, h, stride, PixelFormat32bppARGB,
-        const_cast<BYTE*>(m_impl->lastRawDib.data()));
+    //
+    // GDI+ subregion view: scan0 points at the crop's top-left pixel
+    // and we keep the full source stride, so GDI+ steps to the next
+    // row at the same X offset inside the parent buffer. Zero-copy.
+    BYTE* scan0 = const_cast<BYTE*>(m_impl->lastRawDib.data()) +
+                  static_cast<size_t>(cropY) * static_cast<size_t>(stride) +
+                  static_cast<size_t>(cropX) * 4u;
+    Gdiplus::Bitmap bmp(cropW, cropH, stride, PixelFormat32bppARGB, scan0);
     if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
 
     // Encode to PNG into an in-memory IStream so we can read the byte
@@ -411,8 +439,8 @@ bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int&
     stream->Release();
 
     outBase64 = Base64Encode(png.data(), png.size());
-    outW = w;
-    outH = h;
+    outW = cropW;
+    outH = cropH;
     return true;
 }
 
