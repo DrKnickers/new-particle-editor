@@ -20,10 +20,14 @@
 //      vigilance.
 //   3. Spawner visibility flips the spawner panel mount/unmount.
 
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { BridgeContext } from "@/lib/bridge-context";
+import {
+  isSeparatorDragging,
+  __resetSeparatorDraggingForTests,
+} from "@/lib/separator-drag";
 import { PanelLayout } from "../PanelLayout";
 import {
   loadLayout,
@@ -41,6 +45,7 @@ function makeStubBridge(): Bridge {
 
 beforeEach(() => {
   __resetSpawnerVisibilityForTests();
+  __resetSeparatorDraggingForTests();
 });
 
 describe("PanelLayout — persistence helpers", () => {
@@ -128,5 +133,68 @@ describe("PanelLayout — DOM structure", () => {
     // is the `.relative h-full` wrapper, not a library-injected outer.
     const node = screen.getByTestId("quadrant-viewport");
     expect(node.className).toContain("relative");
+  });
+});
+
+describe("PanelLayout — separator-drag popup-overlap fix", () => {
+  function makeRecordingBridge() {
+    const request = vi.fn().mockResolvedValue({});
+    return {
+      bridge: { request, on: vi.fn().mockReturnValue(() => {}) } as unknown as Bridge,
+      request,
+    };
+  }
+
+  it("pointerdown on a [data-separator] flips the drag flag and dispatches the degenerate-rect viewport message", () => {
+    const { bridge, request } = makeRecordingBridge();
+    render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+    expect(isSeparatorDragging()).toBe(false);
+    const sep = document.querySelector('[data-separator]');
+    expect(sep).not.toBeNull();
+    fireEvent.pointerDown(sep!, { pointerId: 1, pointerType: "mouse", button: 0, buttons: 1 });
+    expect(isSeparatorDragging()).toBe(true);
+    // Degenerate-rect message was dispatched. The host's LayoutBroker
+    // routes (w<=0||h<=0) to the no-Reset early-out at
+    // src/host/LayoutBroker.cpp:24.
+    expect(request).toHaveBeenCalledWith({
+      kind: "layout/viewport-rect",
+      params: { x: -32768, y: -32768, w: 0, h: 0 },
+    });
+  });
+
+  it("pointerup anywhere on document clears the drag flag", () => {
+    const { bridge } = makeRecordingBridge();
+    render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+    const sep = document.querySelector('[data-separator]')!;
+    fireEvent.pointerDown(sep, { pointerId: 1, pointerType: "mouse", button: 0, buttons: 1 });
+    expect(isSeparatorDragging()).toBe(true);
+    // pointerup is dispatched on the document with capture; testing-library's
+    // fireEvent.pointerUp on document body bubbles up to the capturing listener.
+    fireEvent.pointerUp(document.body, { pointerId: 1, pointerType: "mouse", button: 0, buttons: 0 });
+    expect(isSeparatorDragging()).toBe(false);
+  });
+
+  it("pointerdown on a non-separator element does NOT flip the flag or dispatch the degenerate rect", () => {
+    const { bridge, request } = makeRecordingBridge();
+    render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+    request.mockClear();
+    const tree = screen.getByTestId("quadrant-emitter-tree");
+    fireEvent.pointerDown(tree, { pointerId: 1, pointerType: "mouse", button: 0, buttons: 1 });
+    expect(isSeparatorDragging()).toBe(false);
+    expect(request).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "layout/viewport-rect" }),
+    );
   });
 });

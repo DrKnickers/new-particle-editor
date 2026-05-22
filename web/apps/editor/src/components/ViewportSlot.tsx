@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { Bridge } from "@particle-editor/bridge-schema";
+import {
+  isSeparatorDragging,
+  subscribeSeparatorDragging,
+} from "@/lib/separator-drag";
 
 type Props = { bridge: Bridge };
 
@@ -13,6 +17,15 @@ export function ViewportSlot({ bridge }: Props) {
     if (!el) return;
 
     const send = () => {
+      // B1.4 [NT-8]: while the user is dragging a splitter handle,
+      // suppress the per-frame layout/viewport-rect dispatch. PanelLayout
+      // has already parked the popup offscreen via a degenerate-size
+      // rect (which routes to LayoutBroker's no-Reset early-out). Each
+      // additional send during drag would re-arm the expensive D3D9
+      // Engine::Reset path and leave the popup chasing the WebView's
+      // flex layout. On drag-end the `subscribeSeparatorDragging`
+      // listener below re-emits the final rect once.
+      if (isSeparatorDragging()) return;
       const r = el.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       const x = Math.round((r.left + SLOT_BORDER_PX) * dpr);
@@ -28,11 +41,17 @@ export function ViewportSlot({ bridge }: Props) {
     ro.observe(el);
     window.addEventListener("scroll", send, { passive: true });
     window.addEventListener("resize", send);
+    // Re-emit on drag-end so the popup snaps back even if no
+    // RO tick fires after pointerup (e.g. a no-op separator click).
+    const offDrag = subscribeSeparatorDragging((dragging) => {
+      if (!dragging) send();
+    });
 
     return () => {
       ro.disconnect();
       window.removeEventListener("scroll", send);
       window.removeEventListener("resize", send);
+      offDrag();
     };
   }, [bridge]);
 
