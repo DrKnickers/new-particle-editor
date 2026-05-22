@@ -144,6 +144,17 @@ public:
 	// legacy swap-chain Present path (used by viewport_poc and any
 	// host that doesn't enable the layered popup).
 	void SetAlphaCompositor(host::AlphaCompositor* c) { m_pAlphaCompositor = c; }
+
+	// [MT-11] Phase 3 Stage 2: NT-handle alias of the engine's primary
+	// render-target texture, openable from a parallel D3D11 device via
+	// OpenSharedResource. Forwarded from m_pAlphaCompositor->GetShared
+	// Handle() — the AlphaCompositor's offscreen RT is now a shared-
+	// handle texture (Stage 2a promotion). Returns nullptr when the
+	// compositor isn't installed (e.g. arch-C canvas-jpeg mode where
+	// the engine renders to its native swap-chain back buffer) or when
+	// Resize hasn't run yet. Stage 4 wires this into the DXGI / DComp
+	// path; Stage 2 only exposes + verifies the handle.
+	HANDLE GetSharedTextureHandle() const;
 	const std::wstring& GetGroundSlotCustomPath(int slot) const;
 	// Does the slot currently have a loadable texture (either bundled
 	// default or user-supplied custom path)? Used by the picker dialog

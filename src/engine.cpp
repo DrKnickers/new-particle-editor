@@ -1338,6 +1338,17 @@ void Engine::Reset()
 	}
 }
 
+// [MT-11] Phase 3 Stage 2: forwarder to the AlphaCompositor's shared
+// HANDLE. Returns nullptr when the compositor isn't installed (canvas-
+// jpeg mode skips the layered-window path) or before Resize has run.
+// Stage 4 will consume this via a D3D11 OpenSharedResource into the
+// DComp visual tree; today nothing reads it but the standalone
+// shared_texture_test exe (Stage 2c) verifies the handle is openable.
+HANDLE Engine::GetSharedTextureHandle() const
+{
+	return m_pAlphaCompositor ? m_pAlphaCompositor->GetSharedHandle() : nullptr;
+}
+
 void Engine::ResetParameters()
 {
 	if (m_presentationParameters.BackBufferWidth > 0 && m_presentationParameters.BackBufferHeight > 0)

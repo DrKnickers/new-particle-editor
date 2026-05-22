@@ -136,6 +136,15 @@ public:
     // No-op if Resize hasn't run or the HWND is null.
     void Composite(HWND layeredHwnd);
 
+    // [MT-11] Phase 3 Stage 2: NT-handle alias of the offscreen render
+    // target, allocated in Resize via CreateTexture(USAGE_RENDERTARGET,
+    // D3DPOOL_DEFAULT, &sharedHandle). A parallel D3D11 device opens it
+    // via OpenSharedResource (validated end-to-end in the dxgi_spike at
+    // commit 6c00536). Returns nullptr when Resize hasn't run or the
+    // underlying device isn't D3D9Ex. The handle is owned by the source
+    // texture — D3D11 callers do NOT CloseHandle when done.
+    HANDLE GetSharedHandle() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

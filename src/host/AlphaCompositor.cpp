@@ -45,7 +45,18 @@ struct Occlusion
 struct AlphaCompositor::Impl
 {
     Microsoft::WRL::ComPtr<IDirect3DDevice9>  device;
-    Microsoft::WRL::ComPtr<IDirect3DSurface9> offscreenRT;   // D3DPOOL_DEFAULT, ARGB
+    // [MT-11] Phase 3 Stage 2: shared-handle texture promoted from the
+    // prior CreateRenderTarget surface. CreateTexture with USAGE_RENDER
+    // TARGET + D3DPOOL_DEFAULT + a non-null pSharedHandle out-param is
+    // the D3D9Ex idiom for cross-device shareable RTs (validated in the
+    // dxgi_spike at commit 6c00536). sharedTex.GetSurfaceLevel(0) is
+    // the same IDirect3DSurface9 the engine renders into via slot 0,
+    // so the existing Render() chain is unchanged. sharedHandle is an
+    // NT alias D3D11 can open via OpenSharedResource — Stage 4 wires
+    // that side; Stage 2 just exposes the handle and verifies it.
+    Microsoft::WRL::ComPtr<IDirect3DTexture9> sharedTex;
+    HANDLE                                    sharedHandle = nullptr;
+    Microsoft::WRL::ComPtr<IDirect3DSurface9> offscreenRT;   // sharedTex level-0, ARGB
     Microsoft::WRL::ComPtr<IDirect3DSurface9> sysMemSurface; // D3DPOOL_SYSTEMMEM, readback
     HDC      memDC      = nullptr;
     HBITMAP  dibBitmap  = nullptr;
@@ -96,22 +107,37 @@ void AlphaCompositor::Resize(int w, int h)
     if (w <= 0 || h <= 0) return;
 
     // Drop old resources first. ComPtr::Reset releases the COM ref;
-    // GDI handles need explicit cleanup.
+    // GDI handles need explicit cleanup. sharedHandle is owned by
+    // sharedTex — releasing the texture invalidates the handle, no
+    // explicit CloseHandle.
     m_impl->offscreenRT.Reset();
+    m_impl->sharedTex.Reset();
+    m_impl->sharedHandle = nullptr;
     m_impl->sysMemSurface.Reset();
     if (m_impl->dibBitmap) { DeleteObject(m_impl->dibBitmap); m_impl->dibBitmap = nullptr; }
     if (m_impl->memDC)     { DeleteDC(m_impl->memDC);         m_impl->memDC     = nullptr; }
     m_impl->dibPixels = nullptr;
 
-    // D3DFMT_A8R8G8B8 because UpdateLayeredWindow needs an alpha
-    // channel. D3DMULTISAMPLE_NONE because GetRenderTargetData rejects
-    // multisampled source surfaces — the viewport accepts the
-    // aliasing here (scene content has its own AA via texturing).
-    HRESULT hr = m_impl->device->CreateRenderTarget(
+    // [MT-11] Phase 3 Stage 2: shared-handle render-target texture.
+    // CreateTexture with USAGE_RENDERTARGET + D3DPOOL_DEFAULT and a
+    // non-null pSharedHandle yields an NT-handle alias openable from a
+    // parallel D3D11 device via OpenSharedResource. The level-0 surface
+    // serves as the engine's render target slot 0, so the existing
+    // arch-A render+readback path is structurally unchanged. The
+    // sharedHandle out-param is populated only when the device is
+    // D3D9Ex (Stage 1 hard-fails otherwise, so this is always the case
+    // post-Stage-1). D3DMULTISAMPLE_NONE because GetRenderTargetData
+    // rejects multisampled sources; scene AA still handled via texturing.
+    HRESULT hr = m_impl->device->CreateTexture(
         static_cast<UINT>(w), static_cast<UINT>(h),
-        D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0,
-        FALSE /*lockable*/, &m_impl->offscreenRT, nullptr);
-    ThrowIfFailed(hr, "CreateRenderTarget");
+        1 /*levels*/, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+        D3DPOOL_DEFAULT, &m_impl->sharedTex, &m_impl->sharedHandle);
+    ThrowIfFailed(hr, "CreateTexture(shared RT)");
+    hr = m_impl->sharedTex->GetSurfaceLevel(0, &m_impl->offscreenRT);
+    ThrowIfFailed(hr, "GetSurfaceLevel(0)");
+    fprintf(stderr, "[AlphaCompositor] shared RT %dx%d handle=%p\n",
+            w, h, m_impl->sharedHandle);
+    fflush(stderr);
 
     // Readback target. SYSTEMMEM is the only pool that
     // GetRenderTargetData can write to.
@@ -147,6 +173,8 @@ void AlphaCompositor::Resize(int w, int h)
 void AlphaCompositor::ReleaseGpuResources()
 {
     m_impl->offscreenRT.Reset();
+    m_impl->sharedTex.Reset();
+    m_impl->sharedHandle = nullptr;
     m_impl->sysMemSurface.Reset();
     if (m_impl->dibBitmap) { DeleteObject(m_impl->dibBitmap); m_impl->dibBitmap = nullptr; }
     if (m_impl->memDC)     { DeleteDC(m_impl->memDC);         m_impl->memDC     = nullptr; }
@@ -159,6 +187,8 @@ void AlphaCompositor::ReleaseGpuResources()
 }
 
 IDirect3DSurface9* AlphaCompositor::GetRenderTarget() const { return m_impl->offscreenRT.Get(); }
+
+HANDLE AlphaCompositor::GetSharedHandle() const { return m_impl->sharedHandle; }
 void AlphaCompositor::SetOcclusion(std::string id, RECT rectClient, int feather)
 {
     if (feather < 0) feather = 0;
