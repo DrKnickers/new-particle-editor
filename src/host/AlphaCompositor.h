@@ -145,6 +145,19 @@ public:
     // texture — D3D11 callers do NOT CloseHandle when done.
     HANDLE GetSharedHandle() const;
 
+    // [MT-11] Phase 3 Stage 1 follow-up: enable the per-frame pre-stamp
+    // DIB cache used by EncodeFrameJpeg in the arch-C (canvas-JPEG)
+    // transport. Off by default — the legacy FD9b layered-popup path
+    // (arch B) only reads the cache for rare modal-open snapshots,
+    // which now do their own on-demand readback inside
+    // CaptureSnapshotPng. Leaving the cache off in arch B reclaims a
+    // ~19 MB memcpy per frame (~2-5 ms at 3440×1440). FramePublisher's
+    // constructor flips this on; nothing else needs to.
+    //
+    // Idempotent. The disable path also frees the cache buffer so
+    // arch-A → arch-C → arch-A toggles don't leak.
+    void SetPerFrameCacheEnabled(bool enabled);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

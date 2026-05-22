@@ -66,10 +66,20 @@ struct AlphaCompositor::Impl
 
     std::unordered_map<std::string, Occlusion> occlusions;
 
-    // B1.3.1.1 snapshot cache. Holds the engine-rendered BGRA pixels
-    // captured each frame BEFORE the occlusion stamps. CaptureSnapshotPng
-    // reads from here. Reallocated lazily inside Composite when the
-    // cached dims don't match the current DIB.
+    // [MT-11] Phase 3 follow-up: pre-stamp DIB cache for the arch-C
+    // (canvas-JPEG transport) per-frame frame-server. Holds the engine-
+    // rendered BGRA pixels captured each frame BEFORE the occlusion
+    // stamps. EncodeFrameJpeg reads from here on the arch-C hot path.
+    //
+    // CaptureSnapshotPng used to read from here too, but it now does
+    // its own on-demand GetRenderTargetData + LockRect to avoid paying
+    // the ~19 MB memcpy on every frame in arch B (FD9b WS_EX_LAYERED),
+    // where modal opens are the only consumer.
+    //
+    // The cache is OFF by default. FramePublisher's constructor flips
+    // it on via SetPerFrameCacheEnabled. Reallocated lazily inside
+    // Composite when the cached dims don't match the current DIB.
+    bool     perFrameCacheEnabled = false;
     std::vector<uint8_t> lastRawDib;
     int      lastRawW    = 0;
     int      lastRawH    = 0;
@@ -206,6 +216,22 @@ void AlphaCompositor::SetSceneRect(int x, int y, int w, int h)
     m_impl->sceneY = y;
     m_impl->sceneW = w;
     m_impl->sceneH = h;
+}
+
+void AlphaCompositor::SetPerFrameCacheEnabled(bool enabled)
+{
+    if (m_impl->perFrameCacheEnabled == enabled) return;
+    m_impl->perFrameCacheEnabled = enabled;
+    if (!enabled)
+    {
+        // Release the ~19 MB on disable so arch toggles don't leak
+        // and so a later CaptureSnapshotPng can't accidentally read a
+        // stale pre-disable frame (it shouldn't — it now does its own
+        // readback — but the contract is "off means empty").
+        std::vector<uint8_t>().swap(m_impl->lastRawDib);
+        m_impl->lastRawW = 0;
+        m_impl->lastRawH = 0;
+    }
 }
 
 namespace {
@@ -506,24 +532,84 @@ bool AlphaCompositor::EncodeFrameJpeg(int quality,
 
 bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
 {
-    if (m_impl->lastRawDib.empty() || m_impl->lastRawW <= 0 || m_impl->lastRawH <= 0)
-        return false;
+    // [MT-11] Phase 3 follow-up: self-sufficient readback. The cache
+    // path was the bottleneck in arch B (FD9b layered popup) — paying
+    // a 19 MB memcpy every frame to keep a snapshot fresh for modals
+    // that fire seconds-to-minutes apart. We now do a one-shot
+    // GetRenderTargetData + LockRect at snapshot time and consume
+    // ~12-15 ms of one-time cost (imperceptible vs. the ~50-100 ms
+    // dialog mount + React reflow that triggers us).
+    //
+    // Safety: offscreenRT holds the engine's pre-stamp pixels —
+    // stamps in Composite() mutate dibPixels only, never the GPU
+    // render target. So between Engine::Render calls, offscreenRT is
+    // always re-readable. During the Win32 modal sizing loop (L-013 /
+    // cb7b4c7), Engine::Render also doesn't run, so offscreenRT holds
+    // the pre-resize frame — same observable behavior as the prior
+    // cached path.
+    if (!m_impl->offscreenRT || !m_impl->sysMemSurface) return false;
+    if (m_impl->width <= 0 || m_impl->height <= 0)     return false;
 
     CLSID pngClsid = {};
     if (!GetPngEncoderClsid(pngClsid)) return false;
 
-    const int srcW   = m_impl->lastRawW;
-    const int srcH   = m_impl->lastRawH;
+#ifndef NDEBUG
+    // [CACHE-DEFERRAL-PERF] on-demand readback latency. Logs once per
+    // snapshot call (snapshots are rare — no throttling needed).
+    LARGE_INTEGER sQpf{}, sT0{}, sT1{};
+    QueryPerformanceFrequency(&sQpf);
+    QueryPerformanceCounter(&sT0);
+#endif
+
+    // Fresh GPU → SYSTEMMEM. The actual sync to GPU work happens
+    // inside LockRect below, not here.
+    HRESULT hr = m_impl->device->GetRenderTargetData(
+        m_impl->offscreenRT.Get(), m_impl->sysMemSurface.Get());
+    if (FAILED(hr)) return false;
+
+    D3DLOCKED_RECT locked = {};
+    hr = m_impl->sysMemSurface->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+    if (FAILED(hr)) return false;
+
+#ifndef NDEBUG
+    QueryPerformanceCounter(&sT1);
+    const double sMs = (sT1.QuadPart - sT0.QuadPart) * 1000.0 /
+                       static_cast<double>(sQpf.QuadPart);
+    fprintf(stderr,
+            "[CACHE-DEFERRAL-PERF] snapshotReadback=%.3f ms (%dx%d)\n",
+            sMs, m_impl->width, m_impl->height);
+    fflush(stderr);
+#endif
+
+    const int srcW   = m_impl->width;
+    const int srcH   = m_impl->height;
     const int stride = srcW * 4;
 
-    // B1.4 T4c.5: crop the cached DIB to the current scene rect before
-    // encoding. lastRawDib is full-popup-sized (main-row area post-T4c)
-    // but only the scene-rect sub-region holds pixels the user sees,
-    // so encoding the full DIB stretches outside-scene engine content
-    // into the modal's quadrant-viewport <img>. When no scene rect is
-    // set (boot state, or vitest harnesses that drive CaptureSnapshotPng
-    // without first dispatching layout/scene-rect), fall back to the
-    // full DIB — matches the pre-T4c contract.
+    // Copy SYSTEMMEM → a local buffer so the LockRect window is as
+    // short as possible (we don't want to hold the surface lock
+    // across PNG encoding, which can be many ms).
+    std::vector<uint8_t> rawDib(static_cast<size_t>(stride) *
+                                 static_cast<size_t>(srcH));
+    {
+        const auto* src = static_cast<const uint8_t*>(locked.pBits);
+        for (int y = 0; y < srcH; ++y)
+        {
+            memcpy(rawDib.data() + static_cast<size_t>(y) *
+                                    static_cast<size_t>(stride),
+                   src + static_cast<size_t>(y) * locked.Pitch,
+                   static_cast<size_t>(stride));
+        }
+    }
+    m_impl->sysMemSurface->UnlockRect();
+
+    // B1.4 T4c.5: crop the readback DIB to the current scene rect
+    // before encoding. The popup is full-main-row sized post-T4c, but
+    // only the scene-rect sub-region holds pixels the user sees, so
+    // encoding the full DIB stretches outside-scene engine content
+    // into the modal's quadrant-viewport <img>. When no scene rect
+    // is set (boot state, or vitest harnesses that drive
+    // CaptureSnapshotPng without first dispatching layout/scene-rect),
+    // fall back to the full DIB — matches the pre-T4c contract.
     int cropX = 0;
     int cropY = 0;
     int cropW = srcW;
@@ -549,7 +635,7 @@ bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int&
     // GDI+ subregion view: scan0 points at the crop's top-left pixel
     // and we keep the full source stride, so GDI+ steps to the next
     // row at the same X offset inside the parent buffer. Zero-copy.
-    BYTE* scan0 = const_cast<BYTE*>(m_impl->lastRawDib.data()) +
+    BYTE* scan0 = const_cast<BYTE*>(rawDib.data()) +
                   static_cast<size_t>(cropY) * static_cast<size_t>(stride) +
                   static_cast<size_t>(cropX) * 4u;
     Gdiplus::Bitmap bmp(cropW, cropH, stride, PixelFormat32bppARGB, scan0);
@@ -624,11 +710,28 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
 
     m_impl->sysMemSurface->UnlockRect();
 
-    // B1.3.1.1: cache the pre-stamp engine pixels for snapshot capture.
-    // This must run AFTER the readback memcpy but BEFORE the occlusion
-    // stamps — the snapshot is the engine's raw output, so CSS effects
-    // above the resulting <img> backdrop can dim + blur it uniformly
-    // with the panels without seeing the chrome cut-outs.
+    // [MT-11] Phase 3 follow-up: cache the pre-stamp engine pixels
+    // ONLY when the arch-C frame-server is active (FramePublisher
+    // constructor flips perFrameCacheEnabled). Arch B (FD9b layered
+    // popup) skips this — modal-open snapshots now do their own
+    // on-demand readback in CaptureSnapshotPng, so this ~19 MB
+    // memcpy is pure waste in that path. Reclaims ~2-5 ms/frame at
+    // 3440×1440.
+    //
+    // When active, this must run AFTER the readback memcpy but
+    // BEFORE the occlusion stamps — the cache is the engine's raw
+    // output, so JPEG-encoded frames in arch C don't include the
+    // chrome cut-outs (which only the layered-popup arch B needs).
+#ifndef NDEBUG
+    // [CACHE-DEFERRAL-PERF] per-frame phase timing. Grep this prefix
+    // when verifying the perf hypothesis at maximized 3440×1440.
+    // Throttled to ~1 Hz so the printf cost doesn't itself dominate
+    // the measurement.
+    LARGE_INTEGER cdpQpf{}, cdpT0{}, cdpT1{};
+    QueryPerformanceFrequency(&cdpQpf);
+    QueryPerformanceCounter(&cdpT0);
+#endif
+    if (m_impl->perFrameCacheEnabled)
     {
         const size_t bytes = static_cast<size_t>(m_impl->width) *
                              static_cast<size_t>(m_impl->height) * 4u;
@@ -640,6 +743,22 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
         m_impl->lastRawW = m_impl->width;
         m_impl->lastRawH = m_impl->height;
     }
+#ifndef NDEBUG
+    QueryPerformanceCounter(&cdpT1);
+    static DWORD s_cdpLastLogTick = 0;
+    const DWORD  cdpNowTick       = GetTickCount();
+    if (cdpNowTick - s_cdpLastLogTick > 1000)
+    {
+        s_cdpLastLogTick = cdpNowTick;
+        const double cdpMs = (cdpT1.QuadPart - cdpT0.QuadPart) * 1000.0 /
+                             static_cast<double>(cdpQpf.QuadPart);
+        fprintf(stderr,
+                "[CACHE-DEFERRAL-PERF] cacheCopy=%.3f ms (enabled=%d, %dx%d)\n",
+                cdpMs, m_impl->perFrameCacheEnabled ? 1 : 0,
+                m_impl->width, m_impl->height);
+        fflush(stderr);
+    }
+#endif
 
     // B1.4 T4c: stamp alpha=0 for the four bands OUTSIDE the scene
     // rect. The popup HWND occupies the entire main-row area; only

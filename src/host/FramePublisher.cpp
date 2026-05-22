@@ -48,6 +48,13 @@ FramePublisher::FramePublisher(AlphaCompositor* compositor, EmitFn emit, int qua
     , m_emit(std::move(emit))
     , m_quality(quality)
 {
+    // [MT-11] Phase 3 follow-up: opt the compositor into the per-frame
+    // pre-stamp DIB cache. EncodeFrameJpeg in OnFrameComposited below
+    // reads it; without this flip the cache stays empty in arch B
+    // (FD9b layered popup) and OnFrameComposited would return false
+    // forever in arch C. Owning the flip here keeps the arch-C-only
+    // dependency localized to the arch-C-only class.
+    if (m_compositor) m_compositor->SetPerFrameCacheEnabled(true);
 }
 
 bool FramePublisher::OnFrameComposited()
