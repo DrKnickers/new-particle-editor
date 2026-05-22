@@ -77,6 +77,43 @@ export function Modal({
   const bridge = useBridge();
   const [snapshot, setSnapshot] = useState<{ pngBase64: string; w: number; h: number } | null>(null);
   const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null);
+  // [MT-11] Phase 3 Stage 1 follow-up: gate Dialog open on snapshot
+  // readiness so Dialog.Overlay's fade-in starts with the <img>
+  // already mounted. Pre-deferral (cache-hit) the snapshot resolved in
+  // ~0.1 ms — effectively synchronous with the modal-open render — so
+  // Dialog.Overlay's backdrop-filter had stable content from frame
+  // one. Post-deferral the snapshot resolves ~50-500 ms later
+  // (on-demand GPU readback + GDI+ PNG encode + IPC + PNG decode for
+  // the 3440×1369 frame at maximize), which lands the <img> mid-fade-
+  // in. Chromium's backdrop-filter doesn't update reliably when its
+  // source content changes mid-animation, producing a visible flash
+  // of unblurred snapshot before the blur kicks in. Gating the open
+  // prop here delays Dialog mount until after setSnapshot fires —
+  // user-perceived modal-open latency goes up by the same ~50-500 ms,
+  // but the visual flash is gone.
+  //
+  // Fallback timeout: open the dialog anyway after 750 ms even if the
+  // snapshot hasn't arrived, so a host hang in the capture path
+  // never bricks the menu. 750 ms is well above the 95th-percentile
+  // observed capture cost at maximize.
+  const [snapshotReady, setSnapshotReady] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setSnapshotReady(false);
+      return;
+    }
+    if (!bridge) {
+      // Test env / no-context path — open the dialog immediately so
+      // unit tests rendering <Modal open> without a BridgeContext
+      // see Dialog.Content mount. The snapshot/<img> render guard
+      // already short-circuits the portaled <img> in this case.
+      setSnapshotReady(true);
+      return;
+    }
+    const fallback = window.setTimeout(() => setSnapshotReady(true), 750);
+    return () => window.clearTimeout(fallback);
+  }, [open, bridge]);
 
   useEffect(() => {
     if (!open || !bridge) return;
@@ -118,27 +155,56 @@ export function Modal({
     //      Stacking both produces visible stutter; dropping the
     //      re-capture eliminates the modal's contribution to it
     //      entirely.
-    if (el)
-    {
-      void bridge
-        .request({
-          kind: "viewport/occlude",
-          params: {
-            id: "modal",
-            rect: { x: -100000, y: -100000, w: 200000, h: 200000 },
-            feather: 0,
-          },
-        })
-        .catch(() => { /* ignore */ });
-    }
+    // [MT-11] Phase 3 Stage 1 follow-up: capture FIRST, then occlude.
+    // Pre-deferral (cache-hit at ~0.1 ms) the order didn't matter
+    // user-perceptibly because the snapshot arrived inside the same
+    // paint frame as the modal-open render. Post-deferral the capture
+    // takes ~50-500 ms (on-demand GPU readback + PNG encode + IPC +
+    // PNG decode at 3440×1369), so if we send the occlude first the
+    // user sees the engine viewport go alpha-cut (empty) for the
+    // entire capture window before the snapshot + dialog mount.
+    // Reordering to "capture → setSnapshot → occlude → setSnapshot
+    // Ready" keeps the engine viewport live until everything else is
+    // ready, then everything mounts in one render pass.
     void bridge
       .request({ kind: "viewport/capture-snapshot", params: {} })
       .then((res) => {
         if (cancelled) return;
         const snap = res as { pngBase64: string; w: number; h: number };
         setSnapshot(snap);
+
+        // Engine layer goes transparent now that the DOM snapshot is
+        // ready to take over. Fire-and-forget — the next Composite
+        // tick applies the alpha cut.
+        if (el)
+        {
+          void bridge
+            .request({
+              kind: "viewport/occlude",
+              params: {
+                id: "modal",
+                rect: { x: -100000, y: -100000, w: 200000, h: 200000 },
+                feather: 0,
+              },
+            })
+            .catch(() => { /* ignore */ });
+        }
+
+        // Open the Dialog on the next animation frame so React has
+        // mounted the portaled <img> + Chromium has had a chance to
+        // start the PNG decode. Dialog.Overlay's fade-in then starts
+        // with stable backdrop content, and backdrop-filter blurs it
+        // correctly from frame one.
+        window.requestAnimationFrame(() => {
+          if (!cancelled) setSnapshotReady(true);
+        });
       })
-      .catch(() => { /* MockBridge / test env — render guard short-circuits */ });
+      .catch(() => {
+        // MockBridge / test env / host failure — open the dialog
+        // anyway with whatever backdrop state we have (typically the
+        // empty-snapshot render guard short-circuits the <img>).
+        if (!cancelled) setSnapshotReady(true);
+      });
 
     return () => {
       cancelled = true;
@@ -178,7 +244,7 @@ export function Modal({
         viewportEl,
       ) : null}
 
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Root open={open && snapshotReady} onOpenChange={onOpenChange}>
         <Dialog.Portal>
           <Dialog.Overlay
             data-testid="modal-overlay"
