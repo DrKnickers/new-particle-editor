@@ -114,6 +114,7 @@ async function main() {
       "tests/mods-contract.spec.ts",
       "tests/leave-particles.spec.ts",
       "tests/splitters.spec.ts",
+      "tests/d3d9ex.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
