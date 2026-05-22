@@ -30,8 +30,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct IDirect3DDevice9;
 struct IDirect3DSurface9;
@@ -113,6 +115,22 @@ public:
     // pixels React's <img src=...> backdrop wants to see, so CSS
     // effects above can dim + blur it uniformly with the panels.
     bool CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH);
+
+    // [MT-11] Phase 0 spike — Path A (JPEG via WebResourceRequested).
+    // Encode the cached pre-stamp engine pixels as JPEG bytes. Output
+    // buffer is resized to fit the encoded payload. `quality` is 1-100
+    // (clamped); typical spike values: 70, 85, 95. Crops to the current
+    // scene rect if one has been set (same crop semantics as
+    // CaptureSnapshotPng). Returns false if no frame has been composited
+    // yet OR the JPEG encoder is unavailable; outputs are left untouched
+    // on failure. UI-thread only.
+    //
+    // Bytes-out is raw JPEG (the file format), suitable for inclusion as
+    // the body of a WebResourceRequested response with
+    // Content-Type: image/jpeg. The renderer-side `<canvas>` paints via
+    // createImageBitmap(blob) → ctx.drawImage.
+    bool EncodeFrameJpeg(int quality, std::vector<uint8_t>& outBytes,
+                         int& outW, int& outH);
 
     // Per-frame readback + occlusion stamp + UpdateLayeredWindow push.
     // No-op if Resize hasn't run or the HWND is null.

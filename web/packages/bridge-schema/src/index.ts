@@ -837,7 +837,18 @@ export type Event =
   // FD10 (Group A): viewport mouse cursor's intersection with the
   // ground plane in world coords. Host throttles to ~30 Hz so the
   // status bar update doesn't saturate the bridge.
-  | { kind: "cursor/position-3d";     payload: { x: number; y: number; z: number } };
+  | { kind: "cursor/position-3d";     payload: { x: number; y: number; z: number } }
+  // [MT-11] Phase 1: engine frame delivered as base64-encoded JPEG
+  // for in-DOM <canvas> compositing. Host emits one per composited
+  // frame when ALO_VIEWPORT_TRANSPORT=canvas-jpeg; MockBridge never
+  // emits this (no engine in browser-mode). `w` × `h` are scene-rect
+  // pixels (centre-quadrant size at current DPR); `frameId` is a
+  // host-side monotonic counter; `jpegBase64` is the JPEG payload
+  // without the `data:image/jpeg;base64,` URL prefix (the renderer
+  // adds it when building the data URL for Image()). See L-015 for
+  // why this is inline-in-payload rather than fetch'd via
+  // WebResourceRequested.
+  | { kind: "viewport/frame-ready";   payload: { w: number; h: number; frameId: number; jpegBase64: string } };
 
 export type EventKind = Event["kind"];
 export type EventOf<K extends EventKind> = Extract<Event, { kind: K }>;

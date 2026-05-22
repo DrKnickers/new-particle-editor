@@ -1,19 +1,48 @@
-# Session Handoff — AloParticleEditor / LT-4 (B1.4 [NT-8] resizable splitters fully SHIPPED on session branch — T0 → T8 done, FF pending)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 0 + Phase 1 SHIPPED — canvas-in-DOM transport up, Phase 2 next)
 
-**Last updated:** 2026-05-22 (post-B1.4 close-out. The full arc — splitters install + PanelLayout impl + AppShell swap + Playwright spec + T4c popup-spans-window architectural redirect + T4c.5 modal-snapshot crop + T6 Reset-panel-layout menu item + T7 grep no-op + T8 docs — is on the session branch and ready for FF into `origin/lt-4` with the user's OK. Architecture B (DComp visual hosting) ruled out per FD6 history; architecture C (engine pixels into a DOM `<canvas>`) filed as [MT-11] on the ROADMAP for a future ~16-32h dispatch.)
+**Last updated:** 2026-05-21 (post-[MT-11] Phase 0 + Phase 1. Engine pixels now flow to a DOM `<canvas>` via base64-encoded JPEG inline in the typed `viewport/frame-ready` bridge event. ~120 FPS sustained, zero errors, 300/300 vitest. Phase 1 ended at "canvas mounted + painting"; the legacy WS_EX_LAYERED popup still occludes the canvas visually — Phase 2 hides the popup + routes input through the canvas via a new `viewport/input` bridge surface, at which point the canvas becomes the visible source of truth.)
 
-**Test counts at handoff:** vitest **294 / 294** (was 290 pre-T6; +4 from T6's PanelLayout reset helpers + MenuBar integration test) · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** (T6's PanelLayout reset has vitest coverage; a follow-up Playwright assertion would be welcome but not gating).
+**Test counts at handoff:** vitest **300 / 300** (was 294 pre-MT-11; +6 from [`ViewportSlot.test.tsx`](../web/apps/editor/src/components/__tests__/ViewportSlot.test.tsx)) · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** (untouched this session — Phase 2 will add `canvas-architecture.spec.ts` once input is wired).
 
-**Next dispatch options.** B1.4 is done — pick from:
+**Next dispatch options.** Phase 0 + Phase 1 of [MT-11] are done — pick from:
 
 | Option | Why next | Effort |
 |---|---|---|
-| **B2 obsolescence audit** | HANDOFF §0b suspects B1.3 already absorbed B2's scope; a quick diff probably retires B2 entirely | ~30 min |
-| **MT-1 follow-up — texture-picker `…` buttons** | New-UI never wired the legacy `IDC_BUTTON1` / `IDC_BUTTON2` browse buttons; comment marker `TODO(MT-1)` in [EmitterPropertyTabs.tsx](web/apps/editor/src/screens/EmitterPropertyTabs.tsx) | ~2-4 h |
-| **[NT-5] Engine-side single-member link-group enforcement** | Now top of Near-term (position 1.1). Data-layer parity with the B1 render-layer filter | small |
+| **[MT-11] Phase 2 — input forwarding** | Route mouse + wheel + keyboard through canvas → new `viewport/input` bridge surface → engine. Hide the legacy popup (1×1, off-screen) so the canvas becomes visible. The headline payoff (no more chrome-cutout artifact in dropdowns) only lands once Phase 2 ships. | ~4-6 h |
+| **B2 obsolescence audit** | HANDOFF §0b (older) suspected B1.3 already absorbed B2's scope; a quick diff probably retires B2 entirely | ~30 min |
+| **MT-1 follow-up — texture-picker `…` buttons** | New-UI never wired the legacy `IDC_BUTTON1` / `IDC_BUTTON2` browse buttons; comment marker `TODO(MT-1)` in [EmitterPropertyTabs.tsx](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx) | ~2-4 h |
+| **[NT-5] Engine-side single-member link-group enforcement** | Top of Near-term (position 1.1). Data-layer parity with the B1 render-layer filter | small |
 | **[NT-6] Visual-stability lane assignment** | Optional bracket-gutter ergonomic improvement (position 1.2) | small |
-| **[MT-11] Architecture-C migration** | Fundamental fix for the chrome-cutout artifact T4c-on-popup-spans-window makes worse. Pre-spike → 16-32h post-spike | medium |
 | **Phase 3 of 2026 redesign** | Dialog re-skins, Tailwind v4 cleanup sweep, theme-persistence Playwright spec — see [plan](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md) | ~one session |
+
+---
+
+## What landed this session — [MT-11] Phase 0 + Phase 1 (one combined commit)
+
+### Phase 0 — Spike
+JPEG inline-in-payload transport chosen over WebResourceRequested mid-spike when **L-015** ([SetVirtualHostNameToFolderMapping short-circuits user `WebResourceRequested`](lessons.md#l-015)) surfaced. Spike numbers: **~120 FPS sustained** at 699×495 (centre-quadrant scene rect), JPEG ~58 KB / base64 ~78 KB per frame, 1:1 host:renderer with no dropping. Gate was ≥30 FPS — cleared by 4×.
+
+### Phase 1 — Production-grade hookup
+- **[`web/packages/bridge-schema/src/index.ts`](../web/packages/bridge-schema/src/index.ts)**: new `viewport/frame-ready` event kind, typed payload `{ w, h, frameId, jpegBase64 }`.
+- **[`src/host/FramePublisher.h`](../src/host/FramePublisher.h)** + **[`.cpp`](../src/host/FramePublisher.cpp)**: new class owning the encode → base64 → emit → 1 Hz log-throttle pipeline. Constructed alongside `AlphaCompositor` in `WM_CREATE` when `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`; torn down before the compositor in `WM_DESTROY`.
+- **[`src/host/AlphaCompositor.h`](../src/host/AlphaCompositor.h)** + **[`.cpp`](../src/host/AlphaCompositor.cpp)**: new `EncodeFrameJpeg(quality, outBytes, w, h)` — GDI+ JPEG encode with scene-rect crop, same shape as the existing `CaptureSnapshotPng`.
+- **[`src/host/HostWindow.cpp`](../src/host/HostWindow.cpp)**: env-var gate, `m_framePublisher` member, one-line `OnFrameComposited()` call per frame in `RenderD3D9`. Dead WebResourceRequested attempt deleted with a one-paragraph reference to L-015.
+- **[`web/apps/editor/src/components/ViewportSlot.tsx`](../web/apps/editor/src/components/ViewportSlot.tsx)**: dual render path (legacy span vs `<canvas data-testid="viewport-canvas">`); typed `bridge.on("viewport/frame-ready", ...)`; `matchMedia('(resolution)')` listener for DPR-on-monitor-change; subscribe-before-context ordering so jsdom tests share the same code path.
+- **[`web/apps/editor/src/components/__tests__/ViewportSlot.test.tsx`](../web/apps/editor/src/components/__tests__/ViewportSlot.test.tsx)**: new — +6 vitest tests covering both render paths + subscription lifecycle.
+
+---
+
+## Phase 2 — what's queued
+
+The plan in [`tasks/todo.md` §6](todo.md) lays out Phase 2 (~4-6 h):
+
+1. **`viewport/input` bridge surface** (schema + MockBridge cases) for mouse-down/up/move, wheel, keyboard.
+2. **Renderer-side**: dispatch handlers on the `<canvas>` for mouse + wheel; window-scoped for keydown/up with `TYPING_TAGS` guard.
+3. **Host-side `InputDispatcher.cpp`**: synthesize Win32 messages from bridge requests, post to the hidden popup HWND so the engine's existing input handlers consume them unchanged.
+4. **Hide the popup HWND** (off-screen + `ShowWindow(SW_HIDE)`).
+5. **Manual + Playwright smoke matrix**: LMB-drag rotate, MMB-drag pan, RMB-drag, wheel zoom, Shift+LMB instance spawn, keyboard hotkeys.
+
+When Phase 2 ships, the canvas becomes the visible source of truth and the chrome-cutout artifact in dropdowns is gone permanently.
 
 ---
 

@@ -928,3 +928,59 @@ toggle round-trips between 2col and 3col layouts.
 **Cross-reference.** None — first integration of this library in
 the project. CHANGELOG entry for B1.4 cites this lesson; future
 splitter-related dispatches should grep for L-014.
+
+---
+
+## L-015 — `SetVirtualHostNameToFolderMapping` short-circuits `WebResourceRequested`; pick a different URL or use postMessage payload
+
+**Rule.** A WebView2 `WebResourceRequested` handler registered with
+`AddWebResourceRequestedFilter(...)` will **not fire for requests
+whose URL host matches a `SetVirtualHostNameToFolderMapping`
+mapping**, regardless of how broad the filter pattern is. The
+mapped-folder resolver runs first inside the WebView2 process and
+returns `ERR_FILE_NOT_FOUND` (or the file) without ever giving
+user-registered handlers a shot.
+
+**Trigger.** Designing a host→renderer resource-delivery path that
+overlaps the virtual-host URL space. Symptoms: filter registration
+returns `S_OK`, `add_WebResourceRequested` returns `S_OK` with a
+real token, but the handler never invokes — not for the target
+URL, not even for the initial `index.html`. Browser DevTools shows
+`net::ERR_FILE_NOT_FOUND` for the unmapped path.
+
+**Source incident (2026-05-21).** While building the [MT-11]
+Phase 0 spike, wired a `WebResourceRequested` handler to serve
+encoded engine frames at `https://app.local/_viewport/frame.jpg`.
+The renderer `fetch()`'d that URL on every `viewport/frame-ready`
+event. Errors flooded DevTools: 404 for every fetch despite the
+handler being registered with filter `*` and
+`COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL`. Logged
+`add_WebResourceRequested` HRESULT (S_OK, token = 20) and added a
+diagnostic `Log()` at the top of the handler that proved the
+handler never fired for ANY URL, not even `index.html`. Disabling
+`--test-host` didn't help (so not a CDP issue).
+
+**Fix used.** Switched to inline base64-encoded JPEG in the
+`viewport/frame-ready` `postMessage` payload itself. No
+`WebResourceRequested`, no fetch, no virtual-host conflict. Cost:
+~33 % size inflation from base64 (58 KB JPEG → 77 KB on the wire).
+Spike still cleared the 30 FPS bar with room to spare (~120 FPS at
+699×495 on a fully-loaded scene).
+
+**Alternative fixes (not used, kept for reference).**
+
+1. **Different host name.** Use a URL with a host NOT covered by
+   `SetVirtualHostNameToFolderMapping` (e.g. `https://wv2-frames/`
+   or any non-mapped scheme). Requests to non-mapped hosts do flow
+   through `WebResourceRequested`.
+2. **Drop the virtual host mapping entirely.** Serve the React
+   bundle via `WebResourceRequested` too. Larger refactor; only
+   worth it if there are multiple host→renderer resource paths.
+3. **Pre-Navigate registration.** Confirmed not the issue — the
+   handler was registered before `Navigate` was called in the
+   failing case.
+
+**Cross-reference.** [MT-11] Phase 0 spike — see
+`tasks/todo.md` §6. The dead `if (false && ...)` block at
+`src/host/HostWindow.cpp` (post-`add_WebMessageReceived`) is kept
+as a record of what was tried; Phase 5 cleanup removes it.

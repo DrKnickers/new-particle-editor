@@ -21,6 +21,8 @@
 #include <wrl/implements.h>
 #include <d3d9.h>
 #include <winhttp.h>
+#include <shlwapi.h>  // [MT-11] Phase 0: SHCreateMemStream for WebResourceRequested response
+#pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "winhttp.lib")
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
@@ -28,6 +30,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>     // [MT-11] _wgetenv / _wtoi for ALO_VIEWPORT_TRANSPORT
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -40,6 +43,7 @@
 
 #include "AcceleratorBridge.h"
 #include "AlphaCompositor.h"
+#include "FramePublisher.h"
 
 #include <objbase.h>
 #include <gdiplus.h>
@@ -289,6 +293,9 @@ struct HostWindowImpl
 
     ComPtr<ICoreWebView2Controller> webController;
     ComPtr<ICoreWebView2>           webView;
+    // [MT-11] Phase 0: needed by the WebResourceRequested handler to
+    // construct the response stream via env->CreateWebResourceResponse.
+    ComPtr<ICoreWebView2Environment> webEnv;
     EventRegistrationToken          accelKeyTok = {};
 
     ITextureManager& textureManager;
@@ -391,6 +398,17 @@ struct HostWindowImpl
     // bridge a 33 ms minimum interval is a good compromise.
     DWORD                   m_lastCursorEmitTick = 0;
 
+    // [MT-11] Phase 1: canvas-in-DOM transport state.
+    //
+    // m_archCMode is the env-var-gated kill switch; when true and the
+    // AlphaCompositor is up, m_framePublisher is constructed alongside
+    // it in WM_CREATE. Camera input still flows through the visible
+    // popup HWND during Phase 1 (Phase 2 will route input through the
+    // canvas + a new viewport/input bridge surface).
+    bool                                m_archCMode    = false;
+    int                                 m_archCQuality = 70;  // JPEG quality 1..100
+    std::unique_ptr<host::FramePublisher> m_framePublisher;
+
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
@@ -419,6 +437,19 @@ struct HostWindowImpl
         // Engine pointer is bound later via SetEngine() in WM_CREATE.
         modManager->DiscoverMods();
         modManager->RestoreLastSelectedMod();
+
+        // [MT-11] Phase 0 spike: ALO_VIEWPORT_TRANSPORT env var.
+        // "canvas-jpeg" → enable Path A. Anything else → legacy popup.
+        // ALO_VIEWPORT_JPEG_Q overrides the JPEG quality (default 70).
+        if (const wchar_t* v = _wgetenv(L"ALO_VIEWPORT_TRANSPORT"))
+        {
+            if (wcscmp(v, L"canvas-jpeg") == 0) m_archCMode = true;
+        }
+        if (const wchar_t* q = _wgetenv(L"ALO_VIEWPORT_JPEG_Q"))
+        {
+            int n = _wtoi(q);
+            if (n >= 1 && n <= 100) m_archCQuality = n;
+        }
     }
 
     void Log(const char* fmt, ...);
@@ -515,6 +546,13 @@ void HostWindowImpl::RenderD3D9()
     engine->Render();
     fpsMeasurer.measure();
 
+    // [MT-11] Phase 1: hand the just-composited frame to FramePublisher
+    // for encode + base64 + emit. Lifecycle is gated on m_framePublisher
+    // being non-null (only constructed when ALO_VIEWPORT_TRANSPORT=canvas-jpeg
+    // was set in the ctor). See [MT-11] L-015 for why the transport is
+    // inline-in-payload rather than WebResourceRequested.
+    if (m_framePublisher) m_framePublisher->OnFrameComposited();
+
     // spawner/active-count: emit when GetNumInstances() differs from the
     // last emitted value. Polled per-frame, debounced to avoid WebMessage
     // spam. The SpawnerPanel badge subscription doesn't change — only
@@ -588,6 +626,8 @@ HRESULT HostWindowImpl::InitWebView2()
                     Log("[host] WebView2 env failed 0x%08lx\n", envHr);
                     return E_FAIL;
                 }
+                // [MT-11] Phase 0: stash for WebResourceRequested.
+                webEnv = env;
                 env->CreateCoreWebView2Controller(
                     hMain,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
@@ -790,6 +830,14 @@ HRESULT HostWindowImpl::InitWebView2()
                                         return S_OK;
                                     }).Get(), &tok);
 
+                            // [MT-11] L-015: The WebResourceRequested route was
+                            // tried mid-spike and abandoned because
+                            // SetVirtualHostNameToFolderMapping short-circuits
+                            // user handlers for the mapped host. The transport
+                            // now ships the JPEG bytes inline in the
+                            // viewport/frame-ready postMessage payload — see
+                            // FramePublisher.cpp + L-015 in tasks/lessons.md.
+
                             // Navigate to the React app.
                             if (useDevUi)
                             {
@@ -893,11 +941,33 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 layout.SetAlphaCompositor(alphaCompositor.get());
                 Log("[host] AlphaCompositor up (%ldx%ld)\n",
                     vrc.right - vrc.left, vrc.bottom - vrc.top);
+
+                // [MT-11] Phase 1: when arch-C mode is enabled, stand up
+                // the FramePublisher on top of the compositor. Emit
+                // callback wraps PostWebMessageAsJson with the UTF-16
+                // conversion already established by the bridge dispatcher;
+                // logger fans through Log() at 1 Hz. Constructed AFTER the
+                // compositor so EncodeFrameJpeg has somewhere to read.
+                if (m_archCMode && alphaCompositor)
+                {
+                    auto emit = [this](const std::string& json) {
+                        if (!webView) return;
+                        std::wstring w = Utf8ToUtf16(json);
+                        webView->PostWebMessageAsJson(w.c_str());
+                    };
+                    m_framePublisher = std::make_unique<host::FramePublisher>(
+                        alphaCompositor.get(), emit, m_archCQuality);
+                    m_framePublisher->SetLogger([this](const std::string& line) {
+                        Log("%s\n", line.c_str());
+                    });
+                    Log("[ArchC] FramePublisher up (mode=canvas-jpeg, q=%d)\n", m_archCQuality);
+                }
             }
             catch (const std::exception& e)
             {
                 Log("[host] AlphaCompositor init failed: %s — falling back to legacy Present\n", e.what());
                 alphaCompositor.reset();
+                m_framePublisher.reset();
             }
         }
 
@@ -986,6 +1056,10 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // the queue) can't dereference a freed compositor. Drop the
         // compositor first since Engine owns the D3D9 device the
         // compositor's resources are bound to.
+        // [MT-11] Phase 1: drop the FramePublisher first — it holds a
+        // raw pointer back into the compositor, so this MUST go before
+        // alphaCompositor.reset().
+        m_framePublisher.reset();
         if (engine) engine->SetAlphaCompositor(nullptr);
         layout.SetAlphaCompositor(nullptr);
         alphaCompositor.reset();

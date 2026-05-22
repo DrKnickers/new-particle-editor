@@ -353,6 +353,127 @@ std::string Base64Encode(const uint8_t* data, size_t len)
 
 } // namespace
 
+// [MT-11] Phase 0 spike. JPEG encoder CLSID lookup — same shape as
+// GetPngEncoderClsid above, just walks the encoder list for image/jpeg.
+namespace {
+bool GetJpegEncoderClsid(CLSID& outClsid)
+{
+    static CLSID cached = {};
+    static bool  found  = false;
+    if (found) { outClsid = cached; return true; }
+
+    UINT numEncoders = 0;
+    UINT bytes       = 0;
+    if (Gdiplus::GetImageEncodersSize(&numEncoders, &bytes) != Gdiplus::Ok || bytes == 0)
+        return false;
+
+    std::vector<uint8_t> buf(bytes);
+    auto* info = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+    if (Gdiplus::GetImageEncoders(numEncoders, bytes, info) != Gdiplus::Ok)
+        return false;
+
+    for (UINT i = 0; i < numEncoders; ++i)
+    {
+        if (wcscmp(info[i].MimeType, L"image/jpeg") == 0)
+        {
+            cached  = info[i].Clsid;
+            outClsid = cached;
+            found   = true;
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+bool AlphaCompositor::EncodeFrameJpeg(int quality,
+                                      std::vector<uint8_t>& outBytes,
+                                      int& outW, int& outH)
+{
+    if (m_impl->lastRawDib.empty() || m_impl->lastRawW <= 0 || m_impl->lastRawH <= 0)
+        return false;
+
+    CLSID jpegClsid = {};
+    if (!GetJpegEncoderClsid(jpegClsid)) return false;
+
+    const int srcW   = m_impl->lastRawW;
+    const int srcH   = m_impl->lastRawH;
+    const int stride = srcW * 4;
+
+    // Crop to scene rect if set — same shape as CaptureSnapshotPng.
+    // The popup is full-main-row sized post-B1.4 T4c, but only the
+    // scene rect holds pixels the user expects to see in the centre
+    // quadrant. Stretching the full DIB onto the canvas would paint
+    // the offstage engine content under the side panels too.
+    int cropX = 0;
+    int cropY = 0;
+    int cropW = srcW;
+    int cropH = srcH;
+    if (m_impl->sceneW > 0 && m_impl->sceneH > 0)
+    {
+        cropX = (m_impl->sceneX < 0) ? 0 : m_impl->sceneX;
+        cropY = (m_impl->sceneY < 0) ? 0 : m_impl->sceneY;
+        const int maxW = srcW - cropX;
+        const int maxH = srcH - cropY;
+        cropW = (m_impl->sceneW < maxW) ? m_impl->sceneW : maxW;
+        cropH = (m_impl->sceneH < maxH) ? m_impl->sceneH : maxH;
+        if (cropW <= 0 || cropH <= 0) return false;
+    }
+
+    BYTE* scan0 = const_cast<BYTE*>(m_impl->lastRawDib.data()) +
+                  static_cast<size_t>(cropY) * static_cast<size_t>(stride) +
+                  static_cast<size_t>(cropX) * 4u;
+    Gdiplus::Bitmap bmp(cropW, cropH, stride, PixelFormat32bppARGB, scan0);
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
+
+    // Build a quality EncoderParameter (JPEG-specific). EncoderQuality
+    // is the canonical GUID; value is a LONG in 0-100.
+    if (quality < 1)   quality = 1;
+    if (quality > 100) quality = 100;
+    ULONG qval = static_cast<ULONG>(quality);
+    Gdiplus::EncoderParameters params;
+    params.Count = 1;
+    params.Parameter[0].Guid           = Gdiplus::EncoderQuality;
+    params.Parameter[0].Type           = Gdiplus::EncoderParameterValueTypeLong;
+    params.Parameter[0].NumberOfValues = 1;
+    params.Parameter[0].Value          = &qval;
+
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) || !stream)
+        return false;
+
+    if (bmp.Save(stream, &jpegClsid, &params) != Gdiplus::Ok)
+    {
+        stream->Release();
+        return false;
+    }
+
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    STATSTG stat = {};
+    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)))
+    {
+        stream->Release();
+        return false;
+    }
+    const size_t jpegBytes = static_cast<size_t>(stat.cbSize.QuadPart);
+    outBytes.resize(jpegBytes);
+    ULONG read = 0;
+    if (FAILED(stream->Read(outBytes.data(), static_cast<ULONG>(jpegBytes), &read)) ||
+        read != jpegBytes)
+    {
+        stream->Release();
+        outBytes.clear();
+        return false;
+    }
+    stream->Release();
+
+    outW = cropW;
+    outH = cropH;
+    return true;
+}
+
 bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
 {
     if (m_impl->lastRawDib.empty() || m_impl->lastRawW <= 0 || m_impl->lastRawH <= 0)

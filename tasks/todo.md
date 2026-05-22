@@ -1,1048 +1,929 @@
-# tasks/todo.md — B1.4 [NT-8] Resizable splitters via `react-resizable-panels`
+# tasks/todo.md — [MT-11] Architecture-C migration (engine pixels into a DOM `<canvas>`)
 
-**Status:** plan drafted, awaiting user OK before any code.
-**Predecessor session:** B1.3.2 (75081b4 on `origin/lt-4`).
-**Difficulty estimate:** ★★★ (medium — single new dep, four splitters, conditional column, occlusion ripple is already free).
+**Status:** plan drafted, **awaiting user OK on the risks list** before Phase 0 starts.
+**Predecessor session:** B1.4 [NT-8] resizable splitters (`69bed7b` on `origin/lt-4`).
+**Difficulty estimate:** ★★★★ (architecturally fundamental; multi-phase; spike-gated).
+**Effort estimate:** ~16-32 h post-spike (per ROADMAP §2.1). Phase 0 spike: ~2-4 h.
 
 ---
 
 ## 1. Goal + scope
 
-When this ships, the user can drag any of four boundaries in the editor
-shell and the new sizes survive a page reload:
+When this ships, the editor's D3D9 viewport pixels render into a
+`<canvas>` element placed inside the centre-quadrant DOM
+(`ViewportSlot`). The top-level `WS_EX_LAYERED` popup HWND that
+currently sits *above* the WebView2 HWND is retired from the
+*presentation* path (its only remaining role, if any, is input
+ownership — see §3.5). The entire `AlphaCompositor` band-stamp +
+smoothstep-feather + `UpdateLayeredWindow` pipeline becomes dead
+code, slated for deletion in a follow-up PR.
 
-1. **Left column ↔ centre column** — `Particle System` panel vs viewport stack.
-2. **Centre column ↔ Spawner column** — viewport stack vs Spawner panel (only when Spawner is visible).
-3. **Viewport ↔ Curve editor** — inside the centre column.
-4. **Emitter tree ↔ Property tabs** — inside the left column's `.panel-body`.
-
-Defaults match B1.3.2's resting state on first load and after a "reset
-layout" gesture: left column 320 px, Spawner 320 px when on, curve editor
-290 px, inner tree/tabs 25/75. Persistence is per-user via
-`localStorage` under the `alo:layout:*` namespace (matches existing
-`alo:theme` convention).
+User-visible payoff: **the chrome-cutout artifact in dropdowns +
+menus is gone permanently**. Menu shadows, `backdrop-filter`,
+and every CSS effect render naturally because the engine and the
+chrome live in the same compositing tree. Splitter drag no longer
+exposes alpha-cutout shapes because there is no alpha cutout. The
+B1.3.1.1 snapshot-into-DOM pattern for modal backdrops becomes
+redundant (the canvas IS the engine pixels — modals can sample
+them via `<canvas>.toDataURL` or just dim+blur the live canvas).
 
 **In**
 
-- Library: `react-resizable-panels` (chosen in pre-plan; confirmed during
-  this plan's Task 1 by installing the latest 2.x and verifying API).
-- Four draggable splitters per the list above, with min/max constraints.
-- Persistence via the library's built-in `autoSaveId` (writes JSON to
-  `localStorage`).
-- Sensible min sizes so the user cannot drag any pane to unusable widths
-  (see §3.4 for numbers).
-- "Reset layout" hidden behind a View-menu item *Reset panel layout*
-  that clears the layout keys.
-- ARIA + keyboard nav (Tab → splitter focusable, arrow keys nudge size
-  by 1 %). Library ships this for free; verified during Task 1.
-- All existing `data-testid="quadrant-*"` testIDs preserved on the same
-  semantic nodes (Modal portal lookup + Playwright specs depend on them).
+- New transport surface (chosen by Phase 0 spike): one of
+  `WebResourceRequested` (CDP fetch → JPEG/PNG), `postMessage`
+  with transferable `ArrayBuffer` (raw BGRA), or `SharedArrayBuffer`
+  (raw BGRA, COOP/COEP required).
+- New bridge surface `viewport/frame-ready` (engine → renderer
+  ping when a new frame is available for fetch / has been posted).
+- New bridge surface `viewport/input` (renderer → engine mouse +
+  wheel + keyboard events, replacing the popup HWND's direct
+  window messages).
+- React-side `<canvas>` mount inside `ViewportSlot` with `getContext("2d")`
+  paint via `putImageData` / `drawImage` / `createImageBitmap`.
+- Feature flag (env var: `VITE_VIEWPORT_TRANSPORT` = `legacy` |
+  `canvas-jpeg` | `canvas-sab` | `canvas-postmsg`) for A/B
+  verification with architecture A.
+- Camera frustum aspect matches the canvas's CSS-rendered size,
+  not the popup-rect aspect. Resizes flow via the same
+  `layout/scene-rect` (renamed `viewport/canvas-size` post-cleanup,
+  but the message kind is preserved in this PR for compatibility).
+- DPR-correct rendering: canvas backing-store sized to
+  `cssW * devicePixelRatio` × `cssH * devicePixelRatio`; engine
+  RT matched to backing-store dims.
+- DPI changes / monitor moves picked up via `matchMedia` +
+  existing `device/dpr` plumbing.
+- Manual smoke matrix on weak + strong GPUs, integrated + discrete,
+  at 100 % + 150 % + 200 % DPR.
 
 **Out**
 
-- No C++ changes. No bridge schema changes. (`ResizeObserver` on the
-  existing `ViewportSlot` and `useViewportOcclusion` callsites already
-  fans drag-state out to the host without further plumbing — see §2.4.)
-- No per-project persistence (deliberate — user picked per-user; bundling
-  layout into the `.alo` file is a separate dispatch if it ever lands).
-- No collapsible-to-zero animation for the Spawner column — toggling the
-  Spawner panel from its existing toolbar button continues to mount /
-  unmount the panel (we just teach the surrounding `PanelGroup` to
-  recompose). Reason: animation is out of scope for B1.4, and the
-  library handles mount/unmount cleanly.
-- No splitter on the bottom curve-editor row's *horizontal* axis (it
-  already spans the centre column's full width — no second axis to
-  resize).
-- No reset gesture beyond the menu item (no double-click-handle reset
-  for v1 — easy follow-up if requested).
+- **`AlphaCompositor` and `useViewportOcclusion` deletions** — kept
+  alive in this PR behind the feature flag for A/B verification.
+  A follow-up cleanup PR (filed separately, ~2-4 h) deletes the
+  band-stamp pipeline, `viewport/occlude`, the
+  `useViewportOcclusion` hook + 5 callsites (MenuBar, OccludingPopover,
+  ToolPanel, ViewportPill, Modal's sentinel rect),
+  `OccludingMenubarContent`, and the `layout/scene-rect` channel.
+  Splitting cleanup out lets us flip the default and let the new
+  architecture bake before the irreversible deletes.
+- **Modal snapshot-into-DOM pattern** — stays live until the cleanup
+  PR. With architecture C, the canvas itself is the live engine
+  pixels, so the modal backdrop can sample it directly (frozen
+  frame OR live blurred). That refactor is part of the cleanup PR.
+- **Engine internals** — no changes to `Engine::Render`,
+  `Engine::Present`, or any of the D3D9 device handling. The
+  readback path (`GetRenderTargetData` into the SYSTEMMEM staging
+  surface) is reused unchanged; only what happens *after* the
+  readback shifts (no DIB stamping, no `UpdateLayeredWindow`).
+- **Camera input path** — popup HWND stays alive but hidden (1×1,
+  off-screen, `WS_EX_LAYERED` retained). It still owns the D3D9
+  device for swap-chain consistency. **All user input now flows
+  through the canvas DOM element** and into the engine via the
+  new `viewport/input` bridge surface. The popup HWND no longer
+  receives user input.
+- **Headers / COOP-COEP** — only flipped on if Phase 0 picks the
+  SharedArrayBuffer transport. The other two transports work with
+  WebView2's default headers.
+- **`--legacy-ui` parity** — untouched. This is a new-UI-only
+  migration; the legacy Win32 UI doesn't have a WebView2 layer.
+- **Engine device-loss recovery** — unchanged. The existing
+  `Engine::Reset` path still fires on `D3DERR_DEVICELOST`; the
+  canvas observer ignores frames during the device-lost window
+  (no `frame-ready` messages dispatched until recovery).
 
 ---
 
 ## 2. What the codebase already gives us
 
-### 2.1 Existing layout (`web/apps/editor/src/App.tsx`)
+The migration is almost entirely *additive* on top of what's
+already there. The load-bearing surveys (see §10 for the survey
+prompt that produced these):
 
-The relevant region is at [App.tsx:188-286](web/apps/editor/src/App.tsx:188-286).
+### 2.1 D3D9 readback path is already in place
+- [`src/host/AlphaCompositor.cpp:455`](../src/host/AlphaCompositor.cpp:455)
+  — `GetRenderTargetData(m_impl->offscreenRT, m_impl->sysMemSurface)`
+  is the GPU → SYSTEMMEM readback that already runs every frame.
+- [`src/host/AlphaCompositor.cpp:460-472`](../src/host/AlphaCompositor.cpp:460)
+  — `LockRect` + memcpy into the DIB pixel buffer. The BGRA bytes
+  in `m_dibPixels` are exactly what the canvas needs.
+- [`src/host/AlphaCompositor.cpp:482-491`](../src/host/AlphaCompositor.cpp:482)
+  — `m_lastRawDib` already caches the pre-stamp BGRA buffer
+  (B1.3.1.1 zero-copy snapshot path). The cleanest engine-side
+  hook for arch C is: **ship `m_lastRawDib` instead of running the
+  stamps + UpdateLayeredWindow.**
 
-- Outer wrapper: `<div className="flex flex-1 min-h-0 overflow-hidden">`.
-- **Left column**: `<div className="panel w-80 shrink-0">` (320 px fixed)
-  with header *"Particle System"*. Body is `panel-body flex min-h-0
-  flex-col overflow-hidden`, with `EmitterTree` (`flex-1`) and
-  `EmitterPropertyTabs` (`flex-[3_1_0%]`) yielding the 25 / 75 split that
-  B1.3.1 introduced. The comment at
-  [App.tsx:219](web/apps/editor/src/App.tsx:219) already says *"B1.4
-  will make the boundary draggable via react-resizable-panels."*
-- **Centre column**: `<div className="flex flex-1 min-w-0 flex-col">`.
-  `ViewportSlot` is `flex-1`, curve editor is `h-[290px] shrink-0
-  border-t border-border`.
-- **Right (Spawner) column**: `<aside className="w-80 shrink-0 …
-  border-l border-border bg-panel">` — only mounted when
-  `spawnerVisible === true` from
-  [lib/spawner-visibility.ts](web/apps/editor/src/lib/spawner-visibility.ts).
+### 2.2 The WebView2 surface is transparent and ready
+- [`src/host/HostWindow.cpp:611-616`](../src/host/HostWindow.cpp:611)
+  — `DefaultBackgroundColor` is COREWEBVIEW2_COLOR{0,0,0,0} (fully
+  transparent). The current architecture relies on this to let the
+  layered popup show through; architecture C **drops** the
+  transparency requirement (chrome paints on whatever background
+  the canvas isn't covering — typically panel surfaces).
+- [`src/host/HostWindow.cpp:748-750`](../src/host/HostWindow.cpp:748)
+  — Virtual host `app.local` → `web/apps/editor/dist`. The
+  `WebResourceRequested` transport hooks into this same routing
+  layer (a new path under `app.local/_viewport/frame.jpg`).
+- [`src/host/HostWindow.cpp:801`](../src/host/HostWindow.cpp:801)
+  — `Navigate(L"https://app.local/index.html")`. No COOP/COEP today.
 
-### 2.2 Existing testIDs (load-bearing — must be preserved)
+### 2.3 The bridge surface scales cleanly
+- [`web/packages/bridge-schema/src/index.ts`](../web/packages/bridge-schema/src/index.ts)
+  — adds two new request kinds (`viewport/frame-ready` and
+  `viewport/input`). Same pattern as `viewport/occlude` (line 648)
+  and `viewport/capture-snapshot` (line 658).
+- [`src/host/BridgeDispatcher.cpp`](../src/host/BridgeDispatcher.cpp)
+  — new handlers slot in beside `viewport/occlude` (line 790) and
+  `viewport/capture-snapshot` (line 834). Pattern unchanged.
 
-- `quadrant-emitter-tree` — referenced by Playwright
-  [property-tabs.spec.ts:57](web/apps/editor/tests/property-tabs.spec.ts:57).
-- `quadrant-property-tabs` — Playwright + vitest.
-- `quadrant-viewport` — Modal portal target in
-  [Modal.tsx:84-90](web/apps/editor/src/components/Modal.tsx:84-90)
-  (`document.querySelector('[data-testid="quadrant-viewport"]')`),
-  Modal vitest, Playwright.
-- `quadrant-curve-editor` — Playwright + CurveEditor vitest.
-- `quadrant-spawner` — Playwright.
+### 2.4 `ViewportSlot` is already DOM-shaped
+- [`web/apps/editor/src/components/ViewportSlot.tsx:44-56`](../web/apps/editor/src/components/ViewportSlot.tsx:44)
+  — currently a `<div>` placeholder with `<span>D3D9 viewport</span>`.
+  The new `<canvas ref={canvasRef}>` mounts inside the existing
+  ResizeObserver wrapper. The DPR-scaled rect already gets
+  dispatched (`layout/scene-rect`); we reuse that hook to size the
+  canvas backing store.
 
-All five must remain on **DOM nodes whose `getBoundingClientRect`
-semantically matches the rendered pane** (i.e. the testID goes on the
-`Panel`'s inner div, not the `PanelResizeHandle` or any wrapping
-component the library inserts).
+### 2.5 Engine sizing is already decoupled from popup size
+- B1.4 T4c parked the popup at full main-client size
+  (`LayoutBroker::ApplyFullClient`). The Engine RT today is sized
+  to the popup; for architecture C, the RT sizes to the canvas
+  backing store. The decoupling is already in place — no Engine
+  surgery needed, just a different size source.
 
-### 2.3 Existing `localStorage` convention
-
-The only key in use today is `alo:theme`
-([App.tsx:70](web/apps/editor/src/App.tsx:70)). The plan adopts the
-same prefix: `alo:layout` (single key — the library writes a JSON blob
-keyed by panel group id when `autoSaveId` is set).
-
-### 2.4 ResizeObserver wiring already covers drag-state propagation
-
-- [ViewportSlot.tsx:11-37](web/apps/editor/src/components/ViewportSlot.tsx:11-37)
-  attaches a `ResizeObserver` to its outer div and fires
-  `layout/viewport-rect` on every resize. Splitter drags will fire it
-  for free.
-- [lib/viewport-occlusion.ts:46-92](web/apps/editor/src/lib/viewport-occlusion.ts:46-92)
-  attaches `ResizeObserver` to every occlusion target. Splitter drags
-  on a column boundary will resize the spawner / tool-panel
-  occlusion-target divs and fire `viewport/occlude` updates for free.
-
-This is the key risk-killer for the plan: **we do not need a single
-new bridge call.** All host-side compositing stays correct because the
-host already reacts to per-element resize.
-
-### 2.5 Existing tests we will need to update or add
-
-- [components/__tests__/Modal.test.tsx](web/apps/editor/src/components/__tests__/Modal.test.tsx)
-  manually adds `<div data-testid="quadrant-viewport" />` to the DOM
-  — no change needed unless we accidentally move the testID.
-- [tests/property-tabs.spec.ts](web/apps/editor/tests/property-tabs.spec.ts)
-  asserts all five quadrant testIDs are visible — no change needed.
-- New: `tests/splitters.spec.ts` (Playwright) — drag each splitter,
-  reload, assert sizes persist. **No new vitest spec needed** because
-  the library's behaviour is library-tested; we test the *integration*
-  end-to-end where the layout actually mounts.
-- New: `src/components/__tests__/PanelLayout.test.tsx` (vitest) —
-  smoke test that `<PanelLayout />` mounts, exposes the five
-  testIDs, and reads/writes the `alo:layout` key.
+### 2.6 Lessons that constrain the design
+- [L-011](lessons.md): HTML CSS effects cannot reach the engine
+  compositing layer **today**. Architecture C eliminates the layer
+  boundary entirely. ★ L-011 stops being a constraint on the new
+  UI; the cleanup PR can re-introduce CSS effects (menu shadows,
+  popover backdrops) without the opaque-chrome workaround.
+- [L-012](lessons.md): `window.bridge` may be `TestHostBridge`.
+  Continue using `BridgeContext` / `useBridge()` for all new
+  surfaces; never `window.bridge` directly.
+- [L-013](lessons.md): Win32 drag-resize modal loop starves
+  WebView2 IPC. **This applies to architecture C too** — during a
+  WM_SIZING modal loop, frames stop arriving at the canvas. The
+  canvas freezes on the last delivered frame; CSS scales it via
+  `image-rendering` until the loop exits. Identical to today's
+  modal-backdrop pattern, acceptable.
+- [L-014](lessons.md): `react-resizable-panels@4.x` quirks — n/a
+  for arch C itself, but the canvas mounts inside a panel so any
+  re-flow of the panel layout must propagate to the canvas size.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-### 3.1 New components
+### 3.1 Transport choice — Phase 0 spike decides
 
-```
-web/apps/editor/src/components/
-  PanelLayout.tsx        # Outer 2- or 3-column PanelGroup wrapping
-                         # all of AppShell's main row. Renders the
-                         # nested left-column + centre-column PanelGroups.
-                         # Drives spawner mount/unmount based on
-                         # useSpawnerVisible(), preserving testIDs.
-```
+Three candidate transports, ranked by complexity:
 
-App.tsx's main `<div className="flex flex-1 min-h-0 overflow-hidden">`
-section becomes `<PanelLayout bridge={bridge} openPanel={openPanel} />`.
-The five quadrant `data-testid` attributes move into `PanelLayout`, on
-the same semantic nodes they sit on today.
+#### Path A — `WebResourceRequested` + JPEG
+- **Renderer side**: `fetch('https://app.local/_viewport/frame.jpg')`
+  on every `viewport/frame-ready` ping, draw via
+  `createImageBitmap` → `ctx.drawImage`.
+- **Host side**: Register a `WebResourceRequested` handler matching
+  the `_viewport/frame.jpg` path; respond with the JPEG-encoded
+  last frame from `m_lastRawDib`.
+- **Encode cost**: ~3-8 ms for a 1920×1080 JPEG at quality 70
+  (GDI+ or stb_image_write). Lower with smaller backing stores.
+- **Decode cost**: ~1-3 ms via `createImageBitmap` (off-thread).
+- **Round-trip**: ~1-2 ms CDP overhead per fetch.
+- **Pros**: Trivial wiring; no headers; zero shared-memory plumbing;
+  works in dev-UI mode (`http://localhost:5174`) and production
+  (`https://app.local`) without changes.
+- **Cons**: JPEG color quantization (alpha-channel loss; UI
+  components in the canvas region may appear in subtly different
+  shades than chrome adjacent). Encode is on the host UI thread
+  unless we add a worker.
+- **Worst case for spike**: 4K main window, full-window viewport,
+  150 % DPR backing store (5760×3240 effective). Encode at this
+  size could be 30+ ms — kills the path. The spike measures this.
 
-### 3.2 Group nesting (post-T1 — adjusted for 4.x API)
+#### Path B — `postMessage` with transferable `ArrayBuffer`
+- **Renderer side**: `chrome.webview.postMessage` arrives with a
+  `Uint8ClampedArray` BGRA payload; `ctx.putImageData(new ImageData(...))`.
+- **Host side**: After readback, post the raw bytes via
+  `PostWebMessageAsJson` is too slow; we need raw transfer. WebView2
+  supports `PostWebMessageAsString` + base64? No — use the
+  experimental `PostWebMessage` raw bytes path if it exists, or
+  fall back to a worker-side `WebResourceRequested` for the bytes
+  with a sentinel content-type.
+- **Encode cost**: Zero (raw BGRA).
+- **Decode cost**: ~1-2 ms for `putImageData` at 1080p.
+- **Round-trip**: ~1-3 ms for IPC, plus copy overhead (transferable
+  may or may not work — needs verification).
+- **Pros**: Bit-exact pixels (no JPEG quantization). Lower CPU on
+  host side.
+- **Cons**: Copy overhead on the IPC boundary (raw bytes are large
+  — 8 MB at 1080p, 33 MB at 4K). May negate the encode savings.
+- **Spike question**: Does WebView2's `postMessage` IPC support
+  transferable buffers (zero-copy) or always memcpy?
 
-**T1 finding:** `react-resizable-panels@4.11.1` is the installed version
-(latest at time of plan). 4.x renames + reshapes the API. Corrections:
+#### Path C — `SharedArrayBuffer` + COOP/COEP
+- **Renderer side**: `new ImageData(sharedView, w, h)` →
+  `ctx.putImageData`. Zero copies, zero IPC per frame.
+- **Host side**: Allocate the SAB once (via a host-side script
+  injection), write directly into the underlying memory. Engine
+  thread writes; renderer thread reads with a SharedArrayBuffer
+  `Atomics.wait` / `Atomics.notify` handshake.
+- **Encode cost**: Zero.
+- **Decode cost**: Zero (the canvas reads directly from the SAB).
+- **Round-trip**: ~0 ms (just the atomic notify).
+- **Pros**: Fastest possible path. Bit-exact pixels.
+- **Cons**: Requires `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp` on the WebView2
+  navigation. Needs verification that WebView2's virtual-host
+  scheme can serve these headers via `WebResourceRequested`. Also
+  needs verification that WebView2 even exposes
+  `SharedArrayBuffer` (Chromium-based, so likely yes, but the
+  `crossOriginIsolated` flag needs to be true).
 
-- `PanelGroup` → `Group`, with prop `direction` → `orientation`.
-- `PanelResizeHandle` → `Separator`.
-- `autoSaveId` is **gone** — persistence is DIY via `defaultLayout`
-  (passed in on mount) + `onLayoutChanged` (called after pointer
-  release). We use a small `usePersistedLayout(key, defaults)` hook.
-- `Layout` type is `{[panelId: string]: number}` (percentages 0-100).
-- `Panel` accepts `defaultSize`, `minSize`, `maxSize`, `collapsible`,
-  `collapsedSize`, `id` — props the plan already used.
-- `Separator` accepts `disableDoubleClick?: boolean`. Default
-  behaviour is **double-click resets to default size** — a gesture the
-  original plan §3.6 deferred to a follow-up. Now ships free; we
-  leave `disableDoubleClick` unset.
-- `data-resize-handle-active` attribute is **not** a 4.x thing. CSS
-  uses `:hover` + `:active` pseudo-classes on `[data-separator]`
-  instead.
-- ARIA (`aria-orientation`, `aria-valuemax/min/now`, etc.) is auto-
-  applied to the `Separator` — we don't add it ourselves.
-- `Panel`'s `className` lands on a **nested** div, not the root div,
-  to "avoid styles that interfere with Flex layout". The data-testid
-  attribute is passed through to that same root div alongside
-  `data-panel`. **For our quadrant testIDs we place them on a
-  manually-rendered inner div** inside `Panel`'s children, not on
-  the `Panel` element itself — keeps the rect semantics identical
-  to today.
+#### Decision tree
+The pre-spike measures **end-to-end latency and steady-state FPS**
+for each transport at three resolutions (720p, 1080p, 4K @ 100 %
+DPR). The transport that delivers ≥30 FPS at 1080p under
+interactive editing (mouse-drag camera spin) wins. If multiple
+qualify, prefer in order: Path A (simplest) → Path B → Path C.
 
-```tsx
-<Group orientation="horizontal"
-       defaultLayout={outerLayout}
-       onLayoutChanged={persistOuter}>
-  <Panel id="left" minSize={15} maxSize={40}>
-    <div className="panel h-full"><div className="panel-header">…</div>
-      <div className="panel-body flex min-h-0 flex-col overflow-hidden">
-        <Group orientation="vertical"
-               defaultLayout={leftLayout}
-               onLayoutChanged={persistLeft}
-               style={{ flex: 1, minHeight: 0 }}>
-          <Panel id="tree" minSize={10}>
-            <aside data-testid="quadrant-emitter-tree" …>
-              <EmitterTree />
-            </aside>
-          </Panel>
-          <Separator className="ce-splitter ce-splitter-h" />
-          <Panel id="tabs" minSize={20}>
-            <div data-testid="quadrant-property-tabs" …>
-              <EmitterPropertyTabs />
-            </div>
-          </Panel>
-        </Group>
-      </div>
-    </div>
-  </Panel>
+If **all three** fall below 30 FPS at 1080p, the architecture-C
+migration is **not viable** and we revert to architecture A with a
+documented L-015 lesson. (This is a real outcome and the user
+should be aware of it before committing.)
 
-  <Separator className="ce-splitter ce-splitter-v" />
-
-  <Panel id="center" minSize={30}>
-    <Group orientation="vertical"
-           defaultLayout={centerLayout}
-           onLayoutChanged={persistCenter}>
-      <Panel id="viewport" minSize={30}>
-        <div data-testid="quadrant-viewport" className="relative h-full">
-          <ViewportSlot /><ViewportPill />…tool-panels…
-        </div>
-      </Panel>
-      <Separator className="ce-splitter ce-splitter-h" />
-      <Panel id="curve" minSize={10}>
-        <div data-testid="quadrant-curve-editor" …>
-          <CurveEditorPanel />
-        </div>
-      </Panel>
-    </Group>
-  </Panel>
-
-  {spawnerVisible && (
-    <>
-      <Separator className="ce-splitter ce-splitter-v" />
-      <Panel id="spawner" minSize={12} maxSize={40}>
-        <aside data-testid="quadrant-spawner" …><SpawnerPanel /></aside>
-      </Panel>
-    </>
-  )}
-</Group>
-```
-
-Persistence hook:
+### 3.2 The new bridge surface
 
 ```ts
-function usePersistedLayout(key: string, defaults: Layout) {
-  const initial = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) return defaults;
-      const parsed = JSON.parse(raw) as Layout;
-      // Defensive: if any id is missing or ratios don't sum to ~100,
-      // fall back to defaults (corrupted state, e.g. DevTools tampering).
-      const sum = Object.values(parsed).reduce((a, b) => a + b, 0);
-      const allKeys = Object.keys(defaults).every((k) => k in parsed);
-      if (!allKeys || Math.abs(sum - 100) > 0.5) return defaults;
-      return parsed;
-    } catch {
-      return defaults;
+// web/packages/bridge-schema/src/index.ts
+
+// engine → renderer
+{
+  kind: "viewport/frame-ready",
+  // Path A: renderer fetches via WebResourceRequested
+  // Path B: renderer receives raw BGRA in a separate postMessage
+  // Path C: renderer reads from the SAB; the message is just a wake-up
+  payload: { w: number, h: number, frameId: number, timestampMs: number }
+}
+
+// renderer → engine
+{
+  kind: "viewport/input",
+  payload:
+    | { type: "mouse-down", button: 0|1|2, x: number, y: number, buttons: number, modifiers: number }
+    | { type: "mouse-up",   button: 0|1|2, x: number, y: number, buttons: number, modifiers: number }
+    | { type: "mouse-move",                  x: number, y: number, buttons: number, modifiers: number }
+    | { type: "wheel",                       x: number, y: number, deltaY: number, modifiers: number }
+    | { type: "key-down", key: string, code: string, modifiers: number }
+    | { type: "key-up",   key: string, code: string, modifiers: number }
+}
+```
+
+`x` / `y` are in **canvas backing-store pixels** (already DPR-scaled
+on the renderer side). The host translates them straight into
+engine coords without further scaling.
+
+`modifiers` is a bitfield: `1=shift, 2=ctrl, 4=alt, 8=meta`.
+
+### 3.3 Engine-side wiring
+
+```cpp
+// New on AlphaCompositor (or a sibling class — see §3.6):
+class FramePublisher {
+  void OnFrameReady(const uint8_t* bgraBytes, int w, int h);
+  // Path A: stash latest in a member; WebResourceRequested handler reads it.
+  // Path B: copy to IPC buffer + PostWebMessage.
+  // Path C: copy to SAB-backed memory + Atomics.notify.
+};
+
+// In AlphaCompositor::Composite, after the existing readback + cache:
+if (m_useArchitectureC) {
+  m_framePublisher.OnFrameReady(m_impl->lastRawDib, m_impl->lastRawW, m_impl->lastRawH);
+  return; // skip stamping + UpdateLayeredWindow
+}
+// Legacy path:
+ApplyOcclusionStamps(...);
+UpdateLayeredWindow(...);
+```
+
+The `m_useArchitectureC` flag is wired to a host-side env var
+(`ALO_VIEWPORT_TRANSPORT=canvas-jpeg|legacy`) checked at
+`HostWindow` construction. Default during this PR: `legacy`.
+Default after the default-flip (the last phase): `canvas-jpeg`.
+
+### 3.4 Renderer-side canvas mount
+
+```tsx
+// web/apps/editor/src/components/ViewportSlot.tsx (skeleton)
+const ViewportSlot = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bridge = useBridge();
+  const [dpr, setDpr] = useState(window.devicePixelRatio);
+
+  // Size canvas + dispatch viewport/canvas-size on mount + resize
+  useResizeObserver(slotRef, ({ width, height }) => {
+    const w = Math.round(width * dpr);
+    const h = Math.round(height * dpr);
+    if (canvasRef.current) {
+      canvasRef.current.width = w;
+      canvasRef.current.height = h;
     }
-  }, [key]);
-  const onLayoutChanged = useCallback((layout: Layout) => {
-    try { localStorage.setItem(key, JSON.stringify(layout)); }
-    catch { /* localStorage full / disabled — drop silently */ }
-  }, [key]);
-  return { defaultLayout: initial, onLayoutChanged };
-}
+    bridge.request({ kind: "layout/scene-rect", payload: { x: 0, y: 0, w, h } });
+  });
+
+  // Subscribe to frame-ready
+  useFrameSubscription({
+    transport: import.meta.env.VITE_VIEWPORT_TRANSPORT ?? "legacy",
+    onFrame: (bytes, w, h) => {
+      const ctx = canvasRef.current?.getContext("2d");
+      if (!ctx) return;
+      // Path-specific paint logic; for JPEG it's createImageBitmap → drawImage.
+    },
+  });
+
+  // Forward input
+  return (
+    <div ref={slotRef} className="absolute inset-0">
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full"
+        style={{ imageRendering: "pixelated" }}
+        onMouseDown={(e) => dispatchInput(bridge, "mouse-down", e)}
+        onMouseMove={(e) => dispatchInput(bridge, "mouse-move", e)}
+        onMouseUp={(e) => dispatchInput(bridge, "mouse-up", e)}
+        onWheel={(e) => dispatchInput(bridge, "wheel", e)}
+      />
+    </div>
+  );
+};
 ```
 
-**2-col vs 3-col Spawner state.** Because we're DIY now, we use **two
-separate outer keys** to avoid ratio drift between the states:
-`alo:layout:outer:2col` (mounted when `spawnerVisible === false`) and
-`alo:layout:outer:3col` (mounted when `true`). Picked at render time.
-This was the fallback path in the original plan; with `autoSaveId`
-gone we just take that path directly.
+`useFrameSubscription` is a new hook that branches on transport
+and abstracts the per-path subscription logic.
 
-### 3.3 CSS — handle visuals (post-T1 adjusted)
+### 3.5 Popup HWND fate
 
-New CSS rules in [web/apps/editor/src/styles/components.css](web/apps/editor/src/styles/components.css):
+The popup HWND owns the D3D9 swap chain today, and the
+swap chain is the engine's primary surface. Moving the swap chain
+to a hidden HWND has device-recreation cost and is risky. The
+simpler change: **keep the popup HWND alive but invisible**.
 
-```css
-[data-separator].ce-splitter {
-  --ce-splitter-thickness: 4px;
-  background: transparent;
-  position: relative;
-  transition: background 120ms ease;
-}
-[data-separator].ce-splitter:hover,
-[data-separator].ce-splitter:active {
-  background: var(--accent-soft);
-}
-[data-separator].ce-splitter-v {
-  width: var(--ce-splitter-thickness); cursor: col-resize;
-}
-[data-separator].ce-splitter-h {
-  height: var(--ce-splitter-thickness); cursor: row-resize;
-}
-[data-separator].ce-splitter:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-```
+- Size: 1×1, off-screen (e.g., -32000, -32000).
+- Style: keep `WS_EX_LAYERED` + `WS_POPUP` but never call
+  `ShowWindow(SW_SHOW)` (or call `ShowWindow(SW_HIDE)` once after
+  the swap chain is created).
+- Engine RT: still allocated; size set by the canvas backing store
+  (via `Engine::Reset` whenever the canvas resizes).
+- `UpdateLayeredWindow` calls: skipped entirely under architecture
+  C. The popup never paints — it exists purely as the D3D9 device's
+  required `HWND` host.
 
-4 px thickness matches the existing 1 px-border-region; hover affordance
-uses the existing `--accent-soft` token (already present in
-`tokens.css`). Active-drag state piggybacks on the `:active`
-pseudo-class because 4.x doesn't expose a `data-resize-handle-active`
-attribute — `:active` while the user holds the pointer down works
-equivalently for our visual.
+Mouse + keyboard never reach the popup HWND (it's off-screen).
+Input arrives through the canvas → `viewport/input` → engine.
 
-### 3.4 Min/max sizing rationale
+### 3.6 Module split for the new code
 
-Percentages, because the library's `Panel` API takes percentages by
-default and that's what `autoSaveId` persists.
+- New `src/host/FramePublisher.h/.cpp` (Path-A/B/C variant):
+  - `JpegFramePublisher.h/.cpp` (Path A): JPEG encode via GDI+ /
+    stb_image_write; cached buffer accessor for
+    `WebResourceRequested`.
+  - `PostMessageFramePublisher.h/.cpp` (Path B).
+  - `SabFramePublisher.h/.cpp` (Path C).
+  - `IFramePublisher` interface so `AlphaCompositor` can hold a
+    polymorphic pointer set at construction time from the env var.
+- New `src/host/InputDispatcher.h/.cpp`: receives
+  `viewport/input` bridge requests, synthesises Win32 messages
+  for the engine (`WM_LBUTTONDOWN`, etc.) addressed to the engine
+  popup HWND. Engine's existing input handlers receive them
+  unchanged.
 
-| Pane         | default | min   | max  | Rationale (computed against a 1920-wide window)                         |
-|--------------|---------|-------|------|--------------------------------------------------------------------------|
-| left col     | 20 %    | 15 %  | 40 % | 15 % ≈ 288 px (legacy `w-80` = 320 px). Floor: tabs still readable.       |
-| spawner col  | 20 %    | 12 %  | 40 % | 12 % ≈ 230 px (legacy `w-80` minus paddings → Spawner still usable).     |
-| centre col   | (rest)  | 30 %  | —    | Min 30 % ≈ 576 px — viewport still wide enough to render a sane scene.  |
-| inner tree   | 25 %    | 10 %  | —    | Tree of 1-2 emitters still visible.                                      |
-| inner tabs   | 75 %    | 20 %  | —    | Smallest tab strip we want to allow.                                     |
-| inner vp     | 75 %    | 30 %  | —    | Tied to centre min — viewport must stay usable.                          |
-| inner curve  | 25 %    | 10 %  | —    | ≈ 100 px — fits one channel row, matches "below this it's pointless"     |
+Phase 0's spike implements `JpegFramePublisher` first (simplest);
+Phases 1-3 keep the interface and add the other two iff the spike
+shows JPEG is borderline.
 
-The library clamps drags to these bounds; the user cannot drag past min.
+### 3.7 Feature flag mechanics
 
-### 3.5 Reset layout (post-T1 adjusted)
-
-New View-menu item *Reset panel layout* clears the four DIY
-`localStorage` entries (`alo:layout:outer:2col`,
-`alo:layout:outer:3col`, `alo:layout:left`, `alo:layout:center`) and
-forces a re-render with the in-code defaults. Implementation: bump a
-`useState` counter passed as `key={n}` to the outer `<Group>` so React
-remounts the tree. `usePersistedLayout` on next mount sees an empty
-key and returns the in-code `defaults`.
-
-Note: 4.x also ships **double-click-handle reset for free** (the
-`Separator` resets *its* panels to default size on double-click).
-That's per-splitter; the menu item resets all four at once.
-
-### 3.6 Out-of-scope items deliberately deferred
-
-- **~~Reset gesture on the handle itself~~** — 4.x ships this by
-  default. Promoted in scope; no work required.
-- **Per-window-size scaling.** A user with a 4K monitor who sets
-  ratios then plugs into a laptop will see those ratios honoured
-  (because we store percentages, not pixels) — no extra work.
-- **Cross-tab sync.** Two editor windows open at once won't see each
-  other's drags. We don't expect dual windows in practice; if it ever
-  matters, `StorageEvent` listener is a small follow-up.
+- Build-time: `VITE_VIEWPORT_TRANSPORT` env var read at Vite build.
+  Bakes into `import.meta.env.VITE_VIEWPORT_TRANSPORT`. Default
+  in dev: `legacy`. Default in CI / production builds (post-flip):
+  `canvas-jpeg`.
+- Run-time: `ALO_VIEWPORT_TRANSPORT` env var read by `HostWindow`
+  at construction. Determines which `FramePublisher` (or
+  no-publisher = legacy) is instantiated.
+- Both must agree. Mismatch raises an error banner in the UI
+  (renderer side checks via bridge handshake at mount).
+- For A/B verification (Phase 3): two test runs, one per
+  combination, in CI; both must pass identical Playwright spec.
 
 ---
 
 ## 4. Risks named up front + mitigations
 
-### Risk 1 — `react-resizable-panels` API drift ✅ caught in T1
+**This is the section to iterate with the user before any code.**
 
-T1 found 4.11.1 is the installed version (4.x is a major reshape from
-the 1.x/2.x API I sketched against). Names + persistence model
-changed; §3.2 / §3.3 / §3.5 / §3.6 above rewritten to match. The
-risk fired and the mitigation worked — caught at install time, not
-at debug time.
+### Risk 1 — Spike disqualifies all three transports
+**Hazard**: Worst case, all transports fall below the 30 FPS bar
+at 1080p interactive (camera spin while particles emit). The
+migration is not viable without ARC engine internals work
+(swap-chain-to-canvas via DXGI shared-handle interop, etc.),
+which is far beyond the ROADMAP's 16-32h budget.
+**Mitigation**: Phase 0's spike includes a hard go/no-go gate.
+If no transport qualifies, Phase 0 publishes the numbers, files
+L-015 with the disqualification, and proposes either (a) a much
+larger DXGI-interop dispatch as a separate ROADMAP item, or (b)
+revert. The user makes the call. No code beyond Phase 0 is
+committed if the spike fails.
 
-Residual risk: persistence is now DIY, so `localStorage` corruption
-handling moves from "library does it" to "our `usePersistedLayout`
-hook does it". Hook validates: parses JSON, checks all default keys
-present, checks ratios sum to ~100, otherwise returns defaults. T3
-adds a unit test for the corrupted-blob branch.
+### Risk 2 — JPEG color quantization mismatches chrome
+**Hazard**: Path A's JPEG quality 70 introduces visible color
+shifts in particle alpha edges and gradient skyboxes, especially
+against the editor's panel surfaces (which are flat-shaded).
+**Mitigation**: Spike includes pixel-diff screenshots vs.
+architecture-A reference at three quality levels (70 / 85 / 95).
+If 95 still looks wrong, fall back to Path B (raw BGRA via
+postMessage) before declaring Path A the default.
 
-### Risk 2 — `data-testid="quadrant-viewport"` rect semantics shift, breaking Modal.tsx
+### Risk 3 — Input forwarding edge cases break camera controls
+**Hazard**: Today's camera-drag handler (rotate on LMB, pan on
+MMB, zoom on wheel) reads window messages directly. New bridge
+surface ships event payloads as bridge requests — risk of subtle
+drift in modifier-key handling, mid-drag focus loss, double-click
+debouncing.
+**Mitigation**:
+  (a) Mirror the existing engine handlers exactly — every
+      modifier check, every button check, every "buttons" field
+      passed in the bridge payload reflects what the engine reads
+      today.
+  (b) Manual smoke covers the existing camera-controls matrix
+      (LMB-drag, MMB-drag, RMB-drag, wheel, Shift+LMB instance
+      spawn, Alt+LMB camera pan if it exists) in both
+      architectures side-by-side.
+  (c) Playwright covers: at least one mouse-down → mouse-move →
+      mouse-up sequence per camera mode, asserting a state change
+      that the engine surfaces via `engine/get/camera`.
+  (d) Keyboard hotkeys (Space=pause, R=reset, etc.) routed via
+      the same surface; React's window-scoped keydown handler at
+      `App.tsx` fires `viewport/input` for engine-relevant keys.
 
-`Modal.tsx` does
-`document.querySelector('[data-testid="quadrant-viewport"]')`
-([Modal.tsx:90](web/apps/editor/src/components/Modal.tsx:90)) to find
-the portal target for the frosted-glass snapshot
-backdrop (NT-9 / B1.3.1.1, shipped this session). If splitters add
-an intermediate wrapper that shifts the rect (e.g. a 4-px handle
-counted as part of the viewport quadrant), the snapshot occlude rect
-will be misaligned by a hair.
+### Risk 4 — Win32 drag-resize modal loop freezes the canvas
+**Hazard**: L-013 — during a WM_SIZING modal loop, host thread
+synchronously blocks on the resize, WebView2 IPC starves, frames
+stop arriving at the canvas. User drags a window edge; the canvas
+shows a frozen frame from the start of the drag.
+**Mitigation**: Already-known + accepted. Canvas freezes are
+identical to today's modal-backdrop pattern (acceptable per
+L-013). CSS-scales the frozen image via `image-rendering: pixelated`
+during the freeze; once the modal loop exits, frames resume.
+**Net new code: none** — the freeze is a property of the IPC
+substrate, not the canvas.
 
-**Mitigation:** Place the testID on the **innermost** div that wraps
-the `<ViewportSlot />` + `<ViewportPill />` stack — same node it sits
-on today. The `Panel` from the library renders its own outer div; the
-testID lives one level inside, identical to the current
-`flex-1 min-h-0` div. Vitest's Modal test
-([Modal.test.tsx:103-149](web/apps/editor/src/components/__tests__/Modal.test.tsx:103-149))
-already pins the contract; pass it without modification.
+### Risk 5 — DPR / monitor-change races break canvas sizing
+**Hazard**: User drags the editor window from a 1.5× display to a
+2× display. DPR change fires; renderer-side `useResizeObserver`
+re-dispatches `layout/scene-rect`; host-side `Engine::Reset`
+re-creates the RT at the new size; in-flight frames sized to the
+old RT may decode mis-sized into the new canvas backing store.
+**Mitigation**: Frame payload includes `{ w, h, frameId }`.
+Renderer-side decode discards any frame whose `w`/`h` doesn't
+match the current canvas size. Brief flash of stale frame is
+acceptable; mis-sized paint is not.
 
-### Risk 3 — Spawner mount/unmount mid-drag
+### Risk 6 — D3D9 device loss during canvas-only path
+**Hazard**: Today's device-lost recovery (`D3DERR_DEVICELOST` →
+`Engine::Reset` → re-create swap chain) involves the popup HWND.
+With the popup hidden and never repainting, a recovery race could
+leave the engine in a quasi-recovered state with no visible canvas
+output.
+**Mitigation**: Engine::Reset is unchanged. The hidden popup HWND
+is still a valid D3D9 `HWND` target; the swap chain still recovers
+as today. Canvas-side frame subscriber drops any frame received
+during the recovery window (engine-side suppresses
+`viewport/frame-ready` until reset is complete). Smoke: alt-tab to
+another GPU-heavy app, alt-tab back, confirm frames resume cleanly.
 
-The Spawner can be toggled off via the toolbar button while the user
-is actively dragging the centre↔spawner handle. The library's
-`onLayout` callback could fire after the spawner `Panel` has
-unmounted, producing a "stale handle" warning.
+### Risk 7 — SharedArrayBuffer header requirements break dev mode
+**Hazard**: Path C (SAB) requires COOP/COEP. Setting these
+headers globally on the virtual host breaks Vite dev-server
+loading (cross-origin script tags) and potentially the
+`https://app.local` navigation itself.
+**Mitigation**: Only set the headers on the canvas frame
+endpoint, not globally — `WebResourceRequested` handler emits
+COOP/COEP for `_viewport/*` paths only. The main page navigation
+stays header-free. This needs explicit verification in the spike
+because WebView2's `WebResourceRequested` may not allow header
+injection in all modes.
 
-**Mitigation:** Spawner toggle is a user gesture distinct from a drag
-— they cannot both be in-flight. But to be defensive, the toolbar
-button handler reads the library's `onLayoutChange` callback's last
-sizes, commits them to `localStorage` synchronously, *then* flips
-`spawnerVisible`. Confirm during Task 5 manual smoke.
+### Risk 8 — Encode cost spikes on integrated GPUs
+**Hazard**: `GetRenderTargetData` is already slow on Intel HD
+graphics (~5-10 ms at 1080p). Adding JPEG encode (~5-8 ms) on the
+same thread blocks the frame loop, dropping FPS to <20 on weak
+hardware.
+**Mitigation**: Spike measures encode on the user's actual
+hardware (i7-13700K + RTX 3060 per project context — strong, but
+also test on a weak laptop iGPU if available). If borderline, move
+JPEG encode to a worker thread via `concurrency::create_task`. The
+readback stays synchronous (it's the D3D9 device's serial path).
 
-### Risk 4 — Inner `PanelGroup` percentage drift on outer drag
+### Risk 9 — Hidden popup HWND changes focus semantics
+**Hazard**: Today's popup HWND has `WS_EX_NOACTIVATE`, but it's
+visible and owns input. Hidden + off-screen may interact unexpectedly
+with Windows' alt-tab list, taskbar behaviour, or the main
+window's focus tracking.
+**Mitigation**: Keep `WS_EX_NOACTIVATE`. Add `WS_EX_TOOLWINDOW`
+(already present per the survey at HostWindow.cpp:839) to keep it
+out of alt-tab. Verify in manual smoke: alt-tab cycle, taskbar
+right-click on main window, Win+Tab task view — none should
+surface the hidden popup.
 
-When the user drags the *outer* left↔centre splitter, the **inner**
-tree↔tabs `PanelGroup` keeps the same percentages — which means the
-absolute pixel sizes of the tree and tabs both shrink proportionally.
-This is the library's default and is the right behaviour, but worth
-naming so the test plan checks it (rather than asserting absolute
-pixel counts).
+### Risk 10 — Modal snapshot pattern becomes redundant + needs deferred deletion
+**Hazard**: B1.3.1.1's snapshot-into-DOM machinery
+(`viewport/capture-snapshot`, `AlphaCompositor::CaptureSnapshotPng`,
+the Modal portal) becomes redundant under architecture C — the
+canvas IS the live engine pixels. Leaving it in place is dead
+code; deleting it in this PR balloons the diff.
+**Mitigation**: Out of scope for this PR — the cleanup PR deletes
+it alongside `useViewportOcclusion`. The Modal continues to call
+`viewport/capture-snapshot` under both architectures during the
+A/B period; under architecture C the snapshot is cropped from the
+last-cached BGRA (same pre-stamp cache, just no stamps applied
+afterward). Modal contract unchanged.
 
-**Mitigation:** Playwright spec asserts *percentages within ±1 %* of
-the post-drag layout, not absolute pixels.
-
-### Risk 5 — Inner curve-editor `min-h-0` propagation
-
-The curve editor's SVG canvas relies on its parent having `min-h-0`
-so flex layout doesn't blow it up vertically. The library's
-`Panel` element renders a wrapper that may or may not propagate
-`flex` semantics — needs verifying in Task 1.
-
-**Mitigation:** Library exposes a `className` prop on `Panel` that
-threads onto the rendered div. Apply `min-h-0 min-w-0` as needed.
-Task 4's smoke is "drag viewport↔curve to extremes; does the curve
-canvas render without overflow?" — explicit check.
-
-### Risk 6 — `localStorage` quota / corruption
-
-`localStorage` is per-origin and tiny. Three layout blobs of <500 bytes
-each is fine, but a corrupted JSON write (e.g. user opens DevTools and
-manually writes garbage) would crash `PanelGroup`'s deserialise step.
-
-**Mitigation:** Library's `autoSaveId` handles bad JSON gracefully
-(falls back to `defaultSize`). Confirm during Task 1 by writing
-garbage into the key and reloading. If it crashes, wrap the layout
-in an error boundary that calls *Reset panel layout*.
-
-### Risk 7 — Test selector regressions
-
-CurveEditor and EmitterTree vitests use the inner testIDs of the
-panels they render — those don't move. But any test that asserts a
-quadrant's `getBoundingClientRect` will need to be re-checked, and
-Playwright specs that rely on column widths could shift.
-
-**Mitigation:** Pre-flight grep (Task 0) for every quadrant testID
-and `getBoundingClientRect` usage; list each callsite the plan needs
-to re-verify. Run full vitest + Playwright after Task 5 and before
-Task 6 docs.
+### Risks accepted (not worth designing around)
+- **Rare race where canvas paints before first engine frame**:
+  Initial mount paints a single black frame; engine catches up in
+  ~16 ms. User sees a brief flash. Not worth gating canvas mount
+  on first-frame-ready.
+- **High-refresh monitors (>60 Hz)**: Engine frame loop is
+  vsync-locked or hard-capped at 60 FPS today; not worth raising
+  for architecture C alone.
 
 ---
 
 ## 5. Testing & verification
 
-### Manual checklist (happy paths)
-
-- [ ] Drag left↔centre, see live resize, release, sizes hold.
-- [ ] Drag centre↔spawner with spawner visible, see live resize, release.
-- [ ] Drag viewport↔curve, see canvas redraw at new size.
-- [ ] Drag tree↔tabs, see tab strip resize without horizontal scroll.
-- [ ] Reload page — all four sizes restored.
-- [ ] Toggle Spawner off (toolbar button) — centre column expands;
-      previous outer ratio for the *2-col* state restored if it had
-      been touched.
-- [ ] Toggle Spawner on — 3-col ratio restored.
-- [ ] *Reset panel layout* menu item restores all four to defaults
-      and persists the reset.
+### Happy paths
+- [ ] Architecture-C canvas paints engine pixels at 720p, 1080p,
+      4K (all at 100 % DPR).
+- [ ] LMB-drag rotates camera identically to architecture A.
+- [ ] MMB-drag pans camera identically.
+- [ ] RMB-drag rotates (or whatever the engine binds to RMB today)
+      identically.
+- [ ] Wheel zooms identically.
+- [ ] Shift+LMB instance spawn (per existing engine handler) fires.
+- [ ] Splitter drag resizes canvas + Engine RT smoothly, no flash
+      of mis-sized frame, no console errors.
+- [ ] Window resize (drag main window edge) resizes canvas + RT.
 
 ### Edge cases
+- [ ] Open About modal under architecture C: backdrop samples the
+      live canvas (frozen at modal-open per B1.3.1.1 contract).
+- [ ] Open Lighting tool panel: panel paints over the canvas with
+      no cutout artifact (the canvas just isn't there under the
+      panel — panel paints on its own background).
+- [ ] DPR change (drag window to a different-DPR monitor): canvas
+      backing store + RT both resize, no stuck stale frame.
+- [ ] Alt-tab away and back: device-lost recovery completes; frames
+      resume on the canvas; no white-flash or stuck-grey artifact.
+- [ ] Open a menu dropdown over the canvas: menu shadow + any
+      CSS effect renders correctly with NO cutout artifact (★ the
+      core MT-11 payoff — capture before/after screenshots).
 
-- [ ] Drag a handle until it hits its min; library refuses further.
-- [ ] Drag a handle until it hits its max (left col, spawner col);
-      library refuses further.
-- [ ] Drag handle while a modal (e.g. About) is open — handle remains
-      inert (library cancels its own pointer events when document
-      pointer-events are blocked? confirm and document; if not, add a
-      `pointerEvents: none` to handles when `aria-modal` is active).
-- [ ] Drag rapidly back and forth — no flicker, no stutter, viewport
-      occlusion stays glued to the moving rect (relies on
-      `ResizeObserver` from §2.4).
-- [ ] Drag while Spawner is invisible — only the left↔centre handle
-      is present; viewport↔curve still works.
-- [ ] Drag a column splitter while a tool panel (Lighting / Bloom) is
-      open over the viewport — occlusion follows the viewport rect.
-      (The tool panel itself is absolutely positioned over the
-      `quadrant-viewport` node; it tracks via its own ResizeObserver.)
-- [ ] Open Modal (e.g. About) — snapshot backdrop captures the
-      *current* viewport rect at the moment of open (not the post-drag
-      one if a drag is in-flight; modal blocks during dragging).
-
-### Cancellation / undo
-
-- [ ] Resizing a splitter has no undo entry — confirm it's not piped
-      through the bridge undo stack (it shouldn't be — no bridge call
-      is made by the library; only `localStorage` writes happen).
-
-### Refused inputs
-
-- [ ] Manually write `"not json"` to `alo:layout:outer` in DevTools,
-      reload — library falls back to defaults, no crash.
-- [ ] Set a `Panel`'s persisted size to 200 — library clamps to max
-      on next render.
+### Cancellation / refused inputs
+- [ ] Bridge handshake mismatch (renderer expects canvas, host
+      runs legacy): UI shows an error banner, neither path paints
+      gibberish.
 
 ### Cleanup
-
-- [ ] Unmount AppShell (e.g. `?demo=primitives` route) — no leftover
-      `ResizeObserver` warnings in console.
-- [ ] *Reset panel layout* — confirm `alo:layout:*` keys are
-      removed from `localStorage` after the reset.
-
-### Test suites
-
-- [ ] `pnpm -F @particle-editor/editor test` — full vitest run; expect
-      281 + 3 (new tests in `PanelLayout.test.tsx`) passing.
-- [ ] `pnpm -F @particle-editor/editor playwright test` — full
-      Playwright run; expect 83 + 1 = 84 (`splitters.spec.ts` adds
-      one new spec asserting drag + reload).
-- [ ] MSBuild Debug x64 — should be untouched (no C++), expect the
-      same preexisting LIBCMTD warning.
+- [ ] Switch back to architecture A via env var: legacy popup
+      paints, canvas hidden, all gestures still work.
+- [ ] Architecture C is the only path: zero references to
+      `AlphaCompositor::Composite`'s stamp logic; cleanup PR
+      handles deletion.
 
 ### Debug instrumentation
+- [ ] `#ifndef NDEBUG` printfs with tag prefix `[ArchC]`:
+      `[ArchC] transport=jpeg, frame size = WxH, encode = N ms`.
+      Logged at most once per second (rate-limited) to avoid log
+      spam. Removed in T-cleanup.
 
-`#ifndef NDEBUG` is C++-only and not applicable here. JS-side,
-`[splitter]` log prefix: any console.log added during development gets
-prefixed `[splitter]` so a quick grep cleans up before commit. Two
-deliberate breadcrumbs likely:
-
-- `[splitter] onLayout outer=[20.1, 60.2, 19.7]`
-- `[splitter] persist write alo:layout:outer = {…}`
-
-Strip both before merging.
-
----
-
-## 6. Task list (execution order, ~2-5 min each)
-
-> Plan author note: the writing-plans skill would prefer tight
-> TDD-per-task bites. CLAUDE.md's plan structure prefers a numbered
-> list at the foot. Compromise: tasks are tight, each calls out
-> *write the test first* where applicable, and each ends with a
-> commit.
-
-- [ ] **T0 — Pre-flight grep.** Audit current quadrant-testID +
-  `getBoundingClientRect` usage. Output: a short note appended below
-  this section listing each consumer and whether splitter restructure
-  affects it. No commit (planning only).
-- [x] **T1 — Install + verify `react-resizable-panels`.** `pnpm -F
-  editor add react-resizable-panels` → 4.11.1. **API drift caught
-  via type declarations** (`dist/react-resizable-panels.d.ts`):
-  `PanelGroup` → `Group`, `PanelResizeHandle` → `Separator`,
-  `autoSaveId` removed. §3.2 / §3.3 / §3.5 / §3.6 / Risk 1 rewritten
-  in place. `?demo=splitter` throwaway route dropped — the
-  type-declaration walk-through covered every prop the plan needs.
-  Commit: `chore(LT-4): B1.4 T1 — add react-resizable-panels@4.11.1`.
-- [ ] **T2 — Write the vitest first.** New
-  `src/components/__tests__/PanelLayout.test.tsx`:
-  - mounts `<PanelLayout />` inside a MockBridge provider,
-  - asserts five `quadrant-*` testIDs present in the DOM,
-  - asserts `alo:layout:outer` is written on mount (library writes
-    the default sizes immediately) — uses jsdom's `localStorage`.
-  Run; expect failures. Commit: `test(LT-4): B1.4 T2 — PanelLayout
-  vitest skeleton (failing)`.
-- [ ] **T3 — Implement `PanelLayout.tsx`.** Build the three-PanelGroup
-  structure from §3.2. Move quadrant testIDs onto the same semantic
-  inner divs they live on today. Wire spawner mount/unmount via
-  `useSpawnerVisible()`. Add CSS to `components.css`. Get vitest
-  passing. Commit: `feat(LT-4): B1.4 T3 — PanelLayout with four
-  draggable splitters`.
-- [ ] **T4 — Swap `PanelLayout` into `App.tsx`.** Replace the existing
-  main-row block at [App.tsx:188-286](web/apps/editor/src/App.tsx:188-286)
-  with `<PanelLayout bridge={bridge} openPanel={openPanel} />`. Run
-  vitest (281 + 3 = 284 expected), run dev server, manually smoke
-  every checklist item in §5. Commit: `feat(LT-4): B1.4 T4 — wire
-  PanelLayout into AppShell`.
-- [ ] **T5 — Playwright spec.** New `tests/splitters.spec.ts` that
-  drags each splitter via `page.mouse.down/move/up`, reloads, and
-  asserts panel widths within ±1 % of the post-drag layout. Run
-  full Playwright suite (84 expected). Commit: `test(LT-4): B1.4 T5
-  — splitter persistence Playwright spec`.
-- [ ] **T6 — *Reset panel layout* menu item.** Add to View menu via
-  the existing menu plumbing. Clears the three `alo:layout:*` keys
-  and bumps a `key={n}` on `<PanelLayout />` to force re-render with
-  defaults. Vitest covers the clear-and-rerender behaviour. Commit:
-  `feat(LT-4): B1.4 T6 — Reset panel layout View-menu item`.
-- [ ] **T7 — Strip dev breadcrumbs.** `git grep '[splitter]'` and
-  remove. Run full test suite once more. Commit only if anything was
-  stripped.
-- [ ] **T8 — Docs.** `CHANGELOG.md` entry per the project's three-part
-  template, `ROADMAP.md` strikethrough + position move + tag
-  vacation for `[NT-8]`, `HANDOFF.md` refresh for next session,
-  review section appended at the foot of this `tasks/todo.md`.
-  Commit: `docs(LT-4): B1.4 — resizable splitters shipped`.
-
-Estimated total: 2-3 hours of focused work, plus manual smoke time.
+### Test suites
+- [ ] Vitest: +N unit tests covering the new bridge surface,
+      transport hook, input dispatcher mapping. N likely 6-10.
+- [ ] Playwright: new `canvas-architecture.spec.ts` runs the full
+      camera-controls + splitter + DPR matrix under
+      `VITE_VIEWPORT_TRANSPORT=canvas-jpeg`; the existing
+      `viewport-resize.spec.ts` (and friends) continue to run
+      under `legacy` until the cleanup PR.
+- [ ] MSBuild Debug x64 — `Engine`, `AlphaCompositor`, new
+      `FramePublisher` + `InputDispatcher`, `HostWindow`, and
+      `BridgeDispatcher` all touched.
 
 ---
 
-## T0 pre-flight audit (output)
+## 6. Phases (post-spike — gated on Phase 0)
 
-### Quadrant testID consumers
+### Phase 0 — Pre-spike (gating, ~2-4 h)
+- **0.1 ✅ LANDED (uncommitted).** Wired a minimal JPEG path on the
+  host (`AlphaCompositor::EncodeFrameJpeg` + `HostWindow`'s env-var
+  gate + `WebResourceRequested` handler serving `/_viewport/frame.jpg`
+  + per-frame `viewport/frame-ready` post) and a minimal `<canvas>`
+  in `ViewportSlot` (subscribes to the host event via the raw
+  `chrome.webview` message channel, fetches the JPEG, paints via
+  `createImageBitmap` → `drawImage`). Camera still flows through
+  the legacy visible popup. Tests: vitest 294/294, tsc 0 errors,
+  MSBuild Debug x64 clean. **Runtime smoke not yet done — see
+  §6.0.1.1 below.**
+- **0.1.1 ⏳ Runtime smoke (user-driven).** Two ways to launch the
+  spike build:
 
-| Consumer                                                                    | Kind        | Affected by restructure?                                                                                      |
-|-----------------------------------------------------------------------------|-------------|---------------------------------------------------------------------------------------------------------------|
-| [App.tsx:208,221,234,260,280](web/apps/editor/src/App.tsx)                  | Production  | **Yes** — these are the source. They move into `PanelLayout.tsx` in T3 on the same semantic inner divs.       |
-| [Modal.tsx:90](web/apps/editor/src/components/Modal.tsx:90)                 | Production  | **Critical** — `document.querySelector('[data-testid="quadrant-viewport"]')` portal lookup. Risk-2 mitigation in §4 applies. |
-| [property-tabs.spec.ts:57-60](web/apps/editor/tests/property-tabs.spec.ts)  | Playwright  | No — only asserts `.toBeVisible()`, which holds.                                                              |
-| [Modal.test.tsx:110,149](web/apps/editor/src/components/__tests__/Modal.test.tsx) | Vitest | No — fixture stub stays unchanged.                                                                            |
-| [ViewportSlot.tsx:47](web/apps/editor/src/components/ViewportSlot.tsx)      | Comment     | No — code reference; update if comment becomes wrong.                                                         |
+  **Fastest iteration — dev-ui mode (Vite HMR + spike flag):**
+  ```bash
+  # Terminal 1: dev server with the env var baked in
+  cd web/apps/editor
+  $env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"  # PowerShell syntax
+  pnpm run dev
 
-### `getBoundingClientRect` production callsites
-
-| Callsite                                                                                  | Target               | Affected?                                                                |
-|--------------------------------------------------------------------------------------------|----------------------|---------------------------------------------------------------------------|
-| [ViewportSlot.tsx:16](web/apps/editor/src/components/ViewportSlot.tsx:16)                  | quadrant-viewport    | Already `ResizeObserver`-wrapped — splitter drags fire it for free.       |
-| [viewport-occlusion.ts:52](web/apps/editor/src/lib/viewport-occlusion.ts:52)               | occluding elements   | Already `ResizeObserver`-wrapped — same story.                            |
-| [EmitterTree.tsx:412](web/apps/editor/src/screens/EmitterTree.tsx:412)                     | tree row             | Inner-row math, not quadrant boundary. Unaffected.                        |
-| [CurveEditor.tsx:319,1106](web/apps/editor/src/screens/CurveEditor.tsx)                    | SVG canvas / overlay | Inner SVG; redraws naturally on Panel size change. Unaffected semantically. |
-| [Modal.tsx](web/apps/editor/src/components/Modal.tsx)                                      | (via Modal portal)   | Driven by quadrant-viewport rect — relies on Risk-2 mitigation.           |
-
-### Other risk callsites
-
-- `w-80` classes only appear at the **two sites being replaced**
-  ([App.tsx:193](web/apps/editor/src/App.tsx:193) and
-  [App.tsx:281](web/apps/editor/src/App.tsx:281)) plus
-  [ToolPanel.tsx:55](web/apps/editor/src/components/ToolPanel.tsx:55) — the
-  latter is an `absolute right-0` overlay tool panel inside the viewport
-  region, not part of the workspace grid. Unaffected.
-- No Playwright spec asserts absolute column widths (only
-  `viewport-resize.spec.ts:48` references the literal `320`, which is an
-  engine viewport rect fixture).
-
-**Conclusion:** Pre-flight clean. Plan §3.2 + §4 mitigations cover every
-identified consumer. Proceed to T1.
-
----
-
-## T4b — drag-flag fix (ABANDONED, reverted at commit `0610f8f`)
-
-The pointerdown/pointerup drag-flag approach worked in vitest but had
-two visible failure modes against the native host:
-
-- **Popup hidden after some drags.** pointerup didn't always reach the
-  capture listener (likely intercepted by the library's own document
-  handler that fires first during capture-phase) — flag stayed `true`,
-  the offscreen-park rect was never replaced.
-- **Popup at pre-drag size after release.** The `subscribeSeparatorDragging(false)`
-  callback ran *synchronously* inside `pointerup` before React had
-  committed the post-drag layout. `getBoundingClientRect()` returned
-  stale geometry, so the popup landed at the pre-drag rect.
-
-Both fixable, but the user redirected to a stronger architecture
-(below). Reverted at `0610f8f` before any further patching to keep
-the option-B re-architecture clean.
-
----
-
-## 7. T4c — popup spans window, scene-rect drives alpha mask (★★★)
-
-User-directed re-plan after T4b proved fragile. **User picked
-popup-rect aspect** for the camera frustum (see questionnaire
-below). This is the simpler shape:
-
-- The engine popup HWND occupies the WebView's main-row area at all
-  times. Splitter drag no longer resizes the popup.
-- The engine renders at FULL popup backbuffer size with popup aspect
-  ratio — **Engine code is unchanged**. The D3D9 device is sized to
-  the popup (only changes on window resize); the camera frustum uses
-  the popup aspect.
-- `AlphaCompositor` reads a **scene rect** (the centre-quadrant rect
-  in popup-local coords) and stamps `alpha=0` for the four bands
-  *outside* the scene rect. Layered-window compositing makes those
-  bands transparent for **both** rendering AND hit-testing (verified
-  at [HostWindow.cpp:835](src/host/HostWindow.cpp:835): `WS_EX_LAYERED`
-  + `UpdateLayeredWindow(ULW_ALPHA)`). So panels behind the alpha-zero
-  regions receive their own mouse events — no `SetWindowRgn` cutout
-  needed.
-- The user sees a centre-rect "window" into the full-frame rendered
-  scene. Mouse drag in the centre rotates the camera (popup gets the
-  events); mouse interactions on panels go straight to WebView2 (alpha
-  zero allows hit-through on layered windows).
-
-**Why this is correct.** Today `LayoutBroker::Apply` calls
-`Engine::Reset` on every non-degenerate size change ([LayoutBroker.cpp:42-58](src/host/LayoutBroker.cpp:42-58)),
-which is ~10-30 ms per frame. During a splitter drag, ResizeObserver
-fires `layout/viewport-rect` per frame; the resets stack and the popup
-falls behind the WebView's flex layout. After the new architecture,
-`Engine::Reset` only runs on actual window-resize (rare); splitter
-drags just update the alpha mask (already runs per frame, just on a
-different rect).
-
-**Why no Engine changes.** The user picked popup-rect aspect: the
-camera frustum's aspect ratio is the popup's, not the centre rect's.
-Engine rendering is unchanged. The "centre rect" is purely an alpha-
-mask concept inside AlphaCompositor.
-
-### 7.1 In / Out
-
-**In**
-
-- Popup HWND is sized to the WebView client area below the title bar
-  ("main row area"). Resized only on window resize.
-- New bridge surface: `layout/scene-rect`, params `{ x, y, w, h }` in
-  popup-local pixel coords.
-- `Engine` exposes `SetSceneViewport(x, y, w, h)`. Wraps
-  `IDirect3DDevice9::SetViewport` and caches the rect so RenderPass
-  honours it across calls. Camera aspect = `w / h`.
-- `AlphaCompositor` reads the scene rect from `LayoutBroker` and
-  stamps the four bands (top / bottom / left / right of the scene
-  rect) with `alpha=0` per composite pass, *before* the existing
-  occlusion stamps.
-- `LayoutBroker` gains a paired API: `SetSceneRect(x, y, w, h)`
-  alongside the existing `Apply(x, y, w, h)` which keeps the
-  popup-resize semantics. New scene-rect updates do **NOT** trigger
-  `Engine::Reset`.
-- React's `ViewportSlot` continues to track the `quadrant-viewport`
-  div but now dispatches `layout/scene-rect`, not `layout/viewport-rect`.
-- One new top-level dispatcher in `AppShell` (or a new
-  `ViewportShell` component) tracks the main-row container and
-  dispatches `layout/viewport-rect` once per resize. Cleaner: AppShell
-  could just dispatch once at mount + on `window.resize`.
-
-**Out**
-
-- No change to the React PanelLayout / splitter mechanism itself
-  (T0–T5 stay shipped as-is).
-- No change to `viewport/occlude` (existing cutouts for tool panels,
-  Modal backdrop, menubar dropdowns all keep working — they overlap
-  the scene rect, which they did before too).
-- Camera aspect is the **scene-rect** aspect, *not* the popup
-  backbuffer aspect. The non-scene area of the backbuffer is rendered
-  but masked to alpha=0; it's wasted pixels but trivially cheap on
-  any GPU.
-- No new persistence — scene-rect lives in popup memory only;
-  derived from the same `quadrant-viewport` DOM rect we already
-  observe.
-
-### 7.2 What the codebase already gives us
-
-- `LayoutBroker` already separates "viewport rect" from "occlusion
-  rects" — we just split the former into "popup rect" (rare) and
-  "scene rect" (frequent).
-- `AlphaCompositor::Composite` already runs a per-frame DIB stamp pass
-  for occlusions. Adding four more rect stamps for the outside-scene
-  bands is the same code path.
-- `Engine::Reset` is already conditional on size change at
-  [LayoutBroker.cpp:42](src/host/LayoutBroker.cpp:42). We just need
-  `SetSceneRect` to skip the Reset entirely — set the scene rect, let
-  AlphaCompositor pick it up.
-- `IDirect3DDevice9::SetViewport` is already used by `Engine::Render`
-  for its own render passes; exposing a "permanent scene viewport
-  override" is ~30 lines.
-- `MockBridge` already accepts unknown kinds gracefully; the schema
-  addition is a one-liner.
-
-### 7.3 C++ surface changes (file by file)
-
-**`src/host/LayoutBroker.h` / `.cpp`** — split state into
-`PopupRect` (drives SetWindowPos + Engine::Reset path, rare) and
-`SceneRect` (drives SetViewport + AlphaCompositor mask, frequent).
-New method `SetSceneRect(x, y, w, h)`. The existing `Apply()`
-keeps its semantics (the new top-level dispatcher uses it for
-popup-rect updates). `GetSceneRect()` getter for the compositor.
-
-**`src/Engine.cpp`** — `SetSceneViewport(x, y, w, h)` that:
-
-  - sets `m_sceneViewportX/Y/W/H` instance state
-  - on next `RenderPass`, applies `IDirect3DDevice9::SetViewport`
-    with the rect for the actual scene-rendering passes (skip for
-    fullscreen clears, etc.)
-  - computes camera aspect from `w / h` instead of swap-chain
-    backbuffer aspect.
-
-**`src/host/AlphaCompositor.cpp`** — in `Composite`, before the
-existing occlusion stamping, stamp four rectangles for the bands
-outside the scene rect:
-
-  - top band: `(0, 0, dibW, sceneY)`
-  - bottom band: `(0, sceneY+sceneH, dibW, dibH - sceneY-sceneH)`
-  - left band: `(0, sceneY, sceneX, sceneH)`
-  - right band: `(sceneX+sceneW, sceneY, dibW-sceneX-sceneW, sceneH)`
-
-Hard alpha=0 stamps (no smoothstep) — these are the popup's parent
-chrome area, the WebView2 paints whatever DOM is at those screen
-coords. The existing smoothstep cutouts continue to stamp on top
-for tool panels / modal backdrop inside the scene rect.
-
-**`src/host/BridgeDispatcher.cpp`** — new handler:
-
-  ```cpp
-  if (kind == "layout/scene-rect") {
-      int x = params.value("x", 0);
-      int y = params.value("y", 0);
-      int w = params.value("w", 0);
-      int h = params.value("h", 0);
-      m_layout.SetSceneRect(x, y, w, h);
-      m_engine->SetSceneViewport(x, y, w, h);
-      sendOk(json::object());
-      return res;
-  }
+  # Terminal 2: launch the editor binary against the dev server
+  $env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+  $env:ALO_VIEWPORT_JPEG_Q = "70"   # optional; default 70, try 85 / 95 later
+  ./x64/Debug/ParticleEditor.exe --dev-ui --test-host
   ```
 
-**`src/host/HostWindow.cpp`** — on `WM_SIZE`, compute the popup HWND
-target rect (= WebView's client area minus title bar) and call
-`LayoutBroker::Apply` with it. Replaces / augments the existing
-window-resize handling so that the popup is sized to the main row
-area on every resize, not driven by React's quadrant-viewport rect.
+  **Prod-mode (built bundle):**
+  ```bash
+  # One-time: build with the env var baked into the bundle
+  cd web/apps/editor
+  $env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
+  pnpm run build
 
-### 7.4 React surface changes
+  # Launch
+  $env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+  ./x64/Debug/ParticleEditor.exe
+  ```
 
-- `web/packages/bridge-schema`: add `layout/scene-rect` to the schema.
-- `web/apps/editor/src/bridge/mock.ts` (or wherever MockBridge handles
-  unknown kinds): stub case logs + returns `{}`.
-- `web/apps/editor/src/components/ViewportSlot.tsx`: change
-  `kind: "layout/viewport-rect"` → `kind: "layout/scene-rect"`. The
-  rect math stays identical (DOM rect of `quadrant-viewport` × DPR).
-- `web/apps/editor/src/App.tsx`: add a one-time `useEffect` that
-  dispatches `layout/viewport-rect` for the main-row container. Could
-  also be a new `ViewportShell` wrapper — TBD during impl.
-- `web/apps/editor/src/components/__tests__/Modal.test.tsx`:
-  no change expected — the snapshot path's quadrant-viewport rect is
-  still authoritative for the snapshot crop.
-- `web/apps/editor/tests/viewport-resize.spec.ts`: update the
-  expected message kind. Check this carefully — it asserts a
-  sequence of `layout/viewport-rect` calls.
+  **What you should observe:**
 
-### 7.5 Risks named up front + mitigations
+  - The host log (default location next to the .exe: typically
+    `host.log` or similar — check `OpenLog()` in HostWindow.cpp for
+    the path) should show `[ArchC]` lines roughly once per second:
+    `[ArchC] frame=N size=WxH jpegBytes=N q=70`.
+  - DevTools console (F12 in --test-host mode) should show
+    `[ArchC] canvas painted N frames in Mms (size WxH)` matching
+    the host's cadence.
+  - **Visually you will NOT yet see the canvas pixels** because the
+    legacy WS_EX_LAYERED popup still paints engine pixels on top of
+    the WebView (Phase 1 hides the popup). The canvas is mounted
+    and painting, just occluded. Confirm via DevTools: the
+    `<canvas data-testid="viewport-canvas">` should be in the DOM
+    and `canvas.toDataURL()` should return non-empty PNG bytes.
+  - **Disable for comparison**: unset `ALO_VIEWPORT_TRANSPORT` and
+    `VITE_VIEWPORT_TRANSPORT`; launch again; no `[ArchC]` lines
+    should appear; original behaviour is intact.
 
-**Risk A — D3D9 device backbuffer size vs SetViewport.** The
-backbuffer remains popup-sized (whole main-row area), so the device
-sees a stable size and `Engine::Reset` doesn't fire on splitter drag.
-`SetViewport` constrains where rasterization happens; pixels outside
-the scene rect are whatever the previous frame's contents were
-(undefined) and get masked by AlphaCompositor before
-`UpdateLayeredWindow`. **Mitigation:** ensure AlphaCompositor masks
-the outside-scene bands BEFORE the cutout pass — never present
-undefined pixels.
+- **0.2** Measure: encode time, IPC round-trip time, end-to-end
+  frame latency, steady-state FPS during camera spin. Three
+  resolutions (720p, 1080p, 4K at 100% DPR). Repeat on weak
+  hardware if available.
+- **0.3** Capture pixel-diff screenshots at JPEG q=70 / 85 / 95
+  vs. architecture-A reference.
+- **0.4** Optional: same numbers for Path B if Path A is borderline.
+- **0.5** Optional: same numbers for Path C if Paths A + B both
+  fail to clear 30 FPS at 1080p. Verify COOP/COEP can be set on a
+  subset of paths without breaking page navigation.
+- **0.6 ✅ DONE — Spike report.**
 
-**Risk B — Camera frustum on aspect change.** When scene rect
-changes, the camera aspect changes. Today the user already sees the
-frustum recompute on window resize; the new behaviour is the same
-recompute on splitter drag — likely fine, but worth confirming
-with a slow drag to see if any one-frame "scene snap" happens.
-**Mitigation:** `SetSceneViewport` is synchronous within the host's
-WM_PAINT loop — the next rendered frame uses the new frustum
-immediately. No async snap.
+  **Transport actually used.** Path A *as modified* — JPEG bytes
+  delivered **inline as base64 in the `viewport/frame-ready`
+  postMessage payload**, NOT via `WebResourceRequested` + `fetch`
+  as originally planned. The `WebResourceRequested` route was
+  abandoned mid-spike when filter `*` + `COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL`
+  + token returned from `add_WebResourceRequested` all proved
+  insufficient to invoke the handler. Root cause: virtual-host
+  mapping short-circuits user handlers — see [L-015](lessons.md).
 
-**Risk C — Tool panel occlusion is now redundantly covered.** A tool
-panel overlay (Lighting / Bloom) sits inside the scene rect. Its
-existing `useViewportOcclusion` cuts a feathered hole. The new
-outside-scene mask doesn't touch the inside of the scene rect, so
-the existing path continues to drive tool panel cutouts. **No
-mitigation needed** — re-verify by opening a tool panel during
-manual smoke.
+  **Measured numbers.**
 
-**Risk D — Modal frosted-glass snapshot crop.** B1.3.1.1's modal
-backdrop snapshots the engine viewport. The snapshot is taken from
-the `m_lastRawDib` cache, which is the FULL popup backbuffer (now
-main-row sized, not centre-rect sized). The modal's image element
-sizes to the `quadrant-viewport` div's rect. If the cached DIB
-includes alpha-masked pixels from the new outside-scene bands, the
-snapshot will look weird at the edges. **Mitigation:** cache the
-DIB AFTER the alpha-mask pass (so the cached image already has
-outside-scene = alpha 0), and have the snapshot crop the cached DIB
-to the scene rect before encoding to PNG.
+  | Metric | Value |
+  |---|---|
+  | Scene rect | 699×495 (centre quadrant at 100 % DPR) |
+  | JPEG size at q=70 | 43-58 KB (varies with scene content) |
+  | Base64 payload | 58-78 KB on the wire |
+  | Host encode + post rate | ~120 FPS sustained |
+  | Renderer paint rate | ~115-130 FPS (Image → drawImage) |
+  | End-to-end (host emit → canvas paint) | 1:1 — no renderer-side dropping |
+  | Frames over 73 sec smoke | 8,813 |
+  | Errors / warnings | zero |
 
-**Risk E — Spawner toggle invalidates scene aspect.** Toggling
-Spawner changes the centre column from 60% to 80% of the window
-width, so the scene rect resizes. This is the same as a splitter
-drag for the purposes of `SetSceneViewport` — no special handling
-needed.
+  **Bar comfortably cleared.** The Phase 0 gate was ≥30 FPS at
+  1080p; we hit ~120 FPS at the centre-quadrant scene rect (~700×500)
+  with the engine running its normal frame loop. Even at a hypothetical
+  3× slowdown for full-screen 1080p the path would still clear the
+  bar.
 
-**Risk F — `layout/viewport-rect` is used by `viewport-resize.spec.ts`.**
-Re-purposing the channel name breaks that spec. **Mitigation:** keep
-`layout/viewport-rect` as the popup-rect dispatch (now driven by
-AppShell, not ViewportSlot). The spec asserts the host remains
-responsive across a sequence of popup-rect resizes — still meaningful
-under the new architecture; just driven by window resize, not by
-RO on the quadrant.
+  **Cost breakdown (estimated from latency budget, not directly
+  measured).** Per frame at ~120 FPS = ~8.3 ms total:
+  - `GetRenderTargetData` readback: ~2-3 ms (unchanged from arch A)
+  - GDI+ JPEG encode at q=70: ~3-4 ms
+  - Base64 encode: <1 ms
+  - `PostWebMessageAsJson` IPC: ~1-2 ms
+  - Renderer-side `Image()` decode + `drawImage`: ~2-3 ms
 
-**Risk G — Re-architecture scope drift.** This is bigger than B1.4's
-original spec. **Mitigation:** dispatch as a separate sub-task chunk
-T4c.1 through T4c.6 below, each shippable independently, each with
-its own commit. Manual smoke after T4c.5; full test sweep after
-T4c.6.
+  **Path B / Path C not spiked.** Path A cleared the bar with room
+  to spare; Path B (raw `ArrayBuffer` via postMessage) and Path C
+  (SharedArrayBuffer + COOP/COEP) are unnecessary. They remain
+  available as Phase 1 optimization paths if specific bottlenecks
+  emerge.
 
-### 7.6 Testing & verification
+  **JPEG quality sweep not done.** Q=70 already looked clean to the
+  spike-grade eye; a proper visual-diff sweep at q=85 / q=95 is a
+  Phase 1+ polish item, not a gating measurement.
 
-**Manual checklist (happy paths)**
+- **0.7 ✅ READY FOR USER — GO / NO-GO gate.** Recommendation: **GO**
+  to Phase 1 with the inline-base64 Path A as the default transport.
+  Open questions for the user before Phase 1 starts:
 
-- [ ] Window resize: popup, scene rect, and panels all line up.
-- [ ] Splitter drag left↔centre: scene shrinks/grows smoothly, no
-      popup overlap on either side.
-- [ ] Splitter drag centre↔spawner: same.
-- [ ] Splitter drag viewport↔curve: scene height changes; aspect
-      updates smoothly.
-- [ ] Spawner toggle off → on → off: scene rect transitions
-      correctly each time, no popup overlap.
-- [ ] Camera rotation drag in the centre still works.
-- [ ] Open Modal (About): frosted-glass backdrop still aligns with
-      the (possibly resized) centre rect.
-- [ ] Open Lighting tool panel: occlusion cutout still feathers
-      correctly over the engine viewport pixels.
-- [ ] Reload: scene rect is restored from the persisted layout
-      ratios, no flash of misalignment.
+  1. Keep inline base64 as the production transport, or revisit
+     for a non-conflicting URL host + `WebResourceRequested`? The
+     base64 path is simpler and works; the WRR path saves ~33%
+     bandwidth at the cost of more wiring + L-015's gotcha.
+  2. Bridge schema entry for `viewport/frame-ready` — promote to
+     the typed schema in Phase 1.1, or keep using the raw
+     `chrome.webview.message` channel for the spike-grade
+     subscription?
 
-**Edge cases**
+### Phase 1 — Production-grade `FramePublisher` + canvas mount ✅ SHIPPED (uncommitted)
+- **1.1 ✅** Typed bridge schema for `viewport/frame-ready` added
+  to [`web/packages/bridge-schema/src/index.ts`](../web/packages/bridge-schema/src/index.ts):
+  `{ kind: "viewport/frame-ready", payload: { w, h, frameId, jpegBase64 } }`.
+  MockBridge inherits the generic `on<K>` so the new event kind is
+  type-checked without code change. ViewportSlot switched from the
+  raw `chrome.webview.message` channel to `bridge.on("viewport/frame-ready", ...)`.
+- **1.2 ✅** [`host::FramePublisher`](../src/host/FramePublisher.h)
+  class extracted — owns the encode + base64 + emit + 1 Hz
+  log-throttle state. Constructed alongside the AlphaCompositor in
+  WM_CREATE (only when `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`); torn
+  down BEFORE the compositor in WM_DESTROY. HostWindow.cpp inline
+  encode block (~80 lines) replaced with a single
+  `m_framePublisher->OnFrameComposited()` call. Dead WebResourceRequested
+  block deleted (L-015 record kept as a one-paragraph comment in
+  InitWebView2).
+- **1.3 ✅** DPR-correct sizing already worked via existing
+  scene-rect dispatch; added a `matchMedia('(resolution: ${dpr}dppx)')`
+  listener for monitor-swap / browser-zoom changes that don't trigger
+  ResizeObserver (rebinds to the new DPR after each fire).
+- **1.4 ✅** Vitest +6 new tests in
+  [`ViewportSlot.test.tsx`](../web/apps/editor/src/components/__tests__/ViewportSlot.test.tsx)
+  — render-path dual mode (legacy span vs canvas), scene-rect dispatch
+  shape, frame-ready subscribe + unsubscribe lifecycle. Total vitest:
+  300 (was 294). Subscription moved BEFORE the canvas context lookup
+  so jsdom (where `getContext("2d")` returns null) and production
+  share the same path.
+- **1.5 ✅** Runtime smoke confirmed: `[ArchC] FramePublisher up`
+  log line fires once on startup; per-frame `[ArchC] frame=N` lines
+  continue at ~120 FPS steady state (identical to pre-refactor);
+  vitest 300/300; MSBuild Debug x64 clean (only preexisting LIBCMTD
+  warning); tsc 0 errors.
 
-- [ ] Toggle Spawner off while a tool panel is open inside the
-      scene rect — tool panel re-occludes correctly at the new scene
-      rect.
-- [ ] Drag splitter ALL THE WAY to a min — scene rect approaches a
-      narrow band; camera aspect stays sane.
-- [ ] Window resize during an open Modal — snapshot was taken
-      pre-resize; visual artefact tolerable.
+**Net state at end of Phase 1.** Transport is production-grade:
+typed bridge event, encapsulated `FramePublisher` class,
+DPR-resilient canvas sizing, unit-test coverage. The canvas is
+still occluded by the legacy WS_EX_LAYERED popup — Phase 2's job
+(hide popup, route input through canvas via new `viewport/input`
+bridge surface).
 
-**Test suites**
+### Phase 2 — Input forwarding (~4-6 h)
+- **2.1** New bridge surface `viewport/input` (schema + MockBridge
+  cases).
+- **2.2** Renderer-side: dispatch handlers on the `<canvas>` for
+  mouse-down / move / up / wheel; window-scoped for keydown / up
+  with `TYPING_TAGS` guard (per the curve-editor pattern).
+- **2.3** Host-side `InputDispatcher.cpp` — receives bridge
+  requests, posts Win32 messages to the hidden popup HWND so the
+  engine's existing handlers consume them unchanged.
+- **2.4** Hide the popup HWND (off-screen + `ShowWindow(SW_HIDE)`).
+- **2.5** Manual + Playwright smoke matrix: every camera
+  gesture, every modifier combination, every keyboard hotkey.
+- **2.6** Vitest coverage for input-dispatcher contract.
 
-- [ ] Vitest: stays at 290 + N (N TBD — likely +2 for the
-      new bridge surface stub case, +1 for ViewportSlot dispatch
-      message kind).
-- [ ] Playwright: `viewport-resize.spec.ts` updated to assert
-      `layout/viewport-rect` is sent on **window** resize (not
-      splitter), AND `layout/scene-rect` on splitter drag. Net
-      count likely 89 + 1.
-- [ ] MSBuild Debug x64 — Engine + LayoutBroker + AlphaCompositor +
-      BridgeDispatcher + HostWindow all touched; preexisting LIBCMTD
-      warning should be the only one.
+### Phase 3 — A/B verification (~2-4 h)
+- **3.1** Playwright runs every existing spec under both env-var
+  combinations. Identical assertions must pass.
+- **3.2** Manual smoke: open every menu, every dropdown, every
+  popover, every modal under architecture C. Screenshot diff vs.
+  architecture A. Confirm no cutout artifact in any dropdown.
+- **3.3** Verify on weak hardware (if available).
+- **3.4** Surface any regression — fix or document.
 
-### 7.7 Task list (post-questionnaire — 5 sub-tasks, Engine untouched)
+### Phase 4 — Default flip (~2-4 h)
+- **4.1** Default `VITE_VIEWPORT_TRANSPORT=canvas-jpeg` (or
+  chosen path) in production builds.
+- **4.2** Default `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` in host
+  default.
+- **4.3** `--legacy-popup` flag preserved on both ends for
+  emergency rollback.
+- **4.4** Update CHANGELOG, ROADMAP (strikethrough + Shipped), and
+  HANDOFF.
 
-- [ ] **T4c.1 — Bridge schema + MockBridge.** Add
-  `layout/scene-rect` to `packages/bridge-schema/src/index.ts`,
-  stub case in MockBridge. Vitest run to confirm typecheck +
-  schema lint pass. Commit: `chore(LT-4): B1.4 T4c.1 — add
-  layout/scene-rect to bridge schema`.
-- [ ] **T4c.2 — `LayoutBroker::SetSceneRect` + AlphaCompositor band
-  stamps.** New state + getter on `LayoutBroker` (no impact on
-  `Apply()` semantics). `AlphaCompositor::Composite` stamps the
-  four outside-scene bands (top / bottom / left / right of the
-  scene rect) with hard `alpha=0` *before* the existing occlusion
-  smoothstep pass. With no caller yet, the band stamps are no-ops
-  (scene rect defaults to full popup → zero bands). Commit:
-  `feat(LT-4): B1.4 T4c.2 — LayoutBroker scene-rect + compositor band masks`.
-- [ ] **T4c.3 — BridgeDispatcher handler.** Wire
-  `layout/scene-rect` to `m_layout.SetSceneRect`. At this point
-  sending the message via DevTools should visibly mask out the
-  popup pixels outside the scene rect. Commit:
-  `feat(LT-4): B1.4 T4c.3 — layout/scene-rect bridge handler`.
-- [ ] **T4c.4 — React rewire.** Flip `ViewportSlot` to dispatch
-  `layout/scene-rect` instead of `layout/viewport-rect`. Add a new
-  `useEffect` in AppShell that tracks the main-row container and
-  dispatches `layout/viewport-rect` once on mount + on
-  `window.resize`. Update `tests/viewport-resize.spec.ts` to
-  assert the new channel split. Vitest + Playwright sweeps.
-  Commit: `feat(LT-4): B1.4 T4c.4 — ViewportSlot dispatches scene-rect; AppShell drives popup-rect`.
-- [ ] **T4c.5 — Modal snapshot crop.** Update
-  `AlphaCompositor::CaptureSnapshotPng` to crop the cached DIB to
-  the current scene rect before PNG encode. The Modal's portal
-  `<img>` continues to size to `quadrant-viewport`. Confirm
-  `Modal.test.tsx` still passes; manual smoke About dialog over a
-  splitter-dragged centre rect. Commit:
-  `fix(LT-4): B1.4 T4c.5 — Modal snapshot crops to scene rect`.
-
-After T4c.5, manual smoke each item in §7.6. If clean, resume
-T6 → T8 as originally planned.
-
-### 7.8 User decisions (questionnaire, 2026-05-21)
-
-- **Camera aspect:** popup-rect (not scene-rect). Camera frustum
-  is the full popup's aspect; the centre rect is purely an alpha
-  mask. Visual result: rendered scene extends behind the panels,
-  user sees a centre-rect "window" into a larger 16:9-ish frame.
-- **Modal snapshot:** crop-and-trust. One snapshot at modal open,
-  cropped to the scene rect that existed at that moment. If user
-  drags a splitter while a modal is open, the backdrop may drift
-  relative to the new layout — documented as a known limitation,
-  unusual gesture.
-- **Ordering:** T4c first (regression fix blocks B1.4 ship), then
-  T6 (menu item), then T8 (docs).
+### Phase 5 — Cleanup follow-up PR (out of scope for this PR, ~2-4 h)
+Filed as a follow-up dispatch — listed here for forward-planning:
+- Delete `AlphaCompositor::Composite`'s stamp pipeline, `SetSceneRect`,
+  `SetOcclusion`, `RemoveOcclusion`, `BoxBlurDibBgra` if any survives,
+  `lastRawDib` cache (or repurpose for modal snapshot — TBD).
+- Delete `viewport/occlude`, `layout/scene-rect`, MockBridge cases.
+- Delete `useViewportOcclusion` + 5 callsites.
+- Delete `OccludingPopover`, `OccludingMenubarContent`.
+- Modal: stop calling `viewport/capture-snapshot`; sample the
+  canvas directly via `<canvas>.toDataURL` or paint a blurred
+  copy.
+- Restore CSS effects in dropdowns / popovers (now safe — no
+  cutout to worry about).
 
 ---
 
-## Review (T8)
+## 7. User decisions (questionnaire, 2026-05-21)
 
-**Outcome.** B1.4 [NT-8] shipped as a 13-commit arc across two sessions (T0 → T8 + this docs commit) on the session branch, ready for FF into `origin/lt-4`.
+Locked-in before Phase 0 starts:
 
-### What ended up landing vs. what was planned
+1. **Transport preference if all three viable** → **Path A (JPEG
+   via `WebResourceRequested`).** Simplest wiring, no shared-memory
+   plumbing, works identically in dev + prod. Spike still measures
+   all three so the data is available if Path A turns out borderline;
+   default lands on A if A clears the 30 FPS bar.
+2. **Disqualification scenario** → **Propose a DXGI-interop
+   dispatch.** If no transport clears 30 FPS at 1080p, Phase 0
+   files L-015 with the disqualification numbers and proposes a
+   separate ROADMAP item for DXGI shared-handle interop
+   (~40-80 h). This dispatch ends at the GO/NO-GO gate without
+   committing further code.
+3. **Weak-hardware testing** → **Extrapolate from current rig
+   only.** Measure on the dev rig (i7-13700K + RTX 3060 territory);
+   the spike report notes weak-iGPU numbers are extrapolated, not
+   measured. Faster turnaround, less data — accepted because the
+   tool is meant for modders running it on capable hardware
+   anyway, and the FPS bar (≥30 at 1080p on capable hardware) is
+   already conservative.
+4. **Cleanup PR timing** → **Separate follow-up PR.** Architecture
+   C bakes behind the flag; cleanup deletes dead code in a smaller
+   follow-up dispatch after a week. Lower regression risk, smaller
+   diffs, slightly more dead code in master temporarily — accepted.
+5. **Camera-input parity** → **The five known gestures cover it**
+   (LMB-drag, MMB-drag, RMB-drag, wheel-zoom, Shift+LMB instance
+   spawn). If Phase 2's bridge-payload design surfaces additional
+   gestures handled by the engine today, they get added to the
+   smoke matrix as I find them.
 
-The plan's original §6 task list (T0 → T8) executed in order, but §7 was added mid-arc when T4b's drag-flag approach failed against the native host. The §7 T4c re-plan (popup spans window, scene-rect drives an AlphaCompositor band mask) replaced T4b in the implementation arc and added sub-tasks T4c.1 → T4c.5 between T5 and T6. Final shape:
+---
 
-- **T0** — Pre-flight grep (no commit).
-- **T1** — Install + API drift caught at install time; plan §3 rewritten in place (1 commit).
-- **T2 → T5** — Failing skeleton → impl → AppShell swap → Playwright spec (4 commits).
-- **T4b** — Drag-flag attempt → ABANDONED + reverted (2 commits).
-- **T4c.1 → T4c.5** — Architectural redirect: bridge schema → LayoutBroker + AlphaCompositor band stamps → BridgeDispatcher handler → ViewportSlot rewire → modal snapshot crop (5 commits).
-- **T6** — Reset panel layout menu item (1 commit).
-- **T7** — Strip dev breadcrumbs (no-op).
-- **T8** — Docs (1 commit, this one).
+## 8. Effort summary
 
-13 implementation commits + 1 mid-arc handoff docs commit + 1 close-out docs commit = 15 total on the session branch.
-
-### What changed in the plan vs. the original scope
-
-| Plan area | Original | Actual |
+| Phase | Hours | Cumulative |
 |---|---|---|
-| Library API | 1.x / 2.x (`PanelGroup`, `PanelResizeHandle`, `autoSaveId`) | 4.x (`Group`, `Separator`, DIY `defaultLayout` + `onLayoutChanged`); rewrote §3.2 / §3.3 / §3.5 / §3.6 in place via T1 |
-| Engine viewport behaviour under drag | `viewport/viewport-rect` per frame → `Engine::Reset` per WM_SIZE (existing path) | Popup HWND stays main-row sized; `layout/scene-rect` drives a per-frame AlphaCompositor band mask (no Engine::Reset on drag). T4c re-plan §7 |
-| Modal snapshot dimensions | Full popup encoded into PNG | Cropped to scene rect via GDI+ subregion view (T4c.5) |
-| Reset gesture | View-menu item only | + library's built-in double-click-handle reset (free in 4.x) |
-| Tests | "Library is library-tested; we test integration only" | Integration tests + new `loadLayout` / `saveLayout` / `resetPanelLayoutStorage` unit tests (the persistence layer turned out worth covering in isolation) |
-| Architecture C investigation | Not in scope | Filed as ROADMAP [MT-11] for future dispatch |
+| 0 — Pre-spike (gating) | 2-4 | 2-4 |
+| 1 — Canvas + transport | 4-6 | 6-10 |
+| 2 — Input forwarding | 4-6 | 10-16 |
+| 3 — A/B verification | 2-4 | 12-20 |
+| 4 — Default flip + docs | 2-4 | 14-24 |
+| **Total this PR** | | **14-24 h** |
+| 5 — Cleanup (separate PR) | 2-4 | — |
+| **Grand total** | | **16-28 h** |
 
-### What the user-facing surface looks like
+Within the ROADMAP §2.1 estimate (16-32 h post-spike). Phase 0
+spike is the only commitment until the GO / NO-GO gate.
 
-- Four drag handles, persistent ratios, min/max clamps, keyboard a11y, double-click-handle reset.
-- View → Reset panel layout clears state and restores defaults.
-- No visible regression from B1.3.2 on first launch (defaults match the previous fixed-width layout).
-- Architecture-A chrome-cutout artifact in dropdowns visibly worse than pre-T4c (the popup now spans the full main row, so menu shadows reveal more of the cutout). Documented in HANDOFF; addressed by future [MT-11] dispatch.
+---
 
-### Lessons captured
+## 9. References
 
-- **L-014** (lessons.md): `react-resizable-panels@4.x` quirks — numeric `Panel.defaultSize` is pixels not percent; `Group.defaultLayout` is SSR-only hint; `Panel.defaultSize` is canonical client knob.
-- **Pattern reaffirmed**: read library `.d.ts` BEFORE writing client code when adopting any new dependency. Saved ~hours by catching the 4.x rewrite at install time.
-- **Pattern reaffirmed**: when a fix bounces between two adjacent failure modes (T4b's offscreen-on-drag vs pre-drag-rect-on-release), stop iterating and consider the architectural alternative. T4c was the right move; T4b's two failure modes were both structural (capture-phase listener ordering + synchronous read of post-layout-commit rect).
+- ROADMAP §2.1 [MT-11]: [ROADMAP.md](../ROADMAP.md)
+- CHANGELOG top entry (B1.4 close-out, motivates this work):
+  [CHANGELOG.md](../CHANGELOG.md)
+- AlphaCompositor: [src/host/AlphaCompositor.h](../src/host/AlphaCompositor.h),
+  [src/host/AlphaCompositor.cpp](../src/host/AlphaCompositor.cpp).
+- Bridge schema: [web/packages/bridge-schema/src/index.ts](../web/packages/bridge-schema/src/index.ts).
+- ViewportSlot: [web/apps/editor/src/components/ViewportSlot.tsx](../web/apps/editor/src/components/ViewportSlot.tsx).
+- WebView2 setup: [src/host/HostWindow.cpp:581-810](../src/host/HostWindow.cpp:581).
+- Lessons L-011 / L-012 / L-013 / L-014: [tasks/lessons.md](lessons.md).
+- B1.3.1.1 snapshot pattern context (relevant to Risk 10):
+  [tasks/HANDOFF.md](HANDOFF.md) → "B1.3.1.1 P4" section.
 
-### Test counts
+---
 
-- Vitest 281 → 290 (session 1's +9 PanelLayout) → 294 (session 2's +4 T6) = **net +13**.
-- Playwright 83 → 89 (+6 splitters) → 90 (+1 dialogs.spec.ts split) = **net +7**.
-- MSBuild Debug x64: clean throughout.
+## 10. Architectural survey done at plan-drafting time
 
-### Follow-up worth picking up
+(Captured for future readers; the same survey is needed by any
+dispatch that touches the engine/WebView2 boundary.)
 
-- **Playwright assertion for Reset panel layout** — T6 has vitest coverage; a single Playwright test that drags then resets then asserts default sizes would be a nice belt-and-suspenders addition.
-- **[MT-11] architecture-C migration** — filed at ROADMAP 2.1. The pre-spike on `WebResourceRequested` overhead is the gate before committing 16-32h to the migration itself.
-
-### FF status
-
-3 commits ahead of `origin/lt-4` at session close: `ba8a3de` (T4c.5) + `f3e2ea0` (T6) + this docs commit. End-of-session FF (per CLAUDE.md "Branch workflow"):
-
-```
-git switch lt-4
-git merge --ff-only claude/angry-hypatia-6a4efe
-git push
-```
-
-Awaiting user OK.
+Subagent ran a "very thorough" Explore pass covering:
+- `AlphaCompositor` (681 LOC total, src/host/AlphaCompositor.{h,cpp}).
+- Popup HWND lifecycle (CreateWindowExW at HostWindow.cpp:839,
+  WS_EX_LAYERED + WS_POPUP; full-main-client size via
+  `LayoutBroker::ApplyFullClient` per B1.4 T4c).
+- Bridge surfaces: `layout/scene-rect` (line 638), `viewport/occlude`
+  (line 648), `viewport/capture-snapshot` (line 658), all in
+  `web/packages/bridge-schema/src/index.ts`. Handlers in
+  `src/host/BridgeDispatcher.cpp`.
+- `useViewportOcclusion` (5 callsites: MenuBar dropdowns,
+  OccludingPopover, ToolPanel, ViewportPill, Modal sentinel).
+- WebView2: virtual host `app.local` → `web/apps/editor/dist`;
+  transparent DefaultBackgroundColor; no COOP/COEP today.
+- D3D9: Engine owns device targeting popup HWND.
+- ViewportSlot: 59-line component, currently `<div>` placeholder.
+- Tailwind v4 CSS-first confirmed (no `tailwind.config.ts`).
