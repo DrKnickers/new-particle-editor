@@ -1059,6 +1059,35 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
         return setupHr;
     }
 
+    // [MT-11] Phase 3 Stage 3e: DPI. Composition hosting doesn't
+    // auto-track DPI like HWND mode does — the host must call
+    // put_RasterizationScale to tell WebView2 the device-pixel
+    // scaling factor. Without this, chrome rasterizes at 1.0
+    // regardless of monitor DPI and looks blurry on high-DPI
+    // displays. WM_DPICHANGED below updates the scale when the
+    // window moves between monitors at different DPI.
+    //
+    // ICoreWebView2Controller (the base interface, which composition
+    // controller QI's down to via baseController above) exposes
+    // put_RasterizationScale starting at the
+    // ICoreWebView2Controller3 interface generation. QI down to it
+    // if available; skip silently otherwise (best-effort).
+    {
+        ComPtr<ICoreWebView2Controller3> ctrl3;
+        if (SUCCEEDED(baseController.As(&ctrl3)) && ctrl3)
+        {
+            UINT dpi = GetDpiForWindow(hMain);
+            if (dpi == 0) dpi = 96;
+            double scale = static_cast<double>(dpi) / 96.0;
+            HRESULT shr = ctrl3->put_RasterizationScale(scale);
+            if (FAILED(shr))
+            {
+                Log("[host] composition: put_RasterizationScale(%.2f) hr=0x%08lx (non-fatal)\n",
+                    scale, shr);
+            }
+        }
+    }
+
     // [MT-11] Phase 3 Stage 3d: cursor sync. The composition
     // controller exposes the desired cursor via get_Cursor and
     // fires add_CursorChanged whenever it changes (e.g. pointer
@@ -1349,6 +1378,37 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             RECT r;
             GetClientRect(hwnd, &r);
             m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
+        }
+        return 0;
+
+    // [MT-11] Phase 3 Stage 3e: DPI changed (window moved to a
+    // monitor with different DPI). HIWORD(wp) is the new system DPI;
+    // lp points to a suggested RECT in screen coords. Update the
+    // composition controller's rasterization scale so chrome
+    // re-rasterises crisp at the new DPI, then resize/reposition
+    // the host HWND to Windows's suggested rect (recommended
+    // per-monitor-v2 best practice). Gated on m_compositionMode —
+    // under HWND mode WebView2 handles DPI on its own HWND.
+    case WM_DPICHANGED:
+        if (m_compositionMode && m_compositionController)
+        {
+            ComPtr<ICoreWebView2Controller3> ctrl3;
+            if (webController && SUCCEEDED(webController.As(&ctrl3)) && ctrl3)
+            {
+                UINT dpi = HIWORD(wp);  // HIWORD and LOWORD are the same
+                if (dpi == 0) dpi = 96;
+                double scale = static_cast<double>(dpi) / 96.0;
+                ctrl3->put_RasterizationScale(scale);
+                Log("[host] WM_DPICHANGED dpi=%u scale=%.2f\n", dpi, scale);
+            }
+        }
+        if (lp)
+        {
+            const RECT* prc = reinterpret_cast<const RECT*>(lp);
+            SetWindowPos(hwnd, nullptr,
+                prc->left, prc->top,
+                prc->right - prc->left, prc->bottom - prc->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
         }
         return 0;
 
