@@ -444,6 +444,21 @@ struct HostWindowImpl
     std::unique_ptr<host::Compositor>          m_compositor;
     ComPtr<ICoreWebView2CompositionController> m_compositionController;
 
+    // [MT-11] Phase 3 Stage 3d: cursor sync. Under HWND hosting,
+    // WebView2's child HWND owns the cursor via its own WM_SETCURSOR
+    // handler. Under composition hosting the host HWND receives
+    // WM_SETCURSOR and must consult the composition controller for
+    // the desired cursor (pointer for links, I-beam for inputs, etc).
+    // The composition controller fires add_CursorChanged whenever
+    // its desired cursor changes; we cache the HCURSOR here and
+    // return it on the next WM_SETCURSOR.
+    //
+    // The cursor HCURSOR is owned by WebView2 — we MUST NOT call
+    // DestroyCursor on it. Treat as a borrowed handle valid until
+    // the next add_CursorChanged event.
+    HCURSOR                                    m_webViewCursor       = nullptr;
+    EventRegistrationToken                     m_cursorChangedTok    = {};
+
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
@@ -1044,6 +1059,42 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
         return setupHr;
     }
 
+    // [MT-11] Phase 3 Stage 3d: cursor sync. The composition
+    // controller exposes the desired cursor via get_Cursor and
+    // fires add_CursorChanged whenever it changes (e.g. pointer
+    // over a link, I-beam over a text input). Cache the HCURSOR
+    // and return it from WM_SETCURSOR in MainWndProc. Without
+    // this the cursor stays as the Win32 default arrow regardless
+    // of what WebView2 wants — link affordance lost.
+    HRESULT chrCur = ctl->add_CursorChanged(
+        Callback<ICoreWebView2CursorChangedEventHandler>(
+            [this](ICoreWebView2CompositionController* sender, IUnknown*) -> HRESULT
+            {
+                HCURSOR hc = nullptr;
+                if (sender && SUCCEEDED(sender->get_Cursor(&hc)))
+                {
+                    m_webViewCursor = hc;
+                }
+                return S_OK;
+            }).Get(),
+        &m_cursorChangedTok);
+    if (FAILED(chrCur))
+    {
+        Log("[host] composition: add_CursorChanged hr=0x%08lx (non-fatal)\n", chrCur);
+    }
+    // Prime m_webViewCursor with whatever the controller currently
+    // wants — without this the first WM_SETCURSOR before any cursor
+    // change leaves m_webViewCursor null and we fall through to
+    // DefWindowProc (which paints the class arrow). Cheap +
+    // documented as the right pattern in the WebView2 samples.
+    {
+        HCURSOR hc = nullptr;
+        if (SUCCEEDED(ctl->get_Cursor(&hc)) && hc)
+        {
+            m_webViewCursor = hc;
+        }
+    }
+
     // Build the visual tree. This is the load-bearing call — if it
     // returns S_OK but the editor renders opaque white, we are in the
     // documented FD6 failure mode. Per sub-stage 3b acceptance gate:
@@ -1301,6 +1352,22 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
 
+    // [MT-11] Phase 3 Stage 3d: cursor sync. Under composition the
+    // host HWND owns WM_SETCURSOR; consult the cached cursor that
+    // the composition controller's add_CursorChanged handler last
+    // delivered. Returning TRUE tells Windows we set the cursor
+    // ourselves — skip default class-arrow behaviour. Gated on
+    // m_compositionMode + cached cursor existing so default new-UI
+    // paths fall through unchanged.
+    case WM_SETCURSOR:
+        if (m_compositionMode && m_webViewCursor &&
+            LOWORD(lp) == HTCLIENT)
+        {
+            SetCursor(m_webViewCursor);
+            return TRUE;
+        }
+        break;
+
     // [MT-11] Phase 3 Stage 3c: forward mouse input to WebView2's
     // composition controller. Under HWND mode, WebView2's child HWND
     // gets WM_MOUSE* directly from the OS — under composition the
@@ -1374,7 +1441,7 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             webController.Reset();
         }
         webView.Reset();
-        // [MT-11] Phase 3 Stage 3b: release composition controller +
+        // [MT-11] Phase 3 Stage 3b/3d: release composition controller +
         // DComp tree. Order matters per dxgi_spike.cpp:783-818:
         // controller is released AFTER webController->Close() (which
         // already settles WebView2's pending work) and BEFORE
@@ -1383,6 +1450,17 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // controller via its internal Impl::controller ComPtr — the
         // Compositor holds its own reference). m_compositor.reset()
         // then releases the visual tree.
+        //
+        // Stage 3d: unregister the CursorChanged handler before
+        // releasing the controller so the lambda (which captures
+        // `this`) can't fire after HostWindowImpl starts destructing.
+        // Same pattern as AcceleratorKeyPressed above.
+        if (m_compositionController && m_cursorChangedTok.value != 0)
+        {
+            m_compositionController->remove_CursorChanged(m_cursorChangedTok);
+            m_cursorChangedTok = {};
+        }
+        m_webViewCursor = nullptr;
         m_compositionController.Reset();
         m_compositor.reset();
         // FD9b: detach the compositor from Engine BEFORE either is
