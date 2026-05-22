@@ -43,6 +43,7 @@
 
 #include "AcceleratorBridge.h"
 #include "AlphaCompositor.h"
+#include "Compositor.h"
 #include "FramePublisher.h"
 #include "InputDispatcher.h"
 
@@ -420,6 +421,28 @@ struct HostWindowImpl
     // borrow via SetInputDispatcher.
     std::unique_ptr<host::InputDispatcher> m_inputDispatcher;
 
+    // [MT-11] Phase 3 Stage 3: WebView2 composition hosting.
+    //
+    // m_compositionMode is the env-var-gated kill switch (set in the
+    // ctor from ALO_WEBVIEW2_HOSTING=composition). When true,
+    // InitWebView2 takes the CreateCoreWebView2CompositionController
+    // path instead of CreateCoreWebView2Controller, and a host::Compositor
+    // owns the DirectComposition visual tree that WebView2 plugs into
+    // via put_RootVisualTarget. The default new-UI path is unchanged
+    // when the env var is unset.
+    //
+    // m_compositionController is the composition-mode controller
+    // returned by CreateCoreWebView2CompositionController. We also QI
+    // it to ICoreWebView2Controller and store in `webController` so
+    // every existing wire-up (put_Bounds, AcceleratorKeyPressed, etc.)
+    // works unchanged. Kept here so WM_DESTROY can release the
+    // composition-specific reference before releasing the base
+    // controller (the teardown ordering matters per the spike's
+    // Shutdown sequence in dxgi_spike.cpp:783).
+    bool                                       m_compositionMode = false;
+    std::unique_ptr<host::Compositor>          m_compositor;
+    ComPtr<ICoreWebView2CompositionController> m_compositionController;
+
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
     FILE*       logFile = nullptr;
@@ -456,6 +479,16 @@ struct HostWindowImpl
         {
             if (wcscmp(v, L"canvas-jpeg") == 0) m_archCMode = true;
         }
+        // [MT-11] Phase 3 Stage 3: ALO_WEBVIEW2_HOSTING env var.
+        // "composition" → switch WebView2 from HWND hosting to
+        // composition hosting via CreateCoreWebView2CompositionController.
+        // Anything else (including unset) → default HWND-mode hosting,
+        // behaviour byte-identical to today.
+        if (const wchar_t* v = _wgetenv(L"ALO_WEBVIEW2_HOSTING"))
+        {
+            if (wcscmp(v, L"composition") == 0) m_compositionMode = true;
+        }
+
         if (const wchar_t* q = _wgetenv(L"ALO_VIEWPORT_JPEG_Q"))
         {
             int n = _wtoi(q);
@@ -472,6 +505,18 @@ struct HostWindowImpl
     void RenderD3D9();
 
     HRESULT InitWebView2();
+    // Wires every per-controller setup step that's common to both HWND
+    // and composition hosting (transparent bg, DevTools, host-object
+    // proxy, AcceleratorKeyPressed, put_Bounds, navigation, etc.).
+    // Called from the controller-ready completion callback in both
+    // modes — the composition controller QI's down to
+    // ICoreWebView2Controller so the same wire-up works for both.
+    HRESULT FinishWebView2ControllerSetup(ICoreWebView2Controller* controller);
+    // Composition-mode completion callback. Stores the composition
+    // controller, QI's down to the base controller for the shared
+    // setup, then drives Compositor::AttachWebView2 to commit the
+    // DComp tree with WebView2's RootVisualTarget plugged in.
+    HRESULT OnCompositionControllerReady(HRESULT chr, ICoreWebView2CompositionController* ctl);
     void    ResizeWebViewToClient();
 
     void OnWebMessage(const std::wstring& json);
@@ -639,6 +684,60 @@ HRESULT HostWindowImpl::InitWebView2()
                 }
                 // [MT-11] Phase 0: stash for WebResourceRequested.
                 webEnv = env;
+
+                // [MT-11] Phase 3 Stage 3b: composition hosting branch.
+                // Gate is ALO_WEBVIEW2_HOSTING=composition. Stand up the
+                // host::Compositor (DComp V1 device only, no tree yet —
+                // tree assembly is deferred until inside the composition-
+                // controller completion callback, per FD6 v3 lesson) and
+                // create a CompositionController instead of the legacy
+                // HWND-mode controller. Falls back to HWND mode on any
+                // failure so the rest of the path still works.
+                if (m_compositionMode)
+                {
+                    m_compositor = std::make_unique<host::Compositor>(
+                        hMain,
+                        [this](const std::string& s) { Log("%s\n", s.c_str()); });
+                    HRESULT chr = m_compositor->Init();
+                    if (FAILED(chr))
+                    {
+                        Log("[host] composition: Compositor::Init failed hr=0x%08lx — falling back to HWND mode\n", chr);
+                        m_compositor.reset();
+                        m_compositionMode = false;
+                    }
+                }
+
+                if (m_compositionMode && m_compositor)
+                {
+                    // QI for Environment3 — exposes
+                    // CreateCoreWebView2CompositionController. Confirmed
+                    // available in SDK 1.0.3967.48 (WebView2.h:42610).
+                    ComPtr<ICoreWebView2Environment3> env3;
+                    HRESULT qihr = env->QueryInterface(IID_PPV_ARGS(&env3));
+                    if (FAILED(qihr) || !env3)
+                    {
+                        Log("[host] composition: QI Environment3 failed hr=0x%08lx — falling back to HWND mode\n", qihr);
+                        m_compositor.reset();
+                        m_compositionMode = false;
+                    }
+                    else
+                    {
+                        Log("[host] composition: CreateCoreWebView2CompositionController dispatching\n");
+                        return env3->CreateCoreWebView2CompositionController(
+                            hMain,
+                            Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
+                                [this](HRESULT cHr, ICoreWebView2CompositionController* ctl) -> HRESULT
+                                {
+                                    return OnCompositionControllerReady(cHr, ctl);
+                                }).Get());
+                    }
+                }
+
+                // Default HWND-mode path. Unchanged from pre-Stage-3
+                // behaviour. The inner controller-ready body is factored
+                // into FinishWebView2ControllerSetup so the composition
+                // path can reuse it after QI'ing down to the base
+                // ICoreWebView2Controller interface.
                 env->CreateCoreWebView2Controller(
                     hMain,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
@@ -649,224 +748,312 @@ HRESULT HostWindowImpl::InitWebView2()
                                 Log("[host] WebView2 controller failed 0x%08lx\n", ctlHr);
                                 return E_FAIL;
                             }
-                            webController = controller;
-                            controller->get_CoreWebView2(&webView);
-
-                            // PROVEN FIX (PoC visual gate, polish 4b23425):
-                            // Force the WebView2 surface to fully transparent so
-                            // the sibling D3D9 child HWND is visible through the
-                            // viewport slot's transparent <div>.
-                            ComPtr<ICoreWebView2Controller2> ctrl2;
-                            if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&ctrl2))))
-                            {
-                                COREWEBVIEW2_COLOR transparent = {};
-                                transparent.A = 0;
-                                transparent.R = 0;
-                                transparent.G = 0;
-                                transparent.B = 0;
-                                ctrl2->put_DefaultBackgroundColor(transparent);
-                                Log("[host] WebView2 bg => transparent\n");
-                            }
-
-                            // Task 2.2: test-host mode enables DevTools (F12) so
-                            // CDP debugging is fully functional for Playwright. No
-                            // effect in normal launches — production users don't
-                            // see DevTools unless they explicitly pass --test-host.
-                            if (useTestHost && webView)
-                            {
-                                ComPtr<ICoreWebView2Settings> settings;
-                                if (SUCCEEDED(webView->get_Settings(&settings)) && settings)
-                                {
-                                    settings->put_AreDevToolsEnabled(TRUE);
-                                    Log("[host] test-host: DevTools enabled (F12)\n");
-                                }
-                            }
-
-                            // Task 2.2.1: expose hostBridge via AddHostObjectToScript
-                            // (--test-host only). WebView2 drops postMessage under
-                            // CDP attachment (lessons.md L-003); the host-object
-                            // channel is on a separate marshalling path and works,
-                            // so Playwright drives request/response via this object
-                            // instead. Never exposed in production — gated on
-                            // useTestHost.
-                            if (useTestHost && webView)
-                            {
-                                ComPtr<HostBridgeProxy> proxy;
-                                HRESULT phr = Microsoft::WRL::MakeAndInitialize<HostBridgeProxy>(
-                                    &proxy,
-                                    [this](const std::string& req) -> std::string {
-                                        if (!dispatcher) {
-                                            return R"({"type":"res","ok":false,"error":"dispatcher not ready"})";
-                                        }
-                                        return dispatcher->DispatchSync(req);
-                                    });
-                                if (SUCCEEDED(phr) && proxy)
-                                {
-                                    VARIANT proxyVar;
-                                    VariantInit(&proxyVar);
-                                    proxyVar.vt = VT_DISPATCH;
-                                    proxyVar.pdispVal = proxy.Get();
-                                    proxyVar.pdispVal->AddRef();
-
-                                    HRESULT ahr = webView->AddHostObjectToScript(
-                                        L"hostBridge", &proxyVar);
-                                    Log("[host] test-host: AddHostObjectToScript(hostBridge) hr=0x%08lx\n",
-                                        ahr);
-
-                                    // VariantClear releases the AddRef above; the
-                                    // host-object map inside WebView2 keeps its
-                                    // own reference, so the proxy stays alive for
-                                    // the lifetime of the page.
-                                    VariantClear(&proxyVar);
-                                }
-                                else
-                                {
-                                    Log("[host] test-host: HostBridgeProxy init failed hr=0x%08lx\n", phr);
-                                }
-                            }
-
-                            // Task 1.6: intercept registered accelerator keys before
-                            // WebView2 routes them to the page. ICoreWebView2Controller
-                            // exposes add_AcceleratorKeyPressed for exactly this purpose;
-                            // we only set Handled=TRUE when the combo matches the
-                            // dictionary registered by React via `register-accelerators`.
-                            controller->add_AcceleratorKeyPressed(
-                                Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
-                                    [this](ICoreWebView2Controller* /*sender*/,
-                                           ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT
-                                    {
-                                        COREWEBVIEW2_KEY_EVENT_KIND kind = {};
-                                        args->get_KeyEventKind(&kind);
-                                        // Only react on key-down events; KEY_UP events are
-                                        // intentionally ignored (no repeat firing).
-                                        if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN &&
-                                            kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
-                                        {
-                                            return S_OK;
-                                        }
-                                        UINT vk = 0;
-                                        args->get_VirtualKey(&vk);
-
-                                        // GetKeyState is synchronous and reliable in an
-                                        // event handler context — reads the current physical
-                                        // key state at the moment of the event.
-                                        bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                                        bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
-                                        bool alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
-
-                                        bool matched = accelerator.TryDispatch(vk, ctrl, shift, alt,
-                                            [this](const std::string& combo)
-                                            {
-                                                Log("[Accel] combo=%s\n", combo.c_str());
-                                                if (dispatcher)
-                                                    dispatcher->EmitAcceleratorPressed(combo);
-                                            });
-
-                                        if (matched)
-                                            args->put_Handled(TRUE);
-
-                                        return S_OK;
-                                    }).Get(),
-                                &accelKeyTok);
-                            Log("[host] AcceleratorKeyPressed handler registered\n");
-
-                            // Fit to client.
-                            RECT bounds;
-                            GetClientRect(hMain, &bounds);
-                            controller->put_Bounds(bounds);
-
-                            // FD8: viewport is now a top-level WS_POPUP
-                            // owned by hMain (created in WM_CREATE). DWM
-                            // composites top-level popups as their own
-                            // layer in screen space, above any child HWND's
-                            // DComp surface (including WebView2). No
-                            // SetWindowRgn cut-out is required, no z-order
-                            // promotion is needed — owned popups naturally
-                            // stay above their owner.
-
-                            // Production mode: map app.local → web/apps/editor/dist
-                            // so the React app loads from a stable virtual origin.
-                            // Dev mode (--dev-ui): skip the mapping; Vite's own
-                            // dev server serves everything from localhost:5174.
-                            if (!useDevUi)
-                            {
-                                ComPtr<ICoreWebView2_3> wv3;
-                                webView.As(&wv3);
-                                if (wv3)
-                                {
-                                    std::wstring distPath = ComputeEditorDistPath();
-                                    Log("[host] editor dist: %ls\n", distPath.c_str());
-                                    wv3->SetVirtualHostNameToFolderMapping(
-                                        kVirtualHostName, distPath.c_str(),
-                                        COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
-                                }
-                            }
-
-                            // Subscribe to JS → host messages.
-                            EventRegistrationToken tok;
-                            webView->add_WebMessageReceived(
-                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                                    [this](ICoreWebView2*,
-                                           ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
-                                    {
-                                        LPWSTR raw = nullptr;
-                                        HRESULT hr1 = args->TryGetWebMessageAsString(&raw);
-                                        if (SUCCEEDED(hr1) && raw)
-                                        {
-                                            OnWebMessage(raw);
-                                            CoTaskMemFree(raw);
-                                        }
-                                        else
-                                        {
-                                            // Fall back: maybe the page posted a JSON value
-                                            // (chrome.webview.postMessage(obj) rather than
-                                            // postMessage(JSON.stringify(obj))). Surface a
-                                            // dedicated log so we can tell the difference
-                                            // between "no event" and "event but parse failed".
-                                            LPWSTR json = nullptr;
-                                            HRESULT hr2 = args->get_WebMessageAsJson(&json);
-                                            if (SUCCEEDED(hr2) && json)
-                                            {
-                                                Log("[host] WMR JSON-only (%zu chars), hr1=0x%08lx\n",
-                                                    wcslen(json), hr1);
-                                                OnWebMessage(json);
-                                                CoTaskMemFree(json);
-                                            }
-                                            else
-                                            {
-                                                Log("[host] WMR empty: hr1=0x%08lx hr2=0x%08lx\n",
-                                                    hr1, hr2);
-                                            }
-                                        }
-                                        return S_OK;
-                                    }).Get(), &tok);
-
-                            // [MT-11] L-015: The WebResourceRequested route was
-                            // tried mid-spike and abandoned because
-                            // SetVirtualHostNameToFolderMapping short-circuits
-                            // user handlers for the mapped host. The transport
-                            // now ships the JPEG bytes inline in the
-                            // viewport/frame-ready postMessage payload — see
-                            // FramePublisher.cpp + L-015 in tasks/lessons.md.
-
-                            // Navigate to the React app.
-                            if (useDevUi)
-                            {
-                                Log("[host] dev-ui: Navigate to Vite dev server\n");
-                                webView->Navigate(L"http://localhost:5174/");
-                            }
-                            else
-                            {
-                                webView->Navigate(L"https://app.local/index.html");
-                            }
-                            Log("[host] Navigate dispatched\n");
-                            return S_OK;
+                            return FinishWebView2ControllerSetup(controller);
                         }).Get());
                 return S_OK;
             }).Get());
-    Log("[host] CreateCoreWebView2EnvironmentWithOptions returned 0x%08lx (testHost=%d)\n",
-        envCreateHr, useTestHost ? 1 : 0);
+    Log("[host] CreateCoreWebView2EnvironmentWithOptions returned 0x%08lx (testHost=%d composition=%d)\n",
+        envCreateHr, useTestHost ? 1 : 0, m_compositionMode ? 1 : 0);
     return envCreateHr;
+}
+
+// ---------------------------------------------------------------------
+// [MT-11] Phase 3 Stage 3b: shared per-controller setup. Runs after
+// either CreateCoreWebView2Controller (HWND mode) or
+// CreateCoreWebView2CompositionController (+ QI to ICoreWebView2Controller)
+// completes. Every WebView2 wire-up (transparent bg, DevTools, host-object
+// proxy, AcceleratorKeyPressed, put_Bounds, app.local mapping,
+// add_WebMessageReceived, Navigate) is on the base ICoreWebView2Controller
+// or ICoreWebView2 interfaces both modes inherit — so this method runs
+// unchanged in both.
+// ---------------------------------------------------------------------
+HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* controller)
+{
+    if (!controller) return E_POINTER;
+    webController = controller;
+    controller->get_CoreWebView2(&webView);
+
+    // PROVEN FIX (PoC visual gate, polish 4b23425):
+    // Force the WebView2 surface to fully transparent so
+    // the sibling D3D9 child HWND is visible through the
+    // viewport slot's transparent <div>.
+    ComPtr<ICoreWebView2Controller2> ctrl2;
+    if (SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&ctrl2))))
+    {
+        COREWEBVIEW2_COLOR transparent = {};
+        transparent.A = 0;
+        transparent.R = 0;
+        transparent.G = 0;
+        transparent.B = 0;
+        ctrl2->put_DefaultBackgroundColor(transparent);
+        Log("[host] WebView2 bg => transparent\n");
+    }
+
+    // Task 2.2: test-host mode enables DevTools (F12) so
+    // CDP debugging is fully functional for Playwright. No
+    // effect in normal launches — production users don't
+    // see DevTools unless they explicitly pass --test-host.
+    if (useTestHost && webView)
+    {
+        ComPtr<ICoreWebView2Settings> settings;
+        if (SUCCEEDED(webView->get_Settings(&settings)) && settings)
+        {
+            settings->put_AreDevToolsEnabled(TRUE);
+            Log("[host] test-host: DevTools enabled (F12)\n");
+        }
+    }
+
+    // Task 2.2.1: expose hostBridge via AddHostObjectToScript
+    // (--test-host only). WebView2 drops postMessage under
+    // CDP attachment (lessons.md L-003); the host-object
+    // channel is on a separate marshalling path and works,
+    // so Playwright drives request/response via this object
+    // instead. Never exposed in production — gated on
+    // useTestHost.
+    if (useTestHost && webView)
+    {
+        ComPtr<HostBridgeProxy> proxy;
+        HRESULT phr = Microsoft::WRL::MakeAndInitialize<HostBridgeProxy>(
+            &proxy,
+            [this](const std::string& req) -> std::string {
+                if (!dispatcher) {
+                    return R"({"type":"res","ok":false,"error":"dispatcher not ready"})";
+                }
+                return dispatcher->DispatchSync(req);
+            });
+        if (SUCCEEDED(phr) && proxy)
+        {
+            VARIANT proxyVar;
+            VariantInit(&proxyVar);
+            proxyVar.vt = VT_DISPATCH;
+            proxyVar.pdispVal = proxy.Get();
+            proxyVar.pdispVal->AddRef();
+
+            HRESULT ahr = webView->AddHostObjectToScript(
+                L"hostBridge", &proxyVar);
+            Log("[host] test-host: AddHostObjectToScript(hostBridge) hr=0x%08lx\n",
+                ahr);
+
+            // VariantClear releases the AddRef above; the
+            // host-object map inside WebView2 keeps its
+            // own reference, so the proxy stays alive for
+            // the lifetime of the page.
+            VariantClear(&proxyVar);
+        }
+        else
+        {
+            Log("[host] test-host: HostBridgeProxy init failed hr=0x%08lx\n", phr);
+        }
+    }
+
+    // Task 1.6: intercept registered accelerator keys before
+    // WebView2 routes them to the page. ICoreWebView2Controller
+    // exposes add_AcceleratorKeyPressed for exactly this purpose;
+    // we only set Handled=TRUE when the combo matches the
+    // dictionary registered by React via `register-accelerators`.
+    controller->add_AcceleratorKeyPressed(
+        Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
+            [this](ICoreWebView2Controller* /*sender*/,
+                   ICoreWebView2AcceleratorKeyPressedEventArgs* args) -> HRESULT
+            {
+                COREWEBVIEW2_KEY_EVENT_KIND kind = {};
+                args->get_KeyEventKind(&kind);
+                // Only react on key-down events; KEY_UP events are
+                // intentionally ignored (no repeat firing).
+                if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN &&
+                    kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+                {
+                    return S_OK;
+                }
+                UINT vk = 0;
+                args->get_VirtualKey(&vk);
+
+                // GetKeyState is synchronous and reliable in an
+                // event handler context — reads the current physical
+                // key state at the moment of the event.
+                bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+                bool alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+
+                bool matched = accelerator.TryDispatch(vk, ctrl, shift, alt,
+                    [this](const std::string& combo)
+                    {
+                        Log("[Accel] combo=%s\n", combo.c_str());
+                        if (dispatcher)
+                            dispatcher->EmitAcceleratorPressed(combo);
+                    });
+
+                if (matched)
+                    args->put_Handled(TRUE);
+
+                return S_OK;
+            }).Get(),
+        &accelKeyTok);
+    Log("[host] AcceleratorKeyPressed handler registered\n");
+
+    // Fit to client.
+    RECT bounds;
+    GetClientRect(hMain, &bounds);
+    controller->put_Bounds(bounds);
+
+    // FD8: viewport is now a top-level WS_POPUP
+    // owned by hMain (created in WM_CREATE). DWM
+    // composites top-level popups as their own
+    // layer in screen space, above any child HWND's
+    // DComp surface (including WebView2). No
+    // SetWindowRgn cut-out is required, no z-order
+    // promotion is needed — owned popups naturally
+    // stay above their owner.
+
+    // Production mode: map app.local → web/apps/editor/dist
+    // so the React app loads from a stable virtual origin.
+    // Dev mode (--dev-ui): skip the mapping; Vite's own
+    // dev server serves everything from localhost:5174.
+    if (!useDevUi)
+    {
+        ComPtr<ICoreWebView2_3> wv3;
+        webView.As(&wv3);
+        if (wv3)
+        {
+            std::wstring distPath = ComputeEditorDistPath();
+            Log("[host] editor dist: %ls\n", distPath.c_str());
+            wv3->SetVirtualHostNameToFolderMapping(
+                kVirtualHostName, distPath.c_str(),
+                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW);
+        }
+    }
+
+    // Subscribe to JS → host messages.
+    EventRegistrationToken tok;
+    webView->add_WebMessageReceived(
+        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+            [this](ICoreWebView2*,
+                   ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
+            {
+                LPWSTR raw = nullptr;
+                HRESULT hr1 = args->TryGetWebMessageAsString(&raw);
+                if (SUCCEEDED(hr1) && raw)
+                {
+                    OnWebMessage(raw);
+                    CoTaskMemFree(raw);
+                }
+                else
+                {
+                    // Fall back: maybe the page posted a JSON value
+                    // (chrome.webview.postMessage(obj) rather than
+                    // postMessage(JSON.stringify(obj))). Surface a
+                    // dedicated log so we can tell the difference
+                    // between "no event" and "event but parse failed".
+                    LPWSTR json = nullptr;
+                    HRESULT hr2 = args->get_WebMessageAsJson(&json);
+                    if (SUCCEEDED(hr2) && json)
+                    {
+                        Log("[host] WMR JSON-only (%zu chars), hr1=0x%08lx\n",
+                            wcslen(json), hr1);
+                        OnWebMessage(json);
+                        CoTaskMemFree(json);
+                    }
+                    else
+                    {
+                        Log("[host] WMR empty: hr1=0x%08lx hr2=0x%08lx\n",
+                            hr1, hr2);
+                    }
+                }
+                return S_OK;
+            }).Get(), &tok);
+
+    // [MT-11] L-015: The WebResourceRequested route was
+    // tried mid-spike and abandoned because
+    // SetVirtualHostNameToFolderMapping short-circuits
+    // user handlers for the mapped host. The transport
+    // now ships the JPEG bytes inline in the
+    // viewport/frame-ready postMessage payload — see
+    // FramePublisher.cpp + L-015 in tasks/lessons.md.
+
+    // Navigate to the React app.
+    if (useDevUi)
+    {
+        Log("[host] dev-ui: Navigate to Vite dev server\n");
+        webView->Navigate(L"http://localhost:5174/");
+    }
+    else
+    {
+        webView->Navigate(L"https://app.local/index.html");
+    }
+    Log("[host] Navigate dispatched\n");
+    return S_OK;
+}
+
+// ---------------------------------------------------------------------
+// [MT-11] Phase 3 Stage 3b: composition controller completion callback.
+// Mirrors dxgi_spike.cpp:OnCompositionControllerReady. Order:
+//   1. Stash the composition controller (kept alive for WM_DESTROY).
+//   2. QI down to ICoreWebView2Controller and run the shared
+//      FinishWebView2ControllerSetup. All wire-up post-step is identical
+//      to HWND mode (transparent bg, AcceleratorKeyPressed, put_Bounds,
+//      Navigate, ...).
+//   3. Build the DComp tree NOW (deferred per FD6 v3 — must happen AFTER
+//      the controller exists). Compositor::AttachWebView2 plugs the
+//      controller's RootVisualTarget into the webview visual + Commits.
+// If step 3 fails: it's the FD6 failure mode. Log and return; the
+// editor still has the controller wired so the rest of the host stays
+// alive, but the visual tree won't show anything. Per sub-stage 3b
+// acceptance, this is the load-bearing observation.
+// ---------------------------------------------------------------------
+HRESULT HostWindowImpl::OnCompositionControllerReady(
+    HRESULT chr, ICoreWebView2CompositionController* ctl)
+{
+    if (FAILED(chr) || !ctl)
+    {
+        Log("[host] composition: controller completion FAILED hr=0x%08lx ctl=%p\n",
+            chr, static_cast<void*>(ctl));
+        return chr == S_OK ? E_FAIL : chr;
+    }
+    m_compositionController = ctl;
+    Log("[host] composition: controller ready, QI to base for shared setup\n");
+
+    // QI down to ICoreWebView2Controller. The composition controller
+    // does NOT inherit from ICoreWebView2Controller in the IDL — they
+    // are sibling interfaces returned from different creation paths,
+    // both backed by the same underlying object. QueryInterface is the
+    // documented way to get the base controller interface from a
+    // composition controller.
+    ComPtr<ICoreWebView2Controller> baseController;
+    HRESULT qihr = ctl->QueryInterface(IID_PPV_ARGS(&baseController));
+    if (FAILED(qihr) || !baseController)
+    {
+        Log("[host] composition: QI to ICoreWebView2Controller failed hr=0x%08lx\n", qihr);
+        return qihr;
+    }
+
+    HRESULT setupHr = FinishWebView2ControllerSetup(baseController.Get());
+    if (FAILED(setupHr))
+    {
+        Log("[host] composition: shared controller setup failed hr=0x%08lx\n", setupHr);
+        return setupHr;
+    }
+
+    // Build the visual tree. This is the load-bearing call — if it
+    // returns S_OK but the editor renders opaque white, we are in the
+    // documented FD6 failure mode. Per sub-stage 3b acceptance gate:
+    // STOP, capture binary + log + screenshot, surface to user. Do
+    // not iterate beyond the 24h cap.
+    if (m_compositor)
+    {
+        HRESULT bhr = m_compositor->AttachWebView2(ctl);
+        if (FAILED(bhr))
+        {
+            Log("[host] composition: Compositor::AttachWebView2 FAILED hr=0x%08lx — FD6-class failure?\n", bhr);
+            return bhr;
+        }
+        // Seed the tree to the current client size so the first paint
+        // is sized correctly. SetSize commits internally.
+        RECT r;
+        GetClientRect(hMain, &r);
+        m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
+        Log("[host] composition hosting ready (DComp tree committed)\n");
+    }
+    return S_OK;
 }
 
 // ---------- WndProc dispatch ----------
@@ -1015,6 +1202,15 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_SIZE:
         ResizeWebViewToClient();
+        // [MT-11] Phase 3 Stage 3b: under composition hosting, the
+        // DComp tree's root visual clip needs to track the host
+        // client size or chrome gets clipped on resize.
+        if (m_compositionMode && m_compositor && m_compositor->IsReady())
+        {
+            RECT r;
+            GetClientRect(hwnd, &r);
+            m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
+        }
         return 0;
 
     case WM_MOVE:
@@ -1072,6 +1268,17 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             webController.Reset();
         }
         webView.Reset();
+        // [MT-11] Phase 3 Stage 3b: release composition controller +
+        // DComp tree. Order matters per dxgi_spike.cpp:783-818:
+        // controller is released AFTER webController->Close() (which
+        // already settles WebView2's pending work) and BEFORE
+        // m_compositor.reset() (so the Compositor's defensive
+        // put_RootVisualTarget(nullptr) in its dtor still has a live
+        // controller via its internal Impl::controller ComPtr — the
+        // Compositor holds its own reference). m_compositor.reset()
+        // then releases the visual tree.
+        m_compositionController.Reset();
+        m_compositor.reset();
         // FD9b: detach the compositor from Engine BEFORE either is
         // destroyed so Render() (if scheduled before WM_QUIT drains
         // the queue) can't dereference a freed compositor. Drop the
