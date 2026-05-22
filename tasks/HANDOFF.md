@@ -1,33 +1,120 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 plan ready, awaiting Stage 0 spike OK)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stages 0+1+2 shipped, Stage 3 next)
 
-**Last updated:** 2026-05-22 (post-Phase-2-smoke + DXGI plan drafted). Phase 2 shipped (canvas-in-DOM + viewport/input + popup-hide + Shift-place gesture preserved); smoke at maximized 3440×1440 surfaced a 20 FPS bandwidth-bound ceiling on the JPEG transport. Phase 3 redirected from "A/B verification" to **DXGI shared-handle GPU-to-GPU compositing** — full plan at [`tasks/todo.md`](todo.md). Production fallback on Stage 0 NO-GO or runtime detection failure is **legacy arch-A** (visible popup, chrome cutout accepted with UI accommodations), not canvas-JPEG.
+**Last updated:** 2026-05-22 (post-Stage-2-bit-exact-verified). Phase 3 Stages 0 (spike + GO decision), 1 (D3D9Ex migration on real engine), and 2 (shared-handle texture infrastructure + bit-exact verification) all shipped + pushed to `origin/lt-4` at **`e5f3a40`**. Stage 3 is **WebView2 composition hosting migration** — the highest-risk stage of the entire plan and the documented FD6 failure point (three prior attempts produced opaque white despite clean API logs). Estimated 5-7 days extended for rigorous a11y testing.
 
-**Test counts at handoff:** vitest **335 / 335** · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** legacy CI (new `canvas-architecture.spec.ts` self-skips when canvas isn't mounted) · tsc -b 0 errors.
+**Test counts at handoff:** vitest **335 / 335** · Playwright native **96 / 96** (was 90 baseline; +6 D3D9Ex regression specs in [`tests/d3d9ex.spec.ts`](../web/apps/editor/tests/d3d9ex.spec.ts)) · MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning) · tsc -b 0 errors · `shared_texture_test.exe` PASS at 5 (resolution × color) combinations including 3440×1440.
 
 **Repo state at handoff:**
 
 | | |
 |---|---|
-| **`origin/lt-4` HEAD** | (set by FF push in this dispatch — see latest commit on `lt-4`) |
-| **Session branch** | `claude/hungry-mirzakhani-9f9a47` at the same HEAD (FF'd) |
-| **Working tree** | clean (post-FF) |
-| **Phase 2 status** | Shipped behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` + `VITE_VIEWPORT_TRANSPORT=canvas-jpeg`. Default behavior unchanged (legacy popup visible). User-verified working: LMB/RMB/MMB/wheel drag, Ctrl modifiers, full legacy Shift+click placement gesture. |
-| **Phase 3 status** | Plan drafted, awaiting OK to start Stage 0 spike. NO production code in this dispatch — only the plan files. |
+| **`origin/lt-4` HEAD** | `e5f3a40` (Stage 2 shared-handle infrastructure) |
+| **Session branch** | `claude/keen-perlman-619e2c` at the same HEAD (FF'd in this dispatch) |
+| **Working tree** | clean |
+| **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
+| **Phase 3 status** | Stages 0, 1, 2 shipped. Stage 3 (composition hosting) is next, gated on user OK + a fresh sub-plan. |
 
-## Next dispatch — [MT-11] Phase 3 Stage 0 (DXGI spike)
+## Next dispatch — [MT-11] Phase 3 Stage 3 (WebView2 composition hosting migration)
 
-**The plan lives in [`tasks/todo.md`](todo.md).** Stage 0 is a hard
-GO/NO-GO gate, 2 days, capped commitment. Deliverables:
+**Per [`tasks/todo.md`](todo.md) §4 Stage 3 + §6 Stage 3 acceptance.** This is the LOAD-BEARING risk of the entire plan — FD6 v1/v2/v3 each attempted variants of this transition and produced opaque-white output. The Stage 0 spike proved the composition path works on the user's RTX 3080, but the production-code migration is substantially larger than the spike.
 
-1. FD6/B post-mortem doc at `docs/superpowers/research/dxgi-fd6-fd9-history.md` reading the three prior visual-hosting failure attempts ([`docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md:22`](../docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md) is the entry point).
-2. Standalone spike app at `src/host/spike/dxgi_spike.cpp` (template: existing `viewport_poc.vcxproj`) proving D3D9Ex shared-handle texture → D3D11 → WebView2 `ICoreWebView2CompositionController` + DirectComposition visual tree end-to-end.
-3. WebView2 API stability check against SDK 1.0.3967.48.
-4. Perf measurement at 720p / 1080p / 1440p / 3440×1440 vs Phase 2 canvas-JPEG baseline AND vs arch-A.
-5. Decision doc (GO or NO-GO, committed to repo).
+**In scope:**
+- Swap `CreateCoreWebView2Controller(hwnd, …)` → `CreateCoreWebView2CompositionController(hwnd, …)` in `src/host/HostWindow.cpp:InitWebView2` (around line 692).
+- Stand up a `host::Compositor` class (new) owning the DComp device + target + visual tree. Reference pattern in the working `dxgi_spike.cpp` at `src/host/spike/`.
+- Wire WebView2's `RootVisualTarget` to a DComp visual.
+- Input routing rework: under composition hosting, host HWND receives input directly. Phase 2's `viewport/input` bridge surface keeps the renderer-routed keyboard path; mouse may shift to host WNDPROC + `ICoreWebView2CompositionController::SendMouseInput` forwarding (see todo.md §3.4).
+- Cursor sync via `add_CursorChanged` + `WM_SETCURSOR`.
+- DPI handling via `put_RasterizationScale`.
+- Gate behind a new env var (e.g. `ALO_WEBVIEW2_HOSTING=composition`) so default still uses HWND-mode hosting and the existing 96-test harness can A/B.
 
-**GO** → continue to Stage 1 (D3D9Ex migration, 2-3 days), then Stages 2-7 over ~5 weeks total. Each stage is a checkpoint with the user.
+**Acceptance gates (todo.md §6 Stage 3):**
+- All 96 Playwright tests pass under visual hosting (gated by env var for A/B). CRITICAL — FD6 failure point.
+- New `tests/composition-hosting.spec.ts`: assert clicks/keys reach renderer with identical coords/values as HWND mode.
+- **Rigorous a11y suite** (per user direction): Narrator drives UI Automation; verifies menubar, tree rows, dialog modals, form-field labels. Compare against a golden file with minor-wording tolerance.
+- A11y manual smoke: Narrator reads chrome, tab cycles, F2 inline rename, Escape closes modal/menu.
+- IME composition under visual hosting (manual; irreducible).
+- Keyboard nav stress: 100 random tabs / arrow keys / accelerators; no crash, focus always visible.
 
-**NO-GO** → revert Phase 2 commits, file UI accommodations dispatch (chrome layout adjustments to minimize where the cutout artifact shows under legacy arch-A).
+**Risk mitigation (FD6 lessons applied):**
+- Bisect harness in `dxgi_spike.cpp` (`--no-engine` / `--no-webview2`) proved its weight in Stage 0 by catching the DComp z-order gotcha — keep that diagnostic mode available.
+- Defer `CreateTargetForHwnd` + visual-tree construction until INSIDE the composition-controller completion callback (FD6 v3 attributed at least part of the failure to early tree construction).
+- Don't claim "works" from clean API logs alone. FD6 v1-v3 all returned `S_OK` everywhere with opaque-white output. **Visual confirmation via screenshot is mandatory.**
+
+## What landed this dispatch — [MT-11] Phase 3 Stages 0 + 1 + 2 (7 commits + 1 spawned task)
+
+Cumulative session-branch lineage beyond Phase 2 baseline `4896aa7`:
+
+```
+e5f3a40  feat(LT-4): Stage 2 — shared-handle texture infrastructure
+ad7d294  test(LT-4): Stage 1g — d3d9ex.spec.ts (init + reset + L-007)
+29bf484  feat(LT-4): Stage 1c-f — 4× D3DPOOL_MANAGED → D3DPOOL_DEFAULT
+f2e610d  feat(LT-4): Stage 1b — D3D9 → D3D9Ex device swap
+f9bee59  docs(LT-4): Stage 1 sub-plan doc
+6c00536  feat(LT-4): Stage 0 GO decision (z-order + screenshots)
+6ad32b8  feat(LT-4): Stage 0 spike skeleton + post-mortem
+```
+
+### Stage 0 — Spike + GO decision
+
+- [docs/superpowers/research/dxgi-fd6-fd9-history.md](../docs/superpowers/research/dxgi-fd6-fd9-history.md) — post-mortem of FD6 v1/v2/v3 + FD7 + FD8/FD9. Identifies the architectural distinction (Phase 3 has both engine + WebView2 as DComp visuals, vs FD6's mixed paradigm) and the FD6 failure mode (clean S_OK + opaque white).
+- [docs/superpowers/research/dxgi-stage-0-decision.md](../docs/superpowers/research/dxgi-stage-0-decision.md) — locked GO criteria + per-resolution measurements (3000+ FPS at all 4 resolutions on RTX 3080; transport latency 0.30-0.34 ms across 720p/1080p/1440p/3440×1440).
+- [docs/superpowers/research/dxgi-stage-0-run-procedure.md](../docs/superpowers/research/dxgi-stage-0-run-procedure.md) — how to run the spike + interpret results.
+- [src/host/spike/dxgi_spike.cpp](../src/host/spike/dxgi_spike.cpp) — standalone exe (~590 LOC) proving D3D9Ex shared handle → D3D11 → DComp + WebView2 composition controller pipeline end-to-end. **Bisect modes (`--no-engine`, `--no-webview2`) caught the DComp `insertAbove` z-order bug** — keep this harness alive for Stage 3.
+- Screenshots at [docs/superpowers/research/spike-screenshots/](../docs/superpowers/research/spike-screenshots/) — 720p/1080p/1440p/3440x1440 PNGs, all showing correct composite.
+
+### Stage 1 — D3D9Ex migration on production engine
+
+- [src/engine.h](../src/engine.h) — `m_pDirect3D` / `m_pDevice` types promoted to `IDirect3D9Ex*` / `IDirect3DDevice9Ex*` (covariant; existing call sites compile unchanged).
+- [src/engine.cpp](../src/engine.cpp) — `Direct3DCreate9` → `Direct3DCreate9Ex`, `CreateDevice` → `CreateDeviceEx` + `D3DCREATE_MULTITHREADED` flag. **Hard-fail on D3D9Ex unavailable** (per dispatch decision #1; production fallback is legacy arch-A at Stage 6+, not silent D3D9 downgrade).
+- Four D3DPOOL_MANAGED migrations to D3DPOOL_DEFAULT (engine.cpp:1044 ground solid-colour helper, 1511/1522 skydome VB/IB, 1608 custom skydome texture). All wired into `Engine::Reset` via new `CreateSkydomeMeshBuffers` / `ReleaseSkydomeMeshBuffers` helpers + `ReloadGroundTexture` / `ReloadSkydomeTexture` post-Reset re-invokes.
+- New `Engine::GetSharedTextureHandle()` (Stage 2b portion, but committed together).
+- [web/apps/editor/tests/d3d9ex.spec.ts](../web/apps/editor/tests/d3d9ex.spec.ts) — 6 new Playwright specs: bridge-attached smoke, ground cycle (L-007 regression), solid-colour ground (slot 4), skydome cycle, **10× resize cycle (Engine::Reset stress)**, L-007 polluter pair + ground set.
+
+### Stage 2 — Shared-handle texture infrastructure
+
+- [src/host/AlphaCompositor.cpp](../src/host/AlphaCompositor.cpp) — `offscreenRT` promoted from `CreateRenderTarget` to `CreateTexture(USAGE_RENDERTARGET, D3DPOOL_DEFAULT, &sharedHandle)`. The level-0 surface is still used as the engine's render target; arch-A behavior unchanged. New `AlphaCompositor::GetSharedHandle()` exposes the NT-handle alias.
+- [src/engine.cpp](../src/engine.cpp) — `Engine::GetSharedTextureHandle()` forwards to the compositor's handle (returns nullptr when compositor not installed, e.g. canvas-jpeg mode).
+- [src/host/spike/shared_texture_test.cpp](../src/host/spike/shared_texture_test.cpp) — new standalone CLI exe (~260 LOC). Creates D3D9Ex device, shared-handle texture, Clears to known color, opens in D3D11 via `OpenSharedResource`, CopyResource → staging → Map → byte-compare every pixel. Exit 0/1/2 for PASS/FAIL/init-error. **Five PASS runs verified on user's RTX 3080**: 256×256 / 3440×1440 / 1920×1080 (alpha=0) / 1280×720 / 3440×1440-Release with various colors.
+
+### Perf investigation findings (user-asked mid-dispatch)
+
+User reported ~40 FPS at maximized 3440×1440. Investigation via temporary `[Perf]` instrumentation in `AlphaCompositor::Composite` (reverted before commit) measured:
+
+- `readback` (GetRenderTargetData submit): ~0.00 ms (async).
+- `dibCopy` (LockRect + memcpy SYSTEMMEM→DIB): **~12 ms** ← dominant; LockRect blocks for the GPU readback.
+- `cacheCopy` (DIB → lastRawDib for modal snapshot cache): ~2-5 ms ← wasted on 99.9% of frames.
+- `stamps` (band + occlusion alpha): ~1 ms.
+- `ulw` (UpdateLayeredWindow): ~3.5 ms.
+- TOTAL: ~19 ms → ~50 FPS at maximize.
+
+**Stage 1 was ruled OUT as the cause** — D3DCREATE_MULTITHREADED adds sub-microsecond mutex on ~3 D3D calls per frame. The 40-50 FPS matches the documented FD9 baseline ([dxgi-fd6-fd9-history.md §5](../docs/superpowers/research/dxgi-fd6-fd9-history.md#5-fd8--fd9--the-path-that-shipped)). The proper fix is Phase 3 Stage 4 (shared-handle GPU→GPU eliminates the readback path entirely; spike measured 0.30 ms total at 3440×1440 vs current 19 ms).
+
+The `cacheCopy` is genuinely wasted work — **spawned as a separate task** for a future dispatch (~15% FPS gain, ~1-2 hour fix; user chose "do it as a separate dispatch"). See the chip for `Defer lastRawDib cache copy (~15% FPS at maximize)`.
+
+## Critical references for Stage 3
+
+In priority order:
+
+1. **[docs/superpowers/research/dxgi-fd6-fd9-history.md](../docs/superpowers/research/dxgi-fd6-fd9-history.md)** — must read end-to-end before any composition-hosting code is written. §1-3 cover FD6 v1/v2/v3 failure modes; §9 has the concrete "lessons for the spike" that apply equally to Stage 3 production code (defer tree construction until controller exists, instrument every API for non-S_OK, screenshot before declaring success, mirror sample topology).
+2. **[src/host/spike/dxgi_spike.cpp](../src/host/spike/dxgi_spike.cpp)** — working reference. Particularly: `OnCompositionControllerReady` callback structure, `BuildVisualTree` deferred-construction pattern, DComp `AddVisual` z-order gotcha (insertAbove=FALSE with NULL ref = "in front of all siblings"). The bisect modes (`--no-engine`, `--no-webview2`) paid for themselves in Stage 0; Stage 3 should have analogous diagnostic env vars.
+3. **[tasks/lt4_phase_4_1_fd6_visual_hosting_plan.md](lt4_phase_4_1_fd6_visual_hosting_plan.md)** — the original FD6 plan with all three attempts' postmortems inline. Background reading.
+4. **[tasks/todo.md](todo.md) §4 Stage 3 + §6 Stage 3 acceptance** — the active sub-plan headers. The new dispatch writes its own CLAUDE.md-shaped sub-plan before coding.
+5. **[tasks/lessons.md](lessons.md) L-003** — postMessage drops under CDP attach; the test-host bridge uses host-object channel to work around this. Stage 3's composition-mode WebView2 may interact differently with CDP — explicitly verify before declaring tests pass.
+6. **[web/apps/editor/scripts/run-native-tests.mjs](../web/apps/editor/scripts/run-native-tests.mjs)** — harness for the 96-test native CDP suite. Stage 3 must keep all 96 green under the new hosting mode.
+
+## Resumable state (snapshot)
+
+| Thing | Value |
+|---|---|
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\keen-perlman-619e2c` (this dispatch's; next session gets a fresh `claude/<random>` from `origin/lt-4`) |
+| **HEAD (committed)** | `e5f3a40` (Stage 2 — shared-handle infrastructure) |
+| **Ahead of origin/lt-4** | 0 (FF'd) |
+| **Behind master** | `lt-4` is many commits ahead of `master`; nothing merged to master from Phase 3 work yet, per user direction. |
+| **Open PRs** | none |
+| **Build status** | All targets clean: ParticleEditor, expatw_static, viewport_poc, dxgi_spike, shared_texture_test (Debug + Release x64). |
+| **Phase status** | Phase 3 Stages 0, 1, 2 shipped behind no env-var (Stage 1 changes are always-on D3D9Ex; Stage 2's shared-handle promotion of AlphaCompositor RT is also always-on — verified by 96/96 Playwright pass). Stage 3 introduces the first env-var-gated change in Phase 3. |
+
+---
 
 ## Phase 2 smoke matrix — reference if smoke surfaces a regression
 
