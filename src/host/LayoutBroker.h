@@ -85,6 +85,19 @@ public:
     void SetOcclusion(const std::string& id, int x, int y, int w, int h, int feather = 0);
     void RemoveOcclusion(const std::string& id);
 
+    // B1.4 [NT-8] T4c: set the scene rect (the visible centre-quadrant
+    // sub-rect inside the popup) in MAIN-HWND-CLIENT coords. LayoutBroker
+    // translates to popup-client coords (using the current popup origin)
+    // and forwards to AlphaCompositor. The compositor stamps alpha=0
+    // for the four bands outside this rect each frame.
+    //
+    // The rect is cached so it can be re-emitted with a fresh translation
+    // whenever the popup moves or resizes (Apply / PredictAndApply).
+    //
+    // Passing w<=0 or h<=0 clears the scene rect (the compositor's
+    // mask becomes a no-op — the full popup shows rendered scene).
+    void SetSceneRect(int x, int y, int w, int h);
+
     // B1.3.1.1: forward a viewport snapshot request to the compositor.
     // Returns `false` (and leaves outputs untouched) when no
     // compositor is attached or the compositor has no cached frame
@@ -110,6 +123,12 @@ private:
     // to one rect; null/zero-size removes the entry.
     struct Occlusion { int x, y, w, h; int feather; };
     std::unordered_map<std::string, Occlusion> m_occlusions;
+    // B1.4 T4c: scene rect in MAIN-HWND-CLIENT coords. (0/0/0/0)
+    // disables the compositor mask.
+    int     m_sceneX = 0;
+    int     m_sceneY = 0;
+    int     m_sceneW = 0;
+    int     m_sceneH = 0;
     // Track the last applied size so we only fire a (relatively
     // expensive) D3D9 device Reset when the size actually changed.
     int     m_lastW;

@@ -62,6 +62,19 @@ struct AlphaCompositor::Impl
     std::vector<uint8_t> lastRawDib;
     int      lastRawW    = 0;
     int      lastRawH    = 0;
+
+    // B1.4 [NT-8] T4c: the scene rect inside the popup (popup-client
+    // coords). Composite stamps alpha=0 for the four bands outside
+    // this rect, so panels behind the popup's alpha-zero regions show
+    // through and (because the popup is WS_EX_LAYERED with
+    // UpdateLayeredWindow(ULW_ALPHA)) receive their own mouse events.
+    // Default (0/0/0/0) disables the mask — used during host boot
+    // before React dispatches the first layout/scene-rect, so the
+    // popup keeps the pre-T4c "full popup = scene" semantics.
+    int      sceneX = 0;
+    int      sceneY = 0;
+    int      sceneW = 0;
+    int      sceneH = 0;
 };
 
 AlphaCompositor::AlphaCompositor(IDirect3DDevice9* device)
@@ -157,6 +170,14 @@ void AlphaCompositor::RemoveOcclusion(const std::string& id)
     m_impl->occlusions.erase(id);
 }
 
+void AlphaCompositor::SetSceneRect(int x, int y, int w, int h)
+{
+    m_impl->sceneX = x;
+    m_impl->sceneY = y;
+    m_impl->sceneW = w;
+    m_impl->sceneH = h;
+}
+
 namespace {
 
 // smoothstep(0, w, x) — classic cubic, clamped.
@@ -239,6 +260,28 @@ void ApplyOcclusion(uint8_t* dib, int dibW, int dibH,
                 px[3] = static_cast<uint8_t>(px[3] * weight);
             }
         }
+    }
+}
+
+// T4c band-stamp helper. Zero the alpha channel (and premultiplied
+// RGB) of a hard-edged rectangle inside the DIB. Used for the four
+// outside-scene bands — no smoothstep, no per-pixel weight; just
+// memset to 0. Cheaper than four ApplyOcclusion(feather=0) calls
+// because the inner loops collapse to memset per row.
+void StampHardZeroBand(uint8_t* dib, int dibW, int dibH,
+                       int x0, int y0, int x1, int y1)
+{
+    if (x0 < 0)    x0 = 0;
+    if (y0 < 0)    y0 = 0;
+    if (x1 > dibW) x1 = dibW;
+    if (y1 > dibH) y1 = dibH;
+    if (x1 <= x0 || y1 <= y0) return;
+    const int rowBytes = dibW * 4;
+    const int spanBytes = (x1 - x0) * 4;
+    for (int y = y0; y < y1; ++y)
+    {
+        uint8_t* row = dib + y * rowBytes + x0 * 4;
+        memset(row, 0, static_cast<size_t>(spanBytes));
     }
 }
 
@@ -417,6 +460,41 @@ void AlphaCompositor::Composite(HWND layeredHwnd)
         memcpy(m_impl->lastRawDib.data(), dst, bytes);
         m_impl->lastRawW = m_impl->width;
         m_impl->lastRawH = m_impl->height;
+    }
+
+    // B1.4 T4c: stamp alpha=0 for the four bands OUTSIDE the scene
+    // rect. The popup HWND occupies the entire main-row area; only
+    // the scene rect should show rendered scene pixels. The bands
+    // become transparent for both compositing (rendered pixels behind
+    // the alpha=0 area show WebView2 chrome) AND for hit-testing
+    // (WS_EX_LAYERED + ULW_ALPHA → alpha-zero pixels pass clicks
+    // through to the WebView2 underneath, so panels receive their own
+    // mouse events).
+    //
+    // Runs AFTER the lastRawDib cache (so snapshots still hold the
+    // raw engine pixels — T4c.5 crops the cached DIB to the scene
+    // rect before PNG encoding) and BEFORE the per-id smoothstep
+    // occlusion pass (so tool-panel cutouts inside the scene rect
+    // can layer on top with their soft feather edges).
+    //
+    // sceneW/sceneH = 0 means "no mask" — used during host boot
+    // before the first layout/scene-rect dispatch arrives.
+    if (m_impl->sceneW > 0 && m_impl->sceneH > 0)
+    {
+        const int sx = m_impl->sceneX;
+        const int sy = m_impl->sceneY;
+        const int sR = sx + m_impl->sceneW;
+        const int sB = sy + m_impl->sceneH;
+        const int W  = m_impl->width;
+        const int H  = m_impl->height;
+        // Top band:    (0,0) → (W, sy)
+        StampHardZeroBand(dst, W, H, 0, 0, W, sy);
+        // Bottom band: (0, sB) → (W, H)
+        StampHardZeroBand(dst, W, H, 0, sB, W, H);
+        // Left band:   (0, sy) → (sx, sB)
+        StampHardZeroBand(dst, W, H, 0, sy, sx, sB);
+        // Right band:  (sR, sy) → (W, sB)
+        StampHardZeroBand(dst, W, H, sR, sy, W, sB);
     }
 
     // Stamp the alpha (and premultiplied RGB) for each occluded

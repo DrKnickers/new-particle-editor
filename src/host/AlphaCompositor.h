@@ -78,6 +78,27 @@ public:
     // Remove a previously registered occlusion. No-op if id unknown.
     void RemoveOcclusion(const std::string& id);
 
+    // B1.4 [NT-8] T4c: the "scene rect" is the visible centre-quadrant
+    // sub-rect inside the popup, in popup-client coords. Each Composite
+    // call stamps alpha=0 for the four bands OUTSIDE this rect (hard
+    // cut, no smoothstep). Layered-window compositing makes those
+    // bands transparent for both rendering and hit-testing, so the UI
+    // panels behind them show through and receive their own mouse
+    // events.
+    //
+    // The stamps run BEFORE the existing per-id smoothstep occlusion
+    // pass (which can then re-stamp tool-panel cutouts INSIDE the
+    // scene rect with their soft falloff). The pre-stamp DIB cache
+    // for B1.3.1.1's snapshot capture runs FIRST so the raw engine
+    // pixels are preserved untouched — T4c.5 will crop the cached
+    // DIB to this scene rect before PNG encoding.
+    //
+    // A zero-width or zero-height rect disables the mask entirely
+    // (the full popup shows the rendered scene, which is the pre-T4c
+    // behaviour — used during host boot before React has dispatched
+    // the first layout/scene-rect).
+    void SetSceneRect(int x, int y, int w, int h);
+
     // B1.3.1.1: capture the most recent pre-stamp engine frame as a
     // base64-encoded PNG. `outBase64` is filled with the PNG payload
     // (no "data:image/png;base64," prefix — the caller adds that).

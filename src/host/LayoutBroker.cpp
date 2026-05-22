@@ -183,6 +183,30 @@ void LayoutBroker::RemoveOcclusion(const std::string& id)
     if (m_compositor) m_compositor->RemoveOcclusion(id);
 }
 
+void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0)
+    {
+        // Clear → disable compositor mask. Used when React hasn't
+        // dispatched a scene rect yet, or when the centre quadrant
+        // collapses.
+        m_sceneX = m_sceneY = m_sceneW = m_sceneH = 0;
+        if (m_compositor) m_compositor->SetSceneRect(0, 0, 0, 0);
+        return;
+    }
+    m_sceneX = x;
+    m_sceneY = y;
+    m_sceneW = w;
+    m_sceneH = h;
+
+    if (m_compositor && m_lastW > 0 && m_lastH > 0)
+    {
+        // Translate main-client coords to popup-client. Same
+        // arithmetic as SetOcclusion above.
+        m_compositor->SetSceneRect(x - m_lastX, y - m_lastY, w, h);
+    }
+}
+
 bool LayoutBroker::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
 {
     if (!m_compositor) return false;
@@ -194,12 +218,13 @@ void LayoutBroker::ReemitOcclusions()
     if (!m_compositor) return;
     if (m_lastW <= 0 || m_lastH <= 0)
     {
-        // Viewport collapsed — nothing to stamp; clear them so a
-        // stale set doesn't persist into the next non-degenerate
-        // Apply. The compositor's own per-frame loop is a no-op
-        // when the map is empty.
+        // Viewport collapsed — nothing to stamp; clear everything so
+        // a stale set doesn't persist into the next non-degenerate
+        // Apply. The compositor's own per-frame loop is a no-op when
+        // the occlusion map is empty and the scene rect is zero.
         for (const auto& kv : m_occlusions)
             m_compositor->RemoveOcclusion(kv.first);
+        m_compositor->SetSceneRect(0, 0, 0, 0);
         return;
     }
 
@@ -212,6 +237,20 @@ void LayoutBroker::ReemitOcclusions()
             occ.y - m_lastY + occ.h
         };
         m_compositor->SetOcclusion(id, popupRect, occ.feather);
+    }
+
+    // B1.4 T4c: re-stamp the scene rect with a fresh translation
+    // whenever the popup origin changes. If the React side hasn't
+    // dispatched a scene rect yet (m_sceneW == 0), forward zeros to
+    // keep the compositor mask disabled.
+    if (m_sceneW > 0 && m_sceneH > 0)
+    {
+        m_compositor->SetSceneRect(
+            m_sceneX - m_lastX, m_sceneY - m_lastY, m_sceneW, m_sceneH);
+    }
+    else
+    {
+        m_compositor->SetSceneRect(0, 0, 0, 0);
     }
 }
 
