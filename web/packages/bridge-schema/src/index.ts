@@ -619,6 +619,23 @@ export type Request =
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
+  // B1.4 [NT-8] T4c: under the popup-spans-window architecture
+  // (popup HWND occupies the WebView's main-row area at all times),
+  // splitter drag no longer resizes the popup. Instead, the centre-
+  // quadrant rect — the visible "scene rect" inside the popup — is
+  // updated via this message. AlphaCompositor stamps `alpha=0` for
+  // the four bands outside this rect, so panels behind the popup's
+  // alpha-zero regions show through and receive their own mouse
+  // events (WS_EX_LAYERED + UpdateLayeredWindow(ULW_ALPHA) makes
+  // alpha-zero areas transparent for both rendering AND hit-testing).
+  // Camera frustum is unchanged — D3D9 still renders at full popup
+  // backbuffer size with popup aspect; the scene rect is purely a
+  // compositor-level mask. Engine::Reset is NOT triggered by this
+  // message (that path stays bound to layout/viewport-rect, which
+  // now updates only on window resize, not splitter drag).
+  // Coords in MAIN-HWND-CLIENT space (DPR-multiplied), same as
+  // layout/viewport-rect.
+  | { kind: "layout/scene-rect";          params: { x: number; y: number; w: number; h: number } }
   // Tell the host that a chrome region overlaps the viewport rect (a
   // menu, tool panel, dialog…). FD9b: the host's AlphaCompositor stamps
   // alpha into the popup's DIB in this rect, with a `feather` px
@@ -792,6 +809,7 @@ export type ResponseFor<R extends Request> =
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
+  R extends { kind: "layout/scene-rect" }         ? Record<string, never> :
   R extends { kind: "viewport/occlude" }          ? Record<string, never> :
   R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
   R extends { kind: "spawner/start" }             ? Record<string, never> :

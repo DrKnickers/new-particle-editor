@@ -12,6 +12,7 @@
 //   - engine/query/* (3 queries)             read-only
 //   - register-accelerators                  accepted as a no-op
 //   - layout/viewport-rect                   accepted as a no-op
+//   - layout/scene-rect                      accepted as a no-op
 // Everything else (emitters/*, file/*, undo/*, spawner/*) rejects with
 // a "not implemented" error — those land in Phase 3+.
 
@@ -425,6 +426,10 @@ export class MockBridge implements Bridge {
 
       case "layout/viewport-rect":
         // Mock: no native HWND to reposition.
+        return {};
+
+      case "layout/scene-rect":
+        // Mock: no native AlphaCompositor to mask.
         return {};
 
       case "viewport/occlude":

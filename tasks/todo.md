@@ -635,6 +635,352 @@ identified consumer. Proceed to T1.
 
 ---
 
+## T4b — drag-flag fix (ABANDONED, reverted at commit `0610f8f`)
+
+The pointerdown/pointerup drag-flag approach worked in vitest but had
+two visible failure modes against the native host:
+
+- **Popup hidden after some drags.** pointerup didn't always reach the
+  capture listener (likely intercepted by the library's own document
+  handler that fires first during capture-phase) — flag stayed `true`,
+  the offscreen-park rect was never replaced.
+- **Popup at pre-drag size after release.** The `subscribeSeparatorDragging(false)`
+  callback ran *synchronously* inside `pointerup` before React had
+  committed the post-drag layout. `getBoundingClientRect()` returned
+  stale geometry, so the popup landed at the pre-drag rect.
+
+Both fixable, but the user redirected to a stronger architecture
+(below). Reverted at `0610f8f` before any further patching to keep
+the option-B re-architecture clean.
+
+---
+
+## 7. T4c — popup spans window, scene-rect drives alpha mask (★★★)
+
+User-directed re-plan after T4b proved fragile. **User picked
+popup-rect aspect** for the camera frustum (see questionnaire
+below). This is the simpler shape:
+
+- The engine popup HWND occupies the WebView's main-row area at all
+  times. Splitter drag no longer resizes the popup.
+- The engine renders at FULL popup backbuffer size with popup aspect
+  ratio — **Engine code is unchanged**. The D3D9 device is sized to
+  the popup (only changes on window resize); the camera frustum uses
+  the popup aspect.
+- `AlphaCompositor` reads a **scene rect** (the centre-quadrant rect
+  in popup-local coords) and stamps `alpha=0` for the four bands
+  *outside* the scene rect. Layered-window compositing makes those
+  bands transparent for **both** rendering AND hit-testing (verified
+  at [HostWindow.cpp:835](src/host/HostWindow.cpp:835): `WS_EX_LAYERED`
+  + `UpdateLayeredWindow(ULW_ALPHA)`). So panels behind the alpha-zero
+  regions receive their own mouse events — no `SetWindowRgn` cutout
+  needed.
+- The user sees a centre-rect "window" into the full-frame rendered
+  scene. Mouse drag in the centre rotates the camera (popup gets the
+  events); mouse interactions on panels go straight to WebView2 (alpha
+  zero allows hit-through on layered windows).
+
+**Why this is correct.** Today `LayoutBroker::Apply` calls
+`Engine::Reset` on every non-degenerate size change ([LayoutBroker.cpp:42-58](src/host/LayoutBroker.cpp:42-58)),
+which is ~10-30 ms per frame. During a splitter drag, ResizeObserver
+fires `layout/viewport-rect` per frame; the resets stack and the popup
+falls behind the WebView's flex layout. After the new architecture,
+`Engine::Reset` only runs on actual window-resize (rare); splitter
+drags just update the alpha mask (already runs per frame, just on a
+different rect).
+
+**Why no Engine changes.** The user picked popup-rect aspect: the
+camera frustum's aspect ratio is the popup's, not the centre rect's.
+Engine rendering is unchanged. The "centre rect" is purely an alpha-
+mask concept inside AlphaCompositor.
+
+### 7.1 In / Out
+
+**In**
+
+- Popup HWND is sized to the WebView client area below the title bar
+  ("main row area"). Resized only on window resize.
+- New bridge surface: `layout/scene-rect`, params `{ x, y, w, h }` in
+  popup-local pixel coords.
+- `Engine` exposes `SetSceneViewport(x, y, w, h)`. Wraps
+  `IDirect3DDevice9::SetViewport` and caches the rect so RenderPass
+  honours it across calls. Camera aspect = `w / h`.
+- `AlphaCompositor` reads the scene rect from `LayoutBroker` and
+  stamps the four bands (top / bottom / left / right of the scene
+  rect) with `alpha=0` per composite pass, *before* the existing
+  occlusion stamps.
+- `LayoutBroker` gains a paired API: `SetSceneRect(x, y, w, h)`
+  alongside the existing `Apply(x, y, w, h)` which keeps the
+  popup-resize semantics. New scene-rect updates do **NOT** trigger
+  `Engine::Reset`.
+- React's `ViewportSlot` continues to track the `quadrant-viewport`
+  div but now dispatches `layout/scene-rect`, not `layout/viewport-rect`.
+- One new top-level dispatcher in `AppShell` (or a new
+  `ViewportShell` component) tracks the main-row container and
+  dispatches `layout/viewport-rect` once per resize. Cleaner: AppShell
+  could just dispatch once at mount + on `window.resize`.
+
+**Out**
+
+- No change to the React PanelLayout / splitter mechanism itself
+  (T0–T5 stay shipped as-is).
+- No change to `viewport/occlude` (existing cutouts for tool panels,
+  Modal backdrop, menubar dropdowns all keep working — they overlap
+  the scene rect, which they did before too).
+- Camera aspect is the **scene-rect** aspect, *not* the popup
+  backbuffer aspect. The non-scene area of the backbuffer is rendered
+  but masked to alpha=0; it's wasted pixels but trivially cheap on
+  any GPU.
+- No new persistence — scene-rect lives in popup memory only;
+  derived from the same `quadrant-viewport` DOM rect we already
+  observe.
+
+### 7.2 What the codebase already gives us
+
+- `LayoutBroker` already separates "viewport rect" from "occlusion
+  rects" — we just split the former into "popup rect" (rare) and
+  "scene rect" (frequent).
+- `AlphaCompositor::Composite` already runs a per-frame DIB stamp pass
+  for occlusions. Adding four more rect stamps for the outside-scene
+  bands is the same code path.
+- `Engine::Reset` is already conditional on size change at
+  [LayoutBroker.cpp:42](src/host/LayoutBroker.cpp:42). We just need
+  `SetSceneRect` to skip the Reset entirely — set the scene rect, let
+  AlphaCompositor pick it up.
+- `IDirect3DDevice9::SetViewport` is already used by `Engine::Render`
+  for its own render passes; exposing a "permanent scene viewport
+  override" is ~30 lines.
+- `MockBridge` already accepts unknown kinds gracefully; the schema
+  addition is a one-liner.
+
+### 7.3 C++ surface changes (file by file)
+
+**`src/host/LayoutBroker.h` / `.cpp`** — split state into
+`PopupRect` (drives SetWindowPos + Engine::Reset path, rare) and
+`SceneRect` (drives SetViewport + AlphaCompositor mask, frequent).
+New method `SetSceneRect(x, y, w, h)`. The existing `Apply()`
+keeps its semantics (the new top-level dispatcher uses it for
+popup-rect updates). `GetSceneRect()` getter for the compositor.
+
+**`src/Engine.cpp`** — `SetSceneViewport(x, y, w, h)` that:
+
+  - sets `m_sceneViewportX/Y/W/H` instance state
+  - on next `RenderPass`, applies `IDirect3DDevice9::SetViewport`
+    with the rect for the actual scene-rendering passes (skip for
+    fullscreen clears, etc.)
+  - computes camera aspect from `w / h` instead of swap-chain
+    backbuffer aspect.
+
+**`src/host/AlphaCompositor.cpp`** — in `Composite`, before the
+existing occlusion stamping, stamp four rectangles for the bands
+outside the scene rect:
+
+  - top band: `(0, 0, dibW, sceneY)`
+  - bottom band: `(0, sceneY+sceneH, dibW, dibH - sceneY-sceneH)`
+  - left band: `(0, sceneY, sceneX, sceneH)`
+  - right band: `(sceneX+sceneW, sceneY, dibW-sceneX-sceneW, sceneH)`
+
+Hard alpha=0 stamps (no smoothstep) — these are the popup's parent
+chrome area, the WebView2 paints whatever DOM is at those screen
+coords. The existing smoothstep cutouts continue to stamp on top
+for tool panels / modal backdrop inside the scene rect.
+
+**`src/host/BridgeDispatcher.cpp`** — new handler:
+
+  ```cpp
+  if (kind == "layout/scene-rect") {
+      int x = params.value("x", 0);
+      int y = params.value("y", 0);
+      int w = params.value("w", 0);
+      int h = params.value("h", 0);
+      m_layout.SetSceneRect(x, y, w, h);
+      m_engine->SetSceneViewport(x, y, w, h);
+      sendOk(json::object());
+      return res;
+  }
+  ```
+
+**`src/host/HostWindow.cpp`** — on `WM_SIZE`, compute the popup HWND
+target rect (= WebView's client area minus title bar) and call
+`LayoutBroker::Apply` with it. Replaces / augments the existing
+window-resize handling so that the popup is sized to the main row
+area on every resize, not driven by React's quadrant-viewport rect.
+
+### 7.4 React surface changes
+
+- `web/packages/bridge-schema`: add `layout/scene-rect` to the schema.
+- `web/apps/editor/src/bridge/mock.ts` (or wherever MockBridge handles
+  unknown kinds): stub case logs + returns `{}`.
+- `web/apps/editor/src/components/ViewportSlot.tsx`: change
+  `kind: "layout/viewport-rect"` → `kind: "layout/scene-rect"`. The
+  rect math stays identical (DOM rect of `quadrant-viewport` × DPR).
+- `web/apps/editor/src/App.tsx`: add a one-time `useEffect` that
+  dispatches `layout/viewport-rect` for the main-row container. Could
+  also be a new `ViewportShell` wrapper — TBD during impl.
+- `web/apps/editor/src/components/__tests__/Modal.test.tsx`:
+  no change expected — the snapshot path's quadrant-viewport rect is
+  still authoritative for the snapshot crop.
+- `web/apps/editor/tests/viewport-resize.spec.ts`: update the
+  expected message kind. Check this carefully — it asserts a
+  sequence of `layout/viewport-rect` calls.
+
+### 7.5 Risks named up front + mitigations
+
+**Risk A — D3D9 device backbuffer size vs SetViewport.** The
+backbuffer remains popup-sized (whole main-row area), so the device
+sees a stable size and `Engine::Reset` doesn't fire on splitter drag.
+`SetViewport` constrains where rasterization happens; pixels outside
+the scene rect are whatever the previous frame's contents were
+(undefined) and get masked by AlphaCompositor before
+`UpdateLayeredWindow`. **Mitigation:** ensure AlphaCompositor masks
+the outside-scene bands BEFORE the cutout pass — never present
+undefined pixels.
+
+**Risk B — Camera frustum on aspect change.** When scene rect
+changes, the camera aspect changes. Today the user already sees the
+frustum recompute on window resize; the new behaviour is the same
+recompute on splitter drag — likely fine, but worth confirming
+with a slow drag to see if any one-frame "scene snap" happens.
+**Mitigation:** `SetSceneViewport` is synchronous within the host's
+WM_PAINT loop — the next rendered frame uses the new frustum
+immediately. No async snap.
+
+**Risk C — Tool panel occlusion is now redundantly covered.** A tool
+panel overlay (Lighting / Bloom) sits inside the scene rect. Its
+existing `useViewportOcclusion` cuts a feathered hole. The new
+outside-scene mask doesn't touch the inside of the scene rect, so
+the existing path continues to drive tool panel cutouts. **No
+mitigation needed** — re-verify by opening a tool panel during
+manual smoke.
+
+**Risk D — Modal frosted-glass snapshot crop.** B1.3.1.1's modal
+backdrop snapshots the engine viewport. The snapshot is taken from
+the `m_lastRawDib` cache, which is the FULL popup backbuffer (now
+main-row sized, not centre-rect sized). The modal's image element
+sizes to the `quadrant-viewport` div's rect. If the cached DIB
+includes alpha-masked pixels from the new outside-scene bands, the
+snapshot will look weird at the edges. **Mitigation:** cache the
+DIB AFTER the alpha-mask pass (so the cached image already has
+outside-scene = alpha 0), and have the snapshot crop the cached DIB
+to the scene rect before encoding to PNG.
+
+**Risk E — Spawner toggle invalidates scene aspect.** Toggling
+Spawner changes the centre column from 60% to 80% of the window
+width, so the scene rect resizes. This is the same as a splitter
+drag for the purposes of `SetSceneViewport` — no special handling
+needed.
+
+**Risk F — `layout/viewport-rect` is used by `viewport-resize.spec.ts`.**
+Re-purposing the channel name breaks that spec. **Mitigation:** keep
+`layout/viewport-rect` as the popup-rect dispatch (now driven by
+AppShell, not ViewportSlot). The spec asserts the host remains
+responsive across a sequence of popup-rect resizes — still meaningful
+under the new architecture; just driven by window resize, not by
+RO on the quadrant.
+
+**Risk G — Re-architecture scope drift.** This is bigger than B1.4's
+original spec. **Mitigation:** dispatch as a separate sub-task chunk
+T4c.1 through T4c.6 below, each shippable independently, each with
+its own commit. Manual smoke after T4c.5; full test sweep after
+T4c.6.
+
+### 7.6 Testing & verification
+
+**Manual checklist (happy paths)**
+
+- [ ] Window resize: popup, scene rect, and panels all line up.
+- [ ] Splitter drag left↔centre: scene shrinks/grows smoothly, no
+      popup overlap on either side.
+- [ ] Splitter drag centre↔spawner: same.
+- [ ] Splitter drag viewport↔curve: scene height changes; aspect
+      updates smoothly.
+- [ ] Spawner toggle off → on → off: scene rect transitions
+      correctly each time, no popup overlap.
+- [ ] Camera rotation drag in the centre still works.
+- [ ] Open Modal (About): frosted-glass backdrop still aligns with
+      the (possibly resized) centre rect.
+- [ ] Open Lighting tool panel: occlusion cutout still feathers
+      correctly over the engine viewport pixels.
+- [ ] Reload: scene rect is restored from the persisted layout
+      ratios, no flash of misalignment.
+
+**Edge cases**
+
+- [ ] Toggle Spawner off while a tool panel is open inside the
+      scene rect — tool panel re-occludes correctly at the new scene
+      rect.
+- [ ] Drag splitter ALL THE WAY to a min — scene rect approaches a
+      narrow band; camera aspect stays sane.
+- [ ] Window resize during an open Modal — snapshot was taken
+      pre-resize; visual artefact tolerable.
+
+**Test suites**
+
+- [ ] Vitest: stays at 290 + N (N TBD — likely +2 for the
+      new bridge surface stub case, +1 for ViewportSlot dispatch
+      message kind).
+- [ ] Playwright: `viewport-resize.spec.ts` updated to assert
+      `layout/viewport-rect` is sent on **window** resize (not
+      splitter), AND `layout/scene-rect` on splitter drag. Net
+      count likely 89 + 1.
+- [ ] MSBuild Debug x64 — Engine + LayoutBroker + AlphaCompositor +
+      BridgeDispatcher + HostWindow all touched; preexisting LIBCMTD
+      warning should be the only one.
+
+### 7.7 Task list (post-questionnaire — 5 sub-tasks, Engine untouched)
+
+- [ ] **T4c.1 — Bridge schema + MockBridge.** Add
+  `layout/scene-rect` to `packages/bridge-schema/src/index.ts`,
+  stub case in MockBridge. Vitest run to confirm typecheck +
+  schema lint pass. Commit: `chore(LT-4): B1.4 T4c.1 — add
+  layout/scene-rect to bridge schema`.
+- [ ] **T4c.2 — `LayoutBroker::SetSceneRect` + AlphaCompositor band
+  stamps.** New state + getter on `LayoutBroker` (no impact on
+  `Apply()` semantics). `AlphaCompositor::Composite` stamps the
+  four outside-scene bands (top / bottom / left / right of the
+  scene rect) with hard `alpha=0` *before* the existing occlusion
+  smoothstep pass. With no caller yet, the band stamps are no-ops
+  (scene rect defaults to full popup → zero bands). Commit:
+  `feat(LT-4): B1.4 T4c.2 — LayoutBroker scene-rect + compositor band masks`.
+- [ ] **T4c.3 — BridgeDispatcher handler.** Wire
+  `layout/scene-rect` to `m_layout.SetSceneRect`. At this point
+  sending the message via DevTools should visibly mask out the
+  popup pixels outside the scene rect. Commit:
+  `feat(LT-4): B1.4 T4c.3 — layout/scene-rect bridge handler`.
+- [ ] **T4c.4 — React rewire.** Flip `ViewportSlot` to dispatch
+  `layout/scene-rect` instead of `layout/viewport-rect`. Add a new
+  `useEffect` in AppShell that tracks the main-row container and
+  dispatches `layout/viewport-rect` once on mount + on
+  `window.resize`. Update `tests/viewport-resize.spec.ts` to
+  assert the new channel split. Vitest + Playwright sweeps.
+  Commit: `feat(LT-4): B1.4 T4c.4 — ViewportSlot dispatches scene-rect; AppShell drives popup-rect`.
+- [ ] **T4c.5 — Modal snapshot crop.** Update
+  `AlphaCompositor::CaptureSnapshotPng` to crop the cached DIB to
+  the current scene rect before PNG encode. The Modal's portal
+  `<img>` continues to size to `quadrant-viewport`. Confirm
+  `Modal.test.tsx` still passes; manual smoke About dialog over a
+  splitter-dragged centre rect. Commit:
+  `fix(LT-4): B1.4 T4c.5 — Modal snapshot crops to scene rect`.
+
+After T4c.5, manual smoke each item in §7.6. If clean, resume
+T6 → T8 as originally planned.
+
+### 7.8 User decisions (questionnaire, 2026-05-21)
+
+- **Camera aspect:** popup-rect (not scene-rect). Camera frustum
+  is the full popup's aspect; the centre rect is purely an alpha
+  mask. Visual result: rendered scene extends behind the panels,
+  user sees a centre-rect "window" into a larger 16:9-ish frame.
+- **Modal snapshot:** crop-and-trust. One snapshot at modal open,
+  cropped to the scene rect that existed at that moment. If user
+  drags a splitter while a modal is open, the backdrop may drift
+  relative to the new layout — documented as a known limitation,
+  unusual gesture.
+- **Ordering:** T4c first (regression fix blocks B1.4 ship), then
+  T6 (menu item), then T8 (docs).
+
+---
+
 ## Review (filled in after T8)
 
 *Empty — to be filled in after work completes.*
