@@ -126,6 +126,14 @@ export function PanelLayout({ bridge }: Props) {
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
 
+  // B1.4 [NT-8] T4c: React no longer dispatches a popup-rect to the
+  // host. The host self-sizes the engine popup HWND to its own main
+  // client area on WM_CREATE / WM_SIZE / WM_WINDOWPOSCHANGED
+  // (HostWindow.cpp). The popup is therefore stable across splitter
+  // drags — only the SCENE rect changes, dispatched by ViewportSlot
+  // as layout/scene-rect. Zero React→host postMessages for layout
+  // rect (other than the per-frame scene-rect updates).
+
   // 4.x quirk: when a Group mounts with `groupSize === 0` (typical
   // for nested flex containers on first paint), the library flips
   // `defaultLayoutDeferred = true` and, on the first ResizeObserver

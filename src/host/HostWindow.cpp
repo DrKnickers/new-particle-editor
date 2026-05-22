@@ -1509,6 +1509,16 @@ int HostWindowImpl::Run(int nCmdShow)
         return 1;
     }
 
+    // B1.4 [NT-8] T4c: size the popup HWND to the main window's
+    // full client rect just before showing the window. Without this,
+    // the popup is stuck at CreateWindowExW's bootstrap rect
+    // (screen 16,16,320,240) and renders as a tiny preview at the
+    // monitor's top-left until the user first resizes. By this
+    // point WM_CREATE has completed, the engine + AlphaCompositor +
+    // particleSystem are fully bound, and Engine::Reset can handle
+    // the resize cleanly.
+    layout.ApplyFullClient();
+
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
 

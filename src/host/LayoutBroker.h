@@ -75,6 +75,20 @@ public:
     // authoritative layout/viewport-rect.
     void PredictAndApply();
 
+    // B1.4 [NT-8] T4c: under the popup-spans-window architecture,
+    // React no longer dispatches a popup-rect via layout/viewport-rect.
+    // The host sizes the popup HWND to the OWNER MAIN HWND's full
+    // client rect on WM_CREATE / WM_SIZE / WM_WINDOWPOSCHANGED. The
+    // scene-rect (from React via layout/scene-rect) masks everything
+    // outside the centre quadrant via AlphaCompositor band stamps.
+    //
+    // ApplyFullClient is equivalent to Apply(0, 0, clientW, clientH)
+    // using the owner's current GetClientRect — wrapped here so
+    // callers don't need to repeat the GetWindow / GetClientRect
+    // boilerplate, and so the "popup = full client" invariant lives
+    // in one place.
+    void ApplyFullClient();
+
     // Register an occlusion rect (in main-client coords) from React.
     // `id` is a stable handle the React side uses (e.g.
     // "tool-panel:background", "menu:file"). Passing a null rect

@@ -19,8 +19,12 @@ export function ViewportSlot({ bridge }: Props) {
       const y = Math.round((r.top + SLOT_BORDER_PX) * dpr);
       const w = Math.round(Math.max(0, r.width - SLOT_BORDER_PX * 2) * dpr);
       const h = Math.round(Math.max(0, r.height - SLOT_BORDER_PX * 2) * dpr);
-      // Fire-and-forget — host doesn't return data for layout updates.
-      void bridge.request({ kind: "layout/viewport-rect", params: { x, y, w, h } }).catch(() => {});
+      // B1.4 [NT-8] T4c: the centre-quadrant rect now drives the
+      // SCENE rect (the visible sub-rect inside the popup), not the
+      // popup HWND itself. AlphaCompositor stamps alpha=0 outside
+      // this rect each frame — UI panels behind the alpha-zero bands
+      // show through (and receive their own mouse events).
+      void bridge.request({ kind: "layout/scene-rect", params: { x, y, w, h } }).catch(() => {});
     };
 
     send();

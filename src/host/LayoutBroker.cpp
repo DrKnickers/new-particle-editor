@@ -141,6 +141,19 @@ void LayoutBroker::PredictAndApply()
     ReemitOcclusions();
 }
 
+void LayoutBroker::ApplyFullClient()
+{
+    if (!m_viewport) return;
+    HWND owner = GetWindow(m_viewport, GW_OWNER);
+    if (!owner) return;
+    RECT rc{};
+    if (!GetClientRect(owner, &rc)) return;
+    const int w = rc.right - rc.left;
+    const int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
+    Apply(0, 0, w, h);
+}
+
 void LayoutBroker::RefreshScreenPosition()
 {
     if (!m_viewport || m_lastW <= 0 || m_lastH <= 0) return;
