@@ -312,6 +312,11 @@ private:
 
 	// MT-3: build the UV sphere VB/IB/Decl once at engine init.
 	void				InitSkydomeMesh();
+	// [MT-11] Phase 3 Stage 1: split out the VB/IB allocation + fill so
+	// Engine::Reset can recreate them post-device-Reset (D3DPOOL_DEFAULT
+	// no longer survives Reset, unlike the original D3DPOOL_MANAGED).
+	void				CreateSkydomeMeshBuffers();
+	void				ReleaseSkydomeMeshBuffers();
 	// MT-3: compile IDR_SHADER_SKYDOME from RCDATA and cache parameter handles.
 	void				InitSkydomeEffect();
 	// MT-3: release m_pSkydomeTexture and re-load from slot (bundled or custom).
@@ -370,7 +375,15 @@ private:
     D3DXMATRIX  m_sphLightFill[3];
     D3DXMATRIX  m_sphLightAll[3];
 
-	// MT-3: Skydome UV sphere geometry (D3DPOOL_MANAGED; survives device Reset)
+	// MT-3 / [MT-11] Phase 3 Stage 1: Skydome UV sphere geometry.
+	// Originally D3DPOOL_MANAGED so it survived device Reset, but
+	// D3D9Ex disallows the managed pool — promoted to D3DPOOL_DEFAULT.
+	// Engine::Reset now releases the VB/IB before m_pDevice->Reset and
+	// recreates them via CreateSkydomeMeshBuffers() after the device
+	// successfully resets (mirrors the existing OnLostDevice / OnResetDevice
+	// flow used for shaders + bloom + compositor RT). The vertex
+	// declaration m_pSkydomeDecl is not pool-bound and stays valid
+	// across Reset.
 	struct SkydomeVertex
 	{
 	    D3DXVECTOR3 Position;

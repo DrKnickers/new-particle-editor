@@ -1040,8 +1040,14 @@ static bool CreateSolidColorTexture(IDirect3DDevice9*    pDevice,
 {
     if (pDevice == NULL || ppOut == NULL) return false;
     IDirect3DTexture9* pNew = NULL;
+    // [MT-11] Phase 3 Stage 1: D3DPOOL_MANAGED → D3DPOOL_DEFAULT.
+    // D3D9Ex doesn't support managed pool. Solid-colour texture is
+    // tiny (1×1) and gets recreated in Engine::Reset via the existing
+    // ReloadGroundTexture() pathway (active slot driven by
+    // m_groundTextureIndex), so the device-Reset cycle is transparent
+    // to callers.
     if (FAILED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8,
-                                       D3DPOOL_MANAGED, &pNew, NULL)))
+                                       D3DPOOL_DEFAULT, &pNew, NULL)))
         return false;
     D3DLOCKED_RECT lr;
     if (FAILED(pNew->LockRect(0, &lr, NULL, 0)))
@@ -1279,6 +1285,16 @@ void Engine::Reset()
 	// papered over the failed Reset on the next WM_PAINT. (HANDOFF
 	// Open Items §1, fixed 2026-05-20.)
 	if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnLostDevice();
+	// [MT-11] Phase 3 Stage 1: D3D9Ex disallows D3DPOOL_MANAGED, so
+	// resources that were previously managed-pool (skydome VB/IB, the
+	// solid-colour ground texture, and any custom skydome texture)
+	// are now D3DPOOL_DEFAULT and must be released before Reset and
+	// recreated after. Same shape as L-007's incident — every newly-
+	// D3DPOOL_DEFAULT resource that misses this dance produces a
+	// stale-resource D3DERR on the next Reset.
+	ReleaseSkydomeMeshBuffers();
+	SAFE_RELEASE(m_pSkydomeTexture);
+	SAFE_RELEASE(m_pGroundTexture);
 	// FD9b: the compositor's off-screen RT is D3DPOOL_DEFAULT, so
 	// it must be released before m_pDevice->Reset — otherwise Reset
 	// fails with D3DERR_INVALIDCALL and the engine is left in a
@@ -1297,6 +1313,14 @@ void Engine::Reset()
     }
 	if (m_pBloomEffect != NULL) m_pBloomEffect->OnResetDevice();
 	if (m_pSkydomeEffect != NULL) m_pSkydomeEffect->OnResetDevice();
+	// [MT-11] Phase 3 Stage 1: rebuild the previously-managed-pool
+	// resources. CreateSkydomeMeshBuffers regenerates the procedural
+	// VB/IB; ReloadGroundTexture re-runs the bundled-or-solid-colour
+	// loader using m_groundTextureIndex; ReloadSkydomeTexture re-runs
+	// the bundled-or-custom path using m_skydomeIndex.
+	CreateSkydomeMeshBuffers();
+	ReloadGroundTexture();
+	ReloadSkydomeTexture(m_skydomeIndex);
 
 	ResetParameters();
 
@@ -1441,10 +1465,34 @@ D3DMULTISAMPLE_TYPE Engine::GetMultiSampleType(DWORD* MultiSampleQuality, D3DFOR
 	return D3DMULTISAMPLE_NONE;
 }
 
-// MT-3: Build the UV sphere vertex + index buffers used by the skydome render pass.
-// Called once from the Engine constructor after m_pDevice is created.
-// D3DPOOL_MANAGED means these survive device Reset and only need cleanup in ~Engine.
+// MT-3: Build the UV sphere vertex declaration + mesh used by the skydome
+// render pass. Called once from the Engine constructor after m_pDevice is
+// created. [MT-11] Phase 3 Stage 1: the VB/IB allocation moved into
+// CreateSkydomeMeshBuffers() so Engine::Reset can recreate them after
+// the device Reset (D3DPOOL_DEFAULT resources don't survive Reset).
 void Engine::InitSkydomeMesh()
+{
+    // Vertex declaration — not pool-bound, survives device Reset.
+    D3DVERTEXELEMENT9 decl[] = {
+        {0, offsetof(SkydomeVertex, Position),  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+        {0, offsetof(SkydomeVertex, Normal),    D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0},
+        {0, offsetof(SkydomeVertex, TexCoord),  D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+        D3DDECL_END()
+    };
+    if (FAILED(m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl)))
+        throw runtime_error("Unable to create skydome mesh");
+
+    // VB + IB — pool-bound, must be recreated on device Reset.
+    CreateSkydomeMeshBuffers();
+}
+
+// [MT-11] Phase 3 Stage 1: Allocate + fill the skydome VB and IB.
+// Called from InitSkydomeMesh (engine init) and from Engine::Reset (after
+// device Reset succeeds). D3DPOOL_DEFAULT means the buffers live in
+// driver-managed VRAM that's lost on Reset; the procedural sphere data
+// is cheap to regenerate (~256 vertices, ~1024 indices), so we just
+// re-emit it every time rather than caching.
+void Engine::CreateSkydomeMeshBuffers()
 {
     const int lon = kSkydomeLongSegments;
     const int lat = kSkydomeLatSegments;
@@ -1495,20 +1543,10 @@ void Engine::InitSkydomeMesh()
         }
     }
 
-    // Vertex declaration
-    D3DVERTEXELEMENT9 decl[] = {
-        {0, offsetof(SkydomeVertex, Position),  D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
-        {0, offsetof(SkydomeVertex, Normal),    D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL,   0},
-        {0, offsetof(SkydomeVertex, TexCoord),  D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
-        D3DDECL_END()
-    };
-    if (FAILED(m_pDevice->CreateVertexDeclaration(decl, &m_pSkydomeDecl)))
-        throw runtime_error("Unable to create skydome mesh");
-
-    // VB
+    // VB — D3DPOOL_DEFAULT for D3D9Ex compatibility.
     if (FAILED(m_pDevice->CreateVertexBuffer(
         UINT(verts.size() * sizeof(SkydomeVertex)),
-        D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &m_pSkydomeVB, NULL)))
+        D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT, &m_pSkydomeVB, NULL)))
         throw runtime_error("Unable to create skydome mesh");
     void* pVB = NULL;
     if (FAILED(m_pSkydomeVB->Lock(0, 0, &pVB, 0)))
@@ -1516,10 +1554,10 @@ void Engine::InitSkydomeMesh()
     memcpy(pVB, verts.data(), verts.size() * sizeof(SkydomeVertex));
     m_pSkydomeVB->Unlock();
 
-    // IB
+    // IB — D3DPOOL_DEFAULT for D3D9Ex compatibility.
     if (FAILED(m_pDevice->CreateIndexBuffer(
         UINT(idx.size() * sizeof(uint16_t)),
-        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_MANAGED, &m_pSkydomeIB, NULL)))
+        D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &m_pSkydomeIB, NULL)))
         throw runtime_error("Unable to create skydome mesh");
     void* pIB = NULL;
     if (FAILED(m_pSkydomeIB->Lock(0, 0, &pIB, 0)))
@@ -1530,6 +1568,15 @@ void Engine::InitSkydomeMesh()
 #ifndef NDEBUG
     fprintf(stdout, "[Skydome] sphere mesh init verts=%d tris=%d\n", vertCount, triCount);
 #endif
+}
+
+// [MT-11] Phase 3 Stage 1: Release the skydome VB + IB ahead of
+// m_pDevice->Reset. Counterpart of CreateSkydomeMeshBuffers. Symmetric
+// with the existing OnLostDevice pattern used for shaders + compositor RT.
+void Engine::ReleaseSkydomeMeshBuffers()
+{
+    SAFE_RELEASE(m_pSkydomeVB);
+    SAFE_RELEASE(m_pSkydomeIB);
 }
 
 void Engine::InitSkydomeEffect()
@@ -1602,10 +1649,14 @@ bool Engine::ReloadSkydomeTexture(int slot)
         std::string narrowPath = WideToAnsi(path);
         m_pSkydomeTexture = LoadTextureViaFileManager(m_pDevice, m_fileManager, narrowPath);
         if (m_pSkydomeTexture != NULL) return true;
+        // [MT-11] Phase 3 Stage 1: D3DPOOL_MANAGED → D3DPOOL_DEFAULT.
+        // D3D9Ex disallows the managed pool. Custom-slot textures are
+        // re-loaded from disk via Engine::Reset → ReloadSkydomeTexture
+        // (called with m_skydomeIndex) when the device is reset.
         return SUCCEEDED(D3DXCreateTextureFromFileEx(
             m_pDevice, path.c_str(),
             D3DX_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, D3DFMT_UNKNOWN,
-            D3DPOOL_MANAGED, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL,
+            D3DPOOL_DEFAULT, D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL,
             &m_pSkydomeTexture));
     }
     return false;
