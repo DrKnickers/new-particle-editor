@@ -40,12 +40,11 @@
 // the toolbar's Spawner button — the new mount reads from the
 // appropriate key with the appropriate defaults.
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { useSpawnerVisible } from "@/lib/spawner-visibility";
 import { useOpenToolPanel, setOpenToolPanel } from "@/lib/tool-panel";
-import { setSeparatorDragging } from "@/lib/separator-drag";
 import { ViewportSlot } from "./ViewportSlot";
 import { ViewportPill } from "./ViewportPill";
 import { CurveEditorPanel } from "./CurveEditorPanel";
@@ -126,51 +125,6 @@ export function PanelLayout({ bridge }: Props) {
   const outer = usePersistedLayout(outerKey, outerDefaults);
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
-
-  // B1.4 [NT-8] drag-resize popup fix. The engine viewport is a
-  // top-level layered Win32 popup composited above WebView2.
-  // ViewportSlot's ResizeObserver fires `layout/viewport-rect` per
-  // frame, and LayoutBroker::Apply runs an expensive D3D9
-  // Engine::Reset on every non-degenerate size change. During a
-  // fast splitter drag this stacks resets and the popup falls far
-  // behind the WebView's flex layout — the popup paints over the
-  // neighbouring pane until pointerup.
-  //
-  // Fix (L-014 follow-up): on pointerdown to any [data-separator],
-  // dispatch a single degenerate-size rect that routes to
-  // LayoutBroker's no-Reset early-out (popup parked at -32768,-32768
-  // with 1×1 size). ViewportSlot short-circuits its per-frame send
-  // while the flag is true. On pointerup, ViewportSlot's
-  // drag-subscribe listener re-emits the final rect once — one
-  // Reset, not N.
-  useEffect(() => {
-    function onDown(e: PointerEvent) {
-      const t = e.target;
-      if (!(t instanceof Element) || !t.closest("[data-separator]")) return;
-      setSeparatorDragging(true);
-      // Park the popup offscreen with degenerate size. LayoutBroker's
-      // `w<=0||h<=0` early-out at src/host/LayoutBroker.cpp:24 skips
-      // Engine::Reset, which is the load-bearing performance win.
-      void bridge.request({
-        kind: "layout/viewport-rect",
-        params: { x: -32768, y: -32768, w: 0, h: 0 },
-      }).catch(() => { /* ignore */ });
-    }
-    function onUp() {
-      setSeparatorDragging(false);
-      // ViewportSlot's subscription fires send() once on the
-      // transition to false, repositioning the popup at the final
-      // quadrant rect.
-    }
-    document.addEventListener("pointerdown", onDown, true);
-    document.addEventListener("pointerup", onUp, true);
-    document.addEventListener("pointercancel", onUp, true);
-    return () => {
-      document.removeEventListener("pointerdown", onDown, true);
-      document.removeEventListener("pointerup", onUp, true);
-      document.removeEventListener("pointercancel", onUp, true);
-    };
-  }, [bridge]);
 
   // 4.x quirk: when a Group mounts with `groupSize === 0` (typical
   // for nested flex containers on first paint), the library flips
