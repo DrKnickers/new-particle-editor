@@ -15,6 +15,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>   // [MT-11] Phase 3 Stage 3c: GET_X_LPARAM / GET_Y_LPARAM for mouse forwarding
 #include <shellapi.h>
 #include <shlobj.h>
 #include <wrl.h>
@@ -517,6 +518,16 @@ struct HostWindowImpl
     // setup, then drives Compositor::AttachWebView2 to commit the
     // DComp tree with WebView2's RootVisualTarget plugged in.
     HRESULT OnCompositionControllerReady(HRESULT chr, ICoreWebView2CompositionController* ctl);
+    // [MT-11] Phase 3 Stage 3c: forward a Win32 mouse message arriving
+    // at hMain into the WebView2 composition surface via
+    // ICoreWebView2CompositionController::SendMouseInput. Under HWND
+    // hosting, WebView2's child HWND received WM_MOUSE* directly from
+    // the OS — under composition hosting the host HWND owns input and
+    // must forward. Also handles SetCapture/ReleaseCapture for
+    // drag-past-window-edge continuity. No-op when m_compositionMode
+    // is false. The caller (MainWndProc) returns 0 after this so
+    // DefWindowProc doesn't double-process the message.
+    void    ForwardMouseToCompositionWebView2(UINT msg, WPARAM wp, LPARAM lp);
     void    ResizeWebViewToClient();
 
     void OnWebMessage(const std::wstring& json);
@@ -1056,6 +1067,83 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
     return S_OK;
 }
 
+// ---------------------------------------------------------------------
+// [MT-11] Phase 3 Stage 3c: mouse forwarding under composition hosting.
+// Translates the Win32 WM_MOUSE* message family into
+// ICoreWebView2CompositionController::SendMouseInput calls. The
+// COREWEBVIEW2_MOUSE_EVENT_KIND enum values are numerically identical
+// to the WM_* constants (verified at compile time against WebView2.h
+// 1.0.3967.48 — WM_MOUSEMOVE=512, WM_LBUTTONDOWN=513, ...), so a
+// direct cast is safe. Same for COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS
+// matching MK_* bits.
+//
+// Wheel messages (WM_MOUSEWHEEL, WM_MOUSEHWHEEL) arrive in SCREEN
+// coordinates while all other WM_MOUSE* arrive in CLIENT coords;
+// translate the wheel cases via ScreenToClient. Wheel delta goes in
+// the mouseData parameter (signed short in the HIWORD of wParam).
+//
+// Capture handling: SetCapture(hMain) on any button-down so drags
+// extending past the window edge keep flowing as WM_MOUSEMOVE to the
+// host. ReleaseCapture() when the up-event leaves wParam's MK_*
+// button bits at zero (no button still held). This avoids the
+// alternate "track which button captured" book-keeping and
+// matches the simple model React's pointer-id state expects.
+// ---------------------------------------------------------------------
+void HostWindowImpl::ForwardMouseToCompositionWebView2(UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (!m_compositionController) return;
+
+    POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    UINT32 mouseData = 0;
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL)
+    {
+        ScreenToClient(hMain, &pt);
+        // GET_WHEEL_DELTA_WPARAM returns a signed short. Cast through
+        // INT16 first to sign-extend correctly into the 32-bit slot
+        // SendMouseInput expects.
+        mouseData = static_cast<UINT32>(static_cast<INT16>(GET_WHEEL_DELTA_WPARAM(wp)));
+    }
+
+    // MK_* bits in wParam's low word map 1:1 to
+    // COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS:
+    //   MK_LBUTTON=0x01  → LEFT_BUTTON
+    //   MK_RBUTTON=0x02  → RIGHT_BUTTON
+    //   MK_SHIFT  =0x04  → SHIFT
+    //   MK_CONTROL=0x08  → CONTROL
+    //   MK_MBUTTON=0x10  → MIDDLE_BUTTON
+    // (MK_XBUTTON1/2 don't have COREWEBVIEW2 equivalents in 1.0.3967.48;
+    //  Stage 3c doesn't forward them. The 99-test suite doesn't
+    //  exercise XButton.)
+    auto virtualKeys = static_cast<COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS>(
+        LOWORD(wp) & (MK_LBUTTON | MK_RBUTTON | MK_SHIFT |
+                      MK_CONTROL | MK_MBUTTON));
+
+    m_compositionController->SendMouseInput(
+        static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(msg),
+        virtualKeys,
+        mouseData,
+        pt);
+
+    // Capture: any button-down captures, any button-up that leaves
+    // wParam with no buttons held releases.
+    switch (msg)
+    {
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK:
+        SetCapture(hMain);
+        break;
+    case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP:
+        if ((wp & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) == 0)
+        {
+            ReleaseCapture();
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 // ---------- WndProc dispatch ----------
 
 LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -1212,6 +1300,24 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
         }
         return 0;
+
+    // [MT-11] Phase 3 Stage 3c: forward mouse input to WebView2's
+    // composition controller. Under HWND mode, WebView2's child HWND
+    // gets WM_MOUSE* directly from the OS — under composition the
+    // host owns input and forwards via SendMouseInput. Gated on
+    // m_compositionMode so the default new-UI path falls through to
+    // DefWindowProc unchanged.
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+    case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
+        if (m_compositionMode && m_compositionController)
+        {
+            ForwardMouseToCompositionWebView2(msg, wp, lp);
+            return 0;
+        }
+        break;
 
     case WM_MOVE:
         // FD8: when main moves, the viewport popup follows. Position
