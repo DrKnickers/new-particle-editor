@@ -1753,12 +1753,21 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
     m_background     = RGB(0x14,0x08,0x34);
 
 	//
-	// Initialize Direct3D
+	// Initialize Direct3D9Ex
 	//
-	m_pDirect3D = Direct3DCreate9(D3D_SDK_VERSION);
-	if (m_pDirect3D == NULL)
+	// [MT-11] Phase 3 Stage 1: D3D9 → D3D9Ex. D3D9Ex is required for
+	// the Stage 2 shared-handle render-target path; the spike validated
+	// the entire engine→D3D11→DComp pipeline on this rig (decision doc
+	// at docs/superpowers/research/dxgi-stage-0-decision.md). Per Stage 1
+	// decision #1: hard-fail if D3D9Ex is unavailable — there is no
+	// in-process fallback to vanilla D3D9 (production fallback to legacy
+	// arch-A is filed for Stage 6+).
 	{
-		throw runtime_error("Unable to initialize Direct3D");
+		HRESULT createHr = Direct3DCreate9Ex(D3D_SDK_VERSION, &m_pDirect3D);
+		if (FAILED(createHr) || m_pDirect3D == NULL)
+		{
+			throw runtime_error("Unable to initialize Direct3D9Ex");
+		}
 	}
 
 	ZeroMemory(&m_presentationParameters, sizeof(m_presentationParameters));
@@ -1785,12 +1794,45 @@ Engine::Engine(HWND hFocus, HWND hDevice, ITextureManager& textureManager, IShad
 
 	m_presentationParameters.MultiSampleType = GetMultiSampleType(&m_presentationParameters.MultiSampleQuality, DisplayMode.Format, m_presentationParameters.AutoDepthStencilFormat, m_presentationParameters.Windowed);
 
-	// Create device (first try hardware, then software)
-	if (FAILED(m_pDirect3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hFocus, D3DCREATE_HARDWARE_VERTEXPROCESSING, &m_presentationParameters, &m_pDevice)))
-	if (FAILED(m_pDirect3D->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hFocus, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &m_presentationParameters, &m_pDevice)))
+	// Create device (first try hardware, then software).
+	// [MT-11] Phase 3 Stage 1: D3D9 CreateDevice → D3D9Ex CreateDeviceEx
+	// (extra trailing nullptr for fullscreen display mode — we are always
+	// windowed) + D3DCREATE_MULTITHREADED, which is required for Stage 2
+	// cross-device shared-handle textures and costs ~5% per-frame
+	// overhead in exchange. Verified across 189k frames in the dxgi_spike
+	// without anomaly.
 	{
-		SAFE_RELEASE(m_pDirect3D);
-		throw runtime_error("Unable to create render device");
+		DWORD const baseFlags = D3DCREATE_MULTITHREADED;
+		DWORD       vertexFlags = D3DCREATE_HARDWARE_VERTEXPROCESSING;
+		const char* vpModeName  = "HWVP";
+		HRESULT     createDevHr = m_pDirect3D->CreateDeviceEx(
+			D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hFocus,
+			baseFlags | vertexFlags, &m_presentationParameters,
+			NULL, &m_pDevice);
+		if (FAILED(createDevHr))
+		{
+			vertexFlags = D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+			vpModeName  = "SOFTWARE_VP";
+			createDevHr = m_pDirect3D->CreateDeviceEx(
+				D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hFocus,
+				baseFlags | vertexFlags, &m_presentationParameters,
+				NULL, &m_pDevice);
+		}
+		if (FAILED(createDevHr))
+		{
+			SAFE_RELEASE(m_pDirect3D);
+			throw runtime_error("Unable to create render device");
+		}
+
+		// Adapter info for Stage 2 multi-GPU LUID match debugging.
+		D3DADAPTER_IDENTIFIER9 adapterIdent = {};
+		m_pDirect3D->GetAdapterIdentifier(D3DADAPTER_DEFAULT, 0, &adapterIdent);
+		printf("[D3D9Ex] device created (%s multithreaded) adapter=%s "
+		       "VendorId=0x%lX DeviceId=0x%lX\n",
+		       vpModeName, adapterIdent.Description,
+		       (unsigned long)adapterIdent.VendorId,
+		       (unsigned long)adapterIdent.DeviceId);
+		fflush(stdout);
 	}
 
 	// Create vertex declaration

@@ -434,9 +434,18 @@ private:
 	// MT-3 follow-up: needed to resolve curated skydome textures from the
 	// base game / active mod via the MEG-archive + loose-file chain.
 	IFileManager&					m_fileManager;
-	IDirect3D9*						m_pDirect3D;
+	// [MT-11] Phase 3 Stage 1: promoted from IDirect3D9/IDirect3DDevice9 to
+	// the *Ex types so the engine's render target can be opened as a
+	// shared-handle resource by a D3D11 device (Stage 2). IDirect3DDevice9Ex
+	// inherits from IDirect3DDevice9, so existing call sites that use the
+	// base interface (TextureManager, ShaderManager, Effect helpers) keep
+	// working through implicit covariance. D3DPOOL_MANAGED is no longer
+	// available on this device — the four pre-existing managed-pool sites
+	// (engine.cpp 1044/1511/1522/1608) have been migrated to
+	// D3DPOOL_DEFAULT and added to the OnLostDevice/OnResetDevice flow.
+	IDirect3D9Ex*					m_pDirect3D;
 	D3DPRESENT_PARAMETERS			m_presentationParameters;
-	IDirect3DDevice9*				m_pDevice;
+	IDirect3DDevice9Ex*				m_pDevice;
 	IDirect3DVertexDeclaration9*	m_pDeclaration;
 
 	// FD9b: non-owning. When non-null, Render targets its off-screen
