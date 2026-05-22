@@ -487,7 +487,12 @@ bool BuildVisualTree() {
         }
         // AddVisual with insertAbove=TRUE places this above prior children
         // when referenceVisual is null (it's documented as "above all").
-        hr = g_rootVisual->AddVisual(g_webviewVisual.Get(), TRUE, nullptr);
+        // insertAbove=FALSE with referenceVisual=NULL puts this at the END
+        // of the children list, which renders it IN FRONT of all siblings
+        // (DComp draws children list-order, last-drawn-on-top). The MSDN
+        // naming is counterintuitive: "insertAbove=TRUE + NULL ref" means
+        // "behind all," NOT "above all" — bisected via --no-engine smoke.
+        hr = g_rootVisual->AddVisual(g_webviewVisual.Get(), FALSE, nullptr);
         if (FAILED(hr)) {
             LogDbg("[SPIKE-ERROR] root->AddVisual(webview) failed hr=0x%08lX\n", hr);
             return false;
@@ -743,8 +748,12 @@ void RenderFrame() {
     DWORD nowMs = GetTickCount();
     if (nowMs - g_lastTitleUpdateMs >= 250) {
         wchar_t title[128];
+        // — = em-dash, escape form so the source survives MSVC's
+        // source-charset interpretation regardless of BOM presence.
+        // Literal em-dash gets re-encoded as UTF-8 bytes interpreted as
+        // CP-1252 if the compiler doesn't see a BOM — produces "DXGI Spike â€"".
         swprintf(title, _countof(title),
-                 L"DXGI Spike — %.1f FPS @ %ls  (%dx%d  %.2fms)",
+                 L"DXGI Spike -- %.1f FPS @ %ls  (%dx%d  %.2fms)",
                  g_emaFps, g_cfg.resLabel, g_cfg.width, g_cfg.height, g_emaTotalMs);
         SetWindowTextW(g_mainWnd, title);
         g_lastTitleUpdateMs = nowMs;
@@ -880,7 +889,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
 
     g_mainWnd = CreateWindowExW(
         0,
-        kWindowClassName, L"DXGI Spike — initializing",
+        kWindowClassName, L"DXGI Spike -- initializing",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         rect.right - rect.left, rect.bottom - rect.top,
