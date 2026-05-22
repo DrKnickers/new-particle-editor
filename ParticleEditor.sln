@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "expatw_static", "libs\expat
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "viewport_poc", "src\host\viewport_poc.vcxproj", "{4843B928-23DB-4D9F-8F1F-D80071FD0C33}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dxgi_spike", "src\host\spike\dxgi_spike.vcxproj", "{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -53,6 +55,14 @@ Global
 		{4843B928-23DB-4D9F-8F1F-D80071FD0C33}.Release|x86.ActiveCfg = Release|x64
 		{4843B928-23DB-4D9F-8F1F-D80071FD0C33}.Template|x64.ActiveCfg = Release|x64
 		{4843B928-23DB-4D9F-8F1F-D80071FD0C33}.Template|x86.ActiveCfg = Release|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Debug|x64.ActiveCfg = Debug|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Debug|x64.Build.0 = Debug|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Debug|x86.ActiveCfg = Debug|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Release|x64.ActiveCfg = Release|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Release|x64.Build.0 = Release|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Release|x86.ActiveCfg = Release|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Template|x64.ActiveCfg = Release|x64
+		{8DC9F0A1-B7C6-46BF-BAA2-D3791D5E1234}.Template|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
