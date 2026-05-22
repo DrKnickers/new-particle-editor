@@ -1,6 +1,7 @@
 #include "BridgeDispatcher.h"
 
 #include "AcceleratorBridge.h"
+#include "InputDispatcher.h"
 #include "LayoutBroker.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -847,6 +848,22 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- viewport/input ([MT-11] Phase 2) --------
+    //
+    // DOM mouse/wheel/key events on the in-DOM <canvas> arrive here
+    // and are forwarded to InputDispatcher, which PostMessages the
+    // synthesized Win32 message to the (hidden) viewport popup HWND.
+    // When InputDispatcher is null (legacy-popup mode) the request is
+    // a silent no-op — the renderer shouldn't be dispatching these at
+    // all in that mode, but ack rather than error so a stray event
+    // doesn't surface as a noisy reject.
+    if (kind == "viewport/input")
+    {
+        if (m_input) m_input->Dispatch(params);
+        sendOk(json::object());
+        return res;
+    }
+
     // -------- register-accelerators --------
     if (kind == "register-accelerators")
     {
@@ -1393,6 +1410,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // at src/main.cpp:1289-1305.
         if (m_ppAttachedParticleSystem && *m_ppAttachedParticleSystem && m_engine)
         {
+            fprintf(stderr, "[ArchC-kill] file/new killing attached=%p\n",
+                    static_cast<void*>(*m_ppAttachedParticleSystem));
             m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
             *m_ppAttachedParticleSystem = nullptr;
         }
@@ -1515,6 +1534,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // swapping. Same reasoning as the file/new branch above.
         if (m_ppAttachedParticleSystem && *m_ppAttachedParticleSystem && m_engine)
         {
+            fprintf(stderr, "[ArchC-kill] file/open killing attached=%p\n",
+                    static_cast<void*>(*m_ppAttachedParticleSystem));
             m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
             *m_ppAttachedParticleSystem = nullptr;
         }

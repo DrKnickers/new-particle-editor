@@ -1,5 +1,12 @@
 import { useEffect, useRef } from "react";
-import type { Bridge } from "@particle-editor/bridge-schema";
+import type { Bridge, ViewportInputEvent } from "@particle-editor/bridge-schema";
+import {
+  blurEvent,
+  isTypingTarget,
+  makeKeyEvent,
+  makeMouseEvent,
+  makeWheelEvent,
+} from "../lib/viewport-input";
 
 type Props = { bridge: Bridge };
 
@@ -30,6 +37,12 @@ function isArchCEnabled(): boolean {
 export function ViewportSlot({ bridge }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // [MT-11] Phase 2: an <img> element is the actual visual surface
+  // (paints engine pixels via .src). The canvas above it is now purely
+  // an input event target — transparent, no buffer painting. Splitting
+  // these two responsibilities lets the browser handle the resize-
+  // friendly atomic-decode-swap that canvas drawImage can't match.
+  const imgRef = useRef<HTMLImageElement | null>(null);
   const archCEnabled = isArchCEnabled();
 
   useEffect(() => {
@@ -88,71 +101,165 @@ export function ViewportSlot({ bridge }: Props) {
     };
   }, [bridge]);
 
-  // [MT-11] Phase 1 — canvas paint loop. Subscribes to the typed
-  // viewport/frame-ready bridge event, decodes the base64 JPEG inline
-  // (see L-015), paints via Image() + drawImage. Skip entirely if the
-  // transport flag isn't set; MockBridge (browser dev) never emits this
-  // event so the subscription is a benign no-op.
+  // [MT-11] Phase 2 — paint engine frames into an <img> element via
+  // .src assignment, rather than canvas drawImage. The <img> approach
+  // has three properties that the canvas approach lacked:
+  //
+  //   1. NO BUFFER-CLEAR GAP. Canvas resizes (canvas.width=N) clear
+  //      the drawing buffer to transparent before the next paint,
+  //      revealing the page background as flicker. Setting img.src
+  //      doesn't touch any persistent buffer — the browser keeps the
+  //      previous decoded frame painted until the new one is ready,
+  //      then atomically swaps.
+  //
+  //   2. NO ASPECT-DISTORTION WOBBLE. With a fixed-aspect canvas
+  //      buffer being CSS-stretched to a slot whose aspect changes
+  //      during pane drag, the content visibly squishes between
+  //      frames. The <img> element's natural sizing model (intrinsic
+  //      from the source data, CSS-fit via object-fit) handles
+  //      aspect changes smoothly.
+  //
+  //   3. LIGHTER PER-FRAME COST. We avoid allocating a fresh Image()
+  //      per frame (the previous pattern) AND the canvas drawImage
+  //      step. The browser's image-decode pipeline handles the
+  //      base64 → bitmap conversion on a background thread.
+  //
+  // The canvas overlay (still rendered above this <img>) is kept for
+  // its DOM input event handling; its drawing buffer is never touched
+  // and remains transparent forever. Skip entirely if the transport
+  // flag isn't set; MockBridge (browser dev) never emits this event
+  // so the subscription is a benign no-op.
   useEffect(() => {
     if (!archCEnabled) return;
 
     let cancelled = false;
-    let inFlight = false;
     let lastLoggedAt = 0;
     let framesSinceLastLog = 0;
 
-    // Subscribe unconditionally — the canvas + context lookup happens
-    // per-event inside the handler so jsdom-mode (no real canvas) and
-    // production (real canvas) both flow through the same code path.
     const unsubscribe = bridge.on("viewport/frame-ready", (e) => {
       if (cancelled) return;
       const p = e.payload;
       if (!p?.jpegBase64) return;
 
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;  // jsdom or context unavailable — skip paint
+      const img = imgRef.current;
+      if (!img) return;  // jsdom or pre-mount — skip
 
-      // Drop frames if a previous decode is still in flight. The host emits
-      // monotonically; missing a frame is fine — the next one paints.
-      if (inFlight) return;
-      inFlight = true;
-
-      if (canvas.width !== p.w) canvas.width = p.w;
-      if (canvas.height !== p.h) canvas.height = p.h;
-
-      // Decode the base64-embedded JPEG via Image() + data: URL. Image
-      // decoding happens off the main thread on modern browsers, and
-      // drawImage is fast once decoded.
-      const img = new Image();
-      img.onload = () => {
-        if (cancelled) { inFlight = false; return; }
-        try {
-          ctx.drawImage(img, 0, 0, p.w, p.h);
-        } catch {
-          // ignore paint failures; next frame retries
-        }
-
-        framesSinceLastLog += 1;
-        const now = performance.now();
-        if (now - lastLoggedAt > 1000) {
-          // eslint-disable-next-line no-console
-          console.log(`[ArchC] canvas painted ${framesSinceLastLog} frames in ${(now - lastLoggedAt).toFixed(0)}ms (size ${p.w}x${p.h}, b64 ${p.jpegBase64.length} chars)`);
-          framesSinceLastLog = 0;
-          lastLoggedAt = now;
-        }
-        inFlight = false;
-      };
-      img.onerror = () => {
-        inFlight = false;
-      };
+      // Atomic swap. The browser keeps the previous frame painted
+      // through the decode of this one, eliminating the buffer-clear
+      // gap that was visible as resize flicker / wobble.
       img.src = `data:image/jpeg;base64,${p.jpegBase64}`;
+
+      framesSinceLastLog += 1;
+      const now = performance.now();
+      if (now - lastLoggedAt > 1000) {
+        // eslint-disable-next-line no-console
+        console.log(`[ArchC] <img> painted ${framesSinceLastLog} frames in ${(now - lastLoggedAt).toFixed(0)}ms (size ${p.w}x${p.h}, b64 ${p.jpegBase64.length} chars)`);
+        framesSinceLastLog = 0;
+        lastLoggedAt = now;
+      }
     });
 
     return () => {
       cancelled = true;
       unsubscribe();
+    };
+  }, [bridge, archCEnabled]);
+
+  // [MT-11] Phase 2 — DOM input forwarding. Pointer + wheel events on
+  // the canvas, keyboard + blur events on window. All gated on
+  // archCEnabled: in legacy-popup mode the visible popup HWND receives
+  // input directly from the OS, so the canvas must NOT intercept it.
+  //
+  // Coordinate convention: popup-client physical pixels = clientX/Y *
+  // devicePixelRatio. The popup spans the full main client (T4c.4) so
+  // canvas-relative offsets aren't needed — clientX/Y already aligns
+  // with the popup's client origin.
+  //
+  // Pointer capture: setPointerCapture on pointerdown means drag
+  // gestures (LMB-rotate, MMB-pan, etc.) keep firing pointermove even
+  // when the cursor leaves the canvas — critical for fast camera
+  // motions that overshoot the viewport bounds.
+  //
+  // Wheel: native addEventListener with { passive: false } per L-008
+  // (React 18 attaches wheel listeners as passive at the root, which
+  // blocks preventDefault — the FieldSpinner pattern). We preventDefault
+  // so the viewport region doesn't double-handle wheels as page scroll.
+  //
+  // Keyboard: window-scoped with TYPING_TAGS guard so typing in
+  // inspector fields doesn't drive engine input. Forwards all keys —
+  // the engine's viewport WNDPROC default-cases unknown VKs (only
+  // VK_SHIFT is consumed today; broader forward is safe + forward-
+  // compat for future engine hotkeys).
+  useEffect(() => {
+    if (!archCEnabled) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const send = (params: ViewportInputEvent) => {
+      void bridge.request({ kind: "viewport/input", params }).catch(() => {});
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* not supported */ }
+      send(makeMouseEvent("mousedown", e, e.clientX, e.clientY));
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      send(makeMouseEvent("mousemove", e, e.clientX, e.clientY));
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      try { canvas.releasePointerCapture(e.pointerId); } catch { /* not held */ }
+      send(makeMouseEvent("mouseup", e, e.clientX, e.clientY));
+    };
+    const onPointerCancel = (e: PointerEvent) => {
+      try { canvas.releasePointerCapture(e.pointerId); } catch { /* not held */ }
+      // pointercancel → synthesize a mouseup so the engine's drag state
+      // unwinds (matches the WM_CAPTURECHANGED defensive cleanup at
+      // HostWindow.cpp:1169).
+      send(makeMouseEvent("mouseup", e, e.clientX, e.clientY));
+    };
+    // Disable the default browser context menu over the canvas so RMB-
+    // drag isn't interrupted by a popup. The right-click event still
+    // dispatches as pointerdown / pointerup with button=right.
+    const onContextMenu = (e: Event) => { e.preventDefault(); };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      send(makeWheelEvent(e, e.clientX, e.clientY));
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      send(makeKeyEvent("keydown", e));
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      send(makeKeyEvent("keyup", e));
+    };
+
+    const onBlur = () => {
+      send(blurEvent);
+    };
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
+    canvas.addEventListener("contextmenu", onContextMenu);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
+      canvas.removeEventListener("contextmenu", onContextMenu);
+      canvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, [bridge, archCEnabled]);
 
@@ -162,12 +269,38 @@ export function ViewportSlot({ bridge }: Props) {
       className="absolute inset-0 bg-transparent flex items-center justify-center text-text-3 text-sm"
     >
       {archCEnabled ? (
-        <canvas
-          ref={canvasRef}
-          data-testid="viewport-canvas"
-          className="absolute inset-0 w-full h-full"
-          style={{ imageRendering: "pixelated" }}
-        />
+        <>
+          {/* [MT-11] Phase 2: visual layer. Engine pixels arrive as
+              base64 JPEG via the viewport/frame-ready bridge event and
+              paint into this <img> via .src assignment. The browser
+              handles atomic-decode-swap, so resize and aspect changes
+              don't flicker. `pointer-events: none` so the canvas overlay
+              above receives DOM input. `object-fit: fill` to stretch
+              the image to the slot's CSS box (the source data already
+              matches the scene rect dimensions emitted by the host).
+              `draggable={false}` to suppress the default HTML5 drag-
+              image behaviour on mousedown. */}
+          <img
+            ref={imgRef}
+            data-testid="viewport-img"
+            alt=""
+            draggable={false}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+            style={{ imageRendering: "pixelated", objectFit: "fill" }}
+          />
+          {/* [MT-11] Phase 2: input layer. Transparent canvas overlay
+              on top of the <img>. Receives all pointer / wheel events
+              for the viewport — its drawing buffer is intentionally
+              never painted (stays at the default 300×150 transparent
+              black). The data-testid is preserved for backward
+              compatibility with existing vitest + Playwright specs
+              that look up the input target by this name. */}
+          <canvas
+            ref={canvasRef}
+            data-testid="viewport-canvas"
+            className="absolute inset-0 w-full h-full"
+          />
+        </>
       ) : (
         /* The native D3D9 viewport sibling renders here. In browser-mode
            (MockBridge), the underlying body bg shows through.

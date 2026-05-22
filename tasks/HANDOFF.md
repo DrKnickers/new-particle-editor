@@ -1,19 +1,110 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 0 + Phase 1 SHIPPED — canvas-in-DOM transport up, Phase 2 next)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 plan ready, awaiting Stage 0 spike OK)
 
-**Last updated:** 2026-05-21 (post-[MT-11] Phase 0 + Phase 1. Engine pixels now flow to a DOM `<canvas>` via base64-encoded JPEG inline in the typed `viewport/frame-ready` bridge event. ~120 FPS sustained, zero errors, 300/300 vitest. Phase 1 ended at "canvas mounted + painting"; the legacy WS_EX_LAYERED popup still occludes the canvas visually — Phase 2 hides the popup + routes input through the canvas via a new `viewport/input` bridge surface, at which point the canvas becomes the visible source of truth.)
+**Last updated:** 2026-05-22 (post-Phase-2-smoke + DXGI plan drafted). Phase 2 shipped (canvas-in-DOM + viewport/input + popup-hide + Shift-place gesture preserved); smoke at maximized 3440×1440 surfaced a 20 FPS bandwidth-bound ceiling on the JPEG transport. Phase 3 redirected from "A/B verification" to **DXGI shared-handle GPU-to-GPU compositing** — full plan at [`tasks/todo.md`](todo.md). Production fallback on Stage 0 NO-GO or runtime detection failure is **legacy arch-A** (visible popup, chrome cutout accepted with UI accommodations), not canvas-JPEG.
 
-**Test counts at handoff:** vitest **300 / 300** (was 294 pre-MT-11; +6 from [`ViewportSlot.test.tsx`](../web/apps/editor/src/components/__tests__/ViewportSlot.test.tsx)) · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** (untouched this session — Phase 2 will add `canvas-architecture.spec.ts` once input is wired).
+**Test counts at handoff:** vitest **335 / 335** · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** legacy CI (new `canvas-architecture.spec.ts` self-skips when canvas isn't mounted) · tsc -b 0 errors.
 
-**Next dispatch options.** Phase 0 + Phase 1 of [MT-11] are done — pick from:
+**Repo state at handoff:**
+
+| | |
+|---|---|
+| **`origin/lt-4` HEAD** | (set by FF push in this dispatch — see latest commit on `lt-4`) |
+| **Session branch** | `claude/hungry-mirzakhani-9f9a47` at the same HEAD (FF'd) |
+| **Working tree** | clean (post-FF) |
+| **Phase 2 status** | Shipped behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` + `VITE_VIEWPORT_TRANSPORT=canvas-jpeg`. Default behavior unchanged (legacy popup visible). User-verified working: LMB/RMB/MMB/wheel drag, Ctrl modifiers, full legacy Shift+click placement gesture. |
+| **Phase 3 status** | Plan drafted, awaiting OK to start Stage 0 spike. NO production code in this dispatch — only the plan files. |
+
+## Next dispatch — [MT-11] Phase 3 Stage 0 (DXGI spike)
+
+**The plan lives in [`tasks/todo.md`](todo.md).** Stage 0 is a hard
+GO/NO-GO gate, 2 days, capped commitment. Deliverables:
+
+1. FD6/B post-mortem doc at `docs/superpowers/research/dxgi-fd6-fd9-history.md` reading the three prior visual-hosting failure attempts ([`docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md:22`](../docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md) is the entry point).
+2. Standalone spike app at `src/host/spike/dxgi_spike.cpp` (template: existing `viewport_poc.vcxproj`) proving D3D9Ex shared-handle texture → D3D11 → WebView2 `ICoreWebView2CompositionController` + DirectComposition visual tree end-to-end.
+3. WebView2 API stability check against SDK 1.0.3967.48.
+4. Perf measurement at 720p / 1080p / 1440p / 3440×1440 vs Phase 2 canvas-JPEG baseline AND vs arch-A.
+5. Decision doc (GO or NO-GO, committed to repo).
+
+**GO** → continue to Stage 1 (D3D9Ex migration, 2-3 days), then Stages 2-7 over ~5 weeks total. Each stage is a checkpoint with the user.
+
+**NO-GO** → revert Phase 2 commits, file UI accommodations dispatch (chrome layout adjustments to minimize where the cutout artifact shows under legacy arch-A).
+
+## Phase 2 smoke matrix — reference if smoke surfaces a regression
+
+Phase 2 was user-verified working before commit. Reference matrix for diagnostic / regression-test purposes:
+
+**Launch (PowerShell):**
+
+```powershell
+$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
+cd web/apps/editor; pnpm run build; cd ../../..
+$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+./x64/Debug/ParticleEditor.exe --new-ui
+```
+
+Or two-terminal dev mode (Vite HMR):
+
+```powershell
+cd web/apps/editor
+$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
+pnpm run build
+$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+./x64/Debug/ParticleEditor.exe
+```
+
+**The matrix.**
+
+| Gesture | Expected | Verifies |
+|---|---|---|
+| LMB-drag in viewport | Camera MOVE (target translates) | mousedown/move/up + MK_LBUTTON encoded |
+| RMB-drag in viewport | Camera ROTATE (orbit around target) | RMB encoding + drag continuity past canvas edge |
+| MMB-drag | Camera MOVE | MMB encoding |
+| Ctrl+LMB-drag | ZOOM | MK_CONTROL bit reassembled per event |
+| Ctrl+RMB-drag | ZOOM | as above |
+| Wheel up | Zoom in | deltaY sign convention correct |
+| Wheel down | Zoom out | as above |
+| Shift+LMB-click | Cursor-bound instance spawns | MK_SHIFT on mousedown + VK_SHIFT keydown reaches host |
+| Release Shift | Instance dies | VK_SHIFT keyup |
+| Alt-Tab while holding Shift | Instance dies (defensive) | window.blur → WM_KILLFOCUS path |
+| Open File menu while canvas active | No cutout artifact in the dropdown | popup hidden, canvas is the only visible viewport |
+| Open Mods → submenu with chrome | No cutout artifact | **the headline payoff** |
+| Open a modal (Help → About) | Frosted-glass backdrop unchanged | snapshot-into-DOM path still works alongside archC |
+
+**Diagnostics.** In archC mode the host logs `[ArchC] InputDispatcher up (popup=...)` + `[ArchC] viewport popup hidden (canvas-in-DOM is the visible surface)` lines on startup. Diagnostic logging from this session (`[ArchC-input]` per-event, `[ArchC-engine]` per-LBUTTONDOWN, `[ArchC-kill]` per-attached-instance kill, `[ArchC] frame=N` at 1 Hz) is retained in the code as a Stage-4/5 regression detection aid — slated for removal in Phase 3 Stage 7 per the [`tasks/todo.md`](todo.md) cleanup plan.
+
+## Alternative next-dispatch options (if not starting DXGI)
+
+Below in priority order if the user chooses to defer Stage 0. The primary recommendation remains Stage 0.
 
 | Option | Why next | Effort |
 |---|---|---|
-| **[MT-11] Phase 2 — input forwarding** | Route mouse + wheel + keyboard through canvas → new `viewport/input` bridge surface → engine. Hide the legacy popup (1×1, off-screen) so the canvas becomes visible. The headline payoff (no more chrome-cutout artifact in dropdowns) only lands once Phase 2 ships. | ~4-6 h |
-| **B2 obsolescence audit** | HANDOFF §0b (older) suspected B1.3 already absorbed B2's scope; a quick diff probably retires B2 entirely | ~30 min |
+| **B2 obsolescence audit** | Older HANDOFF §0b suspected B1.3 already absorbed B2's scope; a quick diff probably retires B2 entirely | ~30 min |
 | **MT-1 follow-up — texture-picker `…` buttons** | New-UI never wired the legacy `IDC_BUTTON1` / `IDC_BUTTON2` browse buttons; comment marker `TODO(MT-1)` in [EmitterPropertyTabs.tsx](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx) | ~2-4 h |
 | **[NT-5] Engine-side single-member link-group enforcement** | Top of Near-term (position 1.1). Data-layer parity with the B1 render-layer filter | small |
 | **[NT-6] Visual-stability lane assignment** | Optional bracket-gutter ergonomic improvement (position 1.2) | small |
-| **Phase 3 of 2026 redesign** | Dialog re-skins, Tailwind v4 cleanup sweep, theme-persistence Playwright spec — see [plan](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md) | ~one session |
+
+## What landed this session — [MT-11] Phase 2 close-out + DXGI plan
+
+- **`viewport/input` bridge surface** — single kind with discriminated `ViewportInputEvent` union ([bridge-schema/src/index.ts](../web/packages/bridge-schema/src/index.ts) + MockBridge no-op arm).
+- **Renderer encoders** — new [`web/apps/editor/src/lib/viewport-input.ts`](../web/apps/editor/src/lib/viewport-input.ts) with pure-function helpers (`encodeMkButtons`, `quantiseWheelDelta`, `toPopupClientCoords`, `isTypingTarget`, `makeMouseEvent` / `makeWheelEvent` / `makeKeyEvent`).
+- **ViewportSlot DOM handlers** — third `useEffect` in [`ViewportSlot.tsx`](../web/apps/editor/src/components/ViewportSlot.tsx) wiring pointerdown/move/up/cancel + contextmenu + native `wheel` listener `{ passive: false }` on the canvas; window-scoped keydown / keyup / blur with TYPING_TAGS guard. `setPointerCapture` on pointerdown for drag continuity.
+- **Host InputDispatcher** — new [`src/host/InputDispatcher.{h,cpp}`](../src/host/InputDispatcher.h) switches on payload type, decodes into `WM_*` / `wParam` / `lParam`, `PostMessage`s to the popup HWND. Wired through [`BridgeDispatcher`](../src/host/BridgeDispatcher.cpp) (`SetInputDispatcher` + `viewport/input` arm). Constructed in `WM_CREATE` alongside `FramePublisher` when `m_archCMode`; torn down before the compositor.
+- **Popup hide** — `LayoutBroker::GetViewport()` + `HostWindowImpl::Run` calls `ShowWindow(SW_HIDE)` after `ApplyFullClient` when `m_archCMode`. Popup still spans full main client so `LayoutBroker` scene-rect math + D3D9 swapchain stay valid; `UpdateLayeredWindow` becomes a wasted no-op.
+- **Shift+LMB regression fix** — `SetFocus(hwnd)` at the top of WM_LBUTTONDOWN was triggering a spurious `WM_KILLFOCUS` cascade on the hidden popup that killed cursor-bound spawns within ~2ms. Gated `SetFocus` (LMB + RMB) + the `WM_KILLFOCUS` defensive kill on `!m_archCMode` to break the focus-thrash → kill loop.
+- **Legacy placement gesture preserved** — Added `OBJECT_Z` drag mode to `HostWindow.cpp` matching legacy `src/main.cpp:2877-2934`: WM_LBUTTONDOWN with attached preview enters OBJECT_Z (Z-axis drag, X/Y frozen), WM_MOUSEMOVE adjusts `cursor.z = -y * camDist / 1000`, WM_LBUTTONUP calls `engine->DetachParticleSystem(attached)`. The cursor-bound preview becomes a free-running placed system. User-verified: chain-clicks place multiple, Shift release ends gesture.
+- **DXGI plan drafted** — [`tasks/todo.md`](todo.md) restructured as the Phase 3 DXGI plan; Phase 0+1+2 planning content moved to [`tasks/todo-mt-11-phase-0-1-2-archive.md`](todo-mt-11-phase-0-1-2-archive.md). Phase 3 was originally "A/B verification" (~2-4h) but redirected to "DXGI shared-handle compositing" (~5 weeks) after Phase 2 perf smoke showed canvas-JPEG bandwidth-bound at 20 FPS on maximized 3440×1440. Stage 0 of the new plan is a 2-day hard gate; NO-GO falls back to legacy arch-A.
+- **Tests** — vitest +35 (26 encoder unit tests in new `viewport-input.test.ts`, 9 DOM-integration tests in `ViewportSlot.test.tsx`'s new Phase 2 describe block); new Playwright [`tests/canvas-architecture.spec.ts`](../web/apps/editor/tests/canvas-architecture.spec.ts) with 3 cases that self-skip in legacy CI.
+
+Decisions captured for next session:
+
+1. Single `viewport/input` kind with discriminator (vs per-event-type kinds) — matches Win32 MSG shape, one dispatch arm per side.
+2. `SW_HIDE` only, popup stays sized to full main client (vs move off-screen) — preserves T4c.4 scene-rect math.
+3. Include `window.blur` → `viewport/input { type: "blur" }` so cursor-bound spawn dies on Alt-Tab.
+4. Forward all keys that pass TYPING_TAGS guard — engine wndproc default-cases unknowns, broad forward is safe + forward-compat.
+5. Phase 3 = DXGI, not A/B verification. Fallback = legacy arch-A (not SharedBuffer, not canvas-JPEG).
+6. Rigorous a11y testing in Stage 3 (per user direction).
+
+The chrome-cutout artifact that motivated [MT-11] IS gone in Phase 2 (verified). The remaining gap is performance at maximized resolution — Phase 3 DXGI plan addresses that. See [`tasks/todo.md`](todo.md) for the active plan.
 
 ---
 

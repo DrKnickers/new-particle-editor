@@ -49,6 +49,7 @@ namespace host {
 
 class AcceleratorBridge;
 class LayoutBroker;
+class InputDispatcher;
 
 class BridgeDispatcher
 {
@@ -130,6 +131,14 @@ public:
     {
         m_ppAttachedParticleSystem = ppAttached;
     }
+
+    // [MT-11] Phase 2: inject the InputDispatcher that owns the hidden
+    // viewport popup HWND. The `viewport/input` request arm forwards
+    // its params object to InputDispatcher::Dispatch. Null is tolerated
+    // — that's the legacy-popup path where input flows directly from
+    // the OS and the request should never fire. Wired once in
+    // HostWindow when m_archCMode is true.
+    void SetInputDispatcher(InputDispatcher* input) { m_input = input; }
 
     // Called from the WebView2 WebMessageReceived handler. The string is
     // the raw JSON sent by `chrome.webview.postMessage` on the React side.
@@ -219,6 +228,7 @@ private:
     UndoStack*         m_undo     = nullptr;
     HWND               m_hostHwnd = nullptr;
     ::ModManager*      m_modManager = nullptr;  // LT-4 D6: mods/* surface
+    InputDispatcher*   m_input      = nullptr;  // [MT-11] Phase 2: viewport/input
 
     // LT-4 host-state plumbing — pointers borrowed from HostWindow.
     // `m_pParticleSystem` is a pointer-to-unique_ptr so file/new and

@@ -442,6 +442,13 @@ export class MockBridge implements Bridge {
         // short-circuits the <img> portal in unit tests.
         return { pngBase64: "", w: 0, h: 0 };
 
+      case "viewport/input":
+        // [MT-11] Phase 2 — mock: no native HWND to PostMessage to.
+        // Tests assert on `dispatch` call args (kind + payload shape);
+        // the return shape is the standard empty-object ack. Browser
+        // mode never has an engine to drive, so this is a pure no-op.
+        return {};
+
       // ---------------- file ops (Phase 3 Screen 8 Batch 3) ----------
       //
       // The mock implementations are deliberately UI-free: there's no

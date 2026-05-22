@@ -37,6 +37,7 @@ public:
     explicit LayoutBroker(HWND viewport = nullptr) : m_viewport(viewport), m_engine(nullptr), m_lastW(0), m_lastH(0) {}
 
     void SetViewport(HWND viewport) { m_viewport = viewport; }
+    HWND GetViewport() const { return m_viewport; }
 
     // Inject the live Engine after construction (mirrors
     // BridgeDispatcher::SetEngine). Null is treated as "engine not

@@ -24,9 +24,10 @@
 // any module-reset dance.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { fireEvent, render, screen, cleanup } from "@testing-library/react";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { ViewportSlot } from "../ViewportSlot";
+import { MK_LBUTTON, MK_SHIFT } from "../../lib/viewport-input";
 
 function makeStubBridge(): Bridge & {
   request: ReturnType<typeof vi.fn>;
@@ -116,5 +117,130 @@ describe("ViewportSlot — canvas-jpeg path (VITE_VIEWPORT_TRANSPORT='canvas-jpe
     expect(unsubscribe).not.toHaveBeenCalled();
     unmount();
     expect(unsubscribe).toHaveBeenCalled();
+  });
+});
+
+// ─── [MT-11] Phase 2 input forwarding ────────────────────────────────
+//
+// These tests assert the DOM event → bridge.request wiring. The pure-
+// function encoders are exercised in lib/__tests__/viewport-input.test.ts;
+// here we lock down that the listeners get attached on mount, fire the
+// right Request kind + payload shape, and detach on unmount.
+
+function findViewportInputCalls(
+  bridge: { request: ReturnType<typeof vi.fn> },
+): Array<{ kind: string; params: Record<string, unknown> }> {
+  return bridge.request.mock.calls
+    .map((c) => c[0] as { kind: string; params: Record<string, unknown> })
+    .filter((req) => req.kind === "viewport/input");
+}
+
+describe("ViewportSlot — Phase 2 input forwarding (canvas-jpeg only)", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_VIEWPORT_TRANSPORT", "canvas-jpeg");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllEnvs();
+  });
+
+  it("pointerdown on canvas dispatches viewport/input { type: 'mousedown' }", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    const canvas = screen.getByTestId("viewport-canvas");
+    fireEvent.pointerDown(canvas, {
+      clientX: 100,
+      clientY: 200,
+      button: 0,
+      buttons: 1,
+      pointerId: 1,
+    });
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(inputs[0]?.params).toMatchObject({
+      type: "mousedown",
+      button: "left",
+      x: 100,
+      y: 200,
+      buttons: MK_LBUTTON,
+    });
+  });
+
+  it("pointerdown with shiftKey encodes MK_SHIFT in buttons bitmask", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    const canvas = screen.getByTestId("viewport-canvas");
+    fireEvent.pointerDown(canvas, {
+      clientX: 0,
+      clientY: 0,
+      button: 0,
+      buttons: 1,
+      shiftKey: true,
+      pointerId: 1,
+    });
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs[0]?.params.buttons).toBe(MK_LBUTTON | MK_SHIFT);
+  });
+
+  it("pointermove on canvas dispatches viewport/input { type: 'mousemove' }", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    const canvas = screen.getByTestId("viewport-canvas");
+    fireEvent.pointerMove(canvas, { clientX: 50, clientY: 75, buttons: 0 });
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs.some((r) => r.params.type === "mousemove")).toBe(true);
+  });
+
+  it("wheel on canvas dispatches viewport/input { type: 'wheel' } with sign-flipped delta", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    const canvas = screen.getByTestId("viewport-canvas");
+    fireEvent.wheel(canvas, { clientX: 10, clientY: 10, deltaY: 100 });
+    const inputs = findViewportInputCalls(bridge);
+    const wheel = inputs.find((r) => r.params.type === "wheel");
+    expect(wheel).toBeTruthy();
+    expect(wheel?.params.deltaY).toBe(-120);  // DOM +100 → Win32 -WHEEL_DELTA
+  });
+
+  it("window keydown of VK_SHIFT (keyCode=16) dispatches viewport/input { type: 'keydown', vk: 16 }", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    fireEvent.keyDown(window, { keyCode: 16, key: "Shift" });
+    const inputs = findViewportInputCalls(bridge);
+    const key = inputs.find((r) => r.params.type === "keydown");
+    expect(key).toBeTruthy();
+    expect(key?.params).toMatchObject({ type: "keydown", vk: 16, repeat: false });
+  });
+
+  it("TYPING_TAGS guard: keydown with target=INPUT does NOT dispatch", () => {
+    const bridge = makeStubBridge();
+    render(
+      <div>
+        <input data-testid="text-input" />
+        <ViewportSlot bridge={bridge} />
+      </div>,
+    );
+    const input = screen.getByTestId("text-input");
+    fireEvent.keyDown(input, { keyCode: 16, key: "Shift" });
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs.find((r) => r.params.type === "keydown")).toBeUndefined();
+  });
+
+  it("window.blur dispatches viewport/input { type: 'blur' }", () => {
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    fireEvent.blur(window);
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs.some((r) => r.params.type === "blur")).toBe(true);
+  });
+
+  it("does NOT attach listeners in legacy mode (env unset)", () => {
+    vi.stubEnv("VITE_VIEWPORT_TRANSPORT", "");
+    const bridge = makeStubBridge();
+    render(<ViewportSlot bridge={bridge} />);
+    // Canvas isn't even rendered; window-level keydown should be a no-op.
+    fireEvent.keyDown(window, { keyCode: 16, key: "Shift" });
+    const inputs = findViewportInputCalls(bridge);
+    expect(inputs.length).toBe(0);
   });
 });

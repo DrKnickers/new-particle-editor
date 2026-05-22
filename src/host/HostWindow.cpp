@@ -44,6 +44,7 @@
 #include "AcceleratorBridge.h"
 #include "AlphaCompositor.h"
 #include "FramePublisher.h"
+#include "InputDispatcher.h"
 
 #include <objbase.h>
 #include <gdiplus.h>
@@ -362,7 +363,11 @@ struct HostWindowImpl
     // (matches legacy "drag relative to start" feel — releasing and
     // re-pressing resets the reference frame). NONE means no drag in
     // progress; the wheel handler only fires when dragMode == NONE.
-    enum class DragMode { NONE, MOVE, ROTATE, ZOOM };
+    // OBJECT_Z: cursor-bound preview is being dragged for placement.
+    // Only Z (height) tracks the drag delta; X/Y stay frozen at the
+    // click position. WM_LBUTTONUP detaches the preview (place it).
+    // Matches legacy src/main.cpp:2891-2898 + 2877-2883 + 2936-2948.
+    enum class DragMode { NONE, MOVE, ROTATE, ZOOM, OBJECT_Z };
     DragMode        m_dragMode      = DragMode::NONE;
     Engine::Camera  m_dragStartCam  = {};
     int             m_dragStartX    = 0;
@@ -408,6 +413,12 @@ struct HostWindowImpl
     bool                                m_archCMode    = false;
     int                                 m_archCQuality = 70;  // JPEG quality 1..100
     std::unique_ptr<host::FramePublisher> m_framePublisher;
+
+    // [MT-11] Phase 2: viewport/input bridge surface owner. Constructed
+    // alongside FramePublisher when m_archCMode is true; holds a raw
+    // HWND for the popup it PostMessages to. BridgeDispatcher gets a
+    // borrow via SetInputDispatcher.
+    std::unique_ptr<host::InputDispatcher> m_inputDispatcher;
 
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
@@ -961,6 +972,16 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         Log("%s\n", line.c_str());
                     });
                     Log("[ArchC] FramePublisher up (mode=canvas-jpeg, q=%d)\n", m_archCQuality);
+
+                    // [MT-11] Phase 2: stand up the InputDispatcher on the
+                    // hidden viewport popup. Bound to BridgeDispatcher
+                    // below in Run() once `dispatcher` exists.
+                    m_inputDispatcher = std::make_unique<host::InputDispatcher>(hViewport);
+                    m_inputDispatcher->SetLogger([this](const std::string& line) {
+                        Log("%s\n", line.c_str());
+                    });
+                    Log("[ArchC] InputDispatcher up (popup=%p)\n",
+                        static_cast<void*>(hViewport));
                 }
             }
             catch (const std::exception& e)
@@ -1060,6 +1081,13 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // raw pointer back into the compositor, so this MUST go before
         // alphaCompositor.reset().
         m_framePublisher.reset();
+        // [MT-11] Phase 2: drop InputDispatcher too. It holds the
+        // popup HWND raw; the popup itself is destroyed below as part
+        // of the standard WM_DESTROY cleanup. Order between the two
+        // archC publishers doesn't matter — neither references the
+        // other — but tearing them down before the engine/compositor
+        // matches the FramePublisher pattern.
+        m_inputDispatcher.reset();
         if (engine) engine->SetAlphaCompositor(nullptr);
         layout.SetAlphaCompositor(nullptr);
         alphaCompositor.reset();
@@ -1115,7 +1143,25 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_LBUTTONDOWN:
     {
         if (!engine) return 0;
-        SetFocus(hwnd);
+        // [MT-11] Phase 2 smoke instrumentation — verify what wParam
+        // actually arrived from the synthesized PostMessage.
+        Log("[ArchC-engine] WM_LBUTTONDOWN wp=0x%llx MK_SHIFT=%d MK_CONTROL=%d hasPS=%d emitters=%zu attached=%d\n",
+            static_cast<unsigned long long>(wp),
+            (wp & MK_SHIFT) ? 1 : 0,
+            (wp & MK_CONTROL) ? 1 : 0,
+            particleSystem ? 1 : 0,
+            particleSystem ? particleSystem->getEmitters().size() : 0,
+            m_attachedParticleSystem ? 1 : 0);
+        // [MT-11] Phase 2: in archC mode the popup is hidden and WebView2
+        // owns keyboard routing; we forward keystrokes through the bridge.
+        // SetFocus on the hidden popup briefly succeeds (visibility isn't
+        // a precondition; WS_EX_NOACTIVATE only blocks user-driven
+        // activation), then OS focus management snaps it back, firing a
+        // spurious WM_KILLFOCUS that the defensive kill below interprets
+        // as "user Alt-Tab'd, drop the spawn." Skip SetFocus to break
+        // the focus-thrash → kill loop. Legacy mode keeps the original
+        // semantic (popup must own focus for WM_KEYDOWN VK_SHIFT spawn).
+        if (!m_archCMode) SetFocus(hwnd);
         // LT-4 polish: Shift+LMB also triggers cursor-bound spawn. The
         // legacy keydown-only path (case WM_KEYDOWN below) requires the
         // viewport HWND to have focus when Shift is pressed, but
@@ -1127,8 +1173,30 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         // routing. Skip the camera drag so the spawn doesn't compete
         // with a MOVE drag. Release on Shift-keyup or LBUTTONUP — the
         // existing WM_KEYUP handler kills the attached instance.
-        if ((wp & MK_SHIFT) && particleSystem && !particleSystem->getEmitters().empty()
-            && m_attachedParticleSystem == nullptr)
+        // Legacy parity: if a cursor-bound preview already exists (spawned
+        // by an earlier WM_KEYDOWN VK_SHIFT or by the B1.3.1 fallback below),
+        // LMB-down enters OBJECT_Z drag mode for height adjustment. LMB-up
+        // will then detach the preview, placing it permanently in the scene.
+        // Matches legacy src/main.cpp:2891-2898. Do NOT enter a camera drag
+        // — placement is the entire intent of this click while a preview
+        // is alive.
+        if (m_attachedParticleSystem != nullptr)
+        {
+            m_dragMode     = DragMode::OBJECT_Z;
+            m_dragStartCam = engine->GetCamera();
+            m_dragStartX   = (short)LOWORD(lp);
+            m_dragStartY   = (short)HIWORD(lp);
+            SetCapture(hwnd);
+            Log("[ArchC-engine] LMB-down OBJECT_Z drag (placing attached=%p)\n",
+                static_cast<void*>(m_attachedParticleSystem));
+            return 0;
+        }
+        // B1.3.1 round 5 fallback: Shift+LMB with no existing preview spawns
+        // one in-place (covers the case where WM_KEYDOWN VK_SHIFT didn't
+        // fire because WebView2 held focus). Then immediately enter
+        // OBJECT_Z so the user can drag-Z in the same gesture and LMB-up
+        // places it.
+        if ((wp & MK_SHIFT) && particleSystem && !particleSystem->getEmitters().empty())
         {
             int cx = (short)LOWORD(lp);
             int cy = (short)HIWORD(lp);
@@ -1139,8 +1207,17 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             m_mouseCursor.SetPosition(pos);
             m_attachedParticleSystem =
                 engine->SpawnParticleSystem(*particleSystem, &m_mouseCursor);
+            Log("[ArchC-engine] SHIFT+LMB spawn cx=%d cy=%d pos=(%.3f,%.3f,%.3f) result=%p\n",
+                cx, cy, pos.x, pos.y, pos.z,
+                static_cast<void*>(m_attachedParticleSystem));
+            m_dragMode     = DragMode::OBJECT_Z;
+            m_dragStartCam = engine->GetCamera();
+            m_dragStartX   = cx;
+            m_dragStartY   = cy;
+            SetCapture(hwnd);
             return 0;
         }
+        // Plain LMB drag — camera MOVE / ZOOM (no preview involved).
         m_dragMode     = (wp & MK_CONTROL) ? DragMode::ZOOM : DragMode::MOVE;
         m_dragStartCam = engine->GetCamera();
         m_dragStartX   = (short)LOWORD(lp);
@@ -1156,10 +1233,32 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         m_dragStartX   = (short)LOWORD(lp);
         m_dragStartY   = (short)HIWORD(lp);
         SetCapture(hwnd);
-        SetFocus(hwnd);
+        // [MT-11] Phase 2: see WM_LBUTTONDOWN — skip SetFocus in archC
+        // to avoid the spurious WM_KILLFOCUS → defensive-kill loop.
+        if (!m_archCMode) SetFocus(hwnd);
         return 0;
     }
     case WM_LBUTTONUP:
+    {
+        // Legacy parity: if a cursor-bound preview was being dragged
+        // for placement (OBJECT_Z mode, or any state with an attached
+        // preview), DETACH it now. After Detach the system stays in
+        // the world at its current position and continues to emit —
+        // it is no longer parented to m_mouseCursor. The user can
+        // then click again (while still holding Shift) to spawn a
+        // fresh preview, repeating the click-to-place gesture.
+        // Matches legacy src/main.cpp:2877-2883.
+        if (m_attachedParticleSystem && engine)
+        {
+            Log("[ArchC-engine] LMB-up placing attached=%p (Detach, system stays alive)\n",
+                static_cast<void*>(m_attachedParticleSystem));
+            engine->DetachParticleSystem(m_attachedParticleSystem);
+            m_attachedParticleSystem = nullptr;
+        }
+        m_dragMode = DragMode::NONE;
+        ReleaseCapture();
+        return 0;
+    }
     case WM_RBUTTONUP:
     {
         m_dragMode = DragMode::NONE;
@@ -1178,17 +1277,33 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     {
         if (!engine) return 0;
 
-        // LT-4 shift-click-to-spawn: always-update cursor block, regardless
-        // of drag mode. Mirrors legacy src/main.cpp:2982-2987 — without
-        // this, the attached ParticleSystemInstance (parented to
-        // m_mouseCursor via Object3D) wouldn't track the mouse during
-        // Shift-hold. Cache the (x,y) so WM_KEYDOWN can use it for the
-        // spawn coords (WM_KEYDOWN's lParam is NOT mouse coords; legacy
-        // bug at src/main.cpp:2960).
         int mx = (short)LOWORD(lp);
         int my = (short)HIWORD(lp);
         m_lastCursorX = mx;
         m_lastCursorY = my;
+
+        // Legacy parity: in OBJECT_Z drag (placing a cursor-bound preview),
+        // only Z tracks the drag. X/Y stay frozen at the click position so
+        // the user can rake the mouse vertically to set height without the
+        // preview sliding sideways. Matches legacy src/main.cpp:2939-2948.
+        if (m_dragMode == DragMode::OBJECT_Z)
+        {
+            long y = my - m_dragStartY;
+            D3DXVECTOR3 diff = m_dragStartCam.Target - m_dragStartCam.Position;
+            float len = D3DXVec3Length(&diff);
+            D3DXVECTOR3 pos = m_mouseCursor.GetPosition();
+            pos.z = -static_cast<float>(y) * len / 1000.0f;
+            m_mouseCursor.SetPosition(pos);
+            return 0;
+        }
+
+        // LT-4 shift-click-to-spawn: always-update cursor block, regardless
+        // of (non-OBJECT_Z) drag mode. Mirrors legacy src/main.cpp:2982-2987
+        // — without this, the attached ParticleSystemInstance (parented to
+        // m_mouseCursor via Object3D) wouldn't track the mouse during
+        // Shift-hold. Cache the (x,y) so WM_KEYDOWN can use it for the
+        // spawn coords (WM_KEYDOWN's lParam is NOT mouse coords; legacy
+        // bug at src/main.cpp:2960).
         D3DXVECTOR3 cursorWorld;
         GetCursorPos3D(engine.get(), (short)mx, (short)my, cursorWorld);
         m_mouseCursor.SetPosition(cursorWorld);
@@ -1317,6 +1432,8 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (wp != VK_SHIFT) break;
         if (m_attachedParticleSystem && engine)
         {
+            Log("[ArchC-kill] WM_KEYUP VK_SHIFT killing attached=%p\n",
+                static_cast<void*>(m_attachedParticleSystem));
             engine->KillParticleSystem(m_attachedParticleSystem);
             m_attachedParticleSystem = nullptr;
         }
@@ -1327,10 +1444,30 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         // Defensive: if the viewport loses focus while Shift is held
         // (Alt-Tab away, foreign focus steal), WM_KEYUP may never arrive
         // and the attached instance leaks. Drop it here.
-        if (m_attachedParticleSystem && engine)
+        //
+        // [MT-11] Phase 2: in archC mode the popup is hidden, never
+        // genuinely owns focus, but receives spurious WM_KILLFOCUS from
+        // Win32 focus churn whenever ANY focus assignment touches it
+        // (other apps activating, modal dialogs, etc.). Treating those
+        // as user-Alt-Tab triggers and killing the cursor-bound spawn
+        // is a regression. The legitimate Alt-Tab case is now covered
+        // by the window.blur → viewport/input { type: "blur" } bridge
+        // path (renderer-side), which goes through THIS handler too —
+        // so we still need the kill, just not unconditionally. Gate
+        // the kill on legacy mode for now; a future refinement could
+        // distinguish bridge-routed blur from spurious OS focus events
+        // via a sentinel wParam from InputDispatcher.
+        if (!m_archCMode && m_attachedParticleSystem && engine)
         {
+            Log("[ArchC-kill] WM_KILLFOCUS killing attached=%p\n",
+                static_cast<void*>(m_attachedParticleSystem));
             engine->KillParticleSystem(m_attachedParticleSystem);
             m_attachedParticleSystem = nullptr;
+        }
+        else if (m_archCMode && m_attachedParticleSystem)
+        {
+            Log("[ArchC-kill] WM_KILLFOCUS suppressed (archC mode, attached=%p preserved)\n",
+                static_cast<void*>(m_attachedParticleSystem));
         }
         return 0;
     }
@@ -1341,6 +1478,8 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         // on the main window's WM_DESTROY which fires after this).
         if (m_attachedParticleSystem && engine)
         {
+            Log("[ArchC-kill] WM_DESTROY killing attached=%p\n",
+                static_cast<void*>(m_attachedParticleSystem));
             engine->KillParticleSystem(m_attachedParticleSystem);
             m_attachedParticleSystem = nullptr;
         }
@@ -1566,6 +1705,10 @@ int HostWindowImpl::Run(int nCmdShow)
     // file/new + file/open can kill any in-flight cursor-bound instance
     // before swapping the ParticleSystem under it.
     dispatcher->BindAttachedSystem(&m_attachedParticleSystem);
+    // [MT-11] Phase 2: hand the InputDispatcher to the bridge so
+    // `viewport/input` requests route into it. Nullable — in legacy-
+    // popup mode this stays null and the handler is a no-op ack.
+    dispatcher->SetInputDispatcher(m_inputDispatcher.get());
     Log("[host] LT-4 host state bound (particleSystem + spawnerDriver)\n");
 
     HRESULT hr = InitWebView2();
@@ -1592,6 +1735,23 @@ int HostWindowImpl::Run(int nCmdShow)
     // particleSystem are fully bound, and Engine::Reset can handle
     // the resize cleanly.
     layout.ApplyFullClient();
+
+    // [MT-11] Phase 2: in arch-C (canvas-in-DOM) mode, hide the
+    // viewport popup. The popup still spans the full main client
+    // (ApplyFullClient above), the D3D9 swapchain on its hidden HWND
+    // keeps rendering at the popup-client size, and FramePublisher
+    // continues reading the AlphaCompositor's pre-stamp DIB —
+    // `UpdateLayeredWindow` becomes a no-op since the window is
+    // hidden (cleanup of that wasted call is a Phase 5 follow-up).
+    // The canvas in the WebView2 DOM is now the visible viewport;
+    // input flows through InputDispatcher rather than the OS-routed
+    // path.
+    if (m_archCMode)
+    {
+        HWND hPopup = layout.GetViewport();
+        if (hPopup) ShowWindow(hPopup, SW_HIDE);
+        Log("[ArchC] viewport popup hidden (canvas-in-DOM is the visible surface)\n");
+    }
 
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);

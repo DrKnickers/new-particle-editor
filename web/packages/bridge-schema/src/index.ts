@@ -220,6 +220,50 @@ export type ModDescriptor = {
   isFoC: boolean;
 };
 
+// ─── Viewport input ([MT-11] Phase 2) ────────────────────────────────
+//
+// Discriminated union carried by the `viewport/input` Request kind.
+// The host's InputDispatcher switches on `type` and PostMessages the
+// corresponding Win32 message to the (hidden) viewport popup HWND.
+//
+// Coordinates (`x`, `y`) are popup-client physical pixels, which equals
+// main-client CSS coords × `devicePixelRatio` at event time. The
+// popup spans the full main client per T4c.4 so client-of-popup ≡
+// client-of-main; the renderer doesn't need to know the popup's screen
+// position.
+//
+// `buttons` is a Win32 MK_* bitmask reassembled from the DOM event:
+//   MK_LBUTTON = 0x0001, MK_RBUTTON = 0x0002, MK_SHIFT = 0x0004,
+//   MK_CONTROL = 0x0008, MK_MBUTTON = 0x0010
+// The renderer reads `event.buttons` (DOM 1/2/4 bits for L/R/M) plus
+// `event.shiftKey/ctrlKey` and reassembles MK_*. The engine's WNDPROC
+// reads modifiers exclusively from these bits — never from
+// GetAsyncKeyState — so the bridge-payload bitmask is the source of
+// truth even though the HWND is hidden.
+//
+// `deltaY` is WHEEL_DELTA units (120 per notch, positive = away-from-
+// user / "zoom in" per the existing handler at HostWindow.cpp:1350).
+// The renderer normalises DOM `WheelEvent.deltaY` to this convention
+// (DOM is opposite-sign; multiply by -1 and quantise to ±120 per
+// notch).
+//
+// `vk` is a Win32 virtual-key code (e.g. VK_SHIFT=16). Renderer uses
+// `event.keyCode` which is legacy but still populated for every key
+// the engine could care about. `repeat` is `event.repeat` — the host
+// stamps lParam bit-30 from this so the engine's WM_KEYDOWN repeat
+// filter at HostWindow.cpp:1296 works unchanged.
+//
+// `blur` corresponds to `window.blur` — the host posts WM_KILLFOCUS
+// to the popup so the defensive cursor-bound-spawn cleanup at
+// HostWindow.cpp:1325 runs when the user Alt-Tabs away mid-Shift-hold.
+export type ViewportInputEvent =
+  | { type: "mousemove"; x: number; y: number; buttons: number }
+  | { type: "mousedown" | "mouseup"; button: "left" | "right" | "middle";
+      x: number; y: number; buttons: number }
+  | { type: "wheel"; x: number; y: number; deltaY: number; buttons: number }
+  | { type: "keydown" | "keyup"; vk: number; repeat: boolean }
+  | { type: "blur" };
+
 // ─── Track DTO (Phase 3 Screen 6 Batch A) ────────────────────────────
 //
 // Per-emitter animation curves. The native `Emitter::tracks[7]` slot
@@ -656,6 +700,19 @@ export type Request =
   // the host's "no frame yet" path returns an empty string + zero
   // dims so the caller can short-circuit.
   | { kind: "viewport/capture-snapshot";  params: Record<string, never> }
+  // [MT-11] Phase 2: renderer-side DOM events on the in-DOM <canvas>
+  // are forwarded to the host, which synthesizes the corresponding
+  // Win32 message and PostMessages it to the (hidden) viewport popup
+  // HWND. The engine's existing viewport WNDPROC consumes the
+  // synthetic messages unchanged. Coords are popup-client physical
+  // pixels (= main-client CSS × devicePixelRatio at event time).
+  // `buttons` is a Win32 MK_* bitmask rebuilt from the DOM event
+  // (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_SHIFT | MK_CONTROL).
+  // `deltaY` is in WHEEL_DELTA units (120 per notch, +up). `vk` is a
+  // Win32 virtual-key code (e.g. VK_SHIFT=16). `blur` corresponds to
+  // window.blur — the host posts WM_KILLFOCUS so the engine's
+  // defensive cursor-bound-spawn cleanup runs on Alt-Tab.
+  | { kind: "viewport/input";             params: ViewportInputEvent }
   | { kind: "spawner/start";              params: SpawnerParamsDto }
   | { kind: "spawner/trigger";            params: Record<string, never> }
   | { kind: "spawner/stop";               params: Record<string, never> }
@@ -812,6 +869,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "layout/scene-rect" }         ? Record<string, never> :
   R extends { kind: "viewport/occlude" }          ? Record<string, never> :
   R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
+  R extends { kind: "viewport/input" }            ? Record<string, never> :
   R extends { kind: "spawner/start" }             ? Record<string, never> :
   R extends { kind: "spawner/trigger" }           ? Record<string, never> :
   R extends { kind: "spawner/stop" }              ? Record<string, never> :
