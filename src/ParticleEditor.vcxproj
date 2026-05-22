@@ -195,6 +195,7 @@
     <ClInclude Include="host\AcceleratorBridge.h" />
     <ClInclude Include="host\AlphaCompositor.h" />
     <ClInclude Include="host\BridgeDispatcher.h" />
+    <ClInclude Include="host\Compositor.h" />
     <ClInclude Include="host\FramePublisher.h" />
     <ClInclude Include="host\InputDispatcher.h" />
     <ClInclude Include="host\HostBridgeProxy.h" />
@@ -245,6 +246,24 @@
     <ClCompile Include="host\BridgeDispatcher.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="host\Compositor.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</ExcludedFromBuild>
+      <!-- Compositor.cpp pulls in modern dcomp.h / d3d11.h / dxgi1_2.h
+           from the Win10 SDK. The project-level AdditionalIncludeDirectories
+           puts $(DXSDK_DIR)Include FIRST because the engine needs DXSDK's
+           d3dx9.h (a legacy June 2010 header), but DXSDK also has stale
+           DXGI.h / D3D11.h / Dcommon.h that predate Direct2D 1.1 and
+           DirectComposition. When dcomp.h transitively pulls
+           dcommon.h / d2d1_1.h / dxgi.h, MSVC finds the DXSDK versions
+           first and the modern types (D2D_VECTOR_2F, DXGI_COLOR_SPACE_TYPE,
+           etc.) come up undeclared, producing dcomp.h syntax errors.
+           Fix: REPLACE (not append to) the include path for THIS file
+           only — no DXSDK, just Win10 SDK + WebView2 SDK. Compositor.cpp
+           doesn't use d3dx9 or any other DXSDK-only API so isolation is
+           safe. Other files in the project keep DXSDK first as before. -->
+      <AdditionalIncludeDirectories>C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;$(SolutionDir)packages\Microsoft.Web.WebView2.1.0.3967.48\build\native\include;$(SolutionDir)src</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="host\FramePublisher.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</ExcludedFromBuild>

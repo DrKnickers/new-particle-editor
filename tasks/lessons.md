@@ -984,3 +984,104 @@ Spike still cleared the 30 FPS bar with room to spare (~120 FPS at
 `tasks/todo.md` §6. The dead `if (false && ...)` block at
 `src/host/HostWindow.cpp` (post-`add_WebMessageReceived`) is kept
 as a record of what was tried; Phase 5 cleanup removes it.
+
+---
+
+## L-016 — Legacy DXSDK June 2010 shadows Win10 SDK headers when DXSDK is first in `<AdditionalIncludeDirectories>`; isolate new TUs via per-file include-path override + pImpl
+
+**Rule.** Any new C++ source file in `ParticleEditor.vcxproj` that
+needs modern Windows SDK headers — `dcomp.h`, `d2d1_1.h`, modern
+`dxgi.h` / `d3d11.h`, anything that references Direct2D 1.1+ types
+or `DXGI_COLOR_SPACE_TYPE` — MUST be isolated from the project-level
+`AdditionalIncludeDirectories`, which puts `$(DXSDK_DIR)Include`
+FIRST for the engine's `d3dx9.h` dependency. DXSDK June 2010 ships
+its OWN `DXGI.h`, `D3D11.h`, `Dcommon.h`, `D2D1.h`, etc. — all
+pre-Windows-8 vintage, all missing the types modern SDK headers
+reference. With DXSDK searched first, `#include <dcomp.h>` (Win10
+SDK only) pulls in transitive `<dcommon.h>` and `<dxgi.h>` from
+DXSDK, the modern types come up undeclared, and dcomp.h itself
+fails to parse.
+
+**Two-part fix:**
+
+1. **Per-file `<AdditionalIncludeDirectories>` REPLACEMENT** (not
+   append) on the new file's `<ClCompile>` entry in the vcxproj.
+   The value must NOT contain `%(AdditionalIncludeDirectories)`
+   (which would inherit DXSDK). Use a Win10-SDK-only path plus
+   whatever else the file genuinely needs (WebView2 SDK, `$(SolutionDir)src`):
+   ```xml
+   <AdditionalIncludeDirectories>C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;$(SolutionDir)packages\Microsoft.Web.WebView2.1.0.3967.48\build\native\include;$(SolutionDir)src</AdditionalIncludeDirectories>
+   ```
+   The full SDK version (`10.0.26100.0`) is hardcoded because the
+   MSBuild `$(WindowsSDKVersion)` macro is empty when only
+   `<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>`
+   is set (the family, not the resolved version). When the SDK
+   updates, the path needs updating too — accepted maintenance
+   cost.
+
+2. **pImpl in the new file's HEADER** so any consumers (e.g.
+   HostWindow.cpp) don't transitively pull `dcomp.h` / `d3d11.h` /
+   `dxgi*.h` and hit the same shadowing. The implementation file is
+   the ONLY translation unit that includes the modern headers, and
+   step 1 isolates it. Consumers see only the public method
+   signatures and a `unique_ptr<Impl>` member.
+
+**Trigger.** Any time `#include <dcomp.h>` produces errors like:
+- `dcomp.h(...): error C2061: syntax error: identifier 'DXGI_COLOR_SPACE_TYPE'`
+- `d2d1_1helper.h(...): error C2065: '_11': undeclared identifier`
+- `d2d1_1helper.h(...): error C4430: missing type specifier`
+
+These are not bugs in dcomp.h / d2d1_1helper.h. They're symptoms of
+DXSDK's stale headers shadowing the Win10 SDK ones.
+
+**Also requires:** `#define D2D_USE_C_DEFINITIONS` before
+`<dcomp.h>` in the implementation file. This opts out of the d2d1
+C++ helper classes (`D2D1::Matrix3x2F` etc.) whose constructors
+reference struct member names that depend on Win10 SDK layout. We
+don't use the C++ helpers — only the C structs like `D2D_RECT_F` —
+so this is safe and surgical.
+
+**How to apply.**
+
+For every new src/host/ .cpp that needs modern Windows headers:
+1. In the `.h`, use pImpl. Public types in the header limited to
+   primitives + WebView2 forward decls + `std::unique_ptr<Impl>`.
+   No `Microsoft::WRL::ComPtr<IDComposition*>` on the public
+   surface.
+2. In the `.cpp`, include modern headers in this order:
+   `<windows.h>` → `<wrl.h>` → `<d3d11.h>` → `<dxgi1_2.h>` →
+   `#define D2D_USE_C_DEFINITIONS` → `<dcomp.h>` → `"WebView2.h"`
+   → `"YourClass.h"`.
+3. In `src/ParticleEditor.vcxproj`, the `<ClCompile>` entry for
+   the file gets a per-file `<AdditionalIncludeDirectories>` that
+   REPLACES (no `%(...)` inheritance) with Win10-SDK-only paths
+   plus what the file truly needs. See the Compositor.cpp entry
+   for the exact pattern.
+
+**Source incident (2026-05-22, [MT-11] Phase 3 Stage 3a).** Adding
+`host::Compositor` to host modern WebView2 composition hosting
+required `<dcomp.h>`. First build attempt failed with `_13
+undeclared` in `d2d1_1helper.h` and `DXGI_COLOR_SPACE_TYPE`
+undefined in `dcomp.h`. Diagnosed via comparing the spike (which
+compiles fine standalone with the same WebView2 SDK + Win10 SDK)
+against ParticleEditor (which has DXSDK first in include path).
+The spike's `dxgi_spike.vcxproj` only has the WebView2 SDK in its
+AdditionalIncludeDirectories; no DXSDK. Confirmed DXSDK June 2010
+ships `D2D1.h`, `Dcommon.h`, `DXGI.h`, `D3D11.h` that predate
+Direct2D 1.1 + DirectComposition.
+
+Initial fix attempt was to PREPEND Win10 SDK paths via per-file
+AdditionalIncludeDirectories, but `$(WindowsSDKVersion)` MSBuild
+macro is empty in this project (resolves "10.0" → empty in the
+project context, not "10.0.26100.0"). Final fix hardcodes the
+full SDK version path, REPLACES (no inheritance from project) so
+DXSDK isn't searched at all for this file, and uses pImpl in the
+header to keep the same problem from biting HostWindow.cpp when it
+includes Compositor.h in Stage 3b.
+
+**Cross-reference.** [MT-11] Phase 3 Stage 3a sub-plan at
+[`tasks/dxgi-stage-3-composition-hosting.md`](dxgi-stage-3-composition-hosting.md).
+The Compositor class at `src/host/Compositor.{h,cpp}` is the
+reference pattern for any future host/ file that needs modern
+Windows headers. Updating this when SDK 1.0.4015+ ships will
+require updating the hardcoded version path.
