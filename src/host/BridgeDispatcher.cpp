@@ -754,6 +754,32 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- layout/scene-rect --------
+    // B1.4 [NT-8] T4c. Under the popup-spans-window architecture the
+    // popup HWND covers the WebView's main-row area at all times.
+    // This message updates the SUB-RECT inside the popup where the
+    // rendered scene should be visible — AlphaCompositor stamps
+    // alpha=0 outside this rect, so UI panels behind those bands
+    // show through (and receive their own mouse events, courtesy of
+    // WS_EX_LAYERED + ULW_ALPHA hit-test semantics).
+    //
+    // Engine code is unchanged — camera frustum still uses the full
+    // popup backbuffer aspect (popup-rect aspect per the T4c
+    // questionnaire). This message is alpha-mask-only; it does NOT
+    // trigger Engine::Reset (which stays bound to layout/viewport-rect
+    // for actual window-resize events). Splitter drag can fire this
+    // per frame without stacking expensive D3D9 device resets.
+    if (kind == "layout/scene-rect")
+    {
+        int x = params.value("x", 0);
+        int y = params.value("y", 0);
+        int w = params.value("w", 0);
+        int h = params.value("h", 0);
+        m_layout.SetSceneRect(x, y, w, h);
+        sendOk(json::object());
+        return res;
+    }
+
     // -------- viewport/occlude --------
     // Register/clear a chrome-rectangle that overlaps the viewport
     // popup. FD9b: LayoutBroker translates the main-client rect to
