@@ -1,10 +1,19 @@
-# Session Handoff — AloParticleEditor / LT-4 (B1.4 [NT-8] resizable splitters + T4c popup-spans-window SHIPPED on session branch, T4c.5 + T6 + T7 + T8 + arch-C ROADMAP pending)
+# Session Handoff — AloParticleEditor / LT-4 (B1.4 [NT-8] resizable splitters fully SHIPPED on session branch — T0 → T8 done, FF pending)
 
-**Last updated:** 2026-05-21 (mid-arc handoff — B1.4's structural pieces are all on the session branch and ready for FF. Splitters work (drag, persist, defaults, spawner toggle, double-click reset). Engine popup now spans the main window with an AlphaCompositor "scene rect" mask. The user-tested drag-overlap regression from T4c.4 led to an architecture investigation: B (DComp visual hosting) is ruled out per FD6 history; C (engine pixels into a `<canvas>` in the WebView) is theoretically viable per back-of-envelope numbers but warrants a separate ~16-32h dispatch. Close-out work T4c.5 / T6 / T7 / T8 still pending; a clean break here lets the next session pick them up fresh.)
+**Last updated:** 2026-05-22 (post-B1.4 close-out. The full arc — splitters install + PanelLayout impl + AppShell swap + Playwright spec + T4c popup-spans-window architectural redirect + T4c.5 modal-snapshot crop + T6 Reset-panel-layout menu item + T7 grep no-op + T8 docs — is on the session branch and ready for FF into `origin/lt-4` with the user's OK. Architecture B (DComp visual hosting) ruled out per FD6 history; architecture C (engine pixels into a DOM `<canvas>`) filed as [MT-11] on the ROADMAP for a future ~16-32h dispatch.)
 
-**Test counts at handoff:** vitest **290 / 290** · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** (was 89; +1 from splitting dialogs.spec.ts's rescale test into a UI gesture + a contract assertion — see T4c.4 commit `bd0fab2`).
+**Test counts at handoff:** vitest **294 / 294** (was 290 pre-T6; +4 from T6's PanelLayout reset helpers + MenuBar integration test) · MSBuild Debug x64 clean (preexisting LIBCMTD warning) · Playwright **90 / 90** (T6's PanelLayout reset has vitest coverage; a follow-up Playwright assertion would be welcome but not gating).
 
-**Next dispatch (fresh session):** see "Open items" below. The four T4c-area pieces are: T4c.5 (Modal snapshot crop), T6 (Reset panel layout View-menu item), T7 (strip `[splitter]` dev breadcrumbs — likely no-op), T8 (docs: CHANGELOG entry, ROADMAP strikethrough for [NT-8], file architecture-C migration as a new ROADMAP item, HANDOFF refresh).
+**Next dispatch options.** B1.4 is done — pick from:
+
+| Option | Why next | Effort |
+|---|---|---|
+| **B2 obsolescence audit** | HANDOFF §0b suspects B1.3 already absorbed B2's scope; a quick diff probably retires B2 entirely | ~30 min |
+| **MT-1 follow-up — texture-picker `…` buttons** | New-UI never wired the legacy `IDC_BUTTON1` / `IDC_BUTTON2` browse buttons; comment marker `TODO(MT-1)` in [EmitterPropertyTabs.tsx](web/apps/editor/src/screens/EmitterPropertyTabs.tsx) | ~2-4 h |
+| **[NT-5] Engine-side single-member link-group enforcement** | Now top of Near-term (position 1.1). Data-layer parity with the B1 render-layer filter | small |
+| **[NT-6] Visual-stability lane assignment** | Optional bracket-gutter ergonomic improvement (position 1.2) | small |
+| **[MT-11] Architecture-C migration** | Fundamental fix for the chrome-cutout artifact T4c-on-popup-spans-window makes worse. Pre-spike → 16-32h post-spike | medium |
+| **Phase 3 of 2026 redesign** | Dialog re-skins, Tailwind v4 cleanup sweep, theme-persistence Playwright spec — see [plan](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md) | ~one session |
 
 ---
 
@@ -25,51 +34,33 @@ In execution order (oldest → newest):
 | [`e115883`](https://github.com/DrKnickers/new-particle-editor/commit/e115883) | **T4c.2 — LayoutBroker scene-rect + AlphaCompositor band masks.** `LayoutBroker::SetSceneRect` translates main-client → popup-client and forwards to the compositor. `AlphaCompositor::Composite` stamps alpha=0 for the four outside-scene bands (top/bottom/left/right of the scene rect) AFTER the `lastRawDib` snapshot cache and BEFORE the per-id smoothstep occlusion pass. Hard cut, no smoothstep — band mask is the popup's parent chrome area where WebView paints whatever DOM is at those screen coords. |
 | [`2dc147a`](https://github.com/DrKnickers/new-particle-editor/commit/2dc147a) | **T4c.3 — BridgeDispatcher `layout/scene-rect` handler.** Routes the message to `LayoutBroker::SetSceneRect`. No `Engine::Reset` involved (that's the load-bearing perf win — splitter drag fires per-frame `layout/scene-rect` without stacking expensive D3D9 device resets). |
 | [`bd0fab2`](https://github.com/DrKnickers/new-particle-editor/commit/bd0fab2) | **T4c.4 — popup spans window, scene-rect drives mask.** ViewportSlot dispatches `layout/scene-rect` (replacing the previous `layout/viewport-rect`). New `LayoutBroker::ApplyFullClient` plus a one-shot call from `HostWindowImpl::Run` just before `ShowWindow` sizes the popup to the main HWND's full client rect at startup. Without this, the popup is stuck at CreateWindowExW's bootstrap rect (screen 16,16,320,240) and renders as a tiny preview at the monitor's top-left corner. Dialogs spec's rescale test reshaped into two tests: one for the DOM gesture (menu→modal→OK), one for the bridge contract (rescale-system → state/changed) — the previous form routed through React's NativeBridge → postMessage and was sensitive to per-T4c boot-time event volume (L-003 + the postMessage drop semantics under CDP). |
+| [`ba8a3de`](https://github.com/DrKnickers/new-particle-editor/commit/ba8a3de) | **T4c.5 — Modal snapshot crops to scene rect.** `AlphaCompositor::CaptureSnapshotPng` now crops the cached BGRA buffer to (sceneX, sceneY, sceneW, sceneH) before PNG encode via the GDI+ subregion-view idiom (scan0 offset + parent stride; zero-copy). Falls back to the full DIB when no scene rect has been set (boot state, vitest harnesses that drive CaptureSnapshotPng without dispatching layout/scene-rect first). The Modal portal `<img>` continues to size to quadrant-viewport via CSS; only the PNG bytes change. Modal.test.tsx untouched — the contract is shape-only. |
+| [`f3e2ea0`](https://github.com/DrKnickers/new-particle-editor/commit/f3e2ea0) | **T6 — Reset panel layout View-menu item.** New View → Reset panel layout menu item clears the four `alo:layout:*` keys and bumps an epoch counter passed as `key={n}` to `<PanelLayout />` so React remounts and the new mount's `loadLayout` calls read defaults. Exports `PANEL_LAYOUT_KEYS` + `resetPanelLayoutStorage` from PanelLayout (helper stays close to the persistence layer; unit test asserts key-set coverage to guard against drift). MenuBar threads `onResetPanelLayout` per existing `onOpen*` pattern. Vitest +4 (3 PanelLayout helpers + 1 MenuBar integration). Browser smoke verified end-to-end: seeded non-default splitter values, clicked the menu item, separators restored to in-code defaults with zero console errors. |
+| **(T7)** | **Strip `[splitter]` dev breadcrumbs — no-op.** `git grep '[splitter]'` across web/ surfaced zero hits in source — only doc references in HANDOFF/todo.md. No commit. |
+| `TODO-HASH` | **T8 — docs.** This dispatch's CHANGELOG entry (B1.4 [NT-8]); ROADMAP strikethrough + Shipped move + tag vacation for [NT-8] + new [MT-11] architecture-C migration entry at 2.1; tasks/HANDOFF refresh for next session; tasks/todo.md review section appended. |
 
 ---
 
-## What didn't land — open items (next session pick-up)
+## Open items — none
 
-### 0a. T4c.5 — Modal snapshot crops to scene rect (~30 min)
+All four T4c-area close-out pieces shipped this session. The B1.4 [NT-8] arc is complete and ready for end-of-session FF + push to `origin/lt-4`. The next dispatch picks from the **Next dispatch options** table at the top of this file.
 
-`AlphaCompositor::CaptureSnapshotPng` currently encodes the FULL popup DIB (now main-row sized, not centre-quadrant). The Modal's portal `<img>` sizes to `quadrant-viewport`. Result: the modal backdrop is the entire main-row's rendered scene stretched into the centre-quadrant `<img>` — visually squished. The fix is to crop the cached DIB to the current scene rect before PNG encode. Plan §7.7 T4c.5 has the call site + approach. Vitest's `Modal.test.tsx` already pins the contract; manual smoke needed for the About dialog over a splitter-dragged centre rect.
+**Architecture observations carried forward (filed as ROADMAP [MT-11] + lessons.md L-014).**
 
-### 0b. T6 — *Reset panel layout* View-menu item (~30 min)
-
-Per plan §3.5: new View-menu item that clears the four `localStorage` keys (`alo:layout:outer:{2col,3col}`, `alo:layout:left`, `alo:layout:center`) and bumps a `useState` counter passed as `key={n}` to the outer `<Group>` so React fully remounts the layout. `usePersistedLayout` on next mount sees empty keys and returns the in-code defaults. Vitest covers the clear-and-rerender behaviour. Worth adding the Playwright assertion too.
-
-### 0c. T7 — strip `[splitter]` dev breadcrumbs (likely no-op)
-
-`git grep '\[splitter\]'` should turn up nothing — none were added. Skip if grep is empty.
-
-### 0d. T8 — docs (CHANGELOG entry, ROADMAP, HANDOFF refresh, todo review) (~45 min)
-
-- **CHANGELOG.md**: new entry at top per the three-part template (what shipped / how we tackled it / issues encountered).
-- **ROADMAP.md**: strike `[NT-8]` and move to Shipped position 5.1, vacate the tag, renumber Near-term as needed.
-- **ROADMAP.md (new entry)**: file the **architecture-C migration** as a new MT- or LT- item. Summary below in §0e.
-- **tasks/HANDOFF.md**: refresh for whatever the next dispatch is.
-- **tasks/todo.md review section**: append the final accounting.
-
-### 0e. Architecture-C migration — file as ROADMAP item (within T8)
-
-Suggested ROADMAP entry text:
-
-> **[MT-?] Migrate engine rendering to DOM `<canvas>` (architecture C)** — Per-frame engine pixels delivered to the WebView page via `WebResourceRequested` (JPEG) or SharedArrayBuffer (raw RGBA), rendered into a `<canvas>` at the viewport quadrant. Eliminates the top-level layered popup architecture: AlphaCompositor band stamps, `viewport/occlude` cutouts, the entire smoothstep-feather plumbing, and all per-chrome `useViewportOcclusion` callsites become unnecessary. Menu shadows, CSS backdrop-filter, and any other CSS effect render naturally because engine and chrome are in the same compositing tree. **Back-of-envelope budget:** ~6-17 ms/frame end-to-end with JPEG + `WebResourceRequested` (~59-167 fps ceiling), well above interactive-editing requirements. **Pre-spike required:** measure real `WebResourceRequested` overhead at high request frequency before committing. **Estimated effort:** ~16-32 h post-spike. **Motivation:** T4c (popup spans window) makes the cutout artifact in chrome dropdowns visibly worse — there's no value of `padPx/featherPx` that fixes it because the cutout exposes WebView body (currently bg-transparent), beneath which sits the main window's solid bg. Architecture C eliminates the cutout entirely.
-
-### Open observations to capture in T8
-
-1. **The user-visible cutout artifact under T4c is a hard limit of architecture A** (engine popup above WebView, alpha-cutout for HTML chrome). It's not a tuning problem; it's the cutout shape becoming visible. L-011 captures the rule; this session adds *why* the rule has no clean workaround under T4c.
-2. **Architecture B (FD6 DComp visual hosting) was attempted 3 times historically and abandoned.** Don't re-spike unless WebView2's DComp story changes. See `docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md:22`.
+1. **The user-visible cutout artifact under T4c is a hard limit of architecture A** (engine popup above WebView, alpha-cutout for HTML chrome). It's not a tuning problem; it's the cutout shape becoming visible. L-011 captures the rule; this session added *why* the rule has no clean workaround under T4c. [MT-11] (architecture C — canvas-in-DOM) is the migration path.
+2. **Architecture B (FD6 DComp visual hosting) was attempted 3 times historically and abandoned.** Don't re-spike unless WebView2's DComp story changes. See [`docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md:22`](../docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md:22).
 3. **L-013's "Win32 drag-resize starves WebView2 IPC" extends to splitter drag inside WebView**, not just modal sizing loops. T4c sidesteps this by removing the popup-resize step from the splitter-drag path entirely (scene-rect is alpha-mask-only, no Engine::Reset).
+4. **`react-resizable-panels@4.x` quirks** are now in lessons.md L-014: numeric `Panel.defaultSize` props are PIXELS not percentages (use `"NN%"` strings); `Group.defaultLayout` is effectively an SSR hint, `Panel.defaultSize` is the canonical client knob.
 
 ---
 
 ## Test counts + verification at handoff
 
-- **Vitest:** 290 / 290 (was 281 baseline; +9 PanelLayout tests).
-- **Native Playwright:** 90 / 90 (was 83 baseline; +6 from `tests/splitters.spec.ts`, +1 from the dialogs.spec.ts rescale split).
+- **Vitest:** 294 / 294 (was 281 baseline pre-B1.4; +9 PanelLayout from session 1, +4 T6 from this session).
+- **Native Playwright:** 90 / 90 (was 83 baseline pre-B1.4; +6 from `tests/splitters.spec.ts`, +1 from the dialogs.spec.ts rescale split).
 - **MSBuild Debug x64:** clean (preexisting LIBCMTD warning unchanged).
-- **Manual smoke (T4c.4 build):** drag works smoothly across all four splitters; startup popup appears correctly inside the main window (no monitor-corner artifact); cutout artifact visible in chrome dropdowns (the architecture-A limit described above).
+- **Manual smoke (T4c.4 build):** drag works smoothly across all four splitters; startup popup appears correctly inside the main window (no monitor-corner artifact); cutout artifact visible in chrome dropdowns (the architecture-A limit — [MT-11] migration path filed).
+- **Browser smoke (T6, this session):** seeded non-default splitter values via `localStorage.setItem`, clicked View → Reset panel layout, verified separator aria-valuenow restored to in-code defaults (25/20/75/60), zero console errors.
 
 ---
 
@@ -79,12 +70,12 @@ If you are a fresh Claude session resuming this project:
 
 1. **This file** — top to bottom.
 2. **[CLAUDE.md](../CLAUDE.md)** — project conventions, plan structure, handoff discipline. The `## Branch workflow` section is load-bearing: `lt-4` is the integration branch; new sessions land on `claude/<random>` and FF into `lt-4` at session end.
-3. **[CHANGELOG.md](../CHANGELOG.md)** — the top entry (B1.3 tab parity reorg) covers what just shipped; the B1.2 entry below covers the left-pane polish; the B1 entry covers the structural realignment B1.2 / B1.3 sit on; entries further down (curve editor polish, Phase 2.8 focus-channel restore, Phase 2.1–2.7 structural moves, Phase 1 tokens + theme) cover the architectural foundation.
+3. **[CHANGELOG.md](../CHANGELOG.md)** — the top entry (B1.4 resizable splitters) covers what just shipped; the B1.3.2 entry below covers the section-header unification + inspector polish; the B1.3.1.1 entry below covers the frosted-glass modal backdrop; entries further down (B1.3 tab parity, B1 left-pane realignment, Phase 2 redesign, Phase 1 tokens + theme) cover the architectural foundation.
 4. **If picking up B1.3.1 / B1.4 / Phase 3** (most likely next step):
    - **[docs/superpowers/specs/2026-05-20-b1-3-tab-parity.md](../docs/superpowers/specs/2026-05-20-b1-3-tab-parity.md)** — B1.3 spec (reference for B1.3.1's place in the sequence).
    - **[docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/specs/2026-05-19-particle-editor-2026-redesign.md)** — original full design spec.
    - **[docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md](../docs/superpowers/plans/2026-05-19-particle-editor-2026-redesign.md)** — step-by-step plan. **Phase 3 still references `tailwind.config.ts` in a few places — those need the same Tailwind v4 / `globals.css` translation Phase 1 got** (see the re-plan note at the top of Phase 1 for the pattern).
-5. **[tasks/lessons.md](lessons.md)** — L-001 through L-013. **L-006 (don't clear React optimistic state on every host-data refresh) is load-bearing in `CurveEditorPanel.tsx`.** **L-010 (sweep BOTH vitest and Playwright on every label rename) applies to any future inspector field rename.** **L-011 + L-012 + L-013 are the load-bearing context for the new Modal architecture — read them before touching the snapshot-backdrop path or any other engine-popup-overlapping surface.** L-013 specifically: the Win32 modal sizing loop starves WebView2 IPC; design host-durable state for anything that must survive a drag-resize.
+5. **[tasks/lessons.md](lessons.md)** — L-001 through L-014. **L-006 (don't clear React optimistic state on every host-data refresh) is load-bearing in `CurveEditorPanel.tsx`.** **L-010 (sweep BOTH vitest and Playwright on every label rename) applies to any future inspector field rename.** **L-011 + L-012 + L-013 are the load-bearing context for the new Modal architecture — read them before touching the snapshot-backdrop path or any other engine-popup-overlapping surface.** L-013 specifically: the Win32 modal sizing loop starves WebView2 IPC; design host-durable state for anything that must survive a drag-resize. **L-014 (react-resizable-panels 4.x quirks)** matters any time PanelLayout is restructured: numeric `Panel.defaultSize` props are PIXELS not percentages (use `"NN%"` strings); `Group.defaultLayout` is effectively an SSR hint, `Panel.defaultSize` is the canonical client knob.
 6. **[tasks/lt4_phase_4_1_acceptance.md](lt4_phase_4_1_acceptance.md)** — parity acceptance checklist. §16 lists intentional divergences from legacy. The 2026 redesign's structural moves don't update this doc; treat it as parity baseline for the legacy `--legacy-ui` path only.
 7. Recent `git log --oneline -20` — Phase 1 + 2 of the redesign at the tip, prior LT-4 dispatch history below.
 
@@ -94,15 +85,15 @@ If you are a fresh Claude session resuming this project:
 
 | Thing | Value |
 |---|---|
-| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\bold-volhard-e0e0f0` (this session's; next session gets a fresh `claude/<random>` path) |
-| **Branch** | `claude/bold-volhard-e0e0f0` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
-| **HEAD (committed)** | `65a5eae` (B1.3.2 impl) + this docs commit on top. Session branch has 5 B1.3.1.1 commits already FF'd to `origin/lt-4` mid-session at `37a99fb`, then 1 B1.3.2 impl + 1 B1.3.2 docs = 2 commits pending FF. |
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\angry-hypatia-6a4efe` (this session's; next session gets a fresh `claude/<random>` path) |
+| **Branch** | `claude/angry-hypatia-6a4efe` → integrates back into `lt-4` per the standard end-of-session FF. Tracks `origin/lt-4`. |
+| **HEAD (committed)** | `TODO-HASH` (this T8 docs commit). Session has 3 close-out commits ahead of `origin/lt-4`: `ba8a3de` (T4c.5) + `f3e2ea0` (T6) + this docs commit. Plus the 12 mid-arc commits already on `origin/lt-4` at `962e5f4` (the prior session's mid-arc handoff). |
 | **Working tree** | clean (after docs commit). |
-| **Ahead of origin/lt-4** | 2 (B1.3.2 impl + this docs commit) — pending FF + push to `origin/lt-4` with the user's OK. Pre-FF `origin/lt-4` HEAD is `37a99fb` (the B1.3.1.1 docs commit). |
-| **Behind master** | `lt-4` is ~370+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
+| **Ahead of origin/lt-4** | 3 (T4c.5 + T6 + this docs commit) — pending FF + push to `origin/lt-4` with the user's OK. Pre-FF `origin/lt-4` HEAD is `962e5f4` (prior session's mid-arc handoff commit). |
+| **Behind master** | `lt-4` is ~380+ commits ahead of `master` (`b28f624`); none merged yet, all backed up to `origin/lt-4`. |
 | **Open PRs** | none |
-| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). C++ touched: AlphaCompositor (snapshot path added + modal-mask deleted) + LayoutBroker (snapshot forwarding added + modal-mask forwarding deleted) + BridgeDispatcher (capture-snapshot handler added + set-modal-mask handler deleted) + HostWindow (GDI+ startup/shutdown). Vitest **281 / 281** (Modal test reshaped to new contract). Playwright **83 / 83**. |
-| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 + B1.2 + B1.2.1 + B1.3 + B1.3.1 + B1.3.1.1 SHIPPED + FF'd to `origin/lt-4` mid-session. B1.3.2 (untagged: section-header unification + 15 inspector polish items) SHIPPED on the session branch, pending FF.** Next dispatch is **B1.4 [NT-8] — resizable splitters via `react-resizable-panels`** (now top of Near-term in ROADMAP). Queued behind: **B2 obsolescence audit**, **MT-1 follow-up** (texture-picker "…" buttons), **NT-5 / NT-6** (link-group cleanups). Phase 3 of the 2026 redesign (dialog re-skin, Tailwind cleanup, theme-persistence test) remains not started. Legacy `--legacy-ui` mode is untouched throughout. |
+| **Build status** | MSBuild Debug x64 clean (preexisting LIBCMTD warning). C++ touched this session: `AlphaCompositor::CaptureSnapshotPng` crop (T4c.5). Vitest **294 / 294**. Playwright **90 / 90**. |
+| **Phase status** | Particle Editor 2026 redesign — **Phase 1 + Phase 2 + curve editor polish + B1 + B1.2 + B1.2.1 + B1.3 + B1.3.1 + B1.3.1.1 + B1.3.2 + B1.4 [NT-8] SHIPPED.** B1.4 pending FF (3 commits). Next dispatch options listed at top of file. Phase 3 of the 2026 redesign (dialog re-skin, Tailwind cleanup, theme-persistence test) remains not started. Legacy `--legacy-ui` mode is untouched throughout. |
 
 **Worktree note.** The Claude Code desktop app provisions a fresh worktree on every session start; this session was in `agitated-margulis-854108`, succeeding `brave-buck-1295c8`. Branch name follows the worktree name. The commit lineage is preserved — only the path / branch label change.
 

@@ -24,21 +24,7 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-8] Resizable splitters for left / centre / right column boundaries
-
-*Estimate: small.*
-
-Make the left / centre / right column boundaries in the new UI
-draggable so users can size panes to taste. Target library is
-`react-resizable-panels` (battle-tested, accessible drag handles,
-persistence hooks). Persistence target is `localStorage` like the
-theme toggle; default sizes match the current fixed widths and
-the 50/50 inner left-column split B1.3.1 established.
-
-[NT-7] (inspector layout follow-ups) has shipped — this is the
-natural next step.
-
-### 1.2 [NT-5] Engine-side single-member link-group enforcement
+### 1.1 [NT-5] Engine-side single-member link-group enforcement
 
 *Estimate: small.*
 
@@ -61,7 +47,7 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.3 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+### 1.2 [NT-6] Visual-stability lane assignment for bracket gutter (option)
 
 *Estimate: small.*
 
@@ -87,9 +73,54 @@ ergonomic issue.
 Bigger UX investments and modest engine work. Each touches more than one
 subsystem but stays inside the rendering preview / editor surface.
 
-*(No items currently queued. MT-1 through MT-10 have all shipped —
-see [Shipped](#5-shipped). When the next medium-term idea lands, it
-takes position `2.1` and the next vacated `MT-N` tag.)*
+### 2.1 [MT-11] Migrate engine rendering to DOM `<canvas>` (architecture C)
+
+*Estimate: medium (~16-32 h post-spike).*
+
+Deliver per-frame engine pixels to the WebView page (via
+`WebResourceRequested` JPEG or a `SharedArrayBuffer` raw-RGBA path)
+and render them into a `<canvas>` placed inside the viewport
+quadrant DOM. Eliminates the entire top-level layered-popup
+architecture: `AlphaCompositor` band stamps, `viewport/occlude`
+cutouts, the smoothstep-feather pipeline, and every
+`useViewportOcclusion` callsite become unnecessary. Menu shadows,
+CSS `backdrop-filter`, and any other CSS effect render naturally
+because the engine and the chrome live in the same compositing
+tree.
+
+**Motivation.** B1.4 T4c (popup spans the main window) makes the
+alpha-cut artifact in chrome dropdowns visibly worse — when a menu
+opens above the viewport, the alpha-cut shape exposes the WebView
+body (currently `bg-transparent`), beneath which sits the main
+window's solid background, so the user sees a hard rectangular
+"window" through the menu. There is no value of
+`padPx` / `featherPx` that fixes this because the cut shape itself
+is what's visible. Architecture C eliminates the cut entirely —
+the engine pixels are *inside* the same DOM as the menus, so DOM
+stacking + CSS effects do the compositing.
+
+**Back-of-envelope budget.** ~6–17 ms / frame end-to-end with
+JPEG via `WebResourceRequested` (~59–167 fps ceiling), comfortably
+above interactive-editing requirements. SharedArrayBuffer path is
+faster still if the COOP / COEP headers can be arranged.
+
+**Pre-spike required.** Measure real `WebResourceRequested`
+overhead at high request frequency before committing. If the
+round-trip cost is materially higher than estimated, the
+SharedArrayBuffer path becomes the default.
+
+**Out of scope.** Camera input still flows through the engine
+popup HWND that owns the D3D9 swap chain — only the *presentation*
+moves into the canvas. The Engine, AlphaCompositor's
+GetRenderTargetData readback, and the existing
+`engine/set/camera` bridge surface all stay.
+
+Compatibility: the existing `viewport/occlude` and
+`viewport/scene-rect` surfaces stay live during the migration so
+both architectures can run side-by-side behind a feature flag for
+A/B verification. Once the canvas path is the default, the
+compositor band stamps + per-chrome `useViewportOcclusion`
+callsites can be deleted in a follow-up cleanup PR.
 
 ---
 
@@ -274,21 +305,28 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-9] ~~Frosted-glass modal backdrop via engine-snapshot capture~~ ✅ Shipped (#TODO)
+### 5.1 [NT-8] ~~Resizable splitters for left / centre / right column boundaries~~ ✅ Shipped (#TODO)
+
+*Estimate: small.*
+*Actual: ~6 hours across two sessions. Session 1 (T0–T5, 5 commits) installed `react-resizable-panels@4.11.1` and built the `PanelLayout` component with four drag handles (left↔centre, centre↔spawner, viewport↔curve, tree↔tabs). Persistence is DIY in 4.x — `autoSaveId` was removed in the major rewrite — so a small `usePersistedLayout(key, defaults)` hook reads/writes the four `alo:layout:*` keys with defensive parse + ratio validation. Session 2 (T4b → T4c.5 + T6, 7 commits) hit a regression where the engine viewport popup overlapped panels mid-drag because per-frame `Engine::Reset` stacked under the splitter's ResizeObserver bursts. A first fix attempt (T4b) parked the popup offscreen during drag via pointerdown/pointerup capture; the timing was structurally unreliable (Win32 layout commits arrive after React's synchronous pointerup handler reads the post-drag rect) and reverted. The architectural redirect (T4c) keeps the popup HWND sized to the main client area at all times and dispatches a per-frame `layout/scene-rect` that drives an `AlphaCompositor` band mask outside the centre quadrant — splitter drag now updates an alpha mask, not a device Reset. T4c.5 cropped the modal-snapshot PNG to the scene rect (post-T4c the popup spans the main row, so encoding the full DIB stretched outside-scene pixels into the centre quadrant's `<img>`). T6 added the View → Reset panel layout menu item (clears the four `alo:layout:*` keys + bumps an epoch counter that remounts `PanelLayout` with defaults). 4.x quirks recorded as `tasks/lessons.md` L-014: numeric `Panel.defaultSize` props are PIXELS not percentages (use `"NN%"` strings); `Group.defaultLayout` is an SSR-hydration hint only, `Panel.defaultSize` is the canonical client knob.*
+
+Drag any of four boundaries in the editor shell — left column ↔ centre column, centre column ↔ Spawner column (when Spawner is visible), viewport ↔ curve editor, and emitter tree ↔ property tabs — and the new sizes survive a page reload via `localStorage`. Min/max constraints per pane (e.g. left column clamped between 15 % and 40 % of window width) prevent dragging any pane to unusable widths. The handles ship full keyboard a11y from the library (arrow keys nudge, double-click resets the splitter's two panels to their default size). Spawner toggle uses two separate persistence keys (`alo:layout:outer:2col` / `:3col`) so the 2-column and 3-column states keep independent ratios. A new **View → Reset panel layout** menu item clears all four keys and remounts the layout at the in-code defaults (20/60/20 outer 3-col, 25/75 left, 75/25 centre). No bridge schema changes; no C++ touched (the engine popup's existing `ResizeObserver`-driven scene-rect dispatch picks up splitter drags for free through `AlphaCompositor`'s band-mask path). 12 commits + this docs commit. Replaces the previous fixed-width column layout that had been the structural skeleton since B1.
+
+### 5.2 [NT-9] ~~Frosted-glass modal backdrop via engine-snapshot capture~~ ✅ Shipped (#TODO)
 
 *Estimate: small.*
 *Actual: ~3 hours, 4 commits (snapshot bridge surface squashed with the dispatcher handler + Modal rewiring + smoke-test polish + modal-mask cleanup) plus docs. Two smoke-test rounds caught structural issues that reshaped the implementation: the first surfaced opaque engine pixels leaking outside the modal occlude during a drag-resize (root cause: the Win32 modal sizing loop on the host thread runs WM_SIZING / WM_SIZE inside a sub-pump that calls `LayoutBroker::PredictAndApply` synchronously but does NOT pump WebView2 IPC, so renderer→host bridge messages can't land during the drag); the second surfaced visible stutter caused by per-frame GDI+ PNG re-encodes during the same drag. Both fixed by host-state-durable design: the React Modal sends ONE occlude with a deliberately-enormous sentinel rect (-1e5, -1e5, 2e5, 2e5) that `ApplyOcclusion` clips to the current popup bounds regardless of resize timing, and ONE capture on modal open with no re-capture during the modal's lifetime (the snapshot img scales via CSS, and the dim+blur in `Dialog.Overlay` hides any content staleness). Captured as L-013 in lessons.md.*
 
 Engine viewport pixels are captured to a base64-encoded PNG by `AlphaCompositor::CaptureSnapshotPng` (Gdiplus zero-copy Bitmap ctor over the cached pre-stamp DIB → PNG-encoded into an in-memory IStream → 30-line inline base64). React Modal portals the snapshot as an `<img position:absolute; inset:0>` into the viewport-quadrant DOM, then full-alpha-cuts the engine popup so `Dialog.Overlay`'s `bg-black/60 backdrop-blur-sm` blurs panels + snapshot uniformly — no visible popup boundary because both sides of it are now WebView2-rendered. Replaces the modal-mask server-side compositor pipeline that B1.3.1 polish round 9 landed as interim work (deleted in P6: `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `viewport/set-modal-mask` bridge surface — replaced by `viewport/capture-snapshot`). The new `<img>` approach has a clean architectural property: CSS effects can sample the snapshot natively because it lives in the WebView2 DOM tree, sidestepping the cross-layer compositing limit that defeated the modal-mask approach (L-011).
 
-### 5.2 [NT-7] ~~Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow~~ ✅ Shipped (#TODO)
+### 5.3 [NT-7] ~~Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow~~ ✅ Shipped (#TODO)
 
 *Estimate: small.*
 *Actual: ~1 hour, 4 commits (plan + bundled implementation + docs + a post-smoke-test polish round). Two architectural decisions confirmed up-front via a question chip (initially 50/50 over biased ratios; free tab clicking over disabled-when-no-selection); the polish round bumped the default to 25/75 favouring tabs after the user smoke-tested the build, matching the "tab strip dominates the visual hierarchy" brief.*
 
 Single bundled implementation commit covering all three findings the user deferred from B1.3's smoke test: (1) tab strip always visible — Tabs.Root + Tabs.List lifted out of the early-return, with a body-level placeholder via a `renderBody((p) => …)` helper inside each Tabs.Content; (2) tabs slot flexes alongside the EmitterTree on the panel-body axis — `h-72 shrink-0` → `flex-[3_1_0%] min-h-0` on the lower-left slot in App.tsx (tree stays `flex-1`); (3) tree breathes into the space the fixed slice used to claim — falls out of the flex change since the tree was already `flex-1 min-h-0`. Default split lands at **25/75 favouring tabs**. Placeholder testid + copy preserved verbatim per L-010; two existing vitest waitFor patterns retuned from the now-too-eager `getByTestId("emitter-property-tabs")` to `getByLabelText("Maximum lifetime:")`. No bridge schema, no C++.
 
-### 5.3 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#77)
+### 5.4 [LT-3] ~~Import emitters from other particle files~~ ✅ Shipped (#77)
 
 New **File → Import Emitters from File…** entry opens an `.alo` picker and a modal dialog showing the source file's emitter tree with `TVS_CHECKBOXES`. Tick whichever emitters you want — *Auto-include children* is on by default so ticking a parent picks up its descendants — hit OK, and the selected emitters land as new root emitters in the current particle system. *Select all* / *Clear* / *Browse…* buttons round out the dialog; *Browse…* swaps the source file in place without cancelling. OK is disabled until at least one emitter is ticked.
 
@@ -302,7 +340,7 @@ New **File → Import Emitters from File…** entry opens an `.alo` picker and a
 - **Estimated effort**: 8–14 hours
 - **Actual**: ~6 hours including the plan + risk pass + the menu-rebuild-eats-static-entry detour. Drove directly without `subagent-driven-development` — the feature scope was small enough that a single focused plan + per-pass implementation was the right cadence.
 
-### 5.4 [MT-3] ~~Selectable skydome backgrounds via the unified Background button~~ ✅ Shipped (#73)
+### 5.5 [MT-3] ~~Selectable skydome backgrounds via the unified Background button~~ ✅ Shipped (#73)
 
 The toolbar's existing **Background:** colour button is now the single entry point for all background settings. Click it to open a modeless **Background** picker dialog — a 12-slot icon-mode `SysListView32` laid out as a 4×3 grid of 192×192 thumbnails. Slot 0 is **Solid colour** (click to open the standard Win32 colour picker); slots 1–8 are bundled scenes (Space / Atmosphere / Sunset / Dawn / Night / Overcast / Studio / Indoor); slots 9–11 are user-customisable. The toolbar preview itself is a hybrid 24×24 button: a flat colour swatch when the picker's slot 0 is active, a skydome thumbnail otherwise. There is no longer a separate standalone skydome preview button — the unified Background button covers both modes.
 
@@ -320,7 +358,7 @@ The toolbar's existing **Background:** colour button is now the single entry poi
 - **Estimated effort**: 8–14 hours
 - **Actual**: ~10 hours across two stages on the same branch — Stage 1 (~7h, 16 commits) built the engine pass + standalone skydome preview + picker dialog via the `subagent-driven-development` skill; Stage 2 (~3h) reworked the toolbar surface into the unified Background button, deleted the standalone skydome button, added the slot-0 `BackgroundPicker_PickSolidColor` helper, and switched the picker to sticky-on-commit behaviour.
 
-### 5.5 [MT-4] ~~Adjustable environment lighting in the preview~~ ✅ Shipped (#71)
+### 5.6 [MT-4] ~~Adjustable environment lighting in the preview~~ ✅ Shipped (#71)
 
 A new **View → Lighting…** modeless dialog exposes the engine's three directional lights (Sun + Fill 1 + Fill 2) and the scene-global ambient and shadow colours. Layout emulates the Petroglyph map editor's Sun / Fill panel — Sun gets Intensity, Z Angle, Tilt Angle, plus Ambient / Specular / Diffuse / Shadow ColorButtons; each Fill gets Intensity, Z Angle, Tilt Angle, and a single Diffuse ColorButton. Two binding controls live in the Sun group: **Force Fill Light Alignment** (default on — drives Fill 1 Z = Sun Z + 120°, Fill 2 Z = Sun Z + 210°, both Tilts fixed at −10°; greys out the fill-angle spinners and the Mirror Sun button) and **Mirror Sun** (one-shot copy of the Sun's Diffuse colour to both Fills). A **Reset to defaults** button at the bottom restores everything to the canonical map-editor values after a confirmation prompt.
 
@@ -342,7 +380,7 @@ Side-quests in the same PR:
 - **Estimated effort**: 4–6 hours
 - **Actual**: ~6 hours. Core implementation (engine getters, dialog template, registry I/O, `LightingDlgProc`, force-align math) landed quickly; the bulk of the iteration was on the read-only spinner UX (one false start through `WM_CTLCOLOREDIT`, then the `WM_PAINT` subclass) and the taskbar-icon fix.
 
-### 5.6 [MT-1] ~~Frequently-used textures palette~~ ✅ Shipped (#69)
+### 5.7 [MT-1] ~~Frequently-used textures palette~~ ✅ Shipped (#69)
 
 A new palette popup, opened by a small painter's-palette button in the Textures groupbox header on the Appearance tab, surfaces the textures the user has recently picked or explicitly pinned — per mod — as 140×160 thumbnail cells (thumb + filename strip). Double-click a thumb to apply it to the slot indicated by the Color/Bump filter toggle; the popup closes after a commit so the viewport is unobscured. Hovering a cell reveals a thumbtack badge in the top-right; clicking it pins the entry into the Pinned section (separate from Recent, capped at 8 each, status strip surfaces "Pins full" when overflow is attempted). Recents auto-track every successful texture load — file-picker pick, palette double-click, and `EN_KILLFOCUS` on the edit fields (debounced so typing doesn't pollute Recent with intermediate filename fragments).
 
@@ -364,7 +402,7 @@ Window-level: modeless, owned by the main editor window so it dies cleanly with 
 - **Estimated effort**: 5–8 hours
 - **Actual**: ~25 hours across 35 commits. The data layer + initial popup landed quickly; the bulk of the time was iterating on visuals (hover state, pin badge bitmap, cell sizing, popup geometry) and then porting the same visual model into the ground-texture picker, which required a ListView WM_PAINT subclass to fully escape native paint interference. The pre-handoff testing principle was carved out of this iteration cycle.
 
-### 5.7 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#67)
+### 5.8 [MT-2] ~~Selectable ground texture~~ ✅ Shipped (#67)
 
 The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground Texture:`** label + 24×24 owner-drawn preview button in the top toolbar shows the currently-selected texture as a thumbnail; clicking it opens a modal **Ground Texture** picker with a 4×2 grid of slot thumbnails (each 64×64). Bundled defaults are **Dirt** (preserved from pre-MT-2), **Grass** / **Sand** / **Snow** (vanilla EaW textures `W_TEMPGRND00.DDS` / `W_SAND00.DDS` / `W_SNOW_RGH.DDS` bundled via RCDATA), and a special **Solid Color** slot that's procedurally generated from a user-chosen `COLORREF` (default flat grey RGB(128,128,128)). The remaining three slots (Custom 1 / Custom 2 / Custom 3) start empty.
 
@@ -385,7 +423,7 @@ The preview's ground plane is no longer hardcoded to `dirt.bmp`. A new **`Ground
 - **Estimated effort**: 2–4 hours (original plan)
 - **Actual**: ~6 hours. The original combobox-only design built quickly; the slot-table redesign + picker dialog + owner-drawn toolbar button + thumbnail generation via D3DX-into-DIB + tooltip via ComCtl32 v5-compatible `TTTOOLINFOW_V2_SIZE` was the bulk of the time. Two live-test bugs caught: uninitialized `m_pGroundTexture` causing access violation on the very first `SAFE_RELEASE`, and the "Custom 1" slot showing a pink load-failure placeholder because the placeholder-decision hardcoded the old bundled count.
 
-### 5.8 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#65)
+### 5.9 [MT-10] ~~Configurable exempt set per link group~~ ✅ Shipped (#65)
 
 The hard-coded v1 exempt set (textures + atlas-index curve + name) is now a per-group default, overridable via a new **Group settings…** dialog reached from the right-click menu when a linked emitter is selected. The dialog lists ~50 emitter fields grouped by category (Textures / Curves / Lifetime / Physics / Appearance / Weather / Rotation / Misc); checking a row marks that field per-emitter (exempt from propagation), unchecking marks it shared. A *Reset to defaults* button restores the v1 set without leaving the dialog.
 
@@ -407,7 +445,7 @@ The propagation hook in `CaptureUndo` consults `ParticleSystem::getLinkExemptFla
   ("checked = shared" instead of "checked = exempt") — UI-only inversion
   at the data/UI boundary, so the data model stayed intact.
 
-### 5.9 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
+### 5.10 [MT-9] ~~Visual link-group bracket for linked emitters~~ ✅ Shipped (#63)
 
 A coloured bracket painted in the emitter tree's right margin makes
 link-group membership legible at scroll-speed. Each link group claims a
@@ -452,7 +490,7 @@ have every reviewer ask about it.
   invalidated the renamed row — fixed by detecting bracket geometry
   shifts between paints and queuing a full-tree invalidate.
 
-### 5.10 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
+### 5.11 [MT-8] ~~Multi-select for the emitter list~~ ✅ Shipped (#60)
 
 Multi-emitter selection via **Ctrl-click** (toggle individual emitters),
 **Shift-click** (select tree-order range from the anchor), and **click-
@@ -494,7 +532,7 @@ user intended.
   resolutions* in the CHANGELOG so the next contributor working with
   layered overlays or marquee selection has a paper trail.
 
-### 5.11 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
+### 5.12 [MT-7] ~~Linked emitters (share parameters across a group)~~ ✅ Shipped (#58)
 
 Two or more emitters in a particle system can be linked into a *link
 group*. Editing any non-exempt field on a linked emitter propagates the
@@ -533,7 +571,7 @@ designed so each can land as a UI-only addition.
   removing the need to add an explicit pre-action capture in every
   link-menu handler.
 
-### 5.12 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
+### 5.13 [NT-4] ~~Duplicate with index increment~~ ✅ Shipped (#56)
 
 Two new entries in the emitter right-click context menu directly below
 *Duplicate*: **Duplicate (increment index)** shifts every keyframe on the
@@ -549,7 +587,7 @@ right-click-duplicate through the full sprite sheet in seconds.
   added to `EmitterList_DuplicateEmitter`, menu items + dialog template in
   both `.en.rc` and `.de.rc`, and four resource IDs in both headers.
 
-### 5.13 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
+### 5.14 [NT-3] ~~Pause / frame-step the preview~~ ✅ Shipped (#53)
 Press F8 to freeze the preview at the current simulation tick; press
 it again to resume from exactly where time left off. While paused, F9
 steps one notional 60 Hz frame; F10 steps ten frames (≈167 ms). All
@@ -587,7 +625,7 @@ was relabeled to match.
   frame-stepping done during the pause; fixed by re-deriving the
   offset from the current anchor at resume time.
 
-### 5.14 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
+### 5.15 [MT-5] ~~Confirm / extend two-child emitter support~~ ✅ Shipped (#51)
 Investigation, not a feature change. Ghidra disassembly of
 `StarWarsG.exe` and `EAW Terrain Editor.exe` confirmed that the
 engine's emitter struct stores exactly one death-child pointer
@@ -613,7 +651,7 @@ No new ROADMAP entry filed; no UI change needed.
   one pointer per slot anyway. Reused the Ghidra + JDK install from
   MT-6; auto-analysis on both binaries was the dominant cost.
 
-### 5.15 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
+### 5.16 [MT-6] ~~Bloom in the preview renderer~~ ✅ Shipped (#47)
 The game's own `Engine\SceneBloom.fx` is loaded via `ShaderManager`
 (mod overlay → game roots → MEG archives, same chain the editor
 already uses for particle shaders), so the editor's bloom is
@@ -650,7 +688,7 @@ listing exactly what was found.
   count is engine-side and hardcoded to 4 in our build pending
   further empirical tuning.
 
-### 5.16 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
+### 5.17 [NT-2] ~~Adjustable ground-plane height in the preview~~ ✅ Shipped (#45)
 "Ground Height:" spinner on the editor's header strip (just left of
 the Background color picker) moves the preview ground plane up or down
 along Z.
@@ -668,7 +706,7 @@ Ctrl = ×0.1). Persists across sessions in the registry; greys out when
   quad vertices with `m_groundZ`. The `static const` ground vertex array
   becomes a per-frame init; 4 vertices × ~80 bytes is negligible.
 
-### 5.17 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
+### 5.18 ~~Autosave for in-progress particles~~ ✅ Shipped (#41)
 Two-tier autosave: a 30-second "recent" tier captures the freshest
 state for the "crashed 10 s ago" case, and a 5-minute "stable" tier
 captures an older known-good state for the "recent file is corrupt"
@@ -690,7 +728,7 @@ restore.
   only, or both-tiers each pick a different MessageBox variant).
   The atomic `.tmp` + `MoveFileEx` write pattern was straightforward.
 
-### 5.18 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
+### 5.19 ~~Drag-and-drop to reparent (make an emitter a child of another)~~ ✅ Shipped (#37)
 Extension of the drag-and-drop reorder gesture: dropping an emitter onto
 another emitter turns the source into the target's spawn-during-life or
 spawn-on-death child. Requires a small "what kind of child?" prompt
@@ -713,7 +751,7 @@ onto self, creating a cycle, dropping a parent onto its own descendant.
   `ImageList_DragShowNolock(FALSE/TRUE)` pair, rather than nesting
   wraps inside `UpdateDropFeedback`).
 
-### 5.19 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
+### 5.20 ~~Drag-and-drop reordering in the emitter tree~~ ✅ Shipped (#35)
 Use the tree control's drag-and-drop notifications (`TVN_BEGINDRAG`,
 `WM_MOUSEMOVE`, `WM_LBUTTONUP`) to let the user reorder emitters by
 dragging them between siblings. Reuses the swap logic from the reorder
@@ -732,7 +770,7 @@ of the work.
   WM_TIMER handler was wired to do an atomic scroll + recompute + ghost
   re-anchor.
 
-### 5.20 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
+### 5.21 ~~Programmable particle spawner for the preview (v1)~~ ✅ Shipped (#30)
 
 Modeless **Spawner** dialog under `Emitters → Spawner…` (also `F7`).
 Two modes:
@@ -768,7 +806,7 @@ Dialog window position persists across sessions for ergonomics.
   v2-deferred items (arc paths, velocity shorthand, presets, path
   visualization) are now their own roadmap entry.
 
-### 5.21 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
+### 5.22 ~~Buttons to reorder emitters~~ ✅ Shipped (#25)
 Added **Move Up** / **Move Down** buttons to the emitter-list toolbar
 between Delete and the visibility eye, plus right-click context-menu
 items and `Alt+Up` / `Alt+Down` keyboard shortcuts. Reorders the
@@ -790,7 +828,7 @@ top / bottom of the root list.
   for the upcoming drag-and-drop roadmap item — same backend method,
   same tree-rebuild path; only the input changes.
 
-### 5.22 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
+### 5.23 ~~Right-click → Duplicate Emitter~~ ✅ Shipped (#19)
 Added a *Duplicate* item to the emitter context menu (between Copy and
 Paste). Copies the selected emitter into a new slot inserted right
 below the original, suffixes the name (e.g. `smoke` → `smoke (copy)`).
@@ -804,7 +842,7 @@ clipboard round-trip.
   required a new `ParticleSystem::insertEmitterAfter` method that
   mirrors `deleteEmitter`'s index-shift logic in reverse.
 
-### 5.23 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
+### 5.24 ~~Scroll-wheel adjustment on numeric boxes~~ ✅ Shipped (#16)
 When the cursor is over a `Spinner` control, `WM_MOUSEWHEEL` increments /
 decrements the value. Hold Shift for ×10 steps, Ctrl for ×0.1 steps.
 Self-contained change to `src/UI/Spinner.cpp`.

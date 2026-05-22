@@ -981,6 +981,68 @@ T6 → T8 as originally planned.
 
 ---
 
-## Review (filled in after T8)
+## Review (T8)
 
-*Empty — to be filled in after work completes.*
+**Outcome.** B1.4 [NT-8] shipped as a 13-commit arc across two sessions (T0 → T8 + this docs commit) on the session branch, ready for FF into `origin/lt-4`.
+
+### What ended up landing vs. what was planned
+
+The plan's original §6 task list (T0 → T8) executed in order, but §7 was added mid-arc when T4b's drag-flag approach failed against the native host. The §7 T4c re-plan (popup spans window, scene-rect drives an AlphaCompositor band mask) replaced T4b in the implementation arc and added sub-tasks T4c.1 → T4c.5 between T5 and T6. Final shape:
+
+- **T0** — Pre-flight grep (no commit).
+- **T1** — Install + API drift caught at install time; plan §3 rewritten in place (1 commit).
+- **T2 → T5** — Failing skeleton → impl → AppShell swap → Playwright spec (4 commits).
+- **T4b** — Drag-flag attempt → ABANDONED + reverted (2 commits).
+- **T4c.1 → T4c.5** — Architectural redirect: bridge schema → LayoutBroker + AlphaCompositor band stamps → BridgeDispatcher handler → ViewportSlot rewire → modal snapshot crop (5 commits).
+- **T6** — Reset panel layout menu item (1 commit).
+- **T7** — Strip dev breadcrumbs (no-op).
+- **T8** — Docs (1 commit, this one).
+
+13 implementation commits + 1 mid-arc handoff docs commit + 1 close-out docs commit = 15 total on the session branch.
+
+### What changed in the plan vs. the original scope
+
+| Plan area | Original | Actual |
+|---|---|---|
+| Library API | 1.x / 2.x (`PanelGroup`, `PanelResizeHandle`, `autoSaveId`) | 4.x (`Group`, `Separator`, DIY `defaultLayout` + `onLayoutChanged`); rewrote §3.2 / §3.3 / §3.5 / §3.6 in place via T1 |
+| Engine viewport behaviour under drag | `viewport/viewport-rect` per frame → `Engine::Reset` per WM_SIZE (existing path) | Popup HWND stays main-row sized; `layout/scene-rect` drives a per-frame AlphaCompositor band mask (no Engine::Reset on drag). T4c re-plan §7 |
+| Modal snapshot dimensions | Full popup encoded into PNG | Cropped to scene rect via GDI+ subregion view (T4c.5) |
+| Reset gesture | View-menu item only | + library's built-in double-click-handle reset (free in 4.x) |
+| Tests | "Library is library-tested; we test integration only" | Integration tests + new `loadLayout` / `saveLayout` / `resetPanelLayoutStorage` unit tests (the persistence layer turned out worth covering in isolation) |
+| Architecture C investigation | Not in scope | Filed as ROADMAP [MT-11] for future dispatch |
+
+### What the user-facing surface looks like
+
+- Four drag handles, persistent ratios, min/max clamps, keyboard a11y, double-click-handle reset.
+- View → Reset panel layout clears state and restores defaults.
+- No visible regression from B1.3.2 on first launch (defaults match the previous fixed-width layout).
+- Architecture-A chrome-cutout artifact in dropdowns visibly worse than pre-T4c (the popup now spans the full main row, so menu shadows reveal more of the cutout). Documented in HANDOFF; addressed by future [MT-11] dispatch.
+
+### Lessons captured
+
+- **L-014** (lessons.md): `react-resizable-panels@4.x` quirks — numeric `Panel.defaultSize` is pixels not percent; `Group.defaultLayout` is SSR-only hint; `Panel.defaultSize` is canonical client knob.
+- **Pattern reaffirmed**: read library `.d.ts` BEFORE writing client code when adopting any new dependency. Saved ~hours by catching the 4.x rewrite at install time.
+- **Pattern reaffirmed**: when a fix bounces between two adjacent failure modes (T4b's offscreen-on-drag vs pre-drag-rect-on-release), stop iterating and consider the architectural alternative. T4c was the right move; T4b's two failure modes were both structural (capture-phase listener ordering + synchronous read of post-layout-commit rect).
+
+### Test counts
+
+- Vitest 281 → 290 (session 1's +9 PanelLayout) → 294 (session 2's +4 T6) = **net +13**.
+- Playwright 83 → 89 (+6 splitters) → 90 (+1 dialogs.spec.ts split) = **net +7**.
+- MSBuild Debug x64: clean throughout.
+
+### Follow-up worth picking up
+
+- **Playwright assertion for Reset panel layout** — T6 has vitest coverage; a single Playwright test that drags then resets then asserts default sizes would be a nice belt-and-suspenders addition.
+- **[MT-11] architecture-C migration** — filed at ROADMAP 2.1. The pre-spike on `WebResourceRequested` overhead is the gate before committing 16-32h to the migration itself.
+
+### FF status
+
+3 commits ahead of `origin/lt-4` at session close: `ba8a3de` (T4c.5) + `f3e2ea0` (T6) + this docs commit. End-of-session FF (per CLAUDE.md "Branch workflow"):
+
+```
+git switch lt-4
+git merge --ff-only claude/angry-hypatia-6a4efe
+git push
+```
+
+Awaiting user OK.
