@@ -1144,6 +1144,28 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
         m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
         Log("[host] composition hosting ready (DComp tree committed)\n");
     }
+
+    // [MT-11] Phase 3 Stage 3f (path b+): give WebView2 logical
+    // keyboard focus. Under HWND hosting, WebView2's own child HWND
+    // received WM_KEY*/WM_IME_* via the OS focus chain — under
+    // composition, the host HWND owns Win32 focus and WebView2
+    // is just a DComp visual with no HWND of its own. WebView2's
+    // input thread won't see keys unless we MoveFocus explicitly.
+    // Without this: clicks still reach React (mouse forwarding 3c
+    // works), but Escape/typing/IME silently vanish because
+    // AcceleratorKeyPressed and the DOM keydown chain only fire
+    // when WebView2 has focus. WM_SETFOCUS in MainWndProc keeps it
+    // restored after Alt-Tab cycles.
+    //
+    // PROGRAMMATIC reason = "the host asked, don't traverse to a
+    // particular child first." Equivalent to focusing the WebView's
+    // root document body.
+    HRESULT fhr = baseController->MoveFocus(
+        COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    if (FAILED(fhr))
+    {
+        Log("[host] composition: initial MoveFocus hr=0x%08lx (non-fatal)\n", fhr);
+    }
     return S_OK;
 }
 
@@ -1380,6 +1402,21 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
         }
         return 0;
+
+    // [MT-11] Phase 3 Stage 3f (path b+): host HWND gained focus
+    // (initial show, Alt-Tab back, click into the window). Forward
+    // logical keyboard focus to WebView2 so its DOM event chain
+    // sees WM_KEY*/WM_IME_*. Without this, after Alt-Tab away and
+    // back the host owns focus, WebView2 doesn't, and keyboard
+    // silently breaks until the next mouse click happens to
+    // re-trigger something. Gated on m_compositionMode — under
+    // HWND mode WebView2 owns its own HWND focus chain.
+    case WM_SETFOCUS:
+        if (m_compositionMode && webController)
+        {
+            webController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
+        break;  // fall through so DefWindowProc sees it too
 
     // [MT-11] Phase 3 Stage 3e: DPI changed (window moved to a
     // monitor with different DPI). HIWORD(wp) is the new system DPI;
