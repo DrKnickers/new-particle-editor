@@ -1,18 +1,151 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stages 0+1+2 shipped, Stage 3 next)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stages 0+1+2+3a–3g shipped on session branch, awaiting user FF + smoke verification)
 
-**Last updated:** 2026-05-22 (post-Stage-2-bit-exact-verified). Phase 3 Stages 0 (spike + GO decision), 1 (D3D9Ex migration on real engine), and 2 (shared-handle texture infrastructure + bit-exact verification) all shipped + pushed to `origin/lt-4` at **`e5f3a40`**. Stage 3 is **WebView2 composition hosting migration** — the highest-risk stage of the entire plan and the documented FD6 failure point (three prior attempts produced opaque white despite clean API logs). Estimated 5-7 days extended for rigorous a11y testing.
+**Last updated:** 2026-05-22 (post-Stage-3g landed; 3f manual keyboard smoke pending user, 3h/3i not started). Phase 3 Stages 0 (spike + GO decision), 1 (D3D9Ex migration), and 2 (shared-handle infrastructure) shipped on `origin/lt-4` at **`b5fd14f`** (sibling-session-shipped Stage 1 follow-up cache deferral integrated cleanly via rebase). Stages **3a (Compositor skeleton), 3b (composition controller swap + FD6 gate cleared), 3c (mouse forwarding), 3d (cursor sync), 3e (DPI), 3f (keyboard focus transfer via MoveFocus), 3g (composition-hosting A/B parity spec)** are on this session branch awaiting end-of-session FF + the keyboard manual smoke.
 
-**Test counts at handoff:** vitest **335 / 335** · Playwright native **96 / 96** (was 90 baseline; +6 D3D9Ex regression specs in [`tests/d3d9ex.spec.ts`](../web/apps/editor/tests/d3d9ex.spec.ts)) · MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning) · tsc -b 0 errors · `shared_texture_test.exe` PASS at 5 (resolution × color) combinations including 3440×1440.
+**Test counts at handoff:** vitest **335 / 335** · Playwright native **HWND baseline 99/99** + **8 skipped** for composition-mode-only specs; **composition-mode 106/107 (1 self-skip)** under `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` · MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning unchanged; the C4996 Release breakage from `fd5481a` is **FIXED** in this session at commit `ba3fbc4`) · tsc -b 0 errors.
 
 **Repo state at handoff:**
 
 | | |
 |---|---|
-| **`origin/lt-4` HEAD** | `e5f3a40` (Stage 2 shared-handle infrastructure) |
-| **Session branch** | `claude/keen-perlman-619e2c` at the same HEAD (FF'd in this dispatch) |
+| **`origin/lt-4` HEAD** | `b5fd14f` (sibling session's Modal backdrop unblurred-flash fix, on top of Stage 1 follow-up cache deferral) |
+| **Session branch** | `claude/upbeat-diffie-24f7fc`, 11 commits ahead of `origin/lt-4` (Stage 3 sub-plan + 3a + 3b + 3b smoke + 3c + 3d + 3e + 3f + Release-fix + 3g + sub-plan/lessons updates) |
 | **Working tree** | clean |
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
-| **Phase 3 status** | Stages 0, 1, 2 shipped. Stage 3 (composition hosting) is next, gated on user OK + a fresh sub-plan. |
+| **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
+
+## Stage 3 — what's left before FF
+
+**Before user FF to `lt-4`:**
+
+1. **3f manual keyboard smoke** (load-bearing per the 5-gate cadence) — launch composition build, click File menu, press Escape, expect menu to close. Also: click in a spinner, type digits, expect spinner updates. ~2 min user-driven. See [`tasks/dxgi-stage-3-composition-hosting.md`](dxgi-stage-3-composition-hosting.md) §7.1 for why this is the only verification path (SendKeyboardInput is a phantom API — see L-017).
+
+**Pending (deferrable to Stage 3 close-out dispatch or split out):**
+
+2. **3h a11y automated suite** — sub-plan §6 sub-stage 3h calls for UI Automation-driven Narrator-equivalent assertions. Recommendation: scaffold via Playwright's `page.accessibility.snapshot()` (cheaper than UI Automation Node bindings — about half of what 3h gates on) and defer real Narrator-driving to a follow-up dispatch if the user wants it.
+
+3. **3i final acceptance** — manual a11y smoke with real Narrator on user's rig + IME smoke (if installed) + keyboard nav stress + visual confirmation screenshot. Fully manual; user-driven.
+
+**Stage 4 prep (deferrable to its own dispatch):** the Compositor class explicitly models Stage 4's engine-visual as a second child of the root visual; `AttachEngineVisual(IDXGISwapChain1*)` is the seam. Not pre-added in this session (would have required input on architectural detail) but the Stage 4 dispatch's diff will be small as a result.
+
+## What landed this session — [MT-11] Phase 3 Stages 3a + 3b + 3c + 3d + 3e + 3f + 3g (11 commits)
+
+Cumulative session-branch lineage beyond `b5fd14f`:
+
+```
+2b33829  docs(LT-4): sub-plan §7.1 SUPERSEDED + lessons.md L-017
+6077fbb  test(LT-4): Stage 3g composition-hosting A/B parity spec
+7fe3075  feat(LT-4): Stage 3f keyboard focus transfer (path b+)
+c5542ba  feat(LT-4): Stage 3e DPI handling under composition
+97d1c16  feat(LT-4): Stage 3d cursor sync under composition
+f0d8c7e  feat(LT-4): Stage 3c mouse forwarding under composition
+ba3fbc4  fix(LT-4): unblock Release x64 build — match Debug's _CRT_SECURE_NO_WARNINGS
+d9b1cb0  docs(LT-4): Stage 3b smoke evidence — FD6 gate PASSED
+d95e08e  feat(LT-4): Stage 3b composition controller swap
+e24320c  feat(LT-4): Stage 3a host::Compositor skeleton
+0d2cc9c  docs(LT-4): Stage 3 sub-plan
+```
+
+### Stage 3a — `host::Compositor` skeleton (`e24320c`)
+
+- New [src/host/Compositor.{h,cpp}](../src/host/Compositor.h) ports the working DComp tree topology from [src/host/spike/dxgi_spike.cpp](../src/host/spike/dxgi_spike.cpp). pImpl in the header keeps `dcomp.h` / `d3d11.h` / `dxgi1_2.h` scoped to a single TU so HostWindow.cpp doesn't transitively pull them in (and thus doesn't need its own DXSDK-vs-Win10-SDK isolation).
+- [src/ParticleEditor.vcxproj](../src/ParticleEditor.vcxproj) gains the new file entries with a **per-file `<AdditionalIncludeDirectories>` that REPLACES (no `%(...)` inheritance) the project default** — Win10-SDK-only path for Compositor.cpp so the legacy DXSDK doesn't shadow modern `dcommon.h` / `dxgi.h`. Filed as [tasks/lessons.md L-016](lessons.md) for any future src/host/ file with modern Windows headers.
+- Verification at the time of commit: MSBuild clean, vitest 335/335, tsc 0 errors, native 96/96 (unchanged — no consumer yet).
+
+### Stage 3b — composition controller swap (`d95e08e` + `d9b1cb0` smoke evidence)
+
+- [src/host/HostWindow.cpp](../src/host/HostWindow.cpp): three new fields (`m_compositionMode`, `m_compositor`, `m_compositionController`), env-var read in ctor (`ALO_WEBVIEW2_HOSTING=composition`), `InitWebView2` refactored — the ~220-line inner controller-ready lambda is hoisted into `FinishWebView2ControllerSetup(ICoreWebView2Controller*)` so both modes share it. Composition path takes `CreateCoreWebView2EnvironmentWithOptions` → QI Environment3 → `CreateCoreWebView2CompositionController` → `OnCompositionControllerReady` → QI to base controller → shared setup → `Compositor::AttachWebView2` + tree commit.
+- Per the 5-load-bearing-gate cadence, **3b is the FD6-class gate**. Smoke evidence at [tasks/stage-3b-smoke-screenshot.png](stage-3b-smoke-screenshot.png) + [tasks/stage-3b-smoke-result.md](stage-3b-smoke-result.md): chrome composites correctly under composition hosting, log shows clean `[host] composition hosting ready (DComp tree committed)`, 21 `[host] WebMsg` lines prove React loaded + boot canary fired. **FD6 failure mode did NOT reproduce.** Calibration note: needs ~8s wait for React mount; a 5s smoke shows dark purple (DComp committed before React mounted) and looks FD6-class but isn't.
+
+### Stage 3c — mouse forwarding via `SendMouseInput` (`f0d8c7e`)
+
+- New `ForwardMouseToCompositionWebView2(UINT msg, WPARAM wp, LPARAM lp)` private method + MainWndProc case block for WM_MOUSE*. Direct-cast `msg` → `COREWEBVIEW2_MOUSE_EVENT_KIND` (enum values are numerically identical to WM_* constants). MK_* low-word bits → `COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS` (same numeric identity). Wheel-message coords translated via `ScreenToClient` (WM_MOUSEWHEEL/HMOUSEWHEEL ship in screen coords; all other WM_MOUSE* are client). `SetCapture(hMain)` on any button-down; `ReleaseCapture()` when up-event leaves wParam's MK_* bits at zero.
+- Native 99/99 PASS under composition mode (A/B against HWND baseline at `ba3fbc4`).
+- **Manual smoke evidence** at [tasks/stage-3c-smoke-screenshot.png](stage-3c-smoke-screenshot.png) + [tasks/stage-3c-smoke-result.md](stage-3c-smoke-result.md): real OS WM_LBUTTONDOWN at (86, 34) opened File menu, `[Occlude] SET id=menu:file rect=(119,17,238,243)` bridge log proves the click reached React's onOpenChange handler. Click outside at (300, 250) closed it; `[Occlude] CLEAR id=menu:file` log confirms. **CAVEAT:** Playwright's `.click()` etc. dispatch via CDP at the renderer level — bypasses OS WM_* path entirely. So the 99-test gate proves the rest of the composition stack works; only the manual smoke proves `SendMouseInput` itself.
+
+### Stage 3d — cursor sync (`97d1c16`)
+
+- Two new fields (`m_webViewCursor`, `m_cursorChangedTok`). `OnCompositionControllerReady` subscribes via `add_CursorChanged` + primes `m_webViewCursor` from `get_Cursor`. MainWndProc `WM_SETCURSOR` case gated on `m_compositionMode + cached cursor + LOWORD(lp) == HTCLIENT` returns the cached HCURSOR via `SetCursor`. The HTCLIENT gate keeps non-client (title bar, resize edges) cursors with DefWindowProc. `remove_CursorChanged` in WM_DESTROY before `m_compositionController.Reset()` so the lambda (captures `this`) can't fire mid-destruction.
+
+### Stage 3e — DPI handling (`c5542ba`)
+
+- Initial `put_RasterizationScale(GetDpiForWindow(hMain)/96.0)` in `OnCompositionControllerReady`. QI baseController to `ICoreWebView2Controller3` (the interface generation that exposes `put_RasterizationScale`); silent skip on QI failure (best-effort for older runtimes).
+- New `WM_DPICHANGED` case in MainWndProc, gated on `m_compositionMode + m_compositionController`. HIWORD(wp) → new DPI, update rasterization scale, resize host HWND to Windows's suggested rect in lParam (per-monitor-v2 best-practice flow).
+
+### Stage 3f — keyboard focus transfer (`7fe3075`)
+
+- **THE ONLY AVAILABLE PATH** for composition-mode keyboard. WebView2 SDK does NOT expose `SendKeyboardInput` in any version (verified against MS docs across 100+ historical SDK releases — see [tasks/lessons.md L-017](lessons.md) for the meta-lesson). DOM keyboard works under composition only when WebView2 has *logical* keyboard focus.
+- `OnCompositionControllerReady` ends with `baseController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC)` to grant initial logical focus. New `WM_SETFOCUS` case in MainWndProc calls MoveFocus again whenever the host HWND gains Win32 focus (initial show, Alt-Tab back, click into title bar).
+- IME works automatically once WebView2 owns focus (OS routes WM_IME_* to focused window's input thread).
+- **3f IS a load-bearing user check-in gate. The manual keyboard smoke is pending the user.** Native 99/99 PASS under composition is the regression bar; the actual keyboard correctness needs a real OS WM_KEYDOWN that only the user can drive. Smoke procedure: click File menu → press Escape → expect menu close. Click spinner → type digits → expect spinner updates.
+
+### Stage 3g — composition-hosting A/B parity spec (`6077fbb`)
+
+- New [web/apps/editor/tests/composition-hosting.spec.ts](../web/apps/editor/tests/composition-hosting.spec.ts) (8 specs). Each test skips with a clear annotation when `ALO_WEBVIEW2_HOSTING != "composition"`, so the harness runs cleanly in both modes:
+  - HWND baseline (no env var): 99 passed, 8 skipped
+  - Composition (env vars set): 106 passed, 1 skipped (curve editor SVG not mounted when no emitter is selected at test time)
+- Registered in [scripts/run-native-tests.mjs](../web/apps/editor/scripts/run-native-tests.mjs) next to `alpha-compositor-snapshot.spec.ts`.
+- **CAVEAT (documented in the file header):** Playwright's `.click()` / `.keyboard.press()` dispatch through CDP at the renderer level — they bypass the OS WM_* path. So these specs validate the BRIDGE layer (controller wiring, host-object proxy, postMessage round-trips, React event handling) under composition. They do NOT validate the host's SendMouseInput / MoveFocus forwarding — that's the manual smoke's job.
+
+### Bonus fix — Release x64 unblocked (`ba3fbc4`)
+
+- Sibling session's heads-up: Release x64 had been failing since `fd5481a` due to C4996 (`_wgetenv`) under /WX. Two-line vcxproj fix matching the Debug pattern: add `_CRT_SECURE_NO_WARNINGS` to both Release `<PreprocessorDefinitions>`. `ParticleEditor.exe` now links in Release for the first time this session.
+
+### Sub-plan + lessons updates (`2b33829`)
+
+- [tasks/dxgi-stage-3-composition-hosting.md](dxgi-stage-3-composition-hosting.md) §7.1 + D4: SUPERSEDED notes documenting the WebFetch-verified finding that `SendKeyboardInput` doesn't exist in any SDK version. Phantom "path (a)" retired permanently.
+- [tasks/lessons.md L-017](lessons.md): "Before planning around an SDK bump, verify the target API actually exists via authoritative docs." Captures the meta-lesson — local-header grep proves "not in THIS version"; vendor docs prove "not in ANY version." Conflating those cost ~1h of planning effort this session.
+
+## Critical references for the next dispatch
+
+In priority order:
+
+1. **[tasks/dxgi-stage-3-composition-hosting.md](dxgi-stage-3-composition-hosting.md)** — the sub-plan. §6 sub-stage 3f manual smoke section explains what 3f needs; §7.1 explains the SDK-bump-path-doesn't-exist finding; §4 lists 3h / 3i acceptance.
+2. **[tasks/stage-3b-smoke-result.md](stage-3b-smoke-result.md)** + **[tasks/stage-3c-smoke-result.md](stage-3c-smoke-result.md)** — the load-bearing smoke evidence (FD6 cleared, mouse forwarding works end-to-end).
+3. **[tasks/lessons.md L-016 + L-017](lessons.md)** — L-016: DXSDK shadowing pattern for any new src/host/ file with modern Windows headers; L-017: verify SDK bump assumptions via authoritative docs before committing to one.
+4. **[src/host/Compositor.h](../src/host/Compositor.h)** — pImpl-style class; Stage 4 adds engine-visual via `AttachEngineVisual(IDXGISwapChain1*)` as a sibling of the WebView2 visual. Architectural seam already designed.
+5. **[src/host/HostWindow.cpp](../src/host/HostWindow.cpp)** `InitWebView2` (~line 606), `OnCompositionControllerReady` (~line 1000), `FinishWebView2ControllerSetup` (factored shared per-controller setup), `ForwardMouseToCompositionWebView2` (~line 1090) — all the Stage 3 surface.
+6. **[web/apps/editor/tests/composition-hosting.spec.ts](../web/apps/editor/tests/composition-hosting.spec.ts)** — 3g spec; new specs added here for 3h/3i should follow its skip-when-not-composition pattern.
+
+## Resumable state (snapshot)
+
+| Thing | Value |
+|---|---|
+| **Worktree** | `C:\Modding\Particle Editor\.claude\worktrees\upbeat-diffie-24f7fc` (this session's; next session gets a fresh `claude/<random>` from `origin/lt-4`) |
+| **HEAD (committed)** | `2b33829` (sub-plan + lessons updates) |
+| **Ahead of origin/lt-4** | 11 (the Stage 3 session-branch sequence above) |
+| **Behind master** | `lt-4` is many commits ahead of `master`; nothing merged to master from Phase 3 work yet. |
+| **Open PRs** | none |
+| **Build status** | All targets clean: ParticleEditor (Debug + Release x64), expatw_static, viewport_poc, dxgi_spike, shared_texture_test. **Release x64 is FIXED this session** (was broken since `fd5481a`). |
+| **Phase status** | Phase 3 Stages 0/1/2 on lt-4 (`b5fd14f` tip); Stages 3a–3g on session branch behind `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
+
+**End-of-session FF flow** (per [CLAUDE.md branch workflow](../CLAUDE.md)):
+
+```
+git switch lt-4
+git merge --ff-only claude/upbeat-diffie-24f7fc
+git push
+```
+
+**Recommend:** wait until 3f manual keyboard smoke is run + passes before FF. If smoke surfaces an issue with MoveFocus, easier to fix on the session branch than as a follow-up commit on lt-4. If user wants to FF immediately and treat 3f smoke as a post-merge gate, the code is conservative (defaults stay byte-identical without the env var), so the risk is bounded.
+
+## Next dispatch options after Stage 3 closes out
+
+Below in priority order:
+
+| Option | Why next | Effort |
+|---|---|---|
+| **Stage 4 — DXGI composition wiring** | Engine visual attaches to the DComp tree as second child of root. Architectural seam already exists at `Compositor::AttachEngineVisual`. Headline payoff: engine pixels visible under composition, performance gate vs canvas-jpeg baseline. | 3-4 days per parent plan §4 |
+| **Stage 3 close-out (3h a11y + 3i final)** | Sub-plan obligations not yet shipped. 3h a11y scaffolding via Playwright's `page.accessibility.snapshot()` is the cheap variant; UI Automation driving is the comprehensive option. 3i is manual user smoke. | 3h ~1d cheap / ~2d comprehensive; 3i ~0.5d user-driven |
+| **Spawned task — Defer lastRawDib cache copy** | Was the chip from a prior session; sibling session resolved it directly (commits `fd41dfa` + `b5fd14f` already on lt-4 — the Stage 1 follow-up cache deferral). ✅ DONE, no action needed. | n/a |
+
+---
+
+## Pre-Stage-3 — what was active before this session
+
+The sections below predate this session's Stage 3 work. Kept verbatim for archive purposes. **Read top-of-file for current state.**
+
+---
 
 ## Next dispatch — [MT-11] Phase 3 Stage 3 (WebView2 composition hosting migration)
 
