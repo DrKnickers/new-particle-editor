@@ -1085,3 +1085,88 @@ The Compositor class at `src/host/Compositor.{h,cpp}` is the
 reference pattern for any future host/ file that needs modern
 Windows headers. Updating this when SDK 1.0.4015+ ships will
 require updating the hardcoded version path.
+
+---
+
+## L-017 — Before planning around an SDK bump, verify the target API actually exists via authoritative docs
+
+**Rule.** When a plan rests on "API X is exposed in SDK version Y
+(higher than what we have)," verify the assumption via the
+vendor's authoritative API reference docs BEFORE writing the
+SDK-bump plan, choosing fallback paths, or committing to a
+two-track decision tree. A 30-second `WebFetch` against the
+vendor's API-surface page beats hours of planning effort that
+might rest on a phantom API. If the verification turns up
+"actually no version exposes that API," collapse the decision
+tree immediately and re-plan around the available surface.
+
+**Trigger.** Any of:
+- A plan section that says "If SDK lacks X, use fallback Y;
+  if SDK has X, use approach Z" without naming a verified
+  source for X's existence.
+- A risk mitigation that says "we'll bump the SDK and use
+  Microsoft/vendor's documented X" without a docs link
+  cited inline.
+- A decision deferred to "we'll find out when we grep at
+  coding time" — that's a fine first cut at sub-plan time,
+  but resolve it BEFORE the implementation sub-stage starts,
+  not as the first action of the implementation.
+- Any conversation where you're about to spend significant
+  effort on "Option A vs Option B" and Option A's existence
+  is asserted but not verified.
+
+**How to apply.**
+
+For Win32/COM-style vendor SDKs (WebView2, Direct3D, etc.):
+
+1. The vendor's API-reference page typically lists the full
+   member surface for each interface. Hit that page for the
+   interface in question.
+2. Many vendor doc systems support "version selector" or
+   per-version URLs. Pick the LATEST documented version and
+   cross-check against the current shipped version.
+3. The vendor's release-notes page is a poor fit for member-
+   level verification — it documents "what changed" not "what
+   exists." Use the API-reference page for the latter.
+4. If the API isn't on any documented version, it doesn't
+   exist. Treat the plan branch that assumed it as DEAD and
+   re-plan immediately.
+
+For npm packages: prefer the registry's per-version
+type-definition file or the package's CHANGELOG. Both are
+authoritative for "what exists at version Y."
+
+**Source incident (2026-05-22, [MT-11] Phase 3 Stage 3f).** The
+sub-plan §3.4 + §6 + §7.1 + D4 collectively spent ~1h modelling
+"path (a) — use `ICoreWebView2CompositionController::SendKeyboardInput`
+on SDK 1.0.4015+" vs "path (b) — DOM keyboard via focus" as a
+binary decision. The pre-coding grep against the local SDK
+headers confirmed `SendKeyboardInput` wasn't in 1.0.3967.48 —
+but I treated that as "not yet, would be in 4015+" rather than
+verifying with the vendor's API reference. When the user said
+"do path (a)" and I went to plan the SDK bump, my first move
+was a 30-second `WebFetch` against
+`learn.microsoft.com/.../win32/icorewebview2compositioncontroller`
+which immediately revealed: the interface has 8 members across
+ALL historical SDK versions (1.0.774.44 through 1.0.4015-prerelease)
+and `SendKeyboardInput` is not among them. The whole "Option A"
+branch was a phantom. The actual answer was simpler than either
+option had modelled — `MoveFocus` on the base controller (which
+exists in every SDK version) is what gives WebView2 logical
+keyboard focus under composition; the DOM keyboard chain works
+unchanged once focus is correct. Stage 3f shipped that as a 37-
+line change.
+
+**The meta-bug in my planning approach.** I let local-header
+grep substitute for vendor-docs verification when modelling
+future-SDK behaviour. Local grep proves "not in THIS version";
+vendor docs prove "not in ANY version." Those are very different
+claims and I conflated them. For "what's available at SDK
+version Y," only the vendor's docs are authoritative. The
+~30-second WebFetch is cheap; the hours of planning effort
+around a phantom path are not.
+
+**Cross-reference.** Stage 3f commit `7fe3075` includes the
+MoveFocus implementation. Sub-plan §7.1 has the full SUPERSEDED
+trail. Stage 3 sub-plan §7.1 was updated to reference this
+lesson rather than carry the long-form story inline.

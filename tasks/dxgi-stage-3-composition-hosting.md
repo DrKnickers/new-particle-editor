@@ -946,12 +946,42 @@ debug-instrumentation lifecycle. Specifically:
 ## 7. Open questions before code starts
 
 1. **`SendKeyboardInput` in SDK 1.0.3967.48 — RESOLVED 2026-05-22:
-   NOT PRESENT.** Zero hits across `packages/Microsoft.Web.WebView2.1.0.3967.48/build/native/include/`.
-   Stage 3 takes path (b) per D4: DOM keyboard via focus + existing
-   `add_AcceleratorKeyPressed` handler. IME is documented as
-   known-broken under composition until separate SDK-bump
-   sub-task. `ICoreWebView2CompositionController3` adds
-   DragEnter/Leave/Over/Drop (not keyboard).
+   NOT PRESENT. SUPERSEDED 2026-05-22 (during 3f implementation):
+   THE API DOES NOT EXIST IN ANY SDK VERSION.** Initial grep
+   showed zero hits in our 1.0.3967.48 headers. WebFetch against
+   the canonical MS docs page (which lists API surface for every
+   historical SDK version from 1.0.774.44 up through the latest
+   1.0.4015-prerelease) confirms `SendKeyboardInput` is not on
+   `ICoreWebView2CompositionController` in ANY version's API
+   surface. The composition controller has 8 methods total
+   (CursorChanged add/remove, get_Cursor, get_RootVisualTarget,
+   get_SystemCursorId, put_RootVisualTarget, SendMouseInput,
+   SendPointerInput) — keyboard is conspicuously absent. Path
+   (a) is therefore a phantom; there is NO SDK-bump that would
+   add it.
+
+   **REAL FIX (Stage 3f path b+):** The DOM keyboard chain works
+   under composition — but only when WebView2 has *logical*
+   keyboard focus. Under HWND mode that's automatic (focus
+   chain = HWND chain). Under composition the host HWND owns
+   Win32 focus and WebView2 has no HWND, so logical focus needs
+   explicit transfer via `ICoreWebView2Controller::MoveFocus`.
+   That call is on the *base* controller (no QI needed) and
+   exists in every SDK version. Stage 3f's two-call wiring
+   (initial MoveFocus in OnCompositionControllerReady + per-
+   WM_SETFOCUS routing in MainWndProc) is the documented
+   Microsoft `WebView2APISample` pattern and the entire 3f
+   delta is ~37 lines.
+
+   IME naturally works once WebView2 owns focus (OS routes
+   WM_IME_* to the focused window's input thread). No special
+   IME wiring needed.
+
+   See `tasks/lessons.md` L-017 for the meta-lesson about
+   verifying SDK assumptions via docs before bumping.
+
+   `ICoreWebView2CompositionController3` adds DragEnter/Leave/
+   Over/Drop (not keyboard).
 
 2. **`get_AutomationProvider` on composition controller — RESOLVED
    2026-05-22: PRESENT** on `ICoreWebView2CompositionController2`
@@ -1016,11 +1046,13 @@ literals (more readable, harder to maintain across SDK upgrades).
 *Recommendation: JSON golden file with tolerance.* Surface for OK
 at sub-stage 3h start.
 
-**D4. Keyboard path — DECIDED 2026-05-22.** Path (b) — DOM keyboard
-via focus — is the Stage 3 baseline. IME documented as known-broken
-under composition until separate SDK-bump sub-task. If pre-coding
-grep finds `SendKeyboardInput` in SDK 1.0.3967.48, upgrade to path
-(a) inline (cheap addition, IME comes along).
+**D4. Keyboard path — DECIDED 2026-05-22, REVISED 2026-05-22 at 3f
+implementation time.** The decision tree collapsed. Path (a) does
+NOT exist in any SDK version per WebFetch verification against MS
+docs (see §7.1). Stage 3f shipped path (b+) — DOM keyboard via
+explicit `MoveFocus` calls — as the ONLY available path. ~37
+lines of code in HostWindow.cpp; IME works automatically once
+WebView2 owns logical focus.
 
 **D5. Stage 3 sub-stage scope — OPEN.** 9 sub-stages as drafted vs
 fewer-bigger commits. *Recommendation: 9 sub-stages — small commits
