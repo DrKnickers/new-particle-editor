@@ -116,6 +116,13 @@ async function main() {
       "tests/splitters.spec.ts",
       "tests/d3d9ex.spec.ts",
       "tests/alpha-compositor-snapshot.spec.ts",
+      // [MT-11] Phase 3 Stage 3g — composition-hosting A/B parity
+      // gate. Tests skip with a clear annotation when
+      // ALO_WEBVIEW2_HOSTING != "composition", so running the
+      // harness WITHOUT the env var (HWND-mode baseline) is a no-op
+      // for this file. Running WITH the env-var pair gates the
+      // composition path's bridge layer.
+      "tests/composition-hosting.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
