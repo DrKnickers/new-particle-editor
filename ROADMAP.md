@@ -8,6 +8,12 @@ D3DX9).
 Items can land in any order within their tier — the grouping reflects scope
 and risk, not strict dependency.
 
+> **Correctness bug backlog.** Roadmap items are features and quality
+> investments. Discrete bugs surfaced by audits or reports live in
+> [`tasks/post-audit-followups.md`](tasks/post-audit-followups.md) — that
+> doc tags each item by branch ([master] / [lt-4] / [both]) and severity
+> (P1/P2/P3). Drain the P1s there before pulling fresh roadmap work.
+
 This file is split into six parts:
 
 1. **[Near term](#1-near-term)** — quality-of-life polish on existing workflows. Each item is contained, low risk, and doesn't touch the rendering pipeline or file format.

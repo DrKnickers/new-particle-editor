@@ -1170,3 +1170,140 @@ around a phantom path are not.
 MoveFocus implementation. Sub-plan §7.1 has the full SUPERSEDED
 trail. Stage 3 sub-plan §7.1 was updated to reference this
 lesson rather than carry the long-form story inline.
+
+---
+
+## L-018 — AI-generated audits need first-party file:line verification before any finding is treated as actionable; LLM severity labels are not signals
+
+**Rule.** When an external AI (ChatGPT, Gemini, Copilot, etc.)
+produces an audit, code review, or "things I noticed" report about
+this codebase, treat every cited file:line and every described
+subsystem as a CLAIM TO VERIFY, not a fact. Severity labels
+("Critical", "High", P1, "blocking") from an LLM carry no weight
+until a reproduction is attempted or the cited code has been read.
+The cost asymmetry is sharp: a 5–10 minute grep-and-read pass
+routinely catches fabricated file names, hallucinated subsystems,
+and claims contradicted by the actual code; a sprint driven by an
+unverified P1 burns hours-to-days on a phantom problem.
+
+This applies even when the audit *looks* careful — formatted
+tables, plausible C++ snippets, confident severity tiers, and
+"Source: Microsoft docs say…" citations are all things LLMs
+produce fluently and unreliably. Surface polish and verification
+quality are independent variables.
+
+**Trigger.** Any time an external AI audit, code review, or
+analysis arrives. Especially when:
+- The audit cites multiple "Critical" or "High" findings (LLMs
+  systematically over-rate confidence).
+- Cited filenames don't match `Glob src/**/*.cpp` results
+  exactly — investigate before assuming the AI just used
+  different naming.
+- A finding implies subsystem-level behaviour (threading, file
+  watchers, raw-pointer command records, COM interface
+  lifetimes) — verify the subsystem exists at all before
+  evaluating the bug claim.
+- Suggested-fix code references types, classes, or call sites
+  whose existence hasn't been confirmed by grep.
+- The audit confidently describes architecture that contradicts
+  what you know about the codebase ("the X layer mutates Y
+  directly" — does that layer exist?).
+
+**How to apply — the verification protocol.**
+
+For every finding in an external audit, BEFORE any agree /
+disagree / "we'll act on this" decision:
+
+1. **File existence.** `Glob` for each cited filename. Zero
+   matches = either the AI hallucinated the name or is looking
+   at a different repo. If the pattern in the finding plausibly
+   maps to a real file in this repo, restate the finding against
+   the real file and only then evaluate.
+2. **Subsystem existence.** Grep for the load-bearing primitives
+   the finding assumes:
+   - "thread race": `std::thread|CreateThread|_beginthread|std::async`.
+     Zero hits = no threading, the race is fabricated.
+   - "file watcher": `ReadDirectoryChangesW|FindFirstChangeNotification`.
+     Zero hits = no hot-reload subsystem.
+   - "raw pointers in undo commands": read the undo store. If it's
+     serialization-based, the finding is fabricated.
+3. **Cited code matches description.** Open the cited file:line.
+   The behaviour the audit describes should match what the code
+   actually does. Mismatch = AI is guessing or hallucinating.
+4. **Existing mitigation.** Search `tasks/*.md`, `CHANGELOG.md`,
+   `lessons.md`, and recent commits before treating a finding
+   as fresh. Both audits in the source incident below treated
+   already-shipped work as new findings.
+5. **Severity recalibration.** LLM "Critical" routinely collapses
+   to "P3 hardening item" once verified. Never let the label drive
+   prioritisation on its own — reproduce or cite the verification
+   first.
+
+When delivering pushback, cite the verification evidence inline:
+the file:line that contradicts the claim, the grep result that
+proves the subsystem doesn't exist, the commit hash that shipped
+the fix. Vague "I don't think that's right" doesn't hold against a
+confident LLM; "grep for `std::thread` in src/ returns zero hits"
+does.
+
+**Source incident (2026-05-24).** Two AI audits landed in the same
+session for the LT-4 work.
+
+- **ChatGPT** audited `lt-4` tip `d3f0fae` against the DXGI /
+  composition work — five findings (P1/P2 mixed). Verification:
+  every file:line was real and the described code matched.
+  Findings 1–4 verified as real-with-caveats; finding 5 needed
+  scoping but was real. The texture-cache-vs-Reset hole (the
+  P1) was a genuine catch — the Stage 1 sub-plan had named the
+  hazard as Risk 4.7 but the chosen mitigation (grep for
+  `D3DPOOL_MANAGED`) was insufficient because `D3DXCreateTextureFromFileInMemory`
+  (no `Ex` variant) hides its `D3DPOOL_MANAGED` default
+  internally and doesn't show up in the grep. Worth acting on.
+
+- **Gemini** audited an unspecified codebase state — twelve
+  findings, four labelled Critical/High. Verification: seven of
+  the ten cited filenames did not exist in the repo
+  (`RenderDevice.cpp`, `UndoSystem.cpp`, `HotReload.cpp`,
+  `ViewerWindow.cpp`, `MainWindow.cpp`, `DialogView.cpp`,
+  `Spawner.cpp`). Of the four "Critical/High" findings:
+  - C3 (raw-pointer undo / use-after-free): fabricated.
+    `UndoStack.cpp` uses whole-`ParticleSystem` serialization
+    snapshots — no raw pointers, no per-emitter ID lookups, no
+    use-after-free vector.
+  - C4 (hot-reload thread race): fabricated. No hot-reload
+    subsystem exists; grep across `src/` for `ReadDirectoryChangesW`,
+    `FileWatcher`, `HotReload`, `std::thread`, `CreateThread`,
+    `_beginthread`, `std::async` returns ZERO hits in source.
+  - C5 (`WS_CLIPCHILDREN` flicker): factually contradicted.
+    `src/main.cpp:7984` and ~10 other `CreateWindowEx` sites
+    already set the flag.
+  - C2 (D3D9 device reset): already implemented at
+    `src/engine.cpp:1260-1339` via the Phase 3 Stage 1c–f work.
+    Gemini's "suggested fix" code shape matches what's already
+    there.
+
+  C7 (autosave thread race) was likewise fabricated — `Autosave.cpp`
+  is fully synchronous on the main thread.
+
+  Net actionable output from Gemini's twelve findings: ONE
+  low-severity ChunkReader hardening item (cap `readString`
+  allocation, cross-check declared chunk size vs remaining file
+  size). The other eleven were either fabricated, contradicted,
+  already done, or unverifiable as cited. The shape of the
+  output strongly suggests Gemini generated a generic
+  "Win32 + D3D9 application hazards" checklist and hallucinated
+  plausible file names to attach each item to, without reading
+  the repo.
+
+**The meta-lesson.** ChatGPT did real work against this codebase;
+Gemini did not. Surface formatting was indistinguishable. The only
+way to tell which was which was to verify, finding by finding.
+Default to that effort up front — it's much cheaper than the
+sprint you'd otherwise waste.
+
+**Cross-reference.** Full per-finding verification trail is in the
+session transcript of 2026-05-24. The post-review action items
+that survived verification — one ChunkReader hardening pass, the
+TextureManager cache-vs-Reset hole from ChatGPT finding #1, and a
+Stage 3h composition-fallback sub-stage from ChatGPT finding #2 —
+get queued into `ROADMAP.md` / Stage 4 sub-plan as appropriate.

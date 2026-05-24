@@ -14,6 +14,16 @@
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
 | **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
 
+## Audit follow-ups awaiting triage (added 2026-05-24)
+
+Five AI audits (ChatGPT × 4, Gemini × 1) ran against the codebase on 2026-05-24, covering both `master` (legacy C++) and `lt-4` (host layer + React bridge). Every finding that survived first-party verification (per [`lessons.md` L-018](lessons.md)) is queued in [`tasks/post-audit-followups.md`](post-audit-followups.md), tagged by branch ([master] / [lt-4] / [both]) and severity (P1/P2/P3).
+
+**Master-side headlines:** data-loss bug in `DoSaveFile` (failed save clears dirty flag AND deletes autosave), two parser memory-safety bugs in `ChunkReader`, a cyclic-emitter-graph crash, and a 16-bit particle index wrap.
+
+**LT-4-side headlines:** `emitters/import-from-file` native handler missing while UI calls it, `DispatchInternal` exception-safety gap, ~20 sites using `sendOk({"ok": false})` nested-failure pattern (contract drift), host-object exception envelope hand-rolling JSON.
+
+**Stage 4 prereqs** (TextureManager-vs-Reset, composition fallback) are listed alongside the correctness items. The recommended PR sequencing is in the doc's "Suggested ordering" section. **Read that doc before sequencing the next non-LT-4 PR or the next host-side bridge work.**
+
 ## Stage 3 — what's left before FF
 
 **Before user FF to `lt-4`:**
