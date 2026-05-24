@@ -14,6 +14,50 @@
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
 | **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
 
+## Autonomous queue execution — Slot 1 SHIPPED, Slot 2+ BLOCKED on lt-4 reconciliation (2026-05-24)
+
+Started the autonomous-prompt queue execution per `tasks/post-audit-followups.md` "Suggested ordering."
+
+**Completed:**
+- **Setup** — committed audit-infrastructure docs (L-018, `post-audit-followups.md`, HANDOFF/ROADMAP pointers) to session branch `claude/zen-haibt-fd8521` at commit `674d6e6`.
+- **Slot 1 (Master P1s F1–F5)** — branched `post-audit/master-p1s` off `master` (`b28f624`) in a separate worktree. Implemented all five fixes, built clean (Debug|x64 + Release|x64), opened **[PR #86](https://github.com/DrKnickers/new-particle-editor/pull/86)** with plan + per-fix review doc at `tasks/post-audit-slot1-master-p1s.md`.
+
+**Blocked on Slot 2 (lt-4 reconciliation required):**
+
+Local `lt-4` is at **`339ab95`**, ahead of `origin/lt-4` (`d3f0fae`) by 10 commits — your in-progress work that hasn't been pushed:
+
+```
+339ab95 feat(LT-4): curve editor polish — lock-to, axis labels, theme grid, robust spinners, spawner bg fix
+92ed1db fix(LT-4): add m_pSkydomeEffect OnLost/OnReset to Engine::Reset — ground-texture lockup fixed
+8d13dea test(LT-4): mark tools.spec.ts:192 test.fixme — engine bug filed
+02e5af8 docs(LT-4): HANDOFF + CHANGELOG refresh — Phase 1 + 2 shipped, focus-channel restore landed
+3cd840a feat(LT-4): hybrid focus-channel curve editor — restore edit surface
+83ee7a5 feat(LT-4): Phase 2.7 — viewport pill + engine/set/leave-particles bridge
+329c595 feat(LT-4): Phase 2.6 — curve editor moves to always-on bottom 260px
+0fd093d feat(LT-4): Phase 2.5 — left panel restack with .panel chrome + .form-row grid
+17768b6 feat(LT-4): Phase 2.4 — Spawner permanent right column
+2759c27 chore(LT-4): remove dead Background/Ground Texture entries from View menu
+```
+
+Note: `92ed1db` is the skydome OnLost/OnReset fix that `tasks/post-audit-followups.md` F7 documents as "already fixed on lt-4." Confirms — but the fix is in *local* lt-4, not on origin yet.
+
+My session branch (`claude/zen-haibt-fd8521`) was branched from `d3f0fae` (the session-start origin/lt-4 tip) and is 1 commit ahead of THAT, but those 10 lt-4 commits aren't in it. The session-start system reminder showed origin/lt-4 as the upstream, which is why I branched from there.
+
+**Why I stopped autonomously:** CLAUDE.md's Branch workflow §"End-of-session flow for LT-4 dispatches" says explicitly: *"If the FF fails, STOP and reconcile... Don't paper over it with a merge commit or a rebase without understanding what diverged."* Three plausible reconciliation paths exist; the right one depends on intent for those 10 commits:
+
+1. **Push local lt-4 → origin first, then rebase session branch onto it.** Treats local lt-4 as ground truth. Subsequent LT-4 slot branches (Slots 2/3/5/6/7) branch from updated origin/lt-4. Most natural if those 10 commits were ready-to-ship work that just lacked a `git push`.
+2. **Cherry-pick the audit-infrastructure commit (`674d6e6`) onto local lt-4, then push.** Same outcome as #1, different mechanic. Cleaner history if the rebase would be noisy.
+3. **Hold the 10 local lt-4 commits private for now; carry on the audit-followups queue against `origin/lt-4` (`d3f0fae`).** Defers reconciliation but means LT-4 slot PRs will be reviewable against a tip that's stale relative to your local. Probably not what you want.
+
+**Recommended: option 1**, but I'm not going to act on this without your call. The 10 commits include real feature work (Phase 2.4–2.7, curve editor polish, focus-channel restore) and an authoring decision about when they ship.
+
+**Other observable state from the worktree survey:**
+- ~20 stale `claude/<adjective>-<name>-XXXXXX` branches accumulated across past sessions, most marked `[behind N]` against their upstream. Not blocking; mentioned for cleanup awareness if you ever want a sweep.
+
+**To resume autonomous execution:** pick a reconciliation path, run the corresponding git operations (or tell me to), and re-invoke the autonomous prompt. The remaining 6 slots (F6/F8 prereqs, master polish, LT-4 bridge contract, LT-4 host polish, capability-manifest test) can drain straightforwardly once lt-4's branch state is unambiguous.
+
+---
+
 ## Audit follow-ups awaiting triage (added 2026-05-24)
 
 Five AI audits (ChatGPT × 4, Gemini × 1) ran against the codebase on 2026-05-24, covering both `master` (legacy C++) and `lt-4` (host layer + React bridge). Every finding that survived first-party verification (per [`lessons.md` L-018](lessons.md)) is queued in [`tasks/post-audit-followups.md`](post-audit-followups.md), tagged by branch ([master] / [lt-4] / [both]) and severity (P1/P2/P3).
