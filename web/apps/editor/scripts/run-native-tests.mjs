@@ -116,6 +116,13 @@ async function main() {
       "tests/splitters.spec.ts",
       "tests/d3d9ex.spec.ts",
       "tests/alpha-compositor-snapshot.spec.ts",
+      // [MT-11] Phase 2 — DOM-event → viewport/input bridge wiring
+      // under architecture-C (canvas-in-DOM viewport). Skips with a
+      // clear annotation when ALO_VIEWPORT_TRANSPORT != "canvas-jpeg",
+      // so runs WITHOUT the env var are a no-op. Included in the
+      // harness so the moment canvas-jpeg is enabled (Phase 4 default
+      // flip) the bridge surface is gated automatically.
+      "tests/canvas-architecture.spec.ts",
       // [MT-11] Phase 3 Stage 3g — composition-hosting A/B parity
       // gate. Tests skip with a clear annotation when
       // ALO_WEBVIEW2_HOSTING != "composition", so running the
