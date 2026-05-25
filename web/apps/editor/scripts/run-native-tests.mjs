@@ -46,9 +46,26 @@ async function main() {
   await sleep(300);
 
   console.log(`[run-native-tests] Launching ${exe} --new-ui --test-host ...`);
+  // [MT-11] Phase 3 Stage 4f hardening — DON'T inherit stdio. The
+  // previous `stdio: "inherit"` caused a real footgun: ParticleEditor.exe
+  // is a SUBSYSTEM:Windows app, but node attaches an inherited console
+  // for its piped stdio. The host writes [ArchC]/[host]/[COMP-*]
+  // diagnostics to stderr every frame; if the user clicks in that
+  // inherited console window, Windows enters QuickEdit (Mark) mode
+  // which BLOCKS the stderr buffer. The next per-frame fprintf hangs
+  // and freezes the entire host thread — Playwright then times out,
+  // ALL in-flight specs cascade-fail. Surfaced during Stage 4f smoke.
+  //
+  // Fix: discard child stdio + windowsHide:true. All host diagnostics
+  // are duplicated to %LOCALAPPDATA%\AloParticleEditor\host.log via
+  // the Log() macro, so test diagnostics don't lose anything. If the
+  // host stderr is genuinely needed for future debugging, switch to
+  // ["ignore", "pipe", "pipe"] and pipe child.stderr to a log file
+  // (NOT to process.stderr, which has the same QuickEdit risk).
   const child = spawn(exe, ["--new-ui", "--test-host"], {
     cwd: repoRoot,
-    stdio: "inherit",
+    stdio: ["ignore", "ignore", "ignore"],
+    windowsHide: true,
     detached: false,
   });
 
@@ -130,6 +147,17 @@ async function main() {
       // for this file. Running WITH the env-var pair gates the
       // composition path's bridge layer.
       "tests/composition-hosting.spec.ts",
+      // [MT-11] Phase 3 Stage 4f — DXGI transport / resize-stress /
+      // perf gates. All three specs skip when ALO_WEBVIEW2_HOSTING
+      // != "composition". Composition mode requires BOTH env vars
+      // (canvas-jpeg + composition) plus a dist/ built with VITE_*
+      // counterparts to be a meaningful gate. (Note 4f #2 dxgi-vs-
+      // jpeg SSIM was deferred from this list — Playwright's DOM-only
+      // screenshots can't see DXGI engine pixels under composition;
+      // manual visual smoke is the irreducible gate. See sub-plan §6.)
+      "tests/dxgi-transport.spec.ts",
+      "tests/dxgi-resize-stress.spec.ts",
+      "tests/dxgi-perf.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",

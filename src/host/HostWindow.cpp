@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>     // [MT-11] _wgetenv / _wtoi for ALO_VIEWPORT_TRANSPORT
 #include <cstring>
+#include <share.h>     // [MT-11] Stage 4f: _SH_DENYNO for _wfsopen sharing
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -606,7 +607,14 @@ struct HostWindowImpl
 void HostWindowImpl::OpenLog()
 {
     std::wstring path = ComputeHostLogPath();
-    _wfopen_s(&logFile, path.c_str(), L"w");
+    // [MT-11] Phase 3 Stage 4f hardening — _wfopen_s opens with
+    // exclusive default share-mode (_SH_DENYRW) so concurrent readers
+    // get EBUSY. Surfaced when the dxgi-transport.spec.ts tried to
+    // read host.log via Node fs.readFileSync to assert [COMP-engine-*]
+    // log lines. Switch to _wfsopen with _SH_DENYNO so readers (tests,
+    // Get-Content -Wait, etc.) can open the file while the host is
+    // writing to it. The host is the only writer so deny-no is safe.
+    logFile = _wfsopen(path.c_str(), L"w", _SH_DENYNO);
     if (logFile) Log("[host] === --new-ui session started ===\n");
 }
 
