@@ -1,488 +1,432 @@
-# tasks/todo.md — [MT-11] Phase 3: DXGI shared-handle viewport compositing
+# Post-[MT-11] Phase 3 dispatch — lessons retro-doc (L-019/L-020/L-021/L-022) + HANDOFF correction
 
-> **Active plan.** This is the next-dispatch plan for [MT-11].
-> **Awaiting user OK on Stage 0 spike start (§9).**
->
-> The prior planning history (Phase 0 + 1 + 2, canvas-JPEG
-> approach) lives at [`todo-mt-11-phase-0-1-2-archive.md`](todo-mt-11-phase-0-1-2-archive.md).
-> Phase 2's implementation is on the session branch (vitest
-> 335/335, Playwright 90/90, MSBuild clean) — see §9 for what to
-> do with that working tree before / during this dispatch.
+> **Active plan.** Post-[MT-11] Phase 3 close-out hygiene work. Phase 3
+> shipped on `origin/lt-4` at `65da3d4` (all 5 stages). The Phase 3
+> plan that previously lived in `tasks/todo.md` is archived at
+> [`todo-mt-11-phase-3-archive.md`](todo-mt-11-phase-3-archive.md).
 
-**Status:** plan drafted 2026-05-22 after Phase 2 perf smoke
-surfaced unacceptable FPS at maximized resolution (20 FPS at
-3440×1440; canvas-JPEG pipeline is bandwidth-bound). User chose
-DXGI over SharedBuffer for native-resolution + zero-IPC-bandwidth.
-Production fallback (on spike NO-GO or runtime detection failure):
-**legacy arch-A** (visible popup, chrome cutout artifact accepted
-with UI accommodations).
+**Difficulty:** ★★ (2/5) — docs-only, low-risk, four new lessons.md
+entries plus a HANDOFF correction note retracting one stale claim. No
+code changes. No test changes.
 
-**Difficulty:** ★★★★★ (largest in project history).
+**Effort estimate:** ~3 hours (drafting + format + verification + FF).
 
-**Effort estimate:** ~5 weeks focused work (vs ROADMAP's original
-40-80h, which I believe is optimistic given FD6/B history and the
-wider-a11y testing scope).
+**Owner:** this session (`claude/festive-hoover-6abdbf`).
 
-**Predecessor:** Phase 2 work on session branch (popup hidden,
-canvas-jpeg transport, viewport/input bridge surface).
+**Target:** fast-forward into `lt-4` and push to `origin/lt-4` at end.
+
+**Status:** plan drafted 2026-05-25 after pre-flight surfaced Option C
+(`ResetParameters` projection-push fix) as a non-bug. Option C
+replaced with new lesson L-022. **Awaiting user OK before any
+`lessons.md` / HANDOFF / CHANGELOG edits.**
 
 ---
 
 ## 1. Goal + scope
 
-**When this ships:** engine pixels flow GPU → GPU into the WebView2
-visual tree with zero CPU readback or compression. At 3440×1440
-maximized with no particles, FPS is engine-limited rather than
-transport-limited (target: 100+ FPS, achieved by removing
-`GetRenderTargetData` + JPEG encode/decode + JSON marshalling from
-the per-frame path). Phase 2's canvas-JPEG transport is demoted
-to a diagnostic env-var-gated dev mode. **Legacy arch-A is the
-production fallback**: if Stage 0 spike says NO-GO, or if runtime
-detection on user hardware fails, the host reverts to the visible
-WS_EX_LAYERED popup with the chrome cutout artifact accepted (plus
-optional UI accommodations dispatch to minimize where the artifact
-shows).
+**Goal.** Formalize three lesson patterns that Stage 4 and Stage 5 surfaced
+but never landed as `tasks/lessons.md` entries (L-019 DXSDK linker-twin,
+L-020 spike-vs-production const audit, L-021 verify rendered geometry —
+combined-math edition), plus a fourth (L-022) discovered during this
+session's pre-flight: handoff claims about latent bugs require fresh
+first-party code verification before they enter a dispatch's plan.
 
-**In scope:**
-- D3D9 → D3D9Ex migration on the engine device
-- Shared-handle D3D9Ex render target opened by a parallel D3D11
-  device (new `host::DxgiInteropBridge` class)
-- WebView2 switched from HWND hosting to composition hosting
-  (`ICoreWebView2CompositionController`)
-- DirectComposition visual tree: engine D3D11 swapchain below +
-  WebView2 visual above (transparent over viewport region)
-- Removal (under DXGI mode) of popup HWND, AlphaCompositor stamp
-  pipeline, FramePublisher — they become dead code or fallback-only
-- Input routing rework: host window receives input directly under
-  visual hosting, Phase 2 `viewport/input` bridge surface adapts
-- Runtime fallback to arch-A on init failure (driver doesn't
-  support shared handles, multi-GPU mismatch, WebView2 visual
-  hosting init fails, etc.)
-- Automated test infrastructure: pixel-diff, FPS-threshold,
-  resource-leak, long-run stability — added incrementally per
-  stage
-- **Rigorous a11y testing** (per user direction): Narrator, IME
-  composition, screen-reader navigation all verified under
-  composition hosting
+The four lessons close out Phase 3 documentation hygiene. Future sessions
+inheriting Phase 3 territory get fully-formed rules in lessons.md instead
+of having to re-derive them from CHANGELOG paragraphs and HANDOFF prose.
 
-**Out of scope (filed for later):**
-- HDR / wide-color rendering — separate ROADMAP entry if needed
-- Multi-monitor / hot-plug GPU edge cases beyond "works on each
-  monitor independently"
-- Driver-version test matrix in CI (we test on user's dev rig
-  only; runtime fallback covers unsupported drivers in production)
-- Engine rendering changes other than the D3D9 → D3D9Ex bump —
-  draw calls, shaders, particle system stay byte-identical
-- **UI accommodations for arch-A fallback** — only triggered if
-  Stage 0 says NO-GO; filed as a separate dispatch at that point
+**In:**
 
-**Explicitly not happening:** SharedBuffer transport (Path C from
-the original spike). User direction: DXGI is the bet; arch-A is
-the fallback. SharedBuffer was a midpoint that adds a third
-codepath to maintain forever, and arch-A already ships and works.
+- New `tasks/lessons.md` entry **L-019** — DXSDK linker-twin
+  (`CreateDXGIFactory2` `LNK2019` → `CreateDXGIFactory1` + QI to
+  `IDXGIFactory2`). Linker-side parallel to L-016's header-side
+  pattern. Source incident: Stage 4b first-build `LNK2019 unresolved
+  external CreateDXGIFactory2`.
+- New `tasks/lessons.md` entry **L-020** — When porting a spike to
+  production, audit every const/enum the spike picked against the
+  production workload's actual data flow. Source incident: Stage 4d.1
+  `DXGI_ALPHA_MODE` PREMULTIPLIED → IGNORE pivot.
+- New `tasks/lessons.md` entry **L-021** — Verify rendered geometry,
+  combined-math edition. Sub-plans describing independent components
+  correctly can still produce broken combined math if the combined math
+  isn't walked pixel-by-pixel. Source incident: Stage 5 T6 Iter 1
+  scene-rect displacement bug.
+- New `tasks/lessons.md` entry **L-022** — Handoff-claim verification
+  against current code. When a HANDOFF or next-session-prompt describes a
+  "latent bug" or carries a TODO from a prior session, verify the claim
+  against current code BEFORE planning a fix. Prior-session reasoning
+  may have been correct when written and stale now, or wrong from the
+  start (reasoning by analogy without re-reading the cited site).
+  Source incident: this session's pre-flight, where the prompt's claim
+  of a latent `ResetParameters` projection-not-pushed bug dissolved on
+  reading [`src/engine.cpp:1734`](../src/engine.cpp:1734) (`ResetParameters`
+  ends with `SetCamera(m_eye)` which pushes the projection — has done
+  since Initial import `0d352ae`).
+- **HANDOFF.md correction** retracting the spurious "latent
+  `ResetParameters` projection-push bug" claim (currently in "Known
+  follow-ups (out of scope for Stage 5)" item 2). Remove the item;
+  renumber 3/4/5 → 2/3/4; add a short Retractions sub-section citing
+  L-022 + the verification finding.
+- **CHANGELOG entry** per CLAUDE.md "Roadmap items: update `ROADMAP.md`
+  and `CHANGELOG.md` when a feature ships." Lessons-retro-doc and a
+  HANDOFF correction are NOT a feature ship — but CLAUDE.md's CHANGELOG
+  guidance applies to "anything non-cosmetic worth remembering."
+  Single short entry; not a full feature-style entry. The L-022
+  incident in particular is worth a paragraph in changelog so a future
+  contributor doesn't re-derive the same "the prompt was wrong"
+  finding.
+- **End-of-session FF flow** per CLAUDE.md branch workflow: `git switch
+  lt-4` → `git merge --ff-only claude/festive-hoover-6abdbf` →
+  `git push`. Lineage already confirmed clean at session start.
 
----
+**Out:**
+
+- Option C (`ResetParameters` projection-push fix) — dissolved during
+  pre-flight as a non-bug. No code edit to make. The L-022 lesson is
+  the replacement deliverable.
+- Option A (Phase 3 close-out a11y suite + final acceptance smoke) —
+  awaiting user gate on whether still wanted. Surfaced to user at
+  session start; not started this dispatch.
+- Option D (next roadmap item / post-audit P1 drainage) — separate
+  dispatch. Roadmap doc explicitly redirects to
+  [`post-audit-followups.md`](post-audit-followups.md) for P1s before
+  fresh roadmap work, which is its own non-trivial planning exercise.
+- L-022's broader scope (e.g. "every doc file should be verified") —
+  the rule is scoped to handoff claims about latent bugs and similar
+  carry-forward TODOs. Broader doc-rot is not in scope.
 
 ## 2. What the codebase already gives us
 
-| Existing surface | How it's relevant |
-|---|---|
-| `Engine` class with private D3D9 device ([engine.cpp](../src/engine.cpp), 2000+ LOC) | Stage 1 swaps `Direct3DCreate9` → `Direct3DCreate9Ex`. All existing `IDirect3DDevice9` calls remain valid (IDirect3DDevice9Ex inherits the interface). Cumulative migration risk addressed by isolating this stage. |
-| `AlphaCompositor` ([src/host/AlphaCompositor.{h,cpp}](../src/host/AlphaCompositor.h), 681 LOC) | Under DXGI: dead code (no CPU compositing). Under arch-A fallback: still does its job exactly as today. Stage 7 deletion guarded by "is DXGI default?" |
-| `FramePublisher` ([src/host/FramePublisher.{h,cpp}](../src/host/FramePublisher.h)) | Same — dead under DXGI, useful under arch-A fallback or canvas-jpeg diagnostic mode. |
-| `LayoutBroker` ([src/host/LayoutBroker.{h,cpp}](../src/host/LayoutBroker.h)) | Scene-rect handling adapts: under DXGI, drives the position of the engine D3D11 swapchain visual within the host window. Popup-HWND tracking goes away under DXGI. |
-| Phase 2 `InputDispatcher` ([src/host/InputDispatcher.{h,cpp}](../src/host/InputDispatcher.h)) | Survives. Keyboard path through bridge unchanged. Mouse path: under DXGI the host owns input directly so InputDispatcher may shrink, OR may stay as the abstraction for renderer-routed keyboard. |
-| Phase 2 `viewport/input` bridge schema | Survives unchanged. |
-| WebView2 environment + controller creation ([HostWindow.cpp:InitWebView2](../src/host/HostWindow.cpp:692)) | Stage 3 swaps `CreateCoreWebView2Controller(hwnd, ...)` for `CreateCoreWebView2CompositionController(hwnd, ...)`. Bridge dispatcher, accelerator handlers, settings all carry over. |
-| `WebView2.h` SDK 1.0.3967.48 ([packages/Microsoft.Web.WebView2.1.0.3967.48](../packages)) | Includes `ICoreWebView2CompositionController` + `CreateSharedBuffer`/`PostSharedBufferToScript` (verified via grep). Composition API stable since 1.0.864; we're well past that. |
-| Vitest harness (335 tests, all green) | Limited additions — most DXGI testing moves to Playwright. |
-| Playwright native-CDP harness (90 tests, all green) | Primary hook for pixel-diff, FPS-threshold, resource-leak, stress tests. Already drives the binary via `pnpm test:native`. |
-| `viewport_poc.vcxproj` standalone exe pattern | Template for Stage 0 spike app (`src/host/spike/dxgi_spike.cpp` etc.) |
-| FD6/FD9 historical docs ([docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md](../docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md)) | Stage 0 deliverable includes a post-mortem doc summarizing why three prior visual-hosting attempts failed and how this one differs. |
-
----
+- [`tasks/lessons.md`](lessons.md) — 18 existing entries with stable
+  format. The **Rule / Trigger / How to apply / Source incident /
+  Cross-reference** shape is set by L-001 through L-018. L-016 (Stage 3a
+  DXSDK header shadowing) is the natural sibling for L-019 (the
+  linker-side twin) — cross-reference the two.
+- [`CHANGELOG.md`](../CHANGELOG.md) Stage 4 entry — "Issues encountered
+  and resolutions" section already has the long-form context for L-019
+  (`LNK2019` → `CreateDXGIFactory1` + QI) and L-020 (PREMULTIPLIED →
+  IGNORE alpha pivot). The retro-doc work is **distillation** of that
+  prose into the Rule / Trigger / How to apply form, not investigation.
+- `CHANGELOG.md` Stage 5 entry — "Issues encountered and resolutions"
+  has the four T6 iteration bugs documented in detail; Iter 1
+  (displacement) is the source for L-021.
+- [`tasks/stage-5-smoke-result.md`](stage-5-smoke-result.md) — the
+  iter-by-iter bug log referenced by the Stage 5 CHANGELOG. Worth
+  pulling specific phrasing for the L-021 source-incident paragraph.
+- [`tasks/HANDOFF.md`](HANDOFF.md) "Known follow-ups (out of scope for
+  Stage 5)" item 2 — the claim we need to retract.
+- [`src/engine.cpp:1654`](../src/engine.cpp:1654) (`ResetParameters`) —
+  the file:line citation for the L-022 source incident.
+- [`src/engine.cpp:998`](../src/engine.cpp:998) (`SetCamera`) — the
+  file:line citation showing the projection push that the "latent bug"
+  claim missed.
+- `git log -S "SetCamera(m_eye)"` outputs `0d352ae Initial import` —
+  the evidence that this is not a recent regression.
 
 ## 3. Architecture / implementation approach
 
-### 3.1 Two graphics devices coexist
+Four lesson entries + one HANDOFF correction + one short CHANGELOG
+entry. Each lesson uses the baseline shape from L-001/L-017/L-018:
+**Rule / Trigger / How to apply / Source incident (date, context) /
+Cross-reference**. L-016's more elaborated shape (Two-part fix, Also
+requires) is the exception, not the rule — only adopted if a lesson
+genuinely needs the elaboration.
 
-- **D3D9Ex device** owned by `Engine`. Renders particles to a
-  shared-handle texture each frame.
-- **D3D11 device** owned by new `host::DxgiInteropBridge`. Opens
-  the engine's shared texture, wraps it in a DXGI swapchain,
-  attaches the swapchain visual to DirectComposition.
+**Drafting order** (each independent — sequential keeps the lessons.md
+diff coherent and lets the L-022 incident verification anchor the rest):
 
-The two devices use the same physical GPU but have independent
-command streams. Synchronization via shared-handle semantics:
-after D3D9Ex `Present`, the shared handle is "ready"; D3D11 reads
-on its next composite pass. Optionally use a cross-device
-`ID3D11Fence` for explicit sync — generally not required for
-static-snapshot-per-frame patterns. Decision deferred to Stage 2
-empirical testing.
+1. **L-019 — DXSDK linker-twin.** Title: *"Legacy DXSDK June 2010 also
+   shadows Win10 SDK link libraries — `LNK2019 CreateDXGIFactory2`-class
+   failures resolve via `CreateDXGIFactory1` + QI, not linker-path
+   surgery."* Key points:
+   - Rule: DXSDK first in `<AdditionalLibraryDirectories>` ships a
+     pre-Win8 `dxgi.lib` missing `CreateDXGIFactory2` and similar
+     Win8+ entrypoints. No per-file `<AdditionalLibraryDirectories>`
+     exists in MSBuild (link is per-project), so L-016's header-side
+     isolation doesn't extend to the linker.
+   - How to apply: use `CreateDXGIFactory1` (DXSDK-compatible since
+     Win7) and QI for `IDXGIFactory2` / `IDXGIFactory4` etc. as
+     needed. Modern-DXGI capability detection becomes a single QI
+     chokepoint per `IDXGIFactory*` consumer.
+   - Source: distilled from CHANGELOG Stage 4 "Issues encountered"
+     §Iter 1.
+   - Cross-ref: L-016 (header-side twin) + Compositor.cpp's
+     factory-creation code + Stage 4 sub-plan.
 
-### 3.2 Visual tree
+2. **L-020 — Spike-vs-production const/enum audit.** Title: *"When
+   porting a spike to production, audit every const/enum the spike
+   picked against the production workload's actual data flow — spike
+   correctness is not transitive."* Key points:
+   - Rule: Spikes validate transport/topology under a synthetic
+     workload (typically `D3DClear` to solid color, no shaders, no
+     blending). Constants the spike picked are correct for that
+     workload, not automatically correct for production.
+   - How to apply: for each const, ask "What invariant in the spike's
+     workload justified this value? Does production hold the same
+     invariant?" Cheap audit pass beats user-surfaced visual
+     regressions.
+   - Source: Stage 4d.1 PREMULTIPLIED → IGNORE alpha pivot.
+   - Cross-ref: Compositor.cpp swapchain-desc + Stage 4 sub-plan §3.5.
 
-```
-Host HWND (main window — top-level HWND)
-└── IDCompositionDesktopDevice
-    └── IDCompositionTarget bound to host HWND
-        └── Root Visual
-            ├── Engine Visual (D3D11 swapchain content)
-            │   - Positioned at scene-rect (LayoutBroker drives)
-            │   - Z-order: behind WebView2
-            └── WebView2 Visual (from
-                ICoreWebView2CompositionController.RootVisualTarget)
-                - Full window size
-                - Transparent background where viewport rect is
-                - Receives DOM input via WebView2 normal pipeline
-```
+3. **L-021 — Verify rendered geometry, combined-math edition.** Title:
+   *"CLAUDE.md's 'verify rendered geometry, not design intent' rule
+   applies to *combined* math across components, not just per-component
+   math — walk the pixel path end-to-end before declaring a
+   multi-component layout correct."* Key points:
+   - Rule: Sub-plans describing Component A and Component B correctly
+     individually can still produce broken geometry when the two
+     compose, if no one walks the pixel path end-to-end. Per-component
+     review catches local errors; combined-math walk catches composition
+     errors.
+   - How to apply: at sub-plan time, pick a concrete pixel and walk
+     it through every component. State the assumed coord space at each
+     stage. A 30-second walk-through with sample pixel `(100, 100)`
+     and scene-rect `(50, 30, 800, 600)` would have caught Stage 5
+     Iter 1.
+   - Source: Stage 5 T6 Iter 1 displacement bug — Compositor's local-
+     coords-post-offset design and Engine's render-at-scene-rect
+     design each correct, combined produced double-offset.
+   - Cross-ref: CLAUDE.md "Verify rendered geometry, not design intent"
+     + Stage 5 sub-plan + Compositor::SetEngineVisualTransform.
 
-No alpha-compositor stamping. CSS transparency handles the
-"viewport shows through chrome" effect — the WebView2 visual is
-transparent where the viewport quadrant is (matches the existing
-`<div>` placeholder pattern), engine visual shows through.
+4. **L-022 — Handoff-claim verification against current code.** Title:
+   *"Handoff notes and next-session prompts carry claims, not facts —
+   verify against current code before any claim enters a dispatch's
+   plan."* Key points:
+   - Rule: Carry-forward TODO claims in HANDOFF.md or next-session-
+     prompts ("latent bug at X", "deferred fix for Y", "should follow
+     up on Z") are claims to verify. Prior-session reasoning may have
+     been correct when written and stale now (sibling session closed
+     the gap), wrong from the start (reasoning by analogy without
+     re-reading the cited site), or correct but mis-located (line
+     numbers shifted).
+   - How to apply: for each carry-forward claim entering the active
+     plan — read the cited code at the cited line (find by name if
+     lines shifted); trace the data flow; if real, plan the fix; if
+     not, retract the claim in HANDOFF.md (don't silently drop it —
+     future sessions inheriting the same docs need the retraction).
+   - Source: this session, post-[MT-11] Phase 3 dispatch.
+     Next-session-prompt and HANDOFF.md described "latent projection-
+     not-pushed bug in `ResetParameters`" at `engine.cpp:1518`.
+     Pre-flight verification: `ResetParameters` now at
+     `engine.cpp:1654` (lines shifted ~136 by Stage 5 additions);
+     ends with `SetCamera(m_eye)` at line 1734; `SetCamera` at line
+     1014 unconditionally pushes `SetTransform(D3DTS_PROJECTION,
+     &m_projection)` and recomputes `m_viewProjection`. `git log -S
+     "SetCamera(m_eye)" -- src/engine.cpp` reports the call dates
+     to `0d352ae` (Initial import). The "latent bug" was a phantom:
+     prior-session author reasoned by analogy from the genuine Stage
+     5 `SetSceneViewport` bug without re-reading `ResetParameters`.
+     Discovery cost: ~15 min. Hypothetical un-verified cost: a
+     duplicate `SetTransform(PROJECTION)` would have shipped right
+     before the existing `SetCamera` push — likely harmless,
+     possibly a redundant device-state push per resize, contributing
+     noise to future readers.
+   - Cross-ref: L-018 (AI-audit verification) is the external-source
+     parallel; L-022 is the internal-handoff parallel. CLAUDE.md
+     "Trust but verify — universally" is the parent principle.
 
-### 3.3 Frame loop
+5. **HANDOFF.md correction.** Remove item 2 ("latent
+   `ResetParameters` projection-push bug") from "Known follow-ups
+   (out of scope for Stage 5)". Renumber 3/4/5 → 2/3/4. Add a new
+   "Retractions" sub-section (placed after "Known follow-ups", before
+   "Stage 5 commits") with one paragraph citing L-022 + the
+   verification finding. Don't strikethrough or comment-out the
+   removed item — it's removed cleanly, with the structural lesson
+   captured in lessons.md.
 
-1. Engine renders to shared-handle texture (existing D3D9 draws;
-   only the render target object changed)
-2. Engine `Present` → D3D9 driver signals shared-handle ready
-3. D3D11 device's next swapchain Present picks up the new content
-4. DComp composites engine visual + WebView2 visual
-5. Visual tree presents to host HWND
+6. **CHANGELOG.md entry.** One short entry under the existing date
+   2026-05-25, inserted at the top of `## Changelog` (above Stage 5).
+   Section title plain prose: *"Lessons retro-doc for [MT-11] Phase 3
+   — L-019/L-020/L-021/L-022 formalized; HANDOFF latent-bug claim
+   retracted."* Date line with TODO-HASH/TODO-PR placeholders matching
+   Stage 5's still-pending hash. Two short paragraphs:
+   - **What ships.** Four new lessons.md entries + HANDOFF retraction
+     of the spurious `ResetParameters` latent-bug claim.
+   - **How we tackled it.** Three of the four lessons were
+     distillation from CHANGELOG Stage 4 / Stage 5 prose. The fourth
+     (L-022) emerged during pre-flight verification of a carry-forward
+     claim that turned out not to hold against current code.
+   - Skip "Issues encountered" — docs distillation has no notable
+     issues.
 
-Per-frame cost: **GPU only.** No `GetRenderTargetData`, no JPEG,
-no memcpy, no JSON, no renderer-side decode. The Phase 2
-diagnostic mode shows what we're saving — ~85 ms per frame at
-3440×1440 — eliminated wholesale.
+7. **End-of-session FF.** Lineage re-check before merge:
+   `git fetch origin lt-4 --quiet` → `git log --oneline
+   origin/lt-4..HEAD` (should show ~1-2 docs commits from this
+   session) → `git log --oneline HEAD..origin/lt-4` (should be 0).
+   Then: `git switch lt-4` → `git merge --ff-only
+   claude/festive-hoover-6abdbf` → `git push`. If FF fails, STOP per
+   CLAUDE.md.
 
-### 3.4 Input routing under visual hosting
+## 4. Risks named up front + mitigations
 
-Under HWND-mode WebView2, all input reached the WebView2 HWND
-first. Under composition hosting, input reaches the host HWND;
-the host must forward into WebView2 via
-`ICoreWebView2CompositionController::SendMouseInput` /
-`SendPointerInput` / `SendKeyboardInput`. This is significant
-input rework but well-documented in Microsoft samples.
+1. **Risk — L-019/L-020/L-021 source-incident paragraphs misquote
+   CHANGELOG prose, drifting from the actual incident.**
+   *Mitigation:* before writing each Source incident section, re-read
+   the corresponding CHANGELOG paragraph in full. Cite the same dates
+   and same line-by-line claims. Don't summarize — quote the
+   structural facts (file:line citations, error messages, fix sites)
+   verbatim where they appear in CHANGELOG.
 
-Phase 2's `viewport/input` bridge surface stays for renderer-
-routed keyboard cases (Shift held for spawn, with TYPING_TAGS
-guard). Most mouse input flows to host WNDPROC directly — the
-popup HWND target goes away.
+2. **Risk — L-022 framed as blame-the-prior-session note instead of a
+   structural rule.** The prior session's author wasn't careless; the
+   failure mode (reasoning by analogy from a genuine bug to a
+   parallel that doesn't hold) is one this collaboration's process
+   has hit before (L-018 is the external-input parallel).
+   *Mitigation:* write L-022 framed as a process rule, not as
+   criticism. The Source incident describes what happened structurally
+   (line numbers shifted, analogy not re-verified) without naming the
+   session branch or making it about the person. The rule reads as
+   "claims-in-docs need verification" the same way L-018 reads as
+   "claims-from-AI need verification" — same shape, different source.
 
-### 3.5 Lifecycle + reset
+3. **Risk — HANDOFF correction goes stale itself when the next
+   dispatch reads it.** If we leave a long retraction paragraph
+   inline in "Known follow-ups", a future reader has to parse the
+   retraction to know item 2 is not actionable. *Mitigation:* remove
+   the spurious item entirely from "Known follow-ups", renumber the
+   rest, and add a short "Retractions" sub-section citing L-022 as the
+   structural lesson. More honest than a strikethrough AND avoids
+   future cargo-culting of the false claim.
 
-- **Engine device reset** (alt-tab, sleep, driver crash):
-  D3D9Ex `D3DERR_DEVICELOST` → recreate shared-handle texture →
-  re-publish to D3D11 side → D3D11 reopens handle.
-- **Window resize**: scene-rect updates → D3D11 swapchain resize
-  → engine render target resizes (or stays fixed and CSS scales,
-  decision in Stage 4).
-- **WebView2 navigation**: visual stays attached, content reloads
-  — no DXGI impact.
-- **Process shutdown**: WebView2 visual released first, then
-  D3D11 swapchain, then engine. Tested explicitly by Stage 6
-  leak harness.
+4. **Risk — CHANGELOG entry's date placement is wrong.** CHANGELOG
+   convention is "reverse chronological order, newest at top of
+   `## Changelog`." Current top is Stage 5 (`2026-05-25`). This
+   entry's date is also 2026-05-25 — "most recently merged sits above
+   older ones from the same day." This entry merges AFTER Stage 5, so
+   sits ABOVE Stage 5. *Mitigation:* insert directly under the
+   `## Changelog` heading, above Stage 5's section. Verify placement
+   before committing.
 
-### 3.6 Fallback to arch-A
+5. **Risk — Cross-references to commits use placeholders we never
+   backfill.** Stage 4 and Stage 5 CHANGELOG entries both have
+   `TODO-HASH` placeholders. *Mitigation:* match the existing pattern
+   — use `TODO-HASH`/`TODO-PR` placeholders. The backfill happens at
+   merge-to-master (none of these LT-4 entries have backfilled hashes
+   yet); not in scope here.
 
-At `DxgiInteropBridge` init, detect failure modes and fall back:
+6. **Risk — Format drift across the four lesson entries.** L-016 is
+   slightly more elaborated than L-017/L-018. *Mitigation:* use the
+   baseline 5-section shape for L-019/L-020/L-021/L-022. No
+   elaborated sub-headings unless a lesson genuinely needs them
+   (e.g. L-019's linker-side detail might benefit from a short "Why
+   no per-file fix" subsection — judgment call at draft time, biased
+   toward simpler).
 
-| Failure | Detection | Action |
-|---|---|---|
-| `D3DERR_NOTAVAILABLE` on shared-handle create | D3D9Ex `CreateTexture` returns error | Fall back to arch-A; log GPU + driver version |
-| `OpenSharedResource` fails | D3D11 returns error | Same |
-| Multi-GPU mismatch | `IDXGIAdapter::GetDesc` LUID differs between D3D9Ex and D3D11 device | Same |
-| Visual hosting init fails | WebView2 `CreateCoreWebView2CompositionController` returns error | Same — full revert to HWND-mode WebView2 |
-| Stage 0 spike NO-GO | Pre-decision before any production code | Plan abandoned; file UI accommodations dispatch as the next move |
+7. **Risk — Risk of finding another non-bug in the carry-forward TODO
+   list mid-dispatch.** L-022's discovery raises the possibility that
+   other claims in HANDOFF's "Known follow-ups" are also stale or
+   wrong. *Mitigation:* explicitly NOT in scope here. The five other
+   items (canvas-architecture fixme, Stage 4e ClearRTV guard, test
+   harness env-var check, lessons-retro-doc itself) are not being
+   verified in this dispatch. If a future dispatch picks any of them
+   up, L-022's rule kicks in then. Flagged in the dispatch summary
+   as "audit candidate for a future dispatch."
 
-Logs include GPU/driver/WebView2-version triple so the user can
-report which combo failed.
+## 5. Testing & verification
 
----
+Docs-only dispatch; verification is format + factual + post-edit
+pre-flight.
 
-## 4. Stage decomposition
+**Format checks (per lesson entry):**
 
-| Stage | What it produces | Effort | Reversible? |
-|---|---|---|---|
-| **0. Spike** | Standalone test app proving D3D9Ex shared handle → D3D11 → WebView2 composition pipeline end-to-end. Doc summarizing FD6/B failure root causes. Perf measurement vs arch-A baseline. **GO/NO-GO gate.** | 2 days | Hard gate. NO-GO → revert Phase 2 + file UI accommodations dispatch. |
-| **1. D3D9Ex migration** | Engine uses D3D9Ex; all existing tests pass; behavior identical to today. | 2-3 days | Yes (one revert commit) |
-| **2. Shared texture infrastructure** | `Engine::GetSharedTextureHandle()` returns valid HANDLE; D3D11 side opens it; bit-exact pixel verification via D3D11 readback test. Standalone — no WebView2 yet. | 3-4 days | Yes |
-| **3. WebView2 composition hosting migration** | WebView2 swapped to visual hosting; behaviorally identical to HWND mode (existing 90 Playwright tests pass; rigorous a11y suite passes). **Highest-risk stage** — historical FD6/B failure point. | 5-7 days (extended for a11y) | Yes (env-var gated) |
-| **4. DXGI composition wiring** | First end-to-end frame via DXGI visible. Behind `ALO_VIEWPORT_TRANSPORT=dxgi` env var. Pixel-diff vs canvas-jpeg passes. | 3-4 days | Yes |
-| **5. Input routing rework** | All Phase 2 input gestures work under DXGI mode. Mouse path migrated to host WNDPROC; keyboard path via bridge survives. | 2-3 days | Partial (some code shared with Phase 2) |
-| **6. Automated test harness** | Pixel-diff infrastructure, FPS-threshold tests, D3D11 debug layer leak assertions, stress tests, driver-fallback test. Added incrementally during stages 1-5; consolidated here. | 3-4 days (parallel with prior stages) | n/a — additive |
-| **7. Polish + cleanup** | Phase 2's FramePublisher + AlphaCompositor either deleted (if DXGI ships as default) or kept as fallback. ROADMAP + CHANGELOG + HANDOFF. | 2-3 days | Last commit reversible |
+- [ ] L-NNN heading uses `## L-NNN — Title sentence` format
+- [ ] All four sections present in order: Rule / Trigger / How to apply
+      / Source incident (date, context) / Cross-reference
+- [ ] Bold section labels (`**Rule.**`, `**Trigger.**`, etc.) end with a
+      period
+- [ ] Each entry followed by `---` separator before the next
+- [ ] Inline file:line links use markdown form
+      `[file](src/path:NNNN)` so readers can jump
 
-**Total**: ~22-30 days of focused work = ~5 weeks. Each stage
-lands behind the env var; default behavior (legacy popup or
-canvas-jpeg) stays unchanged for production users. User can
-demand a checkpoint or freeze between any two stages.
+**Factual checks (per lesson entry):**
 
----
+- [ ] L-019 source-incident matches CHANGELOG Stage 4 "Issues
+      encountered" §Iter 1 verbatim on file names, line numbers,
+      error messages
+- [ ] L-020 source-incident matches CHANGELOG Stage 4 "Issues
+      encountered" §4d.1
+- [ ] L-021 source-incident matches CHANGELOG Stage 5 "Issues
+      encountered" §Iter 1 + the displacement-bug pixel math
+- [ ] L-022 source-incident matches the actual pre-flight finding
+      (line numbers, `git log` commit hash `0d352ae`, function names)
+      — re-read [`src/engine.cpp:1654`](../src/engine.cpp:1654) and
+      [`src/engine.cpp:998`](../src/engine.cpp:998) once before
+      finalizing the paragraph
+- [ ] Each Cross-reference link resolves (file path exists, line
+      number is plausibly stable)
 
-## 5. Risks named up front + mitigations
+**HANDOFF correction:**
 
-1. **FD6/B history — three prior failures in this API family.**
-   *Mitigation:* Stage 0 hard gate; reads post-mortems before any
-   production code lands. NO-GO falls back to arch-A + UI
-   accommodations dispatch (not SharedBuffer, not canvas-jpeg).
-   2-day spike caps the bet.
+- [ ] Item 2 ("latent `ResetParameters` projection-not-pushed bug")
+      removed from "Known follow-ups (out of scope for Stage 5)"
+- [ ] Items 3/4/5 renumbered to 2/3/4 in the same section
+- [ ] New "Retractions" sub-section added with one paragraph citing
+      L-022 + the verification finding
+- [ ] No other HANDOFF content changed (cumulative)
 
-2. **D3D9Ex behavior differences from D3D9.** Different `Reset`
-   semantics, can't use `D3DPOOL_MANAGED`, etc. The engine likely
-   uses managed pool somewhere. *Mitigation:* Stage 1 is a
-   standalone migration with no other changes; full vitest +
-   Playwright + manual smoke must be green before Stage 2
-   proceeds. ANY behavior change blocks until fixed.
+**CHANGELOG entry:**
 
-3. **D3D9-D3D11 interop driver compatibility.** Intel iGPU
-   drivers have known historical bugs in shared-handle paths.
-   *Mitigation:* Hard runtime detection — if init fails OR if
-   a 1-pixel readback validation fails, log and fall back to
-   arch-A. User on unsupported GPU gets working editor with
-   legacy chrome-cutout, not a crash. `--force-dxgi` debug flag
-   to override fallback for diagnosis.
+- [ ] Inserted at top of `## Changelog`, above the Stage 5 entry
+- [ ] Date line matches established format with TODO-HASH/TODO-PR
+- [ ] Two paragraphs ("What ships" + "How we tackled it" — labels
+      bolded with period); no "Issues encountered"
+- [ ] Ends with `---` separator before Stage 5's entry
 
-4. **WebView2 composition hosting is input/focus/a11y-different
-   from HWND hosting.** Documented FD6 failure point.
-   *Mitigation:* Stage 3 swaps hosting behaviorally-identically
-   first; every existing Playwright test must pass; **rigorous
-   a11y suite** (per user direction) added covers Narrator
-   reading, tab navigation, IME composition, dialog accessibility.
+**Pre-handoff smoke (CLAUDE.md "Pre-handoff testing — exhaustive"):**
 
-5. **Resource leak on resize / device reset.** D3D resources +
-   DComp visuals + shared handles all need correct teardown.
-   *Mitigation:* D3D11 debug layer assertions in Debug builds
-   assert zero live objects at shutdown. Stage 6 leak harness
-   does 200×modal-cycle + 200×resize + 5 min stress, asserts
-   < 1MB VRAM growth.
+- [ ] `git status` clean working tree before each commit
+- [ ] `git diff --stat` matches what the dispatch claims to touch
+      (only `tasks/lessons.md`, `tasks/HANDOFF.md`, `CHANGELOG.md`,
+      `tasks/todo.md`, plus the rename
+      `tasks/todo.md → tasks/todo-mt-11-phase-3-archive.md`)
+- [ ] `pnpm -w test` (vitest) — **338 / 338** unchanged (sanity, no
+      React/web touched)
+- [ ] `pnpm -w typecheck` (`tsc -b`) — 0 errors (sanity)
+- [ ] MSBuild Debug + Release x64 clean — no C++ changes (sanity)
+- [ ] Lineage re-check before FF: `git log origin/lt-4..HEAD` shows
+      only this session's docs commits; `git log HEAD..origin/lt-4`
+      empty
 
-6. **WS_EX_LAYERED + WebView2 visual hosting interaction.**
-   Specific historical FD6 failure mode. *Mitigation:* Stage 0
-   spike specifically reproduces this configuration; document
-   what works.
+**Manual review pass (post-edit, pre-commit):**
 
-7. **Multi-GPU laptop systems.** Shared handles across physical
-   GPUs don't work. *Mitigation:* LUID match check between
-   devices → fall back to arch-A on mismatch.
+- [ ] Open the new `tasks/lessons.md` in raw form and verify the
+      four new entries render without GFM formatting issues (no
+      broken tables, no truncated code blocks)
+- [ ] Re-read the L-022 source-incident paragraph specifically —
+      this one is auto-meta-referential (a lesson about
+      verification written from a verification finding) and the
+      language risks sounding self-congratulatory. Should read as
+      "structural finding worth a process rule," not "I caught
+      a thing."
+- [ ] Sanity-check the CHANGELOG entry is parseable by the existing
+      tooling (matches the date-line regex `\*YYYY-MM-DD · ...\*`)
 
-8. **Performance might not justify the cost.** DComp has its own
-   overhead. *Mitigation:* Stage 0 perf measurement vs arch-A
-   baseline. If DXGI < 2× faster than arch-A on user's rig,
-   abort (arch-A already ships; cutout artifact accepted with UI
-   adjustments).
+**Commit boundary.**
 
-9. **Composition API evolved across WebView2 SDK versions.**
-   *Mitigation:* Stage 0 confirms 1.0.3967.48 supports all APIs
-   we use; document minimum required version.
+Two commits total:
 
-10. **A11y / IME might break under visual hosting.** User
-    explicitly requested rigorous testing. *Mitigation:* Stage 3
-    extended by 2-3 days for a11y/IME smoke + automated
-    Narrator-driving where feasible. If found broken,
-    documented as known issue + fall back to arch-A flag for
-    affected users.
+1. **Archive of prior todo.md.** Pure rename
+   (`tasks/todo.md` → `tasks/todo-mt-11-phase-3-archive.md`) + this
+   new file. Subject: `docs(LT-4): archive Phase 3 todo + draft post-
+   Phase 3 dispatch plan`.
 
-11. **Multi-week project mid-development is hard to abandon.**
-    Sunk cost pressure to ship something broken. *Mitigation:*
-    Stage gates with user. After each stage, explicit "ship N,
-    continue to N+1, or freeze and revert?" decision.
+2. **Lessons + retraction.** `tasks/lessons.md` additions +
+   `tasks/HANDOFF.md` correction + `CHANGELOG.md` entry +
+   `tasks/todo.md` review section. Subject: `docs(LT-4): [MT-11]
+   Phase 3 lessons retro-doc — L-019/L-020/L-021/L-022 + HANDOFF
+   retraction`.
 
-12. **Vitest can't drive D3D9.** Renderer-side tests give low
-    coverage on the new code. *Mitigation:* Stage 6 invests in
-    Playwright-side pixel-diff + perf + leak tests proportional
-    to risk.
+**FF + push:**
 
----
-
-## 6. Testing & verification (per stage)
-
-Per CLAUDE.md, these are verifiable claims that gate stage
-progression. The user explicitly chose "minimize manual testing"
-+ "rigorous a11y." Automated tests dominate; manual reserved for
-items that genuinely require a human (screen reader, IME).
-
-### Stage 0 (spike) acceptance — hard GO/NO-GO gate
-
-- [ ] **FD6/B post-mortem doc** at `docs/superpowers/research/dxgi-fd6-fd9-history.md`: one paragraph per prior attempt, root cause + why this attempt differs
-- [ ] **Standalone test app** at `src/host/spike/dxgi_spike.cpp` (template: existing `viewport_poc.vcxproj`): creates D3D9Ex device, shared-handle texture, opens in D3D11, presents through DComp visual into a host HWND. Visible test pattern proves end-to-end works.
-- [ ] **API stability check**: scripted grep against `WebView2.h` confirms all APIs we plan to use have stable interface IDs in 1.0.3967.48
-- [ ] **Perf measurement** at 720p / 1080p / 1440p / 3440×1440: record D3D9 render time, D3D11 composite time, end-to-end frame latency. Document vs Phase 2 canvas-jpeg numbers (~25ms at 3440×1440 → target < 10ms total) AND vs arch-A current (which is fast at native, only struggles with cutout artifact).
-- [ ] **Mixed-mode interaction sanity**: WebView2 visual + D3D11 visual co-composited via DComp; confirm transparency / z-order works
-- [ ] **Decision doc**: short markdown that says GO or NO-GO with reasons. Committed to repo.
-
-### Stage 1 (D3D9Ex migration) acceptance
-
-- [ ] vitest **335/335 pass**
-- [ ] Playwright **90/90 pass**
-- [ ] MSBuild Debug + Release x64 clean
-- [ ] Manual: launch in legacy mode, new-UI legacy popup, new-UI canvas-jpeg modes; all three render and accept input as today
-- [ ] **New auto test** `tests/native/d3d-init.spec.ts`: boot in each mode, assert log contains `[D3D9Ex] device created` (or fallback)
-- [ ] D3D9 debug layer reports zero errors at shutdown
-
-### Stage 2 (shared texture) acceptance
-
-- [ ] **Standalone unit test** at `src/host/spike/shared_texture_test.cpp` (doctest framework): create shared texture, open in D3D11, write known pattern from D3D9, read back from D3D11, verify bit-exact match
-- [ ] D3D11 debug layer reports zero errors
-- [ ] Documented on user's dev rig with GPU + driver version
-
-### Stage 3 (composition hosting) acceptance — rigorous a11y
-
-- [ ] **All 90 Playwright tests pass** under visual hosting (gated by env var for A/B). CRITICAL gate — FD6 failure point.
-- [ ] **New Playwright** `tests/native/composition-hosting.spec.ts`: assert clicks/keys reach renderer with identical coords/values as HWND mode
-- [ ] **A11y automated**: `tests/native/a11y-narrator.spec.ts` — drive Windows Narrator via UI Automation, verify it reads (a) menubar items, (b) tree row labels, (c) dialog modal titles, (d) form-field labels. Compare announcement strings to a golden file. Tolerance for minor wording shifts.
-- [ ] **A11y manual** (irreducibly): Narrator reads visible chrome correctly, tab cycles through interactive elements, F2 enters inline rename, Escape closes modal/menu
-- [ ] **IME smoke** (if user installs an IME): typing in inspector fields composes correctly under visual hosting
-- [ ] **Keyboard nav stress**: Playwright drives 100 random tabs / arrow keys / accelerators; assert no crash + focus always visible
-
-### Stage 4 (DXGI composition wiring) acceptance
-
-- [ ] **New Playwright** `tests/native/dxgi-transport.spec.ts`: boot with `ALO_VIEWPORT_TRANSPORT=dxgi`, assert `[DXGI] up` in log, screenshot canvas region, verify non-black (engine pixels arrived)
-- [ ] **Pixel-diff** `tests/native/dxgi-vs-jpeg.spec.ts`: same engine state under canvas-jpeg and DXGI; SSIM > 0.95 (allows compositing differences, flags structural breaks)
-- [ ] **Perf threshold** `tests/native/dxgi-perf.spec.ts`: drive FPS counter for 10s; assert mean FPS > 80 at 1080p AND > 60 at 3440×1440 (vs Phase 2's 20 FPS — 3× improvement is the bar)
-- [ ] **Resize stress**: 50 programmatic resizes; assert no crash, no log errors, FPS recovers to baseline after settling
-
-### Stage 5 (scene-rect transform on engine visual) acceptance — SHIPPED 2026-05-25
-
-**Reframing note.** Original Stage 5 framing was "input routing rework"
-(the bullets below). Most of that scope was actually covered earlier:
-mouse forwarding shipped under Stage 3c (`SendMouseInput`), keyboard
-focus under Stage 3f (`MoveFocus`), Shift+spawn user-verified during
-Stage 4c. The remaining "scene-rect transform on engine visual" item
-— originally an §1 Out-of-Scope on the Stage 4 sub-plan — was elevated
-to be Stage 5's actual scope and shipped at session
-`claude/affectionate-euclid-5d1c8f`. See [CHANGELOG.md](../CHANGELOG.md)
-top entry + [HANDOFF.md](HANDOFF.md) "Stage 5 — what shipped" for the
-full ship description.
-
-What Stage 5 actually delivered (each verified at T6 smoke + T7 spec):
-
-- [x] **`Compositor::SetEngineVisualTransform`** — DComp engine visual
-      clips to scene-rect quadrant via `SetOffset(0, 0) + SetClip` in
-      absolute host-client coords. Deferred-clip mechanism applies
-      transform after `Present1` so swapchain + clip arrive on same
-      DWM cycle.
-- [x] **`Engine::SetSceneViewport` (Variant B-γ)** — engine scene-pass
-      viewport scoped to scene-rect after the full-RT Clear (D12
-      ordering rule). Per-pixel-FoV projection with reference =
-      current `BackBufferHeight` keeps `fovY ≤ 45°` always — engine
-      renders at-or-less world than pre-Stage-5.
-- [x] **LayoutBroker scene-rect fan-out** under composition-mode gate
-      (`m_dcompCompositor != nullptr`) → Engine + Compositor.
-- [x] **HostWindow attach seed + teardown** — initial seed via
-      `immediate=true`; symmetric clear at WM_DESTROY +
-      WM_APP_COMPOSITION_FALLBACK.
-- [x] **`tests/dxgi-scene-rect.spec.ts`** — 4 log-evidence assertions
-      on `[COMP-engine-transform]` lines (composition-mode-conditional;
-      HWND baseline auto-skips).
-- [x] **HWND baseline regression gate**: 99 passed + 26 skipped + 0
-      failed (was 99 + 22 pre-T7; +4 new tests skipping cleanly).
-- [x] **Composition mode gate**: 122 passed + 3 skipped + 0 failed
-      (was 118 + 3; +4 new tests passing).
-- [x] **User-verified visual**: pane resize "cleanly reveals more of
-      the scene" without distortion; no chrome panel bleed; aspect
-      tracks correctly through drag without snap-on-click.
-
-Original "input routing" acceptance items, retained for historical
-context (most were superseded by earlier stages):
-
-- [x] **All Phase 2 mouse + keyboard gestures** work under DXGI —
-      shipped under Stage 3c (mouse) + Stage 3f (keyboard) + Stage 4c
-      user smoke (Shift+spawn).
-- [ ] **Extension** of `canvas-architecture.spec.ts` runs under DXGI
-      mode — DEFERRED (L-012 instrumentation fault — fixme markers in
-      the spec; three documented fix approaches).
-- [ ] **Focus regression** test: clicking viewport then clicking
-      inspector field doesn't trap focus — manually verified, not
-      formalized in a spec yet.
-
-### Stage 6 (test harness) acceptance — runs through prior stages
-
-- [ ] **Pixel-diff infrastructure**: Playwright helper screenshots a named region, compares to baseline image with configurable SSIM tolerance. Used by stages 3, 4, 5.
-- [ ] **Resource leak harness** `tests/native/resource-leak.spec.ts`: 200× modal-cycle + 200× resize; initial/final VRAM measurement via D3D11 debug layer; assert < 1MB delta
-- [ ] **Long-run stability**: 5 min automated drive (camera rotate + emit + modal cycle + resize); assert no crash, no log errors above warning
-- [ ] **Driver fallback** `tests/native/driver-fallback.spec.ts`: force `OpenSharedResource` to fail via debug toggle; assert fallback to arch-A; app stays usable
-- [ ] **A11y regression**: Narrator-driving suite runs in CI loop
-
-### Stage 7 (cleanup) acceptance
-
-- [ ] CHANGELOG entry (top, reverse chrono) covering all of Phase 3
-- [ ] HANDOFF.md refreshed for next session
-- [ ] ROADMAP: strike [MT-11], move to Shipped, vacate tag
-- [ ] tasks/lessons.md: every gotcha discovered during the 5 weeks
-- [ ] Optional: default `ALO_VIEWPORT_TRANSPORT=dxgi`; demote canvas-jpeg + arch-A to opt-in `--legacy-transport` flag
-- [ ] If NO-GO at Stage 0: revert Phase 2 commits, file UI accommodations dispatch
+- `git switch lt-4`
+- `git merge --ff-only claude/festive-hoover-6abdbf`
+- If FF fails, STOP and reconcile per CLAUDE.md branch workflow.
+- `git push`
 
 ---
 
-## 7. Cross-cutting automated test budget
+## Review (filled in as work progresses)
 
-| Test family | Tool | Cost | Catches |
-|---|---|---|---|
-| Pixel-diff snapshots | Playwright + image-diff | ~30s/scenario | Silent wrong pixels, compositor placement bugs |
-| Perf threshold | Playwright + FPS counter | ~30s/resolution | Performance regressions |
-| Resource leak | Playwright + D3D11 debug layer | ~2 min | VRAM / HWND / GDI leaks |
-| Driver fallback | Playwright + debug toggle | ~10s | Fallback doesn't crash |
-| Stress + long-run | Playwright loop | ~5 min | Heisenbugs, slow drift |
-| A11y Narrator | Playwright + UI Automation | ~2 min | Composition hosting breaking screen readers |
-| IME composition | Manual + IME (irreducible) | ~2 min | Composition under visual hosting |
-
-**Total automated test runtime**: ~10 min. **Test infrastructure
-work**: ~3-4 days, spread across Stage 6. Manual surface
-reduced to: (a) initial visual confirmation after each stage,
-(b) IME smoke if applicable.
-
----
-
-## 8. Stage gate semantics
-
-Between each stage, an explicit checkpoint with the user:
-- **Ship Stage N as-is** (commit + FF to lt-4)
-- **Continue to Stage N+1** (Stage N stays uncommitted until N+1 completes)
-- **Freeze + ship partial** (revert any unstable changes, commit stable subset, file remainder as separate dispatch)
-
-Stage 0 is the hardest gate: NO-GO triggers Phase 2 revert + UI
-accommodations dispatch.
-
----
-
-## 9. Open execution items before code starts
-
-1. **User OK to start Stage 0 spike.** (No code yet — this whole
-   plan is paper.)
-2. **Decision on Phase 2 state during Stage 0**: keep Phase 2's
-   working tree state intact (don't commit; don't revert) so we
-   have a known-working canvas-jpeg fallback to compare against.
-   Stage 0 spike is in a separate worktree or local-only files
-   so Phase 2 state is untouched. Alternative: commit + FF Phase 2
-   before starting (cleaner branch hygiene, slight delay to Stage
-   0 start; Phase 2 ships behind env var so production users see
-   no change).
-3. **Reference docs queued for Stage 0 reading**: FD6 / FD9 plan
-   docs at [`docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md`](../docs/superpowers/plans/2026-05-18-fd9-viewport-alpha-compositing.md);
-   WebView2 visual hosting samples (Microsoft repo).
-
----
-
-## Background reading
-
-Prior planning history (canvas-JPEG approach, Phase 0+1+2) lives
-in [`todo-mt-11-phase-0-1-2-archive.md`](todo-mt-11-phase-0-1-2-archive.md).
-Useful sections of that archive:
-
-- §3.1 transport comparison (canvas-JPEG vs SharedArrayBuffer vs postMessage)
-- §6 phase decomposition + Phase 0 spike report
-- §10 architectural survey
-- §11 Phase 2 execution review (T2.1 → T2.6 retrospective)
-
-Phase 2 implementation artifacts on the session branch:
-- `viewport/input` bridge surface — [`bridge-schema/src/index.ts`](../web/packages/bridge-schema/src/index.ts)
-- `src/host/InputDispatcher.{h,cpp}` — host-side input bridge
-- `src/host/FramePublisher.{h,cpp}` — engine→canvas JPEG transport
-- `web/apps/editor/src/lib/viewport-input.ts` — renderer encoders
-- `web/apps/editor/src/components/ViewportSlot.tsx` — three useEffect blocks
-- 26 encoder unit tests + 9 ViewportSlot DOM tests + 3 canvas-architecture Playwright tests
-
-Phase 2's CHANGELOG draft with `TODO-HASH` placeholders is at the
-top of [`CHANGELOG.md`](../CHANGELOG.md).
+(To be filled in after each todo item completes; final review section
+at end of dispatch.)
