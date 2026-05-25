@@ -268,6 +268,16 @@ std::wstring Utf8ToUtf16(const std::string& s)
 LRESULT CALLBACK HostMainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK HostViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
+// Custom message dispatched from OnCompositionControllerReady when async
+// composition setup fails. wParam carries the failure HRESULT. Handled
+// in MainWndProc to tear down partial composition state and re-dispatch
+// to HWND mode via the stashed webEnv. The pre-dispatch sync failures
+// (Compositor::Init, QI Environment3) already fall back inline; this
+// message closes the analogous hole for failures that happen AFTER
+// CreateCoreWebView2CompositionController has been dispatched. (Post-
+// audit F8.)
+static const UINT WM_APP_COMPOSITION_FALLBACK = WM_APP + 1;
+
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -547,6 +557,14 @@ struct HostWindowImpl
 
     void OnWebMessage(const std::wstring& json);
 
+    // Extracted HWND-mode controller dispatch. Originally inline in the
+    // env-creation callback; pulled out so the F8 async-fallback handler
+    // (WM_APP_COMPOSITION_FALLBACK) can reuse it after tearing down a
+    // failed composition setup. Returns the synchronous HRESULT of
+    // CreateCoreWebView2Controller; the actual controller is delivered
+    // via the inner async callback.
+    HRESULT DispatchHwndModeController(ICoreWebView2Environment* env);
+
     LRESULT MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     LRESULT ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -759,23 +777,11 @@ HRESULT HostWindowImpl::InitWebView2()
                     }
                 }
 
-                // Default HWND-mode path. Unchanged from pre-Stage-3
-                // behaviour. The inner controller-ready body is factored
-                // into FinishWebView2ControllerSetup so the composition
-                // path can reuse it after QI'ing down to the base
-                // ICoreWebView2Controller interface.
-                env->CreateCoreWebView2Controller(
-                    hMain,
-                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [this](HRESULT ctlHr, ICoreWebView2Controller* controller) -> HRESULT
-                        {
-                            if (FAILED(ctlHr) || !controller)
-                            {
-                                Log("[host] WebView2 controller failed 0x%08lx\n", ctlHr);
-                                return E_FAIL;
-                            }
-                            return FinishWebView2ControllerSetup(controller);
-                        }).Get());
+                // Default HWND-mode path. Extracted to
+                // DispatchHwndModeController so the F8 async-fallback
+                // handler can reuse it after tearing down a failed
+                // composition setup.
+                DispatchHwndModeController(env);
                 return S_OK;
             }).Get());
     Log("[host] CreateCoreWebView2EnvironmentWithOptions returned 0x%08lx (testHost=%d composition=%d)\n",
@@ -1011,6 +1017,30 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
 }
 
 // ---------------------------------------------------------------------
+// [Post-audit F8] Extracted HWND-mode dispatch. Originally inline in
+// the env-creation callback's else branch; pulled out so the async-
+// fallback handler (WM_APP_COMPOSITION_FALLBACK) can reuse it after
+// tearing down a failed composition setup. The inner callback body is
+// byte-identical to the original.
+// ---------------------------------------------------------------------
+HRESULT HostWindowImpl::DispatchHwndModeController(ICoreWebView2Environment* env)
+{
+    if (!env) return E_POINTER;
+    return env->CreateCoreWebView2Controller(
+        hMain,
+        Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            [this](HRESULT ctlHr, ICoreWebView2Controller* controller) -> HRESULT
+            {
+                if (FAILED(ctlHr) || !controller)
+                {
+                    Log("[host] WebView2 controller failed 0x%08lx\n", ctlHr);
+                    return E_FAIL;
+                }
+                return FinishWebView2ControllerSetup(controller);
+            }).Get());
+}
+
+// ---------------------------------------------------------------------
 // [MT-11] Phase 3 Stage 3b: composition controller completion callback.
 // Mirrors dxgi_spike.cpp:OnCompositionControllerReady. Order:
 //   1. Stash the composition controller (kept alive for WM_DESTROY).
@@ -1033,7 +1063,11 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
     {
         Log("[host] composition: controller completion FAILED hr=0x%08lx ctl=%p\n",
             chr, static_cast<void*>(ctl));
-        return chr == S_OK ? E_FAIL : chr;
+        // [Post-audit F8] Schedule HWND-mode fallback on next message-
+        // loop iteration. PostMessage so this callback can unwind first.
+        HRESULT failHr = (chr == S_OK) ? E_FAIL : chr;
+        PostMessageW(hMain, WM_APP_COMPOSITION_FALLBACK, static_cast<WPARAM>(failHr), 0);
+        return failHr;
     }
     m_compositionController = ctl;
     Log("[host] composition: controller ready, QI to base for shared setup\n");
@@ -1049,6 +1083,8 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
     if (FAILED(qihr) || !baseController)
     {
         Log("[host] composition: QI to ICoreWebView2Controller failed hr=0x%08lx\n", qihr);
+        // [Post-audit F8] Schedule HWND-mode fallback.
+        PostMessageW(hMain, WM_APP_COMPOSITION_FALLBACK, static_cast<WPARAM>(qihr), 0);
         return qihr;
     }
 
@@ -1056,6 +1092,8 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
     if (FAILED(setupHr))
     {
         Log("[host] composition: shared controller setup failed hr=0x%08lx\n", setupHr);
+        // [Post-audit F8] Schedule HWND-mode fallback.
+        PostMessageW(hMain, WM_APP_COMPOSITION_FALLBACK, static_cast<WPARAM>(setupHr), 0);
         return setupHr;
     }
 
@@ -1448,6 +1486,45 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 SWP_NOZORDER | SWP_NOACTIVATE);
         }
         return 0;
+
+    // [Post-audit F8] Async composition setup failed — tear down partial
+    // state and re-dispatch to HWND mode via the stashed webEnv. wParam
+    // is the original failure HRESULT (informational; we don't act on
+    // it differently per code). PostMessage'd from OnCompositionController-
+    // Ready so the WebView2 callback can unwind before we touch its state.
+    case WM_APP_COMPOSITION_FALLBACK:
+    {
+        HRESULT failHr = static_cast<HRESULT>(wp);
+        Log("[host] composition: async failure hr=0x%08lx — tearing down + falling back to HWND mode\n", failHr);
+
+        // Tear down composition state. webController may be partly set
+        // if FinishWebView2ControllerSetup got far enough; Close it
+        // before reset so WebView2's internal state unwinds cleanly.
+        if (webController)
+        {
+            webController->Close();
+            webController.Reset();
+        }
+        m_compositionController.Reset();
+        m_compositor.reset();
+        m_compositionMode = false;
+
+        // Re-dispatch via the stashed webEnv. Same env, new controller
+        // path — no need to re-create CoreWebView2EnvironmentWithOptions.
+        if (webEnv)
+        {
+            HRESULT hr = DispatchHwndModeController(webEnv.Get());
+            if (FAILED(hr))
+            {
+                Log("[host] composition: HWND fallback dispatch failed hr=0x%08lx\n", hr);
+            }
+        }
+        else
+        {
+            Log("[host] composition: webEnv not stashed; cannot fall back\n");
+        }
+        return 0;
+    }
 
     // [MT-11] Phase 3 Stage 3d: cursor sync. Under composition the
     // host HWND owns WM_SETCURSOR; consult the cached cursor that
