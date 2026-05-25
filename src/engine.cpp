@@ -1414,6 +1414,31 @@ void Engine::WaitEndFrameQuery()
 	}
 }
 
+// [MT-11] Phase 3 Stage 4b — adapter LUID accessor for the multi-GPU
+// guard. IDirect3D9Ex::GetAdapterLUID returns the LUID of the adapter
+// associated with the supplied D3D9 adapter ordinal — the bridge
+// between D3D9's adapter-index world and DXGI's LUID world. Compositor
+// compares this against the LUID of the adapter its D3D11 device
+// picked via D3D_DRIVER_TYPE_HARDWARE; if they differ, the two
+// devices are on different physical GPUs and the shared-handle path
+// is fundamentally broken (OpenSharedResource silently returns a
+// wrong texture).
+LUID Engine::GetAdapterLuid() const
+{
+	LUID luid = {};
+	if (m_pDirect3D == NULL || m_pDevice == NULL) return luid;
+
+	D3DDEVICE_CREATION_PARAMETERS params = {};
+	if (FAILED(m_pDevice->GetCreationParameters(&params))) return luid;
+
+	if (FAILED(m_pDirect3D->GetAdapterLUID(params.AdapterOrdinal, &luid)))
+	{
+		LUID zero = {};
+		return zero;
+	}
+	return luid;
+}
+
 void Engine::ResetParameters()
 {
 	if (m_presentationParameters.BackBufferWidth > 0 && m_presentationParameters.BackBufferHeight > 0)

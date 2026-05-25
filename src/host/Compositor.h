@@ -135,11 +135,20 @@ public:
     // CompositeEngineFrame() — see Engine::IssueEndFrameQuery /
     // WaitEndFrameQuery and sub-plan §3.3 path (b).
     //
-    // 4a stub: returns S_OK and logs a single line; no D3D11/DXGI/
-    // DComp resources are created. Real implementation in 4b.
+    // engineAdapterLuid: caller (HostWindow) passes
+    // engine->GetAdapterLuid(). On hybrid-GPU laptops where D3D9Ex
+    // and D3D11 pick different adapters, OpenSharedResource silently
+    // returns a wrong texture — the LUID compare catches that case
+    // before any pixels are copied. A zero LUID (`{0,0}`) means
+    // "caller doesn't know; skip the check" — single-GPU production
+    // paths can pass `LUID{}` if they don't care to wire the helper.
+    // Mismatch returns DXGI_ERROR_GRAPHICS_VIDPN_SOURCE_IN_USE so the
+    // caller can distinguish LUID failure from other failure modes;
+    // composition mode stays intact, engine visual is NOT attached.
     HRESULT AttachEngineVisual(HANDLE sharedTexture,
                                int    w,
-                               int    h) noexcept;
+                               int    h,
+                               LUID   engineAdapterLuid) noexcept;
 
     // Per-frame composite step. Called from HostWindow's RenderD3D9
     // path AFTER engine->Render() + engine->WaitEndFrameQuery() under

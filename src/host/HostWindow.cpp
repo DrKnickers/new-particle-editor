@@ -1210,7 +1210,40 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
         // is sized correctly. SetSize commits internally.
         RECT r;
         GetClientRect(hMain, &r);
-        m_compositor->SetSize(r.right - r.left, r.bottom - r.top);
+        const int clientW = r.right  - r.left;
+        const int clientH = r.bottom - r.top;
+        m_compositor->SetSize(clientW, clientH);
+
+        // [MT-11] Phase 3 Stage 4b — attach engine visual BEHIND the
+        // WebView2 visual (per sub-plan §3.4 / D3). On failure, log
+        // and continue with composition mode intact: chrome works,
+        // viewport area stays empty (per §3.8 / D7 — explicit
+        // no-chain-into-F8). Stage 4c will wire the per-frame
+        // CompositeEngineFrame call site; until then this attach
+        // is functionally "load the engine visual into the tree
+        // but don't Present it" — 4b's smoke matches Stage 3b's
+        // chrome-only output.
+        if (engine && engine->GetSharedTextureHandle())
+        {
+            HANDLE sharedTex = engine->GetSharedTextureHandle();
+            LUID   engineLuid = engine->GetAdapterLuid();
+            HRESULT ehr = m_compositor->AttachEngineVisual(sharedTex, clientW, clientH, engineLuid);
+            if (FAILED(ehr))
+            {
+                Log("[host] composition: AttachEngineVisual hr=0x%08lx — composition mode continues with engine visual NOT attached (viewport area will be empty; sub-plan §3.8)\n", ehr);
+                // Do NOT PostMessage(WM_APP_COMPOSITION_FALLBACK) — that
+                // path is for chrome-itself-broken failures; engine-
+                // attach failures keep the chrome usable in composition
+                // mode.
+            }
+        }
+        else
+        {
+            Log("[host] composition: skipping AttachEngineVisual (engine=%p sharedHandle=%p) — composition mode continues without engine pixels\n",
+                engine.get(),
+                engine ? engine->GetSharedTextureHandle() : nullptr);
+        }
+
         Log("[host] composition hosting ready (DComp tree committed)\n");
     }
 

@@ -178,6 +178,19 @@ public:
 	void IssueEndFrameQuery();
 	void WaitEndFrameQuery();
 
+	// [MT-11] Phase 3 Stage 4b — adapter LUID for the multi-GPU
+	// guard. Compositor::AttachEngineVisual compares this against
+	// the D3D11 device's adapter LUID; on mismatch (hybrid laptops
+	// where D3D9Ex and D3D11 picked different physical GPUs),
+	// shared-handle opens silently return a wrong texture, so
+	// AttachEngineVisual logs + skips engine attach. Single-GPU
+	// systems (engine's RTX 3080 target) return matching LUIDs;
+	// the check is a no-op there. Returns LUID{0,0} on failure
+	// (no device, GetCreationParameters fails, GetAdapterLUID
+	// fails) — Compositor treats zero LUID as "caller doesn't
+	// know" and skips the comparison.
+	LUID GetAdapterLuid() const;
+
 	const std::wstring& GetGroundSlotCustomPath(int slot) const;
 	// Does the slot currently have a loadable texture (either bundled
 	// default or user-supplied custom path)? Used by the picker dialog

@@ -58,6 +58,13 @@
 #include "Compositor.h"
 
 #pragma comment(lib, "dcomp.lib")
+// [MT-11] Phase 3 Stage 4b — D3D11 device + DXGI factory + composition
+// swapchain. d3d11.lib for D3D11CreateDevice; dxgi.lib for
+// CreateDXGIFactory2. dcomp.lib already covers the existing visual
+// tree work. All three libs ship with the Win10 SDK and are picked
+// up by Compositor.cpp's L-016 per-file include override.
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 
 #include <cstdio>
 
@@ -100,6 +107,30 @@ struct Compositor::Impl
     int  lastW = 0;
     int  lastH = 0;
     bool treeBuilt = false;
+
+    // [MT-11] Phase 3 Stage 4 — engine D3D11 / DXGI bridge + visual.
+    // ComPtr destruction order on ~Impl: engineVisual (releases
+    // SetContent(swapchain) ref) → sharedTexD3D11 (D3D11 alias on the
+    // engine-owned D3D9 VRAM; alias release does NOT free the
+    // underlying texture, which AlphaCompositor owns) → engineBackBuffer
+    // → engineSwapChain → dxgiFactory → d3d11Context → d3d11Device.
+    // AlphaCompositor + Engine teardown later (HostWindow.cpp WM_DESTROY
+    // order) releases the D3D9 side. See Compositor.h's engine-visual
+    // block + sub-plan §3.6 for lifecycle.
+    Microsoft::WRL::ComPtr<ID3D11Device>          d3d11Device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext>   d3d11Context;
+    Microsoft::WRL::ComPtr<IDXGIFactory2>         dxgiFactory;
+    Microsoft::WRL::ComPtr<IDXGISwapChain1>       engineSwapChain;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>       engineBackBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D>       sharedTexD3D11;
+    Microsoft::WRL::ComPtr<IDCompositionVisual>   engineVisual;
+
+    // Cache + flag for AttachEngineVisual idempotence + 4c lazy
+    // handle/size detection in CompositeEngineFrame.
+    HANDLE engineHandleCached   = nullptr;
+    int    engineWidthCached    = 0;
+    int    engineHeightCached   = 0;
+    bool   engineVisualAttached = false;
 
     void LogLine(const std::string& s) const
     {
@@ -311,32 +342,284 @@ HRESULT Compositor::Commit()
     return m_impl->device->Commit();
 }
 
-// ---------- [MT-11] Phase 3 Stage 4 — engine visual stubs ----------
-// 4a: declarations exist on the public surface (see Compositor.h's
-// engine-visual block); these bodies are no-ops returning the
-// documented "not yet attached" / "no-op success" status codes so
-// callers can wire their per-frame and OnCompositionControllerReady
-// call sites against the real signatures without behavioral effect.
-// 4b/4c/4d ship the real D3D11 device + DXGI swapchain + DComp
-// engine visual + per-frame composite + lazy handle re-open.
+// ---------- [MT-11] Phase 3 Stage 4 — engine visual ----------
+// 4a shipped declarations + stub bodies; 4b replaces AttachEngineVisual
+// with the real D3D11 + DXGI + DComp wiring. CompositeEngineFrame and
+// RefreshEngineSharedHandle stay stubs until 4c / 4d respectively.
 
 HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
                                        int    w,
-                                       int    h) noexcept
+                                       int    h,
+                                       LUID   engineAdapterLuid) noexcept
 {
-    (void)sharedTexture;
-    (void)w;
-    (void)h;
-    if (m_impl) m_impl->LogLine("[COMP-engine-init] AttachEngineVisual stub (4a — no D3D11 device yet)");
+    if (!sharedTexture || w <= 0 || h <= 0)
+    {
+        m_impl->LogLine("[COMP-engine-fail] AttachEngineVisual: invalid params (handle/w/h)");
+        return E_INVALIDARG;
+    }
+    if (!m_impl->device || !m_impl->rootVisual)
+    {
+        m_impl->LogLine("[COMP-engine-fail] AttachEngineVisual called before AttachWebView2");
+        return E_NOT_VALID_STATE;
+    }
+
+    // Idempotence — same handle + size, already attached: no-op.
+    if (m_impl->engineVisualAttached &&
+        m_impl->engineHandleCached == sharedTexture &&
+        m_impl->engineWidthCached  == w &&
+        m_impl->engineHeightCached == h)
+    {
+        m_impl->LogLine("[COMP-engine-init] AttachEngineVisual: already attached with same params, no-op");
+        return S_OK;
+    }
+
+    HRESULT hr;
+    char buf[192];
+
+    // 1. D3D11 device (lazy create — persists across re-attach with
+    // different handle/size since the device is adapter-bound, not
+    // resource-bound).
+    if (!m_impl->d3d11Device)
+    {
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#ifndef NDEBUG
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+        const D3D_FEATURE_LEVEL wanted[] = {
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1,
+            D3D_FEATURE_LEVEL_10_0,
+        };
+        D3D_FEATURE_LEVEL chosenLevel = D3D_FEATURE_LEVEL_11_0;
+
+        hr = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+            wanted, _countof(wanted), D3D11_SDK_VERSION,
+            m_impl->d3d11Device.GetAddressOf(), &chosenLevel,
+            m_impl->d3d11Context.GetAddressOf());
+#ifndef NDEBUG
+        if (FAILED(hr))
+        {
+            // SDK debug layer not installed — retry without DEBUG flag.
+            // Spike's pattern at dxgi_spike.cpp:322. Production Debug
+            // builds with SDK layers proceed via the first path; Debug
+            // builds on a machine without SDK layers fall back here.
+            m_impl->LogLine("[COMP-engine-init] D3D11CreateDevice with DEBUG failed hr=" + FormatHresult(hr) + " — retrying without (SDK layers missing?)");
+            flags &= ~D3D11_CREATE_DEVICE_DEBUG;
+            hr = D3D11CreateDevice(
+                nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+                wanted, _countof(wanted), D3D11_SDK_VERSION,
+                m_impl->d3d11Device.GetAddressOf(), &chosenLevel,
+                m_impl->d3d11Context.GetAddressOf());
+        }
+#endif
+        if (FAILED(hr) || !m_impl->d3d11Device)
+        {
+            m_impl->LogLine("[COMP-engine-fail] D3D11CreateDevice hr=" + FormatHresult(hr));
+            m_impl->d3d11Context.Reset();
+            m_impl->d3d11Device.Reset();
+            return hr;
+        }
+        snprintf(buf, sizeof(buf),
+                 "[COMP-engine-init] D3D11 device created (level=0x%X flags=0x%X)",
+                 static_cast<unsigned>(chosenLevel), flags);
+        m_impl->LogLine(buf);
+
+        // LUID guard. Query the D3D11 device's adapter and compare
+        // against the engine's. On mismatch (hybrid-GPU laptops), bail
+        // BEFORE OpenSharedResource — that call silently returns a
+        // different texture across adapters, so the visible failure
+        // mode is "engine pixels are garbage" rather than a clean
+        // error. Catching it here turns it into a clean log line +
+        // skip-engine-attach.
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+        if (SUCCEEDED(m_impl->d3d11Device.As(&dxgiDevice)))
+        {
+            Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+            if (SUCCEEDED(dxgiDevice->GetAdapter(adapter.GetAddressOf())))
+            {
+                DXGI_ADAPTER_DESC desc = {};
+                adapter->GetDesc(&desc);
+                snprintf(buf, sizeof(buf),
+                         "[COMP-engine-luid] D3D11 adapter LUID=%08lX-%08lX (engine LUID=%08lX-%08lX)",
+                         static_cast<unsigned long>(desc.AdapterLuid.HighPart),
+                         static_cast<unsigned long>(desc.AdapterLuid.LowPart),
+                         static_cast<unsigned long>(engineAdapterLuid.HighPart),
+                         static_cast<unsigned long>(engineAdapterLuid.LowPart));
+                m_impl->LogLine(buf);
+
+                const bool callerProvidedLuid =
+                    (engineAdapterLuid.HighPart != 0 || engineAdapterLuid.LowPart != 0);
+                if (callerProvidedLuid &&
+                    (desc.AdapterLuid.HighPart != engineAdapterLuid.HighPart ||
+                     desc.AdapterLuid.LowPart  != engineAdapterLuid.LowPart))
+                {
+                    m_impl->LogLine("[COMP-engine-fail] LUID mismatch — engine D3D9Ex and Compositor D3D11 picked different adapters; skipping engine visual attach (composition mode stays, viewport area empty)");
+                    m_impl->d3d11Context.Reset();
+                    m_impl->d3d11Device.Reset();
+                    // Distinctive HRESULT so callers can disambiguate
+                    // the LUID-mismatch fallback from other failure modes.
+                    return DXGI_ERROR_GRAPHICS_VIDPN_SOURCE_IN_USE;
+                }
+            }
+        }
+    }
+
+    // 2. DXGI factory (lazy create — same lifecycle as the D3D11 device).
+    //
+    // ParticleEditor.vcxproj puts $(DXSDK_DIR)Lib\x64 FIRST on
+    // AdditionalLibraryDirectories (for d3dx9.lib), which shadows the
+    // Win10 SDK's dxgi.lib with DXSDK June 2010's pre-Win8 version
+    // that lacks CreateDXGIFactory2. Same shape as L-016's include-
+    // path shadowing on the linker side. Workaround: use
+    // CreateDXGIFactory1 (in DXSDK's dxgi.lib since Win7 SDK era) +
+    // QI to IDXGIFactory2. If QI fails, the system is pre-Win8 and
+    // CreateSwapChainForComposition (also DXGI 1.2) wouldn't work
+    // anyway — composition mode requires DXGI 1.2. Spike sidesteps
+    // this entirely because dxgi_spike.vcxproj doesn't reference
+    // DXSDK at all; its dxgi.lib resolves to the Win10 SDK directly.
+    if (!m_impl->dxgiFactory)
+    {
+        Microsoft::WRL::ComPtr<IDXGIFactory1> factory1;
+        hr = CreateDXGIFactory1(IID_PPV_ARGS(factory1.GetAddressOf()));
+        if (FAILED(hr))
+        {
+            m_impl->LogLine("[COMP-engine-fail] CreateDXGIFactory1 hr=" + FormatHresult(hr));
+            return hr;
+        }
+        hr = factory1.As(&m_impl->dxgiFactory);
+        if (FAILED(hr) || !m_impl->dxgiFactory)
+        {
+            m_impl->LogLine("[COMP-engine-fail] QI IDXGIFactory1→IDXGIFactory2 hr=" + FormatHresult(hr) + " (pre-Win8 system? DXGI 1.2 required for composition)");
+            return hr;
+        }
+    }
+
+    // 3. Open the engine's shared texture as a D3D11 alias.
+    m_impl->sharedTexD3D11.Reset();
+    hr = m_impl->d3d11Device->OpenSharedResource(
+        sharedTexture, IID_PPV_ARGS(m_impl->sharedTexD3D11.GetAddressOf()));
+    if (FAILED(hr) || !m_impl->sharedTexD3D11)
+    {
+        m_impl->LogLine("[COMP-engine-fail] OpenSharedResource hr=" + FormatHresult(hr));
+        return hr;
+    }
+    {
+        D3D11_TEXTURE2D_DESC desc = {};
+        m_impl->sharedTexD3D11->GetDesc(&desc);
+        snprintf(buf, sizeof(buf),
+                 "[COMP-engine-open] OpenSharedResource handle=%p texSize=%ux%u fmt=%u bind=0x%X share=0x%X",
+                 sharedTexture, desc.Width, desc.Height,
+                 static_cast<unsigned>(desc.Format), desc.BindFlags, desc.MiscFlags);
+        m_impl->LogLine(buf);
+    }
+
+    // 4. Composition swapchain. Format + alpha + buffer count match
+    // dxgi_spike.cpp:377-396 exactly — that combination works on the
+    // user's RTX 3080 per the Stage 0 spike measurements.
+    DXGI_SWAP_CHAIN_DESC1 scDesc = {};
+    scDesc.Width  = static_cast<UINT>(w);
+    scDesc.Height = static_cast<UINT>(h);
+    scDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;       // matches engine's D3DFMT_A8R8G8B8
+    scDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    scDesc.BufferCount = 2;
+    scDesc.SampleDesc.Count = 1;
+    scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    scDesc.AlphaMode  = DXGI_ALPHA_MODE_PREMULTIPLIED; // engine pixels carry premultiplied alpha
+    scDesc.Scaling    = DXGI_SCALING_STRETCH;          // tolerates engine/swapchain size mismatch
+
+    m_impl->engineSwapChain.Reset();
+    m_impl->engineBackBuffer.Reset();
+    hr = m_impl->dxgiFactory->CreateSwapChainForComposition(
+        m_impl->d3d11Device.Get(), &scDesc, nullptr,
+        m_impl->engineSwapChain.GetAddressOf());
+    if (FAILED(hr) || !m_impl->engineSwapChain)
+    {
+        m_impl->LogLine("[COMP-engine-fail] CreateSwapChainForComposition hr=" + FormatHresult(hr));
+        return hr;
+    }
+    snprintf(buf, sizeof(buf),
+             "[COMP-engine-swap] composition swapchain created %dx%d FLIP_SEQ BGRA8 premul", w, h);
+    m_impl->LogLine(buf);
+
+    hr = m_impl->engineSwapChain->GetBuffer(0, IID_PPV_ARGS(m_impl->engineBackBuffer.GetAddressOf()));
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] swapchain GetBuffer(0) hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // 5. Engine visual. Replace any prior attempt — Re-attach with
+    // different params recreates from scratch (the cached state at
+    // top of function would have caught no-change case).
+    if (m_impl->engineVisual)
+    {
+        m_impl->rootVisual->RemoveVisual(m_impl->engineVisual.Get());
+        m_impl->engineVisual.Reset();
+    }
+    hr = m_impl->device->CreateVisual(m_impl->engineVisual.GetAddressOf());
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] CreateVisual(engine) hr=" + FormatHresult(hr));
+        return hr;
+    }
+    hr = m_impl->engineVisual->SetContent(m_impl->engineSwapChain.Get());
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] engineVisual->SetContent(swapchain) hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // 6. Insert engine visual BEHIND the WebView2 visual. The MSDN-
+    // naming inversion: `AddVisual(visual, insertAbove=TRUE,
+    // referenceVisual=nullptr)` actually places this visual at the
+    // BEGINNING of the children list (= rendered FIRST = BEHIND all
+    // siblings) — bisected from spike's --no-engine smoke mode (see
+    // dxgi_spike.cpp:488-495 long comment). The Stage 3 webview was
+    // added via AttachWebView2 with (FALSE, nullptr) which places it
+    // at the END of the children list (= rendered LAST = IN FRONT of
+    // all siblings). So after this AddVisual call the children list
+    // is [engine, webview]; DComp draws engine first, webview on top.
+    // Chrome with opaque backgrounds occludes; transparent regions
+    // show engine through. (D3 OK + sub-plan §3.4.)
+    hr = m_impl->rootVisual->AddVisual(m_impl->engineVisual.Get(), TRUE, nullptr);
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] root->AddVisual(engine, behind) hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // 7. Commit.
+    hr = m_impl->device->Commit();
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] AttachEngineVisual Commit hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // Cache (handle, size) + flag. Lazy detection in 4c's real
+    // CompositeEngineFrame will check this tuple against
+    // engine->GetSharedTextureHandle() each frame; 4d's resize-handle
+    // re-open hooks here too.
+    m_impl->engineHandleCached    = sharedTexture;
+    m_impl->engineWidthCached     = w;
+    m_impl->engineHeightCached    = h;
+    m_impl->engineVisualAttached  = true;
+    m_impl->LogLine("[COMP-engine-attach] engine visual attached (behind WebView2, swapchain content set, tree committed)");
+
     return S_OK;
 }
 
 HRESULT Compositor::CompositeEngineFrame() noexcept
 {
-    // 4a: no engine visual attached → return S_FALSE per the documented
-    // contract (S_OK = composited, S_FALSE = no engine visual). Host's
-    // per-frame loop will treat S_FALSE as "skip the composite step
-    // this frame." Real implementation lands in 4c.
+    // 4a/4b: engine visual may or may not be attached, but
+    // CompositeEngineFrame stays a stub until 4c. Returning S_FALSE
+    // signals "no composite happened this frame" per the documented
+    // contract — the swapchain's back buffer is never Presented, so
+    // 4b smoke shows the same chrome-only output as Stage 3b
+    // (viewport quadrant area still empty until 4c lands the real
+    // CopyResource + Present1 sequence).
     return S_FALSE;
 }
 
@@ -347,10 +630,9 @@ HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,
     (void)sharedTexture;
     (void)w;
     (void)h;
-    // 4a: no D3D11 alias to refresh. The lazy detection in
-    // CompositeEngineFrame is the primary path under D4; this method
-    // gets a real implementation in 4d alongside resize-robustness
-    // work + the 50-resize stress smoke.
+    // 4a/4b: real impl arrives in 4d alongside resize-robustness work.
+    // Until then the lazy path in 4c's CompositeEngineFrame is the
+    // primary handle re-open consumer (D4 OK).
     return S_OK;
 }
 
