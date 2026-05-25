@@ -190,6 +190,35 @@ public:
                                       int    hintW,
                                       int    hintH) noexcept;
 
+    // [MT-11] Phase 3 Stage 5 — scene-rect transform on the engine
+    // visual. Positions + clips the DComp engine visual to a sub-rect
+    // of the host client so chrome panels stop bleeding engine pixels
+    // and the engine output sits at the LayoutBroker's scene-rect
+    // quadrant.
+    //
+    // (x, y, w, h) is in host-client coordinates. The engine visual is
+    // a direct child of the root visual whose coordinate space equals
+    // host-client coords, so no translation is required (in contrast
+    // to AlphaCompositor's SetSceneRect which operates in popup-client
+    // coords and translates via the popup origin). The clip rect is
+    // applied in the visual's OWN coord space post-offset — `{0, 0,
+    // w, h}` means "from the visual's local origin, show w×h."
+    //
+    // Internals: SetOffsetX(x) + SetOffsetY(y) + SetClip({0,0,w,h}) +
+    // device->Commit. Idempotent on identical args. Returns:
+    //   S_OK            — applied successfully (or no-op for idempotent)
+    //   S_FALSE         — engine visual not yet attached (Stage 4
+    //                     AttachEngineVisual hasn't succeeded yet, or
+    //                     failed per §3.8 / D7 — caller should treat
+    //                     this as "not ready, retry later")
+    //   E_INVALIDARG    — w <= 0 or h <= 0
+    //   E_NOT_VALID_STATE — DComp device or engine visual missing
+    //   other HRESULT   — propagated from SetOffset/SetClip/Commit
+    //
+    // Emits `[COMP-engine-transform] offset=(x,y) clip=WxH` on actual
+    // changes (idempotent cases are silent).
+    HRESULT SetEngineVisualTransform(int x, int y, int w, int h) noexcept;
+
     // ---------------------------------------------------------------
 
     // Diagnostic accessors. IsReady() returns true after

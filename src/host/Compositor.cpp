@@ -132,6 +132,17 @@ struct Compositor::Impl
     int    engineHeightCached   = 0;
     bool   engineVisualAttached = false;
 
+    // [MT-11] Phase 3 Stage 5 — last applied scene-rect transform on
+    // the engine visual. Idempotence on SetEngineVisualTransform: skip
+    // the SetOffset/SetClip/Commit call sequence when the new args
+    // match the cache. (0,0,0,0) means "no transform applied yet" —
+    // distinguishable from any real scene-rect because the args fail
+    // the W>0 && H>0 idempotence check.
+    int engineLastX          = 0;
+    int engineLastY          = 0;
+    int engineLastTransformW = 0;
+    int engineLastTransformH = 0;
+
     // [MT-11] Phase 3 Stage 4c — 1 Hz throttled diagnostics for
     // [COMP-engine-frame] + [COMP-engine-handle-hash]. Per-frame
     // emission would dominate the log; per-second is enough to spot
@@ -845,6 +856,100 @@ HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,
     m_impl->engineHandleCached = sharedTexture;
     m_impl->engineWidthCached  = newW;
     m_impl->engineHeightCached = newH;
+    return S_OK;
+}
+
+// ---------- [MT-11] Phase 3 Stage 5 — scene-rect transform ----------
+//
+// Positions + clips the DComp engine visual to the LayoutBroker's
+// scene-rect sub-region of the host client. See Compositor.h for the
+// public contract.
+//
+// Design (sub-plan §3.1 / D1 — Option A):
+//   - Swapchain stays at engine RT size (current full-host-client).
+//     No ResizeBuffers per scene-rect update; DComp's per-visual
+//     SetOffset + SetClip is sufficient and orders-of-magnitude
+//     cheaper than swapchain resize storms during pane drags.
+//   - SetClip is in the visual's OWN coord space post-offset, so
+//     `{0, 0, w, h}` means "from the visual's local origin, show
+//     w×h" — NOT "in parent coord space, this rect at (x, y)."
+//   - Engine visual is a child of the root visual whose coord space
+//     equals host-client coords; engine-visual SetOffset(scene.x,
+//     scene.y) places the visual at scene-rect's top-left within
+//     the root, which equals host-client coords. (Sub-plan §3.3 +
+//     Risk R2 — no popup-origin translation because the engine
+//     visual is over host-client, not popup-client.)
+//   - Under B-γ (sub-plan §1.1 + §3.4), the engine itself constrains
+//     its scene-pass viewport to the scene-rect sub-region of its
+//     full-client RT via Engine::SetSceneViewport. So the w×h clip
+//     here windows the scene-pass-rendered region exactly; the
+//     surrounding engine clear color (from the D12 Clear-before-
+//     SetViewport ordering rule) is hidden by DComp's clip.
+HRESULT Compositor::SetEngineVisualTransform(int x, int y, int w, int h) noexcept
+{
+    if (!m_impl->engineVisualAttached) return S_FALSE;
+    if (!m_impl->engineVisual || !m_impl->device)
+    {
+        return E_NOT_VALID_STATE;
+    }
+    if (w <= 0 || h <= 0)
+    {
+        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform: degenerate w/h");
+        return E_INVALIDARG;
+    }
+
+    // Idempotence — same scene-rect, no-op. Silent (no log line) so
+    // resize storms during a pane drag at 60+ Hz don't flood host.log.
+    if (x == m_impl->engineLastX && y == m_impl->engineLastY &&
+        w == m_impl->engineLastTransformW &&
+        h == m_impl->engineLastTransformH)
+    {
+        return S_OK;
+    }
+
+    HRESULT hr;
+    hr = m_impl->engineVisual->SetOffsetX(static_cast<float>(x));
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetOffsetX hr=" + FormatHresult(hr));
+        return hr;
+    }
+    hr = m_impl->engineVisual->SetOffsetY(static_cast<float>(y));
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetOffsetY hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    D2D_RECT_F clip = {
+        0.0f, 0.0f,
+        static_cast<float>(w),
+        static_cast<float>(h)
+    };
+    hr = m_impl->engineVisual->SetClip(clip);
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetClip hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    hr = m_impl->device->Commit();
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform Commit hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    m_impl->engineLastX          = x;
+    m_impl->engineLastY          = y;
+    m_impl->engineLastTransformW = w;
+    m_impl->engineLastTransformH = h;
+
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "[COMP-engine-transform] offset=(%d,%d) clip=%dx%d",
+             x, y, w, h);
+    m_impl->LogLine(buf);
     return S_OK;
 }
 
