@@ -191,6 +191,45 @@ public:
 	// know" and skips the comparison.
 	LUID GetAdapterLuid() const;
 
+	// [MT-11] Phase 3 Stage 5 — scene-rect viewport (Variant B-γ).
+	//
+	// Under composition mode, LayoutBroker calls this on every
+	// React-side layout/scene-rect dispatch (gated on a non-null
+	// DComp Compositor pointer per LayoutBroker R9 mitigation). The
+	// (x, y, w, h) is in main-host-client coords, which equals the
+	// engine RT's coordinate space (the engine RT is currently sized
+	// to full host client per the popup-spans-window invariant).
+	//
+	// Side effects:
+	//   1. Cache the rect + activate flag.
+	//   2. Recompute m_projection with the scene-rect aspect ratio
+	//      (sceneW / sceneH) via D3DXMatrixPerspectiveFovRH — otherwise
+	//      the scene gets stretched when scene-rect aspect ≠ RT aspect.
+	//   3. Next Engine::Render's scene pass will SetViewport(scene-rect)
+	//      after the full-RT Clear (the D12 ordering rule from sub-plan
+	//      §3.4 — Clear-then-SetViewport prevents post-process bleed
+	//      across the scene-rect boundary).
+	//
+	// Passing w<=0 or h<=0 clears the scene viewport: m_projection
+	// is recomputed at full-RT aspect (matches Engine::Reset's default
+	// setup) and Render skips the SetViewport call. Used by callers
+	// when composition mode detaches.
+	//
+	// Idempotent on identical args. Emits [engine] SetSceneViewport
+	// log lines on actual changes via host.log (when wired).
+	//
+	// Survives Engine::Reset (Reset re-applies the cached rect after
+	// rebuilding m_projection at full-RT aspect — sub-plan R8
+	// mitigation). Non-composition transports (canvas-jpeg, arch-A)
+	// never call this so m_sceneViewportActive stays false and Render
+	// behaves identically to today.
+	void SetSceneViewport(int x, int y, int w, int h);
+
+	// Diagnostic accessor — returns true and populates the outs when
+	// a scene viewport is active; returns false (outs untouched)
+	// otherwise.
+	bool GetSceneViewport(int& x, int& y, int& w, int& h) const;
+
 	const std::wstring& GetGroundSlotCustomPath(int slot) const;
 	// Does the slot currently have a loadable texture (either bundled
 	// default or user-supplied custom path)? Used by the picker dialog
@@ -389,6 +428,20 @@ private:
 	D3DXMATRIX	m_billboard;
 	D3DXMATRIX	m_projection;
 	D3DXMATRIX	m_viewProjection;
+
+	// [MT-11] Phase 3 Stage 5 — scene viewport cache (Variant B-γ).
+	// Active flag false means "use full RT" (default — matches all
+	// non-composition transports). When active, Engine::Render
+	// SetViewports the device to (X, Y, W, H) before the scene
+	// pass (after the full-RT Clear per the D12 ordering rule);
+	// m_projection is computed at W/H aspect by SetSceneViewport.
+	// Survives Reset (re-applied at end of Reset to overwrite the
+	// full-RT-aspect projection rebuild at engine.cpp:1448).
+	int  m_sceneViewportX      = 0;
+	int  m_sceneViewportY      = 0;
+	int  m_sceneViewportW      = 0;
+	int  m_sceneViewportH      = 0;
+	bool m_sceneViewportActive = false;
 
     COLORREF    m_background;
 	bool		m_showGround;

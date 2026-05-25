@@ -669,6 +669,37 @@ bool Engine::Render()
     D3DCOLOR clearColor = D3DCOLOR_XRGB(GetRValue(m_background), GetGValue(m_background), GetBValue(m_background));
 	m_pDevice->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, clearColor, 1.0f, 0);
 
+	// [MT-11] Phase 3 Stage 5 D12 — Clear-then-SetViewport ordering rule.
+	// The full-RT Clear above fills m_pSceneTexture with engine clear
+	// color in its entirety. NOW narrow the viewport to the scene-rect
+	// sub-region so scene draws only land inside it. The post-process
+	// passes below restore the full-RT viewport before sampling.
+	//
+	// This ordering eliminates post-process bleed across the scene-rect
+	// boundary (sub-plan R5b dissolved): bloom's gaussian taps near the
+	// inner scene-rect edge sample uniform engine clear color outside,
+	// not stale pixels from last frame.
+	//
+	// Non-composition transports (canvas-jpeg, arch-A) never call
+	// SetSceneViewport, so m_sceneViewportActive stays false and this
+	// block is a no-op for them — Render behaves byte-identical to
+	// pre-Stage-5.
+	D3DVIEWPORT9 prevViewportS5 = {};
+	bool         restoreViewportS5 = false;
+	if (m_sceneViewportActive)
+	{
+		m_pDevice->GetViewport(&prevViewportS5);
+		D3DVIEWPORT9 vp = {};
+		vp.X      = static_cast<DWORD>(m_sceneViewportX);
+		vp.Y      = static_cast<DWORD>(m_sceneViewportY);
+		vp.Width  = static_cast<DWORD>(m_sceneViewportW);
+		vp.Height = static_cast<DWORD>(m_sceneViewportH);
+		vp.MinZ   = 0.0f;
+		vp.MaxZ   = 1.0f;
+		m_pDevice->SetViewport(&vp);
+		restoreViewportS5 = true;
+	}
+
 	// MT-3: optional skydome pass, after Clear, before ground.
 	// Skipped when slot 0 (Off) is active or when effect/texture isn't
 	// ready (e.g. effect compile failure during init).
@@ -713,6 +744,18 @@ bool Engine::Render()
         instance->RenderNormal(m_pDevice);
 	}
     m_pDevice->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+
+	// [MT-11] Phase 3 Stage 5 D12 — restore full-RT viewport before the
+	// bloom + distort post-process passes. They read+write at full-RT
+	// resolution on m_pSceneTexture / m_pDistortTexture / m_pBloomTexture[];
+	// keeping the scene-rect viewport active would clip their full-screen
+	// quads. DComp's SetClip on the engine visual crops the off-scene-
+	// rect region after compositing, so the wasted post-process work is
+	// invisible (sub-plan §3.4 "post-process at full-RT" trade-off).
+	if (restoreViewportS5)
+	{
+		m_pDevice->SetViewport(&prevViewportS5);
+	}
 
 	// Bloom post-process. Runs after the scene is drawn but before
 	// the heat/distortion pass, so distortion smears the bloomed
@@ -1352,6 +1395,33 @@ void Engine::Reset()
 		    static_cast<int>(m_presentationParameters.BackBufferWidth),
 		    static_cast<int>(m_presentationParameters.BackBufferHeight));
 	}
+
+	// [MT-11] Phase 3 Stage 5 R8 mitigation — re-apply the cached scene
+	// viewport so its projection aspect ratio survives Reset.
+	// ResetParameters() above rebuilt m_projection at FULL-RT aspect via
+	// D3DXMatrixPerspectiveFovRH (engine.cpp:1448), overwriting whatever
+	// scene-rect-aspect projection SetSceneViewport had set last. Without
+	// this re-apply, the first frame after Reset would render at
+	// full-RT aspect until React's next layout/scene-rect dispatch
+	// catches up — visible as a one-frame aspect glitch at every window
+	// resize. SetSceneViewport recomputes m_projection at scene-rect
+	// aspect AND the Render hook's gating flag (m_sceneViewportActive)
+	// stays set so the next frame uses the constrained viewport.
+	//
+	// We snapshot the cached state, flip the active flag false to defeat
+	// the idempotent guard inside SetSceneViewport, then call back into
+	// SetSceneViewport with the snapshot. Net: m_sceneViewportActive
+	// re-armed, m_projection recomputed at scene-rect aspect, log line
+	// emitted as if the scene-rect was freshly dispatched.
+	if (m_sceneViewportActive)
+	{
+		int sx = m_sceneViewportX;
+		int sy = m_sceneViewportY;
+		int sw = m_sceneViewportW;
+		int sh = m_sceneViewportH;
+		m_sceneViewportActive = false;
+		SetSceneViewport(sx, sy, sw, sh);
+	}
 }
 
 // [MT-11] Phase 3 Stage 2: forwarder to the AlphaCompositor's shared
@@ -1437,6 +1507,108 @@ LUID Engine::GetAdapterLuid() const
 		return zero;
 	}
 	return luid;
+}
+
+// [MT-11] Phase 3 Stage 5 — scene-rect viewport (Variant B-γ).
+//
+// Stash the rect, mark active, and recompute m_projection at the
+// scene-rect aspect ratio. Next Engine::Render's scene pass picks
+// up m_sceneViewportActive == true and applies SetViewport after the
+// full-RT Clear (the D12 Clear-then-SetViewport ordering rule in
+// sub-plan §3.4 — prevents post-process bleed across the scene-rect
+// boundary). Post-process passes restore the cached viewport before
+// running.
+//
+// The projection-matrix shape mirrors ResetParameters at
+// engine.cpp:1518: D3DXMatrixPerspectiveFovRH @ 45° FOV, near=1.0,
+// far=1000, then the engine's _33 / _43 overrides that flip Z. The
+// only thing that varies is the aspect: (w / h) here instead of
+// (BackBufferWidth / BackBufferHeight) there. Duplicated inline
+// (~5 lines) per CLAUDE.md "surgical changes" guidance rather than
+// factoring a RebuildProjection helper that nothing else needs.
+//
+// Passing w <= 0 or h <= 0 clears the active flag and restores the
+// full-RT-aspect projection. The Render hook reads m_sceneViewportActive
+// each frame, so the cleared state effectively re-enables the
+// default (full-RT) viewport without us needing to call SetViewport
+// here.
+//
+// Logged to OutputDebugString + printf (live-debugging surface). The
+// canonical Playwright-detectable signal is the Compositor's
+// [COMP-engine-transform] line, which fires through host.log on the
+// same LayoutBroker gate that fired this call.
+void Engine::SetSceneViewport(int x, int y, int w, int h)
+{
+	const bool clearing = (w <= 0 || h <= 0);
+	if (clearing)
+	{
+		if (!m_sceneViewportActive) return;   // already cleared / never set
+
+		// Restore the full-RT-aspect projection to match ResetParameters'
+		// setup. If the device has no live presentation params (pre-Init
+		// state, or post-Reset before ResetParameters runs), skip the
+		// projection rebuild — the next ResetParameters will set it up.
+		if (m_presentationParameters.BackBufferWidth > 0 &&
+		    m_presentationParameters.BackBufferHeight > 0)
+		{
+			float n = 1.0f;
+			D3DXMatrixPerspectiveFovRH(&m_projection, D3DXToRadian(45),
+			    (float)m_presentationParameters.BackBufferWidth /
+			    (float)m_presentationParameters.BackBufferHeight, n, 1000.0f);
+			m_projection._33 = -1.0f;
+			m_projection._43 = -2 * n;
+		}
+
+		m_sceneViewportX      = 0;
+		m_sceneViewportY      = 0;
+		m_sceneViewportW      = 0;
+		m_sceneViewportH      = 0;
+		m_sceneViewportActive = false;
+		OutputDebugStringA("[engine] SetSceneViewport CLEARED (restored full-RT projection)\n");
+		printf("[engine] SetSceneViewport CLEARED (restored full-RT projection)\n");
+		fflush(stdout);
+		return;
+	}
+
+	// Idempotent — same rect, no-op (silent — 60+ Hz pane-drag
+	// dispatches don't flood logs).
+	if (m_sceneViewportActive &&
+	    x == m_sceneViewportX && y == m_sceneViewportY &&
+	    w == m_sceneViewportW && h == m_sceneViewportH)
+	{
+		return;
+	}
+
+	m_sceneViewportX      = x;
+	m_sceneViewportY      = y;
+	m_sceneViewportW      = w;
+	m_sceneViewportH      = h;
+	m_sceneViewportActive = true;
+
+	// Recompute projection at scene-rect aspect.
+	float n      = 1.0f;
+	float aspect = (float)w / (float)h;
+	D3DXMatrixPerspectiveFovRH(&m_projection, D3DXToRadian(45), aspect, n, 1000.0f);
+	m_projection._33 = -1.0f;
+	m_projection._43 = -2 * n;
+
+	char buf[192];
+	snprintf(buf, sizeof(buf),
+	    "[engine] SetSceneViewport x=%d y=%d w=%d h=%d (aspect=%.3f)\n",
+	    x, y, w, h, aspect);
+	OutputDebugStringA(buf);
+	printf("%s", buf);
+	fflush(stdout);
+}
+
+bool Engine::GetSceneViewport(int& x, int& y, int& w, int& h) const
+{
+	if (!m_sceneViewportActive) return false;
+	x = m_sceneViewportX;
+	y = m_sceneViewportY;
+	w = m_sceneViewportW;
+	h = m_sceneViewportH;
+	return true;
 }
 
 void Engine::ResetParameters()
