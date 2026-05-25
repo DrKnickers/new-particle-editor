@@ -300,6 +300,21 @@ struct HostWindowImpl
     // construct the response stream via env->CreateWebResourceResponse.
     ComPtr<ICoreWebView2Environment> webEnv;
     EventRegistrationToken          accelKeyTok = {};
+    // Post-audit G5: stash the WebMessageReceived registration token so
+    // WM_DESTROY can explicitly remove the handler before tearing down
+    // webView. Pre-fix the token was a local in InitWebView2 and the
+    // handler stayed subscribed (the lambda captures `this`) — masked
+    // today by webView.Reset(), but the explicit-unsubscribe pattern
+    // mirrors accelKeyTok above and is materially safer.
+    EventRegistrationToken          webMessageTok = {};
+    // Post-audit F10: TME_LEAVE arming state. WebView2 needs a
+    // COREWEBVIEW2_MOUSE_EVENT_KIND_MOUSE_LEAVE input when the pointer
+    // exits the host HWND so CSS :hover / cursor state clears. Re-arm
+    // on each WM_MOUSEMOVE after the leave fires.
+    bool                            m_mouseTracked = false;
+    // Post-audit G8: owned class background brush. Created in Run(),
+    // released in WM_DESTROY.
+    HBRUSH                          m_classBrush = nullptr;
 
     ITextureManager& textureManager;
     IShaderManager&  shaderManager;
@@ -509,6 +524,21 @@ struct HostWindowImpl
         {
             int n = _wtoi(q);
             if (n >= 1 && n <= 100) m_archCQuality = n;
+        }
+
+        // Post-audit F11: composition hosting without canvas-jpeg
+        // leaves the legacy viewport popup visible underneath the
+        // composition tree — two surfaces fight for the same viewport
+        // rect. The env-var combination is unsupported; warn loudly
+        // so the inconsistent state is obvious in logs.
+        if (m_compositionMode && !m_archCMode)
+        {
+            fprintf(stderr,
+                "[host] WARNING: ALO_WEBVIEW2_HOSTING=composition requires "
+                "ALO_VIEWPORT_TRANSPORT=canvas-jpeg; the legacy viewport popup "
+                "will remain visible underneath the composition tree. Set "
+                "both env vars together.\n");
+            fflush(stderr);
         }
     }
 
@@ -950,7 +980,8 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
     }
 
     // Subscribe to JS → host messages.
-    EventRegistrationToken tok;
+    // Post-audit G5: stash the registration token in the member
+    // webMessageTok so WM_DESTROY can explicitly unsubscribe.
     webView->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>(
             [this](ICoreWebView2*,
@@ -986,7 +1017,7 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
                     }
                 }
                 return S_OK;
-            }).Get(), &tok);
+            }).Get(), &webMessageTok);
 
     // [MT-11] L-015: The WebResourceRequested route was
     // tried mid-spike and abandoned because
@@ -1478,10 +1509,44 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_MOUSEWHEEL:  case WM_MOUSEHWHEEL:
         if (m_compositionMode && m_compositionController)
         {
+            // Post-audit F10: arm TME_LEAVE on each fresh WM_MOUSEMOVE
+            // so WM_MOUSELEAVE fires when the pointer exits the host
+            // HWND. Without this, WebView2 keeps last-known CSS :hover
+            // state and cursor when the pointer leaves the window.
+            if (msg == WM_MOUSEMOVE && !m_mouseTracked)
+            {
+                TRACKMOUSEEVENT tme = {};
+                tme.cbSize    = sizeof(tme);
+                tme.dwFlags   = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                if (TrackMouseEvent(&tme)) m_mouseTracked = true;
+            }
             ForwardMouseToCompositionWebView2(msg, wp, lp);
             return 0;
         }
         break;
+
+    // Post-audit F10: forward COREWEBVIEW2_MOUSE_EVENT_KIND_MOUSE_LEAVE
+    // when the pointer exits the host HWND so WebView2 clears CSS :hover
+    // state and the cursor. WM_MOUSELEAVE's wp/lp don't carry coords or
+    // virtual-key state — use POINT{-1, -1} per WebView2 docs.
+    case WM_MOUSELEAVE:
+        m_mouseTracked = false;
+        if (m_compositionMode && m_compositionController)
+        {
+            // WebView2 SDK 1.0.3967.48 doesn't expose a named
+            // COREWEBVIEW2_MOUSE_EVENT_KIND_MOUSE_LEAVE constant — the
+            // enum values are numerically identical to the WM_* codes
+            // (per ForwardMouseToCompositionWebView2's existing
+            // direct-cast pattern), so casting WM_MOUSELEAVE works.
+            POINT pt = { -1, -1 };
+            m_compositionController->SendMouseInput(
+                static_cast<COREWEBVIEW2_MOUSE_EVENT_KIND>(WM_MOUSELEAVE),
+                COREWEBVIEW2_MOUSE_EVENT_VIRTUAL_KEYS_NONE,
+                0,
+                pt);
+        }
+        return 0;
 
     case WM_MOVE:
         // FD8: when main moves, the viewport popup follows. Position
@@ -1524,6 +1589,26 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
         KillTimer(hwnd, kStatsTimerId);
+        // Post-audit G8: release the class background brush. Per
+        // WNDCLASSEX docs the system would free it on UnregisterClass,
+        // but the class is never explicitly unregistered. Doing it
+        // here is safe for the single-window-per-process host.
+        if (m_classBrush)
+        {
+            DeleteObject(m_classBrush);
+            m_classBrush = nullptr;
+        }
+        // Post-audit G5: unregister the WebMessageReceived handler
+        // explicitly before tearing down webView, mirroring the
+        // accelKeyTok pattern below. The handler lambda captures
+        // `this`; explicit unsubscribe before destruction prevents
+        // any in-flight message dispatch from racing with
+        // HostWindowImpl teardown.
+        if (webView && webMessageTok.value != 0)
+        {
+            webView->remove_WebMessageReceived(webMessageTok);
+            webMessageTok = {};
+        }
         if (webController)
         {
             // Unregister the accelerator hook before closing the controller
@@ -2117,7 +2202,14 @@ int HostWindowImpl::Run(int nCmdShow)
     // dark purple instead of the WebView2 transparent-region's white
     // default. Smoothly indistinguishable from the actual viewport
     // until React resends the rect.
-    wc.hbrBackground = (HBRUSH)CreateSolidBrush(RGB(0x14, 0x08, 0x34));
+    // Post-audit G8: stash the brush so WM_DESTROY can DeleteObject it.
+    // Pre-fix the CreateSolidBrush handle was assigned directly to the
+    // class without being stored, and no UnregisterClass call exists,
+    // so the brush leaked for process lifetime. The host only ever has
+    // one instance per process; storing as a member is the simplest
+    // ownership shape.
+    m_classBrush = CreateSolidBrush(RGB(0x14, 0x08, 0x34));
+    wc.hbrBackground = m_classBrush;
     RegisterClassExW(&wc);
 
     WNDCLASSEXW vc{};

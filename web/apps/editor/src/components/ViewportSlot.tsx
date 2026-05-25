@@ -80,13 +80,19 @@ export function ViewportSlot({ bridge }: Props) {
     // DPR; once it changes, we need a new query for the *new* current
     // DPR to keep getting fired).
     let mql: MediaQueryList | null = null;
+    // Track the active onChange in outer scope so cleanup can remove
+    // it. (Post-audit G6: pre-fix the cleanup nulled `mql` but the
+    // active `change` listener stayed subscribed — one leaked listener
+    // per component unmount, each holding the stale closure including
+    // `send` and `bridge`.)
+    let onChange: (() => void) | null = null;
     const bindDprListener = () => {
       const dpr = window.devicePixelRatio || 1;
       mql = window.matchMedia(`(resolution: ${dpr}dppx)`);
-      const onChange = () => {
+      onChange = () => {
         send();
         // Re-bind to the new DPR so we keep getting fires.
-        mql?.removeEventListener("change", onChange);
+        if (mql && onChange) mql.removeEventListener("change", onChange);
         bindDprListener();
       };
       mql.addEventListener("change", onChange);
@@ -97,7 +103,10 @@ export function ViewportSlot({ bridge }: Props) {
       ro.disconnect();
       window.removeEventListener("scroll", send);
       window.removeEventListener("resize", send);
+      // Post-audit G6: explicitly remove the active DPR listener.
+      if (mql && onChange) mql.removeEventListener("change", onChange);
       mql = null;
+      onChange = null;
     };
   }, [bridge]);
 
