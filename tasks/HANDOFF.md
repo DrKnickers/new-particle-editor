@@ -48,11 +48,46 @@ Automated regression gate (Stage 5 T7, 4 new dxgi-scene-rect assertions):
 
 Surfaced during Stage 5 work but not part of the Stage 5 ship:
 
-1. **L-019 (DXSDK linker-twin) + L-020 (spike-config-vs-production audit) + L-021 (verify rendered geometry pre-handoff) candidate lessons retro-doc.** Stage 4 surfaced two patterns; Stage 5 added L-021 (the displacement bug emerged because the sub-plan described independent components without verifying the COMBINED math against rendered geometry). Worth a single-session retro to formalize all three alongside L-016/L-017/L-018.
-2. **Latent projection-not-pushed bug in `ResetParameters`.** Same class as Stage 5 Iter 4 — `ResetParameters` rebuilds `m_projection` but doesn't call `SetTransform(D3DTS_PROJECTION, ...)`. Pre-Stage-5 nobody noticed because window resize was always followed by camera interaction (which calls `SetCamera` → `SetTransform`). Stage 5 fixed it inside `SetSceneViewport` only; the latent `ResetParameters` bug remains for non-composition transports. Single-line fix when someone gets to it.
-3. **Stage 4 sub-stage 4e — first-frame ClearRenderTargetView guard.** Sub-plan queued this; not observed during smoke; ship-if-surfaces.
-4. **`canvas-architecture.spec.ts` test.fixme markers (L-012 instrumentation issue).** Pre-existing Phase 2 fault; three documented fix approaches.
-5. **Test harness env-var pre-flight check.** Stage 4f surfaced — harness should fail-fast or auto-rebuild on ALO_*/VITE_* mismatch.
+1. **Stage 4 sub-stage 4e — first-frame ClearRenderTargetView guard.** Sub-plan queued this; not observed during smoke; ship-if-surfaces.
+2. **`canvas-architecture.spec.ts` test.fixme markers (L-012 instrumentation issue).** Pre-existing Phase 2 fault; three documented fix approaches.
+3. **Test harness env-var pre-flight check.** Stage 4f surfaced — harness should fail-fast or auto-rebuild on ALO_*/VITE_* mismatch.
+
+> **Future dispatches picking up any of these:** apply [L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan)'s
+> verification rule before committing to scope. The list above has not
+> been re-audited as part of the L-022 sweep — only the spurious
+> `ResetParameters` claim was verified and retracted. Each remaining
+> item is a *plausible* follow-up at time of writing, not a *verified*
+> one.
+
+## Resolved follow-ups (post-Stage-5)
+
+1. **Lessons retro-doc (L-019 / L-020 / L-021 / L-022).** Shipped
+   2026-05-25 in the post-Phase-3 dispatch. L-019 (DXSDK linker-twin),
+   L-020 (spike-vs-production const audit), L-021 (verify rendered
+   geometry — combined-math edition) all landed in
+   [`tasks/lessons.md`](lessons.md) using the established baseline
+   shape. L-022 (handoff-claim verification) was added as the fourth
+   lesson, surfaced by the same dispatch's pre-flight (see Retractions
+   below).
+
+## Retractions
+
+The pre-Stage-5 HANDOFF flagged a "**latent projection-not-pushed bug
+in `ResetParameters`**" as a single-line follow-up fix. Pre-flight
+verification during the 2026-05-25 post-Phase-3 dispatch dissolved
+the claim: [`Engine::ResetParameters`](../src/engine.cpp:1654) ends
+with `SetCamera(m_eye)`, and
+[`Engine::SetCamera`](../src/engine.cpp:998) unconditionally executes
+`SetTransform(D3DTS_PROJECTION, &m_projection)` at line 1014 — has
+done since commit `0d352ae` (Initial import). The "latent bug" was
+a phantom produced by reasoning by analogy from the genuine Stage 5
+`SetSceneViewport` bug (which legitimately rebuilt `m_projection`
+without pushing) to a parallel in `ResetParameters` that doesn't
+hold (because `ResetParameters` calls `SetCamera`, which
+`SetSceneViewport` doesn't). The verification finding and the
+structural process rule live at
+[`lessons.md` L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan).
+**No code change was made for the retracted item; none was needed.**
 
 ## Stage 5 commits (session branch)
 
@@ -78,7 +113,7 @@ With Stage 5 shipped, Phase 3's full scope ("migrate engine rendering to archite
 - **Stage 4**: DXGI engine bridge (engine pixels reach screen via shared texture → D3D11 alias → DXGI composition swapchain → DComp engine visual)
 - **Stage 5**: Scene-rect transform on engine visual (chrome panel backgrounds visible; pane/window resize reveals more scene without distortion)
 
-Next dispatch could pick up: (a) Phase 3 close-out (Stage 3h a11y suite + Stage 3i final acceptance smoke if not yet done); (b) lessons retro-doc (L-019/L-020/L-021 formalization); (c) latent `ResetParameters` projection push bug fix; (d) next-roadmap-item from [`ROADMAP.md`](../ROADMAP.md).
+Next dispatch could pick up: (a) Phase 3 close-out (Stage 3h a11y suite + Stage 3i final acceptance smoke if not yet done); (b) next-roadmap-item from [`ROADMAP.md`](../ROADMAP.md), bearing in mind that the roadmap doc redirects to [`post-audit-followups.md`](post-audit-followups.md) for P1 drainage before pulling fresh roadmap work. The lessons retro-doc previously suggested as (b) shipped 2026-05-25; the "latent `ResetParameters` projection push fix" previously suggested as (c) was retracted as a non-bug — see Retractions above and [`lessons.md` L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan).
 
 ## Stage 4 — what shipped, in plain English
 

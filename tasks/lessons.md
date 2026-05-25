@@ -1307,3 +1307,443 @@ that survived verification — one ChunkReader hardening pass, the
 TextureManager cache-vs-Reset hole from ChatGPT finding #1, and a
 Stage 3h composition-fallback sub-stage from ChatGPT finding #2 —
 get queued into `ROADMAP.md` / Stage 4 sub-plan as appropriate.
+
+---
+
+## L-019 — Legacy DXSDK June 2010 also shadows Win10 SDK link libraries — `LNK2019 CreateDXGIFactory2`-class failures resolve via `CreateDXGIFactory1` + QI, not linker-path surgery
+
+**Rule.** [`src/ParticleEditor.vcxproj`](../src/ParticleEditor.vcxproj)
+puts `$(DXSDK_DIR)Lib\x64` FIRST on `AdditionalLibraryDirectories` so
+the linker can resolve the engine's `d3dx9.lib`. DXSDK June 2010 ships
+its OWN `dxgi.lib` — pre-Windows-8 vintage, missing
+`CreateDXGIFactory2` and the other entrypoints introduced in DXGI 1.2+
+/ Win8 SDK. With DXSDK first on the lib path, any new code that calls
+those entrypoints fails at link time with `LNK2019 unresolved external
+symbol _CreateDXGIFactory2` (or similar), even though the header
+compile succeeded because of L-016's per-file include-path isolation.
+
+**The linker-side parallel doesn't have the same fix.** MSBuild has
+per-file `<AdditionalIncludeDirectories>` (compile is per-TU), but
+**link is per-project** — there is no per-file
+`<AdditionalLibraryDirectories>` knob. The L-016 isolation pattern
+does NOT extend to the linker. Reordering DXSDK below Win10 SDK on
+the project-level lib path would unshadow `dxgi.lib` but also break
+`d3dx9.lib` resolution (Win10 SDK doesn't ship a `d3dx9.lib`). No
+project-level reorder works for both sides.
+
+**Resolution shape.** Use `CreateDXGIFactory1` (DXSDK-compatible
+since Win7, present in DXSDK's `dxgi.lib`) and `QueryInterface` to
+the modern `IDXGIFactory*` you actually need (`IDXGIFactory2` for
+`CreateSwapChainForComposition`, `IDXGIFactory4` for
+`EnumAdapterByLuid`, etc.). The runtime QI succeeds on any Windows
+8+ host because the in-process DXGI runtime (loaded from system32,
+not DXSDK) implements the modern interface — only the link-time
+import library was stale. Capability detection becomes a single QI
+chokepoint per `IDXGIFactory*` consumer; if QI fails, you wouldn't
+get `CreateSwapChainForComposition` to work either, so QI is the
+natural gate for the entire DXGI 1.2+ requirement.
+
+**Trigger.** Any `LNK2019` against a DXGI 1.2+ / DirectComposition /
+modern-Direct3D entrypoint after adding new code under `src/host/`
+that compiles cleanly (L-016 isolation in place) but fails to link:
+
+- `LNK2019 unresolved external symbol _CreateDXGIFactory2`
+- `LNK2019 unresolved external symbol _D3D11CreateDevice` (if linking
+  against DXSDK's `d3d11.lib` rather than Win10 SDK's)
+- `LNK2019 unresolved external symbol _DCompositionCreateDevice3` or
+  similar DComp 1.x-only entrypoints
+
+The compile succeeded means L-016 isolated the header search; the
+link failed means the import library is still stale DXSDK's.
+
+**How to apply.**
+
+1. **Don't reorder the project-level lib path.** Engine's
+   `d3dx9.lib` dependency is load-bearing for the legacy renderer and
+   has no Win10 SDK replacement. Touching the order breaks the engine.
+2. **Don't fight the linker.** No per-file lib-dir override exists.
+   Custom build steps that copy modern `dxgi.lib` into a private
+   directory and prepend that are over-engineered for the actual
+   problem.
+3. **Take the QI path.** Call `CreateDXGIFactory1(IID_PPV_ARGS(&factory1))`
+   and `factory1->QueryInterface(IID_PPV_ARGS(&factory2))` (or higher
+   as needed). The runtime DXGI in `system32\dxgi.dll` implements the
+   modern interface regardless of which import library the linker
+   used. The QI cost is one virtual call per factory creation, paid
+   once at startup. Cite this lesson in the implementation file.
+4. **Mirror for any new factory class.** D3D11 / DirectComposition
+   / D2D each have analogous `Create*Factory` / `Create*Device`
+   entrypoints. The same QI-up pattern applies when DXSDK shadows
+   the import library.
+
+**Source incident (2026-05-25, [MT-11] Phase 3 Stage 4b).** Stage 4b's
+first Debug build of `Compositor::AttachEngineVisual` failed with
+`LNK2019 unresolved external symbol _CreateDXGIFactory2`. The spike
+at [`src/host/spike/dxgi_spike.cpp`](../src/host/spike/dxgi_spike.cpp)
+compiled and linked fine standalone because `dxgi_spike.vcxproj`
+doesn't reference DXSDK at all — its lib path is Win10 SDK only.
+ParticleEditor's lib path has DXSDK June 2010 first (for `d3dx9.lib`),
+which ships a stub `dxgi.lib` lacking `CreateDXGIFactory2`. There is
+no per-file `<AdditionalLibraryDirectories>` in MSBuild, so the
+L-016 header-side isolation pattern doesn't help — link is
+per-project, not per-file. Surgical fix at the call site: switch to
+`CreateDXGIFactory1` (DXSDK-compatible since Win7) and QI to
+`IDXGIFactory2` for the `CreateSwapChainForComposition` call. Uses
+only DXSDK-compatible APIs at link time; gates DXGI 1.2 capability
+detection at the QI step.
+
+**Cross-reference.** [L-016](#l-016--legacy-dxsdk-june-2010-shadows-win10-sdk-headers-when-dxsdk-is-first-in-additionalincludedirectories-isolate-new-tus-via-per-file-include-path-override--pimpl)
+is the header-side twin (different fix shape but same root cause).
+Compositor.cpp's factory creation in `AttachEngineVisual` is the
+reference site for the `CreateDXGIFactory1` + QI pattern. Stage 4
+sub-plan [`tasks/dxgi-stage-4-composition-wiring.md`](dxgi-stage-4-composition-wiring.md)
+§3.2 covers the broader Stage 4 DXGI integration.
+
+---
+
+## L-020 — When porting a spike to production, audit every const/enum the spike picked against the production workload's actual data flow — spike correctness is not transitive
+
+**Rule.** A spike's role is to validate one specific question
+("does the topology work? does the transport meet the budget?")
+under a known-simple workload — typically `D3DClear` to a solid
+color, no shaders, no blending, no real source data. The constants
+and enums the spike chose for that workload (swapchain alpha mode,
+texture formats, blend states, usage flags, RT clear color, sampler
+modes) are correct for the spike's data flow but not automatically
+correct for production's. Before adopting spike defaults into
+production code, walk each const through the production data flow
+and verify the choice still holds.
+
+This is a distinct lesson from L-016/L-017 (which are about SDK +
+include surfaces) and from L-018 (which is about external-source
+verification). L-020 is about the spike→production hand-off
+specifically: spike output is a passing reference for transport
+correctness, NOT a turnkey production config.
+
+**Trigger.** Any production port that copies constants from a
+reference spike, especially for swapchain / texture / render-state
+parameters where the visual or behavioural semantics depend on
+properties of the source data:
+
+- Swapchain alpha mode (PREMULTIPLIED vs STRAIGHT vs IGNORE)
+- Texture formats with sRGB-vs-UNORM variants
+- Color spaces (`DXGI_COLOR_SPACE_*`) for HDR pipelines
+- Sampler states where the spike's content was point-sampled but
+  production needs anisotropic
+- Blend states where the spike used opaque content but production
+  is alpha-blended
+- Clear colors that "happened to be" the right value for the spike
+  (e.g. `{0, 0, 0, 0}` vs `{0, 0, 0, 1}`)
+
+**How to apply.**
+
+For each const/enum the spike chose:
+
+1. Identify the production data flow that consumes the resource —
+   what writes to it, what reads from it, what compositor / shader /
+   blend stage interprets it.
+2. Ask: "What invariant in the spike's workload justified this
+   value?" Examples: PREMULTIPLIED works when the source has
+   already-multiplied alpha (clean `D3DClear` output); IGNORE
+   works when the source's alpha channel is arbitrary and not
+   meaningful.
+3. Ask: "Does production hold the same invariant?" If yes, keep.
+   If no, change. If unsure, the answer is "find out before
+   shipping" — typically a 5-line test against a real production
+   asset.
+4. Document the spike-vs-production divergence in the production
+   code with a comment + cite this lesson.
+
+The audit pass is cheap (~10 min per const); the alternative is a
+user-surfaced visual regression mid-smoke that costs an iteration
+cycle to reproduce, diagnose, and fix.
+
+**Source incident (2026-05-25, [MT-11] Phase 3 Stage 4d.1).** The
+Stage 0 DXGI spike at
+[`src/host/spike/dxgi_spike.cpp`](../src/host/spike/dxgi_spike.cpp)
+created its composition swapchain with
+`DXGI_ALPHA_MODE_PREMULTIPLIED`. Correct for the spike's workload:
+the spike's render loop was `D3DClear` to a solid color, so the
+shared texture's alpha channel held clean pre-multiplied values that
+DComp's compositing math could combine correctly. Stage 4b copied
+the swapchain desc verbatim from the spike. Stage 4c smoke surfaced
+the visual artifact under real engine content: "additive fire
+sprites overlap smoke particles with dark/black backgrounds —
+doesn't occur in legacy."
+
+Root cause: the production engine's particle blend states leave the
+RT's alpha channel in **arbitrary** states — the engine never cared
+about its own RT alpha. Legacy arch-A's `UpdateLayeredWindow` path
+used the popup's STAMPED alpha (from
+`AlphaCompositor::Composite`'s post-process stamping), NOT the
+engine RT's alpha. Under PREMULTIPLIED, DComp interpreted the
+RT's arbitrary alpha as a premultiplied factor and darkened the
+output everywhere alpha was less than full. Fix: switch to
+`DXGI_ALPHA_MODE_IGNORE`. Tells DComp the surface is fully opaque;
+chrome composites on top where opaque, transparent regions show
+full-opacity engine. Matches legacy semantics.
+
+The spike's PREMULTIPLIED choice was correct for the spike. The
+production port should have asked "does the production engine
+write meaningful alpha to its RT?" The answer is no (it never
+has), but the question wasn't asked at port time — the const got
+copied because the spike passed. ~1 iteration cycle of
+user-driven smoke + diagnosis to discover what a 5-minute pre-
+port audit would have caught.
+
+**Cross-reference.** Stage 4 sub-plan [`tasks/dxgi-stage-4-composition-wiring.md`](dxgi-stage-4-composition-wiring.md)
+§3.5 covers the swapchain-desc decisions; Compositor.cpp's
+`AttachEngineVisual` is the production site. CHANGELOG Stage 4
+entry's "Issues encountered" §4d.1 has the long-form smoke
+sequence. [L-018](#l-018--ai-generated-audits-need-first-party-fileline-verification-before-any-finding-is-treated-as-actionable-llm-severity-labels-are-not-signals)
+is the external-source verification parallel; L-020 is the
+internal spike→production parallel.
+
+---
+
+## L-021 — Verify rendered geometry — combined-math edition
+
+**Rule.** CLAUDE.md's "verify rendered geometry, not design intent"
+rule applies to **combined math across components**, not just
+per-component math. A sub-plan describing Component A's coord
+convention correctly AND Component B's coord convention correctly
+can still produce broken geometry when the two compose — if no one
+walks the pixel path end-to-end. Per-component review catches local
+errors; combined-math walk catches composition errors. Both passes
+are needed for any multi-component layout.
+
+This is a strengthening of the existing CLAUDE.md rule, not a
+replacement. The existing rule says "compute pixel positions
+yourself; match against what the user will see." L-021 names the
+specific failure mode that's escaped that rule in practice:
+internally-correct components composing into externally-broken
+geometry.
+
+**Trigger.** Any sub-plan with >1 component contributing to final-
+pixel position:
+
+- Transform + viewport (e.g. DComp visual offset + clip + D3D
+  scissor / RSSetViewports)
+- Projection + render-target sub-region (e.g. per-pixel-FoV
+  projection + scissor)
+- Parent-space + local-space (e.g. WPF / DComp visual tree
+  parent→child offsets)
+- Window-client + control-rect coords (Win32 child windows where
+  parent and child have different origins)
+
+Risk escalates when components use **different coord conventions** —
+absolute vs relative, world vs screen, post-translation vs
+pre-translation, MSDN's "insertAbove=TRUE" semantics (which mean
+"in front" but parse as "above" to most readers — L-016 area), etc.
+Each component being internally correct is necessary but not
+sufficient; the composition needs its own verification.
+
+**How to apply.**
+
+At sub-plan time, before declaring a multi-component layout design
+done:
+
+1. **Pick a concrete sample pixel.** Not "the top-left corner" or
+   "the center" — a specific `(x, y)` like `(100, 100)`, plus a
+   concrete scene-rect or transform like `(50, 30, 800, 600)`.
+2. **State the assumed coord space at each stage.** "After
+   `SetOffset(sceneX, sceneY)`, the visual's local origin is
+   `(sceneX, sceneY)` in parent-space." "After `SetClip({0, 0, w,
+   h})` in local-coords-post-offset, the clip rect in parent-space
+   is `(sceneX, sceneY, sceneX+w, sceneY+h)`."
+3. **Compute the final pixel position** at each component and the
+   combined result. Verify the combined result matches what the
+   user would see.
+4. **Write the trace into the sub-plan.** Not just "design intent",
+   but the actual pixel arithmetic. A reviewer can audit the trace
+   for off-by-one and double-offset errors that prose descriptions
+   hide.
+
+A 30-second mental walk-through with sample pixel `(100, 100)` and
+scene-rect `(50, 30, 800, 600)` is cheaper than a smoke-cycle
+iteration that costs the user a screenshot, your diagnostic time,
+and a re-build.
+
+**Source incident (2026-05-25, [MT-11] Phase 3 Stage 5 T6 Iter 1).**
+The Stage 5 sub-plan described two components contributing to
+scene-rect rendering:
+
+- **T1 (Compositor):** "`SetOffset(sceneX, sceneY) + SetClip({0, 0,
+  w, h})` in local-coords-post-offset." Internally correct — local
+  origin after offset is at `(sceneX, sceneY)` in parent-space; clip
+  is local-relative, carves `(0..w, 0..h)` from the local-coord box.
+- **T3 (Engine):** "Render scene at viewport `(sceneX, sceneY, w,
+  h)` in the RT." Internally correct — engine paints into the
+  scene-rect sub-region of the RT.
+
+Each component followed its sub-plan correctly. The combined
+math produced a **double-offset displacement bug**: engine paints
+RT[sceneX..sceneX+w, sceneY..sceneY+h] → DComp visual offset shifts
+the entire swapchain content by `(sceneX, sceneY)` in parent-space
+→ visible pixels are `local[0..w, 0..h]` which corresponds to **RT
+top-left** = engine clear color. The actual rendered scene sat at
+RT[sceneX..2*sceneX+w, sceneY..2*sceneY+h] — invisible because the
+clip excluded it.
+
+User screenshot at T6 smoke: engine scene in the bottom-right of
+the scene-rect quadrant, engine clear color filling the top-left
+margins. Neither pre-handoff code review nor the implementer's
+mental walkthrough caught the math — each component was reviewed
+in isolation and looked correct.
+
+Fix shape: `SetOffsetX/Y(0, 0) + SetClip` with **ABSOLUTE
+host-client coords** `{x, y, x+w, y+h}`. Visual's local-coord
+space equals parent coord space (root visual = host client); clip
+directly carves the visible region from the (full-RT-sized)
+swapchain at host-client coords; engine continues to paint into
+the scene-rect sub-region of the RT. Combined math: engine paints
+RT[sceneX..sceneX+w, sceneY..sceneY+h] → visual at parent-origin,
+no shift → visible pixels are exactly the scene-rect sub-region of
+the swapchain → correct.
+
+A pre-coding pixel walk would have flagged the double-offset:
+sample `(100, 100)` after `SetOffset(50, 30)` lands at parent-
+coord `(150, 130)`; the clip `{0, 0, w, h}` (local-relative)
+becomes `{50, 30, 50+w, 30+h}` in parent-coords; engine wrote
+parent-coord `(50+100, 30+100) = (150, 130)` to that pixel, but
+the visual surface there now holds `RT[100, 100]` (post-offset
+local coord), which is **engine clear**.
+
+**Cross-reference.** CLAUDE.md "Verify rendered geometry, not
+design intent" is the parent rule. Stage 5 sub-plan
+[`tasks/dxgi-stage-5-scene-rect-transform.md`](dxgi-stage-5-scene-rect-transform.md)
+has the post-T6 revision notes documenting the design pivot.
+[`src/host/Compositor.cpp`](../src/host/Compositor.cpp)
+`SetEngineVisualTransform` is the final shape. Stage 5 smoke evidence
+at [`tasks/stage-5-smoke-result.md`](stage-5-smoke-result.md).
+
+---
+
+## L-022 — Handoff notes and next-session prompts carry claims, not facts — verify against current code before any claim enters a dispatch's plan
+
+**Rule.** Carry-forward TODO claims in [`tasks/HANDOFF.md`](HANDOFF.md),
+next-session-prompt files, sub-plan "follow-ups" sections, or
+similar inter-session-doc surfaces are **claims to verify**, not
+facts. Prior-session reasoning may have been:
+
+- **Correct when written and stale now** (a sibling session closed
+  the gap, lines shifted, a refactor changed the call shape).
+- **Wrong from the start** (the prior session reasoned by analogy
+  from a genuine bug to a parallel that doesn't hold, without
+  re-reading the cited site).
+- **Correct but mis-located** (line numbers shifted; the cited
+  `file:line` no longer points at the function the claim describes).
+
+Verify each carry-forward claim against the current code BEFORE it
+enters a dispatch's plan. A 5-15 minute verification pass routinely
+catches phantom bugs that would otherwise burn a dispatch on a
+non-fix.
+
+L-018 covers external-source claims (AI audits, third-party
+reports). L-022 is the internal-source parallel: claims authored by
+prior sessions of this collaboration itself. The cost asymmetry is
+the same shape — pre-flight verification is cheap, dispatch-time
+discovery is expensive — and the verification posture should be the
+same regardless of which side of the trust boundary the claim came
+from.
+
+**Trigger.** Picking up any dispatch where the prompt or HANDOFF
+cites:
+
+- A "latent bug" or "single-line fix" deferred from a prior
+  session.
+- A "deferred to a follow-up dispatch" item being promoted to
+  active scope.
+- An "out of scope, ship-if-surfaces" deferral being elevated.
+- A specific `file:line` citation in a non-code document (sub-plan,
+  HANDOFF, CHANGELOG, next-session-prompt) for a code site that
+  the current dispatch is about to touch.
+
+Also fires for the converse: when this dispatch is *writing* a
+carry-forward TODO. Bake the verification expectation into the
+note — "verified at HEAD `<hash>`" or "claim not re-verified since
+`<date>`" — so the next session knows the freshness state.
+
+**How to apply.**
+
+For each carry-forward claim entering the active plan:
+
+1. **Read the cited code at the cited line.** If the line has
+   shifted (file edits since the claim was written), find the actual
+   function by name and re-anchor the claim to its current
+   `file:line`.
+2. **Trace the data flow described in the claim.** Does the
+   documented "missing push/call/guard" actually exist? Does
+   the path the claim describes still exist, or was it
+   refactored?
+3. **Use `git log -S` / `git blame`** to date the cited code. If
+   the code predates the claim by months/years, the claim was
+   probably wrong from the start (the prior author reasoned by
+   analogy without reading the site). If it post-dates, the gap
+   may have been closed by a subsequent commit.
+4. **If the bug is real:** plan the fix. Note the verification
+   in the dispatch plan ("Verified the bug at `file:NNNN` —
+   claim still holds at HEAD `<hash>`").
+5. **If the bug is not real:** retract the claim in HANDOFF.md
+   explicitly. Don't silently drop it — future sessions inheriting
+   the same docs need the retraction in place. Cite this lesson
+   in the retraction so the structural finding is preserved.
+
+**Source incident (2026-05-25, post-[MT-11] Phase 3 dispatch
+pre-flight).** The next-session-prompt and `HANDOFF.md` both
+described a "latent projection-not-pushed bug in
+`Engine::ResetParameters`" — cited as a single-line fix at
+`engine.cpp:1518`, with the rationale that `ResetParameters`
+rebuilds `m_projection` but doesn't push it to the device, and
+"pre-Stage-5 nobody noticed because window resize was always
+followed by camera interaction (which calls `SetCamera` →
+`SetTransform`)." The fix described: at end of `ResetParameters`,
+recompute `m_viewProjection` and call
+`m_pDevice->SetTransform(D3DTS_PROJECTION, &m_projection)` — same
+pattern as Stage 5's `SetSceneViewport`.
+
+Pre-flight verification:
+
+- `ResetParameters` is now at [`src/engine.cpp:1654`](../src/engine.cpp:1654)
+  (lines shifted ~136 by Stage 5's `SetSceneViewport` + related
+  additions; the claim's `:1518` no longer points at the function).
+- `ResetParameters` ends with `SetCamera(m_eye)` at
+  [`src/engine.cpp:1734`](../src/engine.cpp:1734) — inside the
+  same guard that rebuilds `m_projection`.
+- `SetCamera` at [`src/engine.cpp:998-1015`](../src/engine.cpp:998)
+  unconditionally executes
+  `D3DXMatrixMultiply(&m_viewProjection, &m_view, &m_projection)`
+  at line 1004 and
+  `m_pDevice->SetTransform(D3DTS_PROJECTION, &m_projection)` at
+  line 1014.
+- `git log -S "SetCamera(m_eye)" -- src/engine.cpp` reports the
+  call dates to commit `0d352ae` (Initial import) — not a recent
+  addition, not a Stage 5 artifact.
+
+So `ResetParameters` **does** push the fresh projection to the
+device via its existing `SetCamera(m_eye)` tail call, has done
+since Initial import, and the "latent bug" was a phantom. The
+prior session appears to have reasoned by analogy from the
+genuine Stage 5 `SetSceneViewport` bug (which legitimately
+rebuilt `m_projection` without pushing) to a parallel in
+`ResetParameters` that doesn't hold (because `ResetParameters`
+calls `SetCamera`, which `SetSceneViewport` doesn't). The
+analogy was plausible but not verified.
+
+Discovery cost: ~15 minutes of pre-flight reading + grep +
+`git log -S`. Hypothetical un-verified cost: a duplicate
+`SetTransform(PROJECTION)` would have shipped right before
+the existing `SetCamera(m_eye)` push — likely harmless,
+possibly a redundant device-state push per resize cycle,
+contributing noise to future readers ("why are there two
+projection pushes here?").
+
+**Cross-reference.** [L-018](#l-018--ai-generated-audits-need-first-party-fileline-verification-before-any-finding-is-treated-as-actionable-llm-severity-labels-are-not-signals)
+is the external-source parallel (AI audits / third-party reports).
+CLAUDE.md "Trust but verify — universally" is the parent
+principle. CLAUDE.md's "Pre-handoff testing — exhaustive" applies
+on the *writing* side: a session producing a HANDOFF note about a
+"latent bug" should verify it before persisting the claim. The
+retracted claim was in `HANDOFF.md` "Known follow-ups (out of
+scope for Stage 5)" item 2; the retraction citing this lesson
+sits in HANDOFF.md's "Retractions" sub-section.

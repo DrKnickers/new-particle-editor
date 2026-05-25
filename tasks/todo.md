@@ -426,7 +426,70 @@ Two commits total:
 
 ---
 
-## Review (filled in as work progresses)
+## Review (post-dispatch)
 
-(To be filled in after each todo item completes; final review section
-at end of dispatch.)
+**All seven plan items shipped this session.** Two commits land on
+`claude/festive-hoover-6abdbf`:
+
+1. `45ab36c` — `docs(LT-4): archive Phase 3 todo + draft post-Phase 3 dispatch plan`
+   (mechanical rename of the completed Phase 3 todo.md to
+   `tasks/todo-mt-11-phase-3-archive.md` + new dispatch plan in
+   `tasks/todo.md`).
+2. (this commit) — `docs(LT-4): [MT-11] Phase 3 lessons retro-doc — L-019/L-020/L-021/L-022 + HANDOFF retraction`
+   (lessons.md +~440 lines, HANDOFF.md restructure with new
+   Resolved/Retractions sub-sections, CHANGELOG.md new top entry,
+   todo.md review section).
+
+**What landed against the original plan:**
+
+| Plan item | Shipped | Notes |
+|---|---|---|
+| L-019 DXSDK linker-twin | ✓ | `tasks/lessons.md` lines 1313-1402 |
+| L-020 spike-vs-production const audit | ✓ | `tasks/lessons.md` lines 1404-1502 |
+| L-021 verify rendered geometry combined-math | ✓ | `tasks/lessons.md` lines 1504-1620 |
+| L-022 handoff-claim verification | ✓ | `tasks/lessons.md` lines 1622-1749 |
+| HANDOFF retraction | ✓ | "Known follow-ups" restructured + new "Resolved follow-ups" + new "Retractions" sub-sections |
+| CHANGELOG entry | ✓ | Inserted above Stage 5 with TODO-HASH/TODO-PR placeholders matching Stage 4+5 pending pattern |
+| Phase 3 closing notes line | ✓ | Updated to reflect the (b)=shipped, (c)=retracted state |
+| FF + push | (pending verification + commit) | This dispatch's tail |
+
+**Deviations from the plan:** None of substance. The HANDOFF "Resolved
+follow-ups" sub-section was a refinement of the plan's §3 item 5
+("HANDOFF.md correction") — the plan said "remove item 2 + add
+Retractions"; the shipped version also added a "Resolved follow-ups"
+sub-section so future readers see *both* what was done this session
+(legitimate ship) and what was retracted (phantom claim), not just
+the retraction.
+
+**Risks that materialised vs the §4 list:**
+
+- R1 (source-incident drift): mitigated as planned — re-read each
+  CHANGELOG paragraph before drafting; verbatim file:line citations
+  preserved.
+- R2 (L-022 blame framing): mitigated as planned — incident
+  paragraph stays structural, names no session branch or prior
+  author.
+- R3 (HANDOFF retraction staleness): mitigated as planned + slightly
+  better — the "Resolved follow-ups" sub-section makes the ship-vs-
+  retract distinction explicit, beyond just the retraction.
+- R4 (CHANGELOG date placement): confirmed correct — inserted at top
+  of `## Changelog`, above Stage 5.
+- R5 (TODO-HASH placeholders): used as planned; matches Stage 4+5
+  pattern (still pending their own backfill).
+- R6 (format drift): mitigated — all four new lessons use the
+  baseline 5-section shape; no elaborated sub-headings.
+- R7 (other HANDOFF claims): explicitly out of scope; flagged in
+  the HANDOFF.md "Known follow-ups" header note so future dispatches
+  picking up any of items 1/2/3 apply L-022's rule before scoping.
+
+**Lessons-about-this-session worth capturing:** None new beyond
+L-022 itself, which IS this session's structural lesson. The
+dispatch ran to plan with no surprises after the Option C
+non-bug discovery (which was a pre-flight finding, not a
+mid-dispatch surprise).
+
+**For the next dispatch:** the HANDOFF.md "Phase 3 closing notes"
+tail now lists only two directions ((a) Phase 3 a11y close-out +
+(b) next-roadmap-item / post-audit P1 drainage), down from four.
+The remaining "Known follow-ups" list has three items — all
+plausible, none re-verified.

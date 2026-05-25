@@ -16,6 +16,77 @@ Conventions:
 
 ## Changelog
 
+### Lessons retro-doc for [MT-11] Phase 3 — L-019/L-020/L-021/L-022 formalized; HANDOFF latent-bug claim retracted
+
+*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+[`tasks/lessons.md`](tasks/lessons.md) gains four new entries closing
+out [MT-11] Phase 3's documentation hygiene. **L-019** (DXSDK June 2010
+linker-twin: `LNK2019 CreateDXGIFactory2`-class failures resolve via
+`CreateDXGIFactory1` + QI, not linker-path surgery) is the linker-side
+parallel to L-016's header-side pattern, with the resolution shape
+explained (no per-file `<AdditionalLibraryDirectories>` exists in
+MSBuild, so the L-016 isolation does not extend to the linker — the
+fix lives in the call site instead). **L-020** (spike correctness is
+not transitive — audit every const/enum the spike picked against the
+production workload's actual data flow) generalizes the Stage 4d.1
+PREMULTIPLIED → IGNORE alpha-mode pivot into a structural rule for any
+spike→production hand-off. **L-021** (verify rendered geometry,
+combined-math edition) extends CLAUDE.md's existing "verify rendered
+geometry, not design intent" rule to combined math across multiple
+components — Stage 5 Iter 1's displacement bug emerged because each
+component's coord convention was reviewed in isolation; nobody walked
+the pixel path end-to-end. Adds a 30-second pre-coding pixel walk to
+the multi-component-layout checklist. **L-022** (handoff notes carry
+claims, not facts — verify against current code before any claim
+enters a dispatch's plan) was surfaced during this dispatch's
+pre-flight: the next-session-prompt and HANDOFF described a "latent
+projection-not-pushed bug in `ResetParameters`" at
+`engine.cpp:1518`; verification revealed `ResetParameters` is now at
+[`engine.cpp:1654`](src/engine.cpp:1654), ends with
+`SetCamera(m_eye)`, which (at [`engine.cpp:1014`](src/engine.cpp:1014))
+unconditionally pushes `SetTransform(D3DTS_PROJECTION, &m_projection)`
+and has done since commit `0d352ae` (Initial import). The "latent bug"
+was a phantom; HANDOFF was updated with a "Retractions" sub-section
+citing L-022.
+
+**How we tackled it.** Three of the four lessons (L-019, L-020, L-021)
+were distillation passes from the existing CHANGELOG Stage 4 and
+Stage 5 "Issues encountered" prose into the canonical lessons.md
+**Rule / Trigger / How to apply / Source incident / Cross-reference**
+shape (set by L-001 through L-018). No investigation needed for those
+three — the source incidents were already richly documented at ship
+time; the work was identifying the structural rule and rephrasing the
+incident as a worked example. **L-022 was different** — the carry-
+forward claim it documents only became visible during this dispatch's
+pre-flight, where reading [`engine.cpp:1654`](src/engine.cpp:1654)
+showed `ResetParameters` already pushed the projection via its
+existing `SetCamera(m_eye)` tail. `git log -S "SetCamera(m_eye)" --
+src/engine.cpp` dated that line to commit `0d352ae` (Initial import)
+— evidence the claim was wrong from the start, not a stale freshness
+problem. The prior session's author appears to have reasoned by
+analogy from the genuine Stage 5 `SetSceneViewport` bug to a parallel
+in `ResetParameters` that doesn't hold (because `ResetParameters`
+calls `SetCamera`, which `SetSceneViewport` doesn't). HANDOFF.md was
+restructured: item 2 of "Known follow-ups (out of scope for Stage 5)"
+was removed; remaining items renumbered 3/4/5 → 1/2/3; new
+"Resolved follow-ups" sub-section captures the lessons-retro-doc
+ship; new "Retractions" sub-section captures the structural finding
+with a pointer at L-022. The two existing CHANGELOG entries (Stage 4
++ Stage 5) were not edited — their existing "Issues encountered" prose
+remains the long-form source the new lessons distill from.
+
+C++ touched: none. Tests touched: none. Docs touched:
+[`tasks/lessons.md`](tasks/lessons.md) (+~440 lines for L-019/L-020/L-021/L-022,
+following the existing entry format), [`tasks/HANDOFF.md`](tasks/HANDOFF.md)
+("Known follow-ups" restructured + new "Resolved follow-ups" + new
+"Retractions" sub-sections; Phase 3 closing notes line updated to
+reflect the post-retro-doc state), [`tasks/todo.md`](tasks/todo.md)
+(fresh dispatch plan; the prior Phase 3 todo.md archived to
+[`tasks/todo-mt-11-phase-3-archive.md`](tasks/todo-mt-11-phase-3-archive.md)).
+
+---
+
 ### Scene-rect transform on the engine visual ([MT-11] Phase 3 Stage 5) — pane resize and window resize now cleanly reveal more of the scene rather than distorting existing content; engine viewport scoped to scene-rect with per-pixel-FoV projection that keeps angular extent per pixel constant across resizes
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
