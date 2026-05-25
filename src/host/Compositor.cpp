@@ -132,6 +132,14 @@ struct Compositor::Impl
     int    engineHeightCached   = 0;
     bool   engineVisualAttached = false;
 
+    // [MT-11] Phase 3 Stage 4c — 1 Hz throttled diagnostics for
+    // [COMP-engine-frame] + [COMP-engine-handle-hash]. Per-frame
+    // emission would dominate the log; per-second is enough to spot
+    // a stalled composite (count stops) or a swapped texture
+    // (sharedTex pointer changes mid-run).
+    DWORD    engineLastFrameLogTick = 0;
+    uint64_t engineFrameCount       = 0;
+
     void LogLine(const std::string& s) const
     {
         if (log) log(s);
@@ -613,14 +621,84 @@ HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
 
 HRESULT Compositor::CompositeEngineFrame() noexcept
 {
-    // 4a/4b: engine visual may or may not be attached, but
-    // CompositeEngineFrame stays a stub until 4c. Returning S_FALSE
-    // signals "no composite happened this frame" per the documented
-    // contract — the swapchain's back buffer is never Presented, so
-    // 4b smoke shows the same chrome-only output as Stage 3b
-    // (viewport quadrant area still empty until 4c lands the real
-    // CopyResource + Present1 sequence).
-    return S_FALSE;
+    // No engine visual attached → S_FALSE per the documented
+    // contract. Host's per-frame loop treats S_FALSE as "skip the
+    // composite step this frame." Triggered by:
+    //   - Stage 3 baseline (no AttachEngineVisual ever called).
+    //   - AttachEngineVisual failed (LUID mismatch, D3D11 device,
+    //     OpenSharedResource, swapchain) — composition mode stays
+    //     intact per §3.8, viewport stays empty.
+    if (!m_impl->engineVisualAttached) return S_FALSE;
+
+    // Defensive — engineVisualAttached implies all resources exist,
+    // but cover the edge case where teardown is mid-flight on a
+    // different thread (shouldn't happen on the single-threaded
+    // message pump, but cheap insurance).
+    if (!m_impl->d3d11Context || !m_impl->engineBackBuffer ||
+        !m_impl->sharedTexD3D11 || !m_impl->engineSwapChain)
+    {
+        return E_NOT_VALID_STATE;
+    }
+
+    // D3D11 CopyResource — texSize must match. AttachEngineVisual
+    // cached (handle, w, h) at attach time. Lazy detection of resize
+    // invalidation is sub-stage 4d's RefreshEngineSharedHandle; for
+    // 4c we assume the handle is stable. If AlphaCompositor::Resize
+    // creates a new handle between 4c-shipped and 4d-shipped,
+    // CopyResource silently fails (the D3D11 debug layer logs the
+    // size mismatch via OutputDebugString); the next 4d ship will
+    // pick up the new handle automatically via lazy detection.
+    m_impl->d3d11Context->CopyResource(
+        m_impl->engineBackBuffer.Get(),
+        m_impl->sharedTexD3D11.Get());
+
+    // Present1 with no sync interval — composition rate is throttled
+    // by DComp's commit cadence (~60-360 Hz depending on monitor +
+    // composition refresh), not by Present rate. Spike measured
+    // 0.30 ms total transport at 3440x1440 — Present is essentially
+    // free, the spin in WaitEndFrameQuery dominates.
+    DXGI_PRESENT_PARAMETERS pp = {};
+    HRESULT hr = m_impl->engineSwapChain->Present1(0, 0, &pp);
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-engine-fail] Present1 hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // 1 Hz throttled diagnostics. GetTickCount() wraps after ~49 days
+    // of uptime; we don't care because the editor session is unlikely
+    // to span that.
+    m_impl->engineFrameCount++;
+    DWORD now = GetTickCount();
+    if (m_impl->engineLastFrameLogTick == 0 ||
+        (now - m_impl->engineLastFrameLogTick) >= 1000)
+    {
+        m_impl->engineLastFrameLogTick = now;
+
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "[COMP-engine-frame] composite n=%llu (1 Hz throttle)",
+                 static_cast<unsigned long long>(m_impl->engineFrameCount));
+        m_impl->LogLine(buf);
+
+        // [COMP-engine-handle-hash] sanity diagnostic per the
+        // dxgi-stage-4 sub-plan §4 4c addendum. Logs current handle
+        // value + cached resource COM-object addresses each second.
+        // If `sharedTex` pointer changes mid-run WITHOUT a preceding
+        // [COMP-engine-resize] entry, OpenSharedResource silently
+        // returned a different texture — the spike's documented
+        // wrong-handle failure mode at dxgi_spike.cpp:355-357.
+        snprintf(buf, sizeof(buf),
+                 "[COMP-engine-handle-hash] handle=%p sharedTex=%p backBuffer=%p texSize=%dx%d",
+                 m_impl->engineHandleCached,
+                 m_impl->sharedTexD3D11.Get(),
+                 m_impl->engineBackBuffer.Get(),
+                 m_impl->engineWidthCached,
+                 m_impl->engineHeightCached);
+        m_impl->LogLine(buf);
+    }
+
+    return S_OK;
 }
 
 HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,

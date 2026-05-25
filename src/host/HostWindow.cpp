@@ -676,6 +676,28 @@ void HostWindowImpl::RenderD3D9()
     engine->Render();
     fpsMeasurer.measure();
 
+    // [MT-11] Phase 3 Stage 4c — composition-mode per-frame composite.
+    // engine->Render() above issued D3D9 draws into the AlphaCompositor's
+    // shared texture. IssueEndFrameQuery markers the D3D9 command stream
+    // after those draws; WaitEndFrameQuery spins until the GPU has
+    // finished them — cross-device sync per sub-plan §3.3 path (b).
+    // Then CompositeEngineFrame CopyResources from the D3D11 alias into
+    // the engine's DXGI swapchain back buffer and Present1's it. DComp
+    // picks up the new content on its next composition cycle.
+    //
+    // Gated on composition-mode + Compositor::IsReady (Stage 3
+    // attachment committed) + engineVisualAttached (Stage 4b attach
+    // succeeded). When AttachEngineVisual failed (LUID mismatch,
+    // D3D11 device, etc.), CompositeEngineFrame returns S_FALSE and
+    // this block is a per-frame no-op; composition mode stays intact
+    // with viewport area empty per sub-plan §3.8.
+    if (m_compositionMode && m_compositor && m_compositor->IsReady())
+    {
+        engine->IssueEndFrameQuery();
+        engine->WaitEndFrameQuery();
+        m_compositor->CompositeEngineFrame();
+    }
+
     // [MT-11] Phase 1: hand the just-composited frame to FramePublisher
     // for encode + base64 + emit. Lifecycle is gated on m_framePublisher
     // being non-null (only constructed when ALO_VIEWPORT_TRANSPORT=canvas-jpeg
