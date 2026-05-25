@@ -619,7 +619,7 @@ HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
     return S_OK;
 }
 
-HRESULT Compositor::CompositeEngineFrame() noexcept
+HRESULT Compositor::CompositeEngineFrame(HANDLE currentSharedHandle) noexcept
 {
     // No engine visual attached → S_FALSE per the documented
     // contract. Host's per-frame loop treats S_FALSE as "skip the
@@ -634,20 +634,55 @@ HRESULT Compositor::CompositeEngineFrame() noexcept
     // but cover the edge case where teardown is mid-flight on a
     // different thread (shouldn't happen on the single-threaded
     // message pump, but cheap insurance).
-    if (!m_impl->d3d11Context || !m_impl->engineBackBuffer ||
-        !m_impl->sharedTexD3D11 || !m_impl->engineSwapChain)
+    if (!m_impl->d3d11Context || !m_impl->engineSwapChain)
     {
         return E_NOT_VALID_STATE;
     }
 
-    // D3D11 CopyResource — texSize must match. AttachEngineVisual
-    // cached (handle, w, h) at attach time. Lazy detection of resize
-    // invalidation is sub-stage 4d's RefreshEngineSharedHandle; for
-    // 4c we assume the handle is stable. If AlphaCompositor::Resize
-    // creates a new handle between 4c-shipped and 4d-shipped,
-    // CopyResource silently fails (the D3D11 debug layer logs the
-    // size mismatch via OutputDebugString); the next 4d ship will
-    // pick up the new handle automatically via lazy detection.
+    // [MT-11] Phase 3 Stage 4d — lazy resize-handle re-open. Every
+    // AlphaCompositor::Resize call invalidates the previous shared
+    // HANDLE and creates a new one. The previous CopyResource path
+    // would read from a released D3D9 texture (visible as a frozen
+    // viewport — engine keeps rendering into new VRAM but our alias
+    // still points at the old, dead allocation). Per-frame compare +
+    // re-open recovers in 1 frame.
+    //
+    // Pointer compare per frame is the dominant steady-state cost;
+    // the re-open path only runs on actual resize events. nullptr is
+    // tolerated as a sentinel for "engine doesn't have a shared
+    // texture right now" (e.g. AlphaCompositor not yet Resized) —
+    // we skip the composite that frame; previous frame remains on
+    // screen.
+    if (!currentSharedHandle) return S_FALSE;
+    if (currentSharedHandle != m_impl->engineHandleCached)
+    {
+        // Re-open against the new handle. RefreshEngineSharedHandle
+        // ignores the (w, h) hints — it reads the actual size from
+        // the texture descriptor after OpenSharedResource, then
+        // calls IDXGISwapChain1::ResizeBuffers if needed.
+        HRESULT rhr = RefreshEngineSharedHandle(currentSharedHandle, 0, 0);
+        if (FAILED(rhr))
+        {
+            // Re-open failed — clear cache so the next frame retries
+            // (RefreshEngineSharedHandle clears engineHandleCached on
+            // failure). Return the failure HRESULT so the host can
+            // observe; the visible symptom is "viewport stays at the
+            // last successful composite" until re-open succeeds.
+            return rhr;
+        }
+    }
+
+    if (!m_impl->engineBackBuffer || !m_impl->sharedTexD3D11)
+    {
+        // Defensive — RefreshEngineSharedHandle should have populated
+        // both. Cover an interim state where teardown raced.
+        return E_NOT_VALID_STATE;
+    }
+
+    // D3D11 CopyResource — source and dest sizes match (the
+    // RefreshEngineSharedHandle path above ResizeBuffers'd the
+    // swapchain to the texture descriptor's actual size before
+    // returning success, so the steady-state invariant holds).
     m_impl->d3d11Context->CopyResource(
         m_impl->engineBackBuffer.Get(),
         m_impl->sharedTexD3D11.Get());
@@ -702,15 +737,91 @@ HRESULT Compositor::CompositeEngineFrame() noexcept
 }
 
 HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,
-                                              int    w,
-                                              int    h) noexcept
+                                              int    hintW,
+                                              int    hintH) noexcept
 {
-    (void)sharedTexture;
-    (void)w;
-    (void)h;
-    // 4a/4b: real impl arrives in 4d alongside resize-robustness work.
-    // Until then the lazy path in 4c's CompositeEngineFrame is the
-    // primary handle re-open consumer (D4 OK).
+    (void)hintW;  // advisory only — actual size read from texture descriptor
+    (void)hintH;
+
+    if (!sharedTexture)
+    {
+        m_impl->LogLine("[COMP-engine-fail] RefreshEngineSharedHandle: null handle");
+        return E_INVALIDARG;
+    }
+    if (!m_impl->d3d11Device || !m_impl->engineSwapChain)
+    {
+        m_impl->LogLine("[COMP-engine-fail] RefreshEngineSharedHandle: D3D11 device or swapchain missing (call AttachEngineVisual first)");
+        return E_NOT_VALID_STATE;
+    }
+
+    // Re-open the D3D11 alias against the new handle. The old alias
+    // pointed at released D3D9 VRAM and any further CopyResource on
+    // it would read garbage.
+    m_impl->sharedTexD3D11.Reset();
+    HRESULT hr = m_impl->d3d11Device->OpenSharedResource(
+        sharedTexture, IID_PPV_ARGS(m_impl->sharedTexD3D11.GetAddressOf()));
+    if (FAILED(hr) || !m_impl->sharedTexD3D11)
+    {
+        m_impl->LogLine("[COMP-engine-fail] RefreshEngineSharedHandle: OpenSharedResource hr=" + FormatHresult(hr));
+        // Clear the cache so the next CompositeEngineFrame retries —
+        // the engine may produce a new valid handle on the next
+        // AlphaCompositor::Resize that we'll pick up automatically.
+        m_impl->engineHandleCached = nullptr;
+        return hr;
+    }
+
+    // Read the texture's actual size from the descriptor — this is
+    // authoritative even when the caller's (hintW, hintH) are stale.
+    D3D11_TEXTURE2D_DESC desc = {};
+    m_impl->sharedTexD3D11->GetDesc(&desc);
+    const int newW = static_cast<int>(desc.Width);
+    const int newH = static_cast<int>(desc.Height);
+
+    // ResizeBuffers if the swapchain back buffer's size differs from
+    // the new alias. DXGI requires releasing the cached back buffer
+    // BEFORE ResizeBuffers (any outstanding back-buffer ref blocks
+    // the resize), then re-acquiring after. DXGI_FORMAT_UNKNOWN +
+    // BufferCount=0 means "keep the existing format / count" —
+    // semantically a size-only resize. The DComp engineVisual's
+    // SetContent(swapchain) reference stays valid through
+    // ResizeBuffers (DXGI documents this; visual identity is on the
+    // IDXGISwapChain1, not on the back buffers it holds).
+    if (newW != m_impl->engineWidthCached || newH != m_impl->engineHeightCached)
+    {
+        m_impl->engineBackBuffer.Reset();
+        hr = m_impl->engineSwapChain->ResizeBuffers(
+            0, static_cast<UINT>(newW), static_cast<UINT>(newH),
+            DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr))
+        {
+            m_impl->LogLine("[COMP-engine-fail] RefreshEngineSharedHandle: ResizeBuffers hr=" + FormatHresult(hr));
+            m_impl->engineHandleCached = nullptr;
+            return hr;
+        }
+        hr = m_impl->engineSwapChain->GetBuffer(0, IID_PPV_ARGS(m_impl->engineBackBuffer.GetAddressOf()));
+        if (FAILED(hr))
+        {
+            m_impl->LogLine("[COMP-engine-fail] RefreshEngineSharedHandle: GetBuffer post-Resize hr=" + FormatHresult(hr));
+            m_impl->engineHandleCached = nullptr;
+            return hr;
+        }
+    }
+
+    // Diagnostic — emit BEFORE updating the cache so the line shows
+    // both old and new values. Resize storms (mid-drag) produce one
+    // line per actual handle change; the 1 Hz throttle on
+    // [COMP-engine-frame] doesn't apply here (events are sparse).
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "[COMP-engine-resize] handle %p -> %p, size %dx%d -> %dx%d",
+             m_impl->engineHandleCached, sharedTexture,
+             m_impl->engineWidthCached, m_impl->engineHeightCached,
+             newW, newH);
+    m_impl->LogLine(buf);
+
+    m_impl->engineHandleCached = sharedTexture;
+    m_impl->engineWidthCached  = newW;
+    m_impl->engineHeightCached = newH;
     return S_OK;
 }
 

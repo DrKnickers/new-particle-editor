@@ -695,7 +695,15 @@ void HostWindowImpl::RenderD3D9()
     {
         engine->IssueEndFrameQuery();
         engine->WaitEndFrameQuery();
-        m_compositor->CompositeEngineFrame();
+        // [MT-11] Phase 3 Stage 4d — pass the engine's current shared
+        // handle so Compositor can lazy-detect AlphaCompositor::Resize
+        // invalidation and re-open the D3D11 alias. Without this, a
+        // window resize freezes the viewport (engine keeps rendering
+        // into a new D3D9 texture but our cached alias still points
+        // at the released old one). Single pointer compare per frame
+        // in the steady state; full re-open + swapchain ResizeBuffers
+        // only on actual handle change.
+        m_compositor->CompositeEngineFrame(engine->GetSharedTextureHandle());
     }
 
     // [MT-11] Phase 1: hand the just-composited frame to FramePublisher

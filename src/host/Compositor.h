@@ -153,32 +153,42 @@ public:
     // Per-frame composite step. Called from HostWindow's RenderD3D9
     // path AFTER engine->Render() + engine->WaitEndFrameQuery() under
     // composition mode. Sequence:
-    //   1. Lazy (handle, w, h) check against the cached AttachEngineVisual
+    //   1. Lazy handle check against the cached AttachEngineVisual
     //      tuple — re-open via RefreshEngineSharedHandle if changed.
     //   2. D3D11 immediate context: CopyResource(backBuffer, alias).
     //   3. swapChain->Present1(0, 0, &emptyParams).
     //
+    // currentSharedHandle: caller (HostWindow) passes engine->
+    // GetSharedTextureHandle() every frame. AlphaCompositor::Resize
+    // invalidates the previous handle and creates a new one every
+    // time the engine's RT is resized; the lazy compare against the
+    // cached handle catches this and re-opens the D3D11 alias +
+    // ResizeBuffers on the swapchain (4d). A single mismatched frame
+    // costs one re-open and proceeds normally; the steady state is
+    // a pointer-compare per frame with no extra work.
+    //
     // Returns S_OK on success; S_FALSE when no engine visual is
     // attached (Stage 3 baseline state, or AttachEngineVisual-failed
     // state per §3.8 — chrome works, viewport empty).
-    //
-    // 4a stub: returns S_FALSE unconditionally. Real implementation
-    // in 4c.
-    HRESULT CompositeEngineFrame() noexcept;
+    HRESULT CompositeEngineFrame(HANDLE currentSharedHandle) noexcept;
 
     // Drop the D3D11 alias and re-open against a fresh shared handle.
-    // Called implicitly by CompositeEngineFrame's lazy check on
-    // (handle, w, h) mismatch (the AlphaCompositor::Resize path
-    // invalidates the shared HANDLE each call — every resize creates
-    // a new handle). Exposed publicly so HostWindow can trigger eager
-    // re-open if the lazy detection ever falls behind. Stage 4 ships
-    // with lazy-only (D4); the explicit path is dormant until 4d/
-    // beyond.
+    // Called implicitly by CompositeEngineFrame's lazy handle-mismatch
+    // path (the AlphaCompositor::Resize path invalidates the shared
+    // HANDLE on every resize — every resize creates a new handle).
+    // Exposed publicly so HostWindow can trigger an eager re-open if
+    // the lazy per-frame detection isn't responsive enough for some
+    // future use case. Stage 4 ships with lazy-only (D4); the
+    // explicit-call path stays available for diagnostic / future use.
     //
-    // 4a stub: returns S_OK without doing anything. Real impl in 4d.
+    // The (hintW, hintH) params are advisory — the actual swapchain
+    // resize uses the texture's D3D11_TEXTURE2D_DESC width/height
+    // after OpenSharedResource (the engine knows the actual size; the
+    // caller's hint may be stale). Pass 0, 0 if you don't have a
+    // hint; ignored either way.
     HRESULT RefreshEngineSharedHandle(HANDLE sharedTexture,
-                                      int    w,
-                                      int    h) noexcept;
+                                      int    hintW,
+                                      int    hintH) noexcept;
 
     // ---------------------------------------------------------------
 
