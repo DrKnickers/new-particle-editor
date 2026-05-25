@@ -14,6 +14,48 @@
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
 | **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
 
+## Autonomous queue execution — final summary (2026-05-24)
+
+**Six PRs opened, one slot deferred.** All branches pushed to origin.
+
+| PR | Slot | Target | Status | Items |
+|---|---|---|---|---|
+| **#86** | 1 | master | open | F1 (DoSaveFile data-loss), F2 (ChunkReader::readString), F3 (chunk depth overflow), F4 (cyclic emitter graph), F5 (uint16 particle index wrap) |
+| **#87** | 2 | lt-4 | open | F6 (TextureManager cache vs D3D9Ex Reset) |
+| **#88** | 3 | lt-4 | open | F8 (composition controller async-failure fallback / Stage 3h) |
+| **#89** | 4 | master | open | F12 (WM_PAINT BeginPaint/EndPaint), F13+F14 (ReadAndRelease helper, 4 sites), F15 (Emitter copy-ctor m_instances), F16 (blend mode 6/7 break) |
+| **#90** | 5 | lt-4 | open | G2 (DispatchInternal exception safety), G4 (HostBridgeProxy JSON envelope). G1 + G3 deferred (see PR body) |
+| **#91** | 6 | lt-4 | open | F10 (WM_MOUSELEAVE), F11 (env-var warning), G5 (WebMessageReceived token), G6 (DPR listener leak), G8 (CreateSolidBrush leak). F9 + G7 deferred (see PR body) |
+
+All six PRs built clean on both MSBuild Debug|x64 and Release|x64. LNK4098 LIBCMTD warning baseline unchanged. Each PR has a plan + per-fix review doc under `tasks/post-audit-slot<N>-*.md` for traceability.
+
+### Deferred items (not shipped this run)
+
+Documented in their respective PR bodies + slot docs; summary here for visibility:
+
+- **G1** (emitters/import-from-file native handler, PR #90) — needs UX call on parent-child preservation when selection includes subtrees, link group remapping across documents, undo granularity. Current UX is dead-end-with-inline-error; not data-loss.
+- **G3** (17 `sendOk({ok:false})` → `sendErr` migration, PR #90) — breaking change for any JS caller that awaits without `.catch()`. Mechanical C++ migration is straightforward; needs JS-side caller audit before shipping.
+- **F9** (hardcoded SDK `10.0.26100.0` in vcxproj, PR #91) — needs cross-SDK CI verification. Only one SDK installed on this box.
+- **G7** (`AlphaCompositor::Resize` transactional rebuild, PR #91) — P3 ("rare on healthy systems"); the fix is a ~50 LoC refactor worth its own focused PR.
+- **Slot 7** (bridge capability-manifest test) — the followups doc was specific that the test must target the real C++ dispatcher (not the mock — that's already covered by `bridge-contract.test.ts`). Doing so via Playwright is substantial design work with open questions about what counts as "implemented" (`ok:false, error:"particle system not bound"` — implemented or not?), parametrization for kinds that need live state, and the deferral exception list maintenance pattern. Better deferred than rushed.
+
+### What's needed before merging the open PRs
+
+User-driven smoke testing for each PR. The PR bodies list the specific test scenarios. Pre-handoff discipline was held to the build-clean-plus-code-walk bar; runtime confirmation is yours.
+
+### Worktrees left behind
+
+Each slot ran in its own worktree under `.claude/worktrees/post-audit-*`. The session branch (`claude/zen-haibt-fd8521`) is also still there. Clean up at your leisure with `git worktree remove`.
+
+### Lessons from the run
+
+Beyond L-018 (verify before acting), two new patterns surfaced:
+
+1. **Direction-of-divergence misread** (mid-session correction commit `e6f3e92`): treating a `git log A..B` result as "B is ahead of A" without confirming the reverse direction was empty. With diverged refs you need both `A..B` AND `B..A` to know which way it points. Candidate for a lessons.md entry if this kind of misread recurs.
+2. **Per-slot review documentation dominates wall-clock**, not LoC. Each slot took roughly the same time regardless of code size because the planning + verification + review docs were the bottleneck. Worth knowing when sequencing future autonomous runs.
+
+---
+
 ## Autonomous queue execution — correction: original "blocked" note was based on a misread; FF'd cleanly (2026-05-24, follow-up)
 
 The "Slot 2+ blocked on lt-4 reconciliation" note immediately below was wrong on the direction of divergence. After fetching origin/lt-4, `git log origin/lt-4..lt-4` returned EMPTY — local lt-4 (`339ab95`) is **behind** origin/lt-4 by ~100 commits, not ahead. The 10 commits I described as "your in-progress unpushed work" are all *in origin already*; they're just absent from the stale local lt-4 branch ref. The `92ed1db` skydome fix referenced in F7 is on origin/lt-4 like the followups doc already claimed.
