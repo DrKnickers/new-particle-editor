@@ -2,15 +2,42 @@
 
 #include "../engine.h"
 #include "AlphaCompositor.h"
+#include "Compositor.h"
 
 namespace host {
 
 void LayoutBroker::SetAlphaCompositor(AlphaCompositor* compositor)
 {
-    m_compositor = compositor;
+    m_alphaCompositor = compositor;
     // If we acquired a compositor and already have occlusions cached,
     // replay them so the first paint after attach is correct.
-    if (m_compositor) ReemitOcclusions();
+    if (m_alphaCompositor) ReemitOcclusions();
+}
+
+void LayoutBroker::SetCompositor(Compositor* compositor)
+{
+    m_dcompCompositor = compositor;
+    // Replay the cached scene-rect onto the newly-attached compositor
+    // so the first frame post-attach is sized correctly — avoids a
+    // 1-3 frame full-client glitch before React's first
+    // layout/scene-rect dispatch arrives (sub-plan §3.5).
+    //
+    // T2 lands the setter; T4 extends ReemitOcclusions to actually
+    // exercise Compositor::SetEngineVisualTransform (and Engine::
+    // SetSceneViewport via the Compositor-gated path). Until T4 lands
+    // this call is a no-op for the new Compositor path — the existing
+    // AlphaCompositor replay continues to work unchanged.
+    if (m_dcompCompositor) ReemitOcclusions();
+}
+
+bool LayoutBroker::GetSceneRect(int& x, int& y, int& w, int& h) const
+{
+    if (m_sceneW <= 0 || m_sceneH <= 0) return false;
+    x = m_sceneX;
+    y = m_sceneY;
+    w = m_sceneW;
+    h = m_sceneH;
+    return true;
 }
 
 void LayoutBroker::Apply(int x, int y, int w, int h)
@@ -178,7 +205,7 @@ void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int 
     }
     m_occlusions[id] = { x, y, w, h, feather };
 
-    if (m_compositor && m_lastW > 0 && m_lastH > 0)
+    if (m_alphaCompositor && m_lastW > 0 && m_lastH > 0)
     {
         const RECT popupRect = {
             x - m_lastX,
@@ -186,14 +213,14 @@ void LayoutBroker::SetOcclusion(const std::string& id, int x, int y, int w, int 
             x - m_lastX + w,
             y - m_lastY + h
         };
-        m_compositor->SetOcclusion(id, popupRect, feather);
+        m_alphaCompositor->SetOcclusion(id, popupRect, feather);
     }
 }
 
 void LayoutBroker::RemoveOcclusion(const std::string& id)
 {
     m_occlusions.erase(id);
-    if (m_compositor) m_compositor->RemoveOcclusion(id);
+    if (m_alphaCompositor) m_alphaCompositor->RemoveOcclusion(id);
 }
 
 void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
@@ -204,7 +231,7 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
         // dispatched a scene rect yet, or when the centre quadrant
         // collapses.
         m_sceneX = m_sceneY = m_sceneW = m_sceneH = 0;
-        if (m_compositor) m_compositor->SetSceneRect(0, 0, 0, 0);
+        if (m_alphaCompositor) m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
         return;
     }
     m_sceneX = x;
@@ -212,23 +239,23 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
     m_sceneW = w;
     m_sceneH = h;
 
-    if (m_compositor && m_lastW > 0 && m_lastH > 0)
+    if (m_alphaCompositor && m_lastW > 0 && m_lastH > 0)
     {
         // Translate main-client coords to popup-client. Same
         // arithmetic as SetOcclusion above.
-        m_compositor->SetSceneRect(x - m_lastX, y - m_lastY, w, h);
+        m_alphaCompositor->SetSceneRect(x - m_lastX, y - m_lastY, w, h);
     }
 }
 
 bool LayoutBroker::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
 {
-    if (!m_compositor) return false;
-    return m_compositor->CaptureSnapshotPng(outBase64, outW, outH);
+    if (!m_alphaCompositor) return false;
+    return m_alphaCompositor->CaptureSnapshotPng(outBase64, outW, outH);
 }
 
 void LayoutBroker::ReemitOcclusions()
 {
-    if (!m_compositor) return;
+    if (!m_alphaCompositor) return;
     if (m_lastW <= 0 || m_lastH <= 0)
     {
         // Viewport collapsed — nothing to stamp; clear everything so
@@ -236,8 +263,8 @@ void LayoutBroker::ReemitOcclusions()
         // Apply. The compositor's own per-frame loop is a no-op when
         // the occlusion map is empty and the scene rect is zero.
         for (const auto& kv : m_occlusions)
-            m_compositor->RemoveOcclusion(kv.first);
-        m_compositor->SetSceneRect(0, 0, 0, 0);
+            m_alphaCompositor->RemoveOcclusion(kv.first);
+        m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
         return;
     }
 
@@ -249,7 +276,7 @@ void LayoutBroker::ReemitOcclusions()
             occ.x - m_lastX + occ.w,
             occ.y - m_lastY + occ.h
         };
-        m_compositor->SetOcclusion(id, popupRect, occ.feather);
+        m_alphaCompositor->SetOcclusion(id, popupRect, occ.feather);
     }
 
     // B1.4 T4c: re-stamp the scene rect with a fresh translation
@@ -258,12 +285,12 @@ void LayoutBroker::ReemitOcclusions()
     // keep the compositor mask disabled.
     if (m_sceneW > 0 && m_sceneH > 0)
     {
-        m_compositor->SetSceneRect(
+        m_alphaCompositor->SetSceneRect(
             m_sceneX - m_lastX, m_sceneY - m_lastY, m_sceneW, m_sceneH);
     }
     else
     {
-        m_compositor->SetSceneRect(0, 0, 0, 0);
+        m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
     }
 }
 

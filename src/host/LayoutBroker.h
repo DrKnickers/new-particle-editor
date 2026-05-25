@@ -30,6 +30,11 @@ class Engine;
 namespace host {
 
 class AlphaCompositor;
+// [MT-11] Phase 3 Stage 5 — DComp tree compositor (owns the engine
+// visual). LayoutBroker injects scene-rect transforms when composition
+// mode is active. Forward-declared to keep dcomp.h out of this header
+// (Compositor.cpp's L-016 isolation pattern).
+class Compositor;
 
 class LayoutBroker
 {
@@ -51,6 +56,21 @@ public:
     // "compositor not installed" — occlusion updates are recorded
     // (so a later attach can replay them) but no stamping happens.
     void SetAlphaCompositor(AlphaCompositor* compositor);
+
+    // [MT-11] Phase 3 Stage 5 — inject the DComp-tree compositor (the
+    // one that owns the engine visual). Non-null implies composition
+    // mode is active; SetSceneRect will additionally forward the
+    // scene-rect transform onto Compositor::SetEngineVisualTransform
+    // and the engine's per-frame viewport via Engine::SetSceneViewport
+    // (gated on this pointer per R9 mitigation c). Passing null at
+    // teardown clears the gate so any late SetSceneRect dispatch
+    // post-WM_DESTROY doesn't dereference a freed Compositor.
+    //
+    // Replays the cached scene-rect onto the newly-attached compositor
+    // + engine, so the first frame after attach is sized correctly
+    // even if React hasn't dispatched a layout/scene-rect since the
+    // compositor came up.
+    void SetCompositor(Compositor* compositor);
 
     // x/y/w/h are device pixels in the OWNER MAIN HWND'S client
     // coordinates, exactly what React's ViewportSlot sends from
@@ -113,6 +133,15 @@ public:
     // mask becomes a no-op — the full popup shows rendered scene).
     void SetSceneRect(int x, int y, int w, int h);
 
+    // [MT-11] Phase 3 Stage 5 — read the cached scene rect (in
+    // main-client coords). Returns true and populates the outs when a
+    // non-degenerate scene rect has been dispatched at least once;
+    // returns false (outs untouched) otherwise. Used by HostWindow at
+    // composition-controller-ready time to seed the engine visual's
+    // initial transform without waiting for React's next dispatch
+    // (sub-plan §3.5 — avoids a 1-3 frame full-client glitch).
+    bool GetSceneRect(int& x, int& y, int& w, int& h) const;
+
     // B1.3.1.1: forward a viewport snapshot request to the compositor.
     // Returns `false` (and leaves outputs untouched) when no
     // compositor is attached or the compositor has no cached frame
@@ -133,7 +162,15 @@ private:
 
     HWND    m_viewport;
     Engine* m_engine;
-    AlphaCompositor* m_compositor = nullptr;
+    // FD9b legacy popup band-mask compositor — owned by HostWindow,
+    // injected via SetAlphaCompositor.
+    AlphaCompositor* m_alphaCompositor = nullptr;
+    // [MT-11] Phase 3 Stage 5 — DComp-tree compositor injected by
+    // HostWindow when composition mode is active. Non-null IS the
+    // composition-mode signal LayoutBroker uses to gate the new
+    // SetEngineVisualTransform + Engine::SetSceneViewport calls (per
+    // sub-plan §3.3 + R9 mitigation c). Owned by HostWindow.
+    Compositor* m_dcompCompositor = nullptr;
     // Occlusion rects from React (main-client coords). Each id maps
     // to one rect; null/zero-size removes the entry.
     struct Occlusion { int x, y, w, h; int feather; };
