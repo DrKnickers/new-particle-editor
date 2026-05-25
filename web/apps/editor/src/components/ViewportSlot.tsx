@@ -34,6 +34,32 @@ function isArchCEnabled(): boolean {
   return fromImportMeta === "canvas-jpeg" || fromProcess === "canvas-jpeg";
 }
 
+// [MT-11] Phase 3 Stage 4c.1 — composition-mode detection. When the
+// host runs with ALO_WEBVIEW2_HOSTING=composition, engine pixels reach
+// the screen via DXGI swapchain → DComp engine visual UNDER the
+// WebView2 visual (transparent regions show engine through). The
+// canvas-jpeg <img> would paint JPEG-decoded engine frames on TOP of
+// the DXGI source, occluding it and rendering Stage 4's whole GPU
+// pipeline invisible. So under composition mode we SKIP the
+// frame-ready subscription — the <img> stays empty / transparent and
+// DXGI pixels show through. The <canvas> input listeners stay active
+// (Phase 2's viewport/input bridge is still the engine input pathway
+// under composition mode — host's SendMouseInput forwards mouse to
+// WebView2 → DOM canvas → bridge → InputDispatcher → popup HWND →
+// engine WndProc).
+//
+// Build-time gate via VITE_WEBVIEW2_HOSTING env var (mirrors the
+// host's runtime ALO_WEBVIEW2_HOSTING). Both must be set together
+// when building a composition-mode bundle. Stage 7 cleanup will
+// collapse the env-var pair into a single mode.
+function isCompositionMode(): boolean {
+  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_WEBVIEW2_HOSTING;
+  const fromProcess = typeof process !== "undefined" && process.env
+    ? process.env.VITE_WEBVIEW2_HOSTING
+    : undefined;
+  return fromImportMeta === "composition" || fromProcess === "composition";
+}
+
 export function ViewportSlot({ bridge }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -44,6 +70,11 @@ export function ViewportSlot({ bridge }: Props) {
   // friendly atomic-decode-swap that canvas drawImage can't match.
   const imgRef = useRef<HTMLImageElement | null>(null);
   const archCEnabled = isArchCEnabled();
+  // [MT-11] Phase 3 Stage 4c.1 — see isCompositionMode() comment for
+  // rationale. When true, the frame-ready subscription below is
+  // skipped so the <img> stays empty and DXGI engine pixels show
+  // through. Input handlers on the canvas stay active either way.
+  const compositionMode = isCompositionMode();
 
   useEffect(() => {
     const el = ref.current;
@@ -140,6 +171,17 @@ export function ViewportSlot({ bridge }: Props) {
   // so the subscription is a benign no-op.
   useEffect(() => {
     if (!archCEnabled) return;
+    // [MT-11] Phase 3 Stage 4c.1 — skip frame-ready under composition
+    // mode so DXGI engine pixels show through the transparent <img>.
+    // FramePublisher continues publishing JPEG frames host-side (per
+    // sub-plan §1 — wasted work, harmless until Stage 7 removal); we
+    // just stop CONSUMING them. The canvas overlay's input listeners
+    // (third useEffect below) stay active for the engine input path.
+    if (compositionMode) {
+      // eslint-disable-next-line no-console
+      console.log("[ArchC] composition mode active — skipping viewport/frame-ready subscription (DXGI engine visual is the source)");
+      return;
+    }
 
     let cancelled = false;
     let lastLoggedAt = 0;
@@ -172,7 +214,7 @@ export function ViewportSlot({ bridge }: Props) {
       cancelled = true;
       unsubscribe();
     };
-  }, [bridge, archCEnabled]);
+  }, [bridge, archCEnabled, compositionMode]);
 
   // [MT-11] Phase 2 — DOM input forwarding. Pointer + wheel events on
   // the canvas, keyboard + blur events on window. All gated on
