@@ -14,7 +14,17 @@
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
 | **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
 
-## Autonomous queue execution — Slot 1 SHIPPED, Slot 2+ BLOCKED on lt-4 reconciliation (2026-05-24)
+## Autonomous queue execution — correction: original "blocked" note was based on a misread; FF'd cleanly (2026-05-24, follow-up)
+
+The "Slot 2+ blocked on lt-4 reconciliation" note immediately below was wrong on the direction of divergence. After fetching origin/lt-4, `git log origin/lt-4..lt-4` returned EMPTY — local lt-4 (`339ab95`) is **behind** origin/lt-4 by ~100 commits, not ahead. The 10 commits I described as "your in-progress unpushed work" are all *in origin already*; they're just absent from the stale local lt-4 branch ref. The `92ed1db` skydome fix referenced in F7 is on origin/lt-4 like the followups doc already claimed.
+
+The push rejection was because `git push origin lt-4:lt-4` tried to rewind origin/lt-4 to the older local-lt-4 ref. Not a "diverged unpushed work" scenario — just a stale local pointer.
+
+**What actually happened.** Session branch `claude/zen-haibt-fd8521` is a clean fast-forward of origin/lt-4 — the docs commit (`674d6e6`) sits directly on top of origin/lt-4's tip (`d3f0fae`). Standard end-of-session FF flow applies, no reconciliation needed. Pushed `claude/zen-haibt-fd8521` → origin/lt-4 as FF, which advances origin/lt-4 by 2 commits (audit-infrastructure docs + the original "blocked" handoff note + this correction).
+
+**Note for future sessions:** when describing branch divergence, always verify direction with BOTH `git log A..B` AND `git log B..A`. The first being non-empty doesn't tell you which side is ahead — only the asymmetry between the two does. Candidate for a `lessons.md` entry if this kind of misread recurs.
+
+## Autonomous queue execution — Slot 1 SHIPPED, Slot 2+ BLOCKED on lt-4 reconciliation (2026-05-24) [SUPERSEDED — see correction above]
 
 Started the autonomous-prompt queue execution per `tasks/post-audit-followups.md` "Suggested ordering."
 
