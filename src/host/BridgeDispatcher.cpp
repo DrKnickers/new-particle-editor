@@ -622,6 +622,32 @@ BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
     m_spawnerConfig = DefaultSpawnerConfigJson();
 }
 
+// Post-audit G2: defensive envelope for any json::exception that escapes
+// DispatchInternal. The outer try/catch in Dispatch and DispatchSync wraps
+// only json::parse; per-handler `.get<T>()` / `.value(...)` / `is_T()`
+// calls inside DispatchInternal can still throw nlohmann::json::type_error
+// when callers send malformed payloads. Pre-fix those propagated uncaught
+// into the WebView2 callback or COM dispatch path; post-fix this builds
+// a well-formed error envelope that the JS side can parse.
+static json BuildDispatchExceptionEnvelope(const json& parsed, const char* what)
+{
+    json res = {
+        {"type",  "res"},
+        {"ok",    false},
+        {"error", std::string("dispatch exception: ") + (what ? what : "(no message)")},
+    };
+    // Preserve correlation id if the request had one.
+    if (auto it = parsed.find("id"); it != parsed.end() && it->is_string())
+    {
+        res["id"] = it->get<std::string>();
+    }
+    else
+    {
+        res["id"] = nullptr;
+    }
+    return res;
+}
+
 void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
 {
     json parsed;
@@ -645,7 +671,17 @@ void BridgeDispatcher::Dispatch(const std::string& jsonRequest)
         return;
     }
 
-    json res = DispatchInternal(parsed);
+    // Post-audit G2: catch json::exception escaping DispatchInternal.
+    json res;
+    try
+    {
+        res = DispatchInternal(parsed);
+    }
+    catch (const json::exception& e)
+    {
+        fprintf(stderr, "[host] BridgeDispatcher::Dispatch: type/conversion exception: %s\n", e.what());
+        res = BuildDispatchExceptionEnvelope(parsed, e.what());
+    }
     // Drop responses that have no id (malformed request, can't correlate).
     if (m_emit && res.contains("id") && res["id"].is_string())
     {
@@ -685,7 +721,16 @@ std::string BridgeDispatcher::DispatchSync(const std::string& jsonRequest)
         return err.dump();
     }
 
-    return DispatchInternal(parsed).dump();
+    // Post-audit G2: catch json::exception escaping DispatchInternal.
+    try
+    {
+        return DispatchInternal(parsed).dump();
+    }
+    catch (const json::exception& e)
+    {
+        fprintf(stderr, "[host] BridgeDispatcher::DispatchSync: type/conversion exception: %s\n", e.what());
+        return BuildDispatchExceptionEnvelope(parsed, e.what()).dump();
+    }
 }
 
 json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
