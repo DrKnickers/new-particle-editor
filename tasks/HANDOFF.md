@@ -1,20 +1,84 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stage 4 SHIPPED; Stage 5 next)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stage 5 SHIPPED — Phase 3 complete)
 
-**Last updated:** 2026-05-25. [MT-11] Phase 3 **Stages 0–4 all shipped on `origin/lt-4`.** Stage 4 (DXGI composition wiring) is the headline ship: engine pixels reach the screen via D3D9Ex shared texture → D3D11 alias → DXGI composition swapchain → DComp engine visual UNDER the WebView2 visual, fully interactive, resize-robust, alpha-correct. Mean engine FPS 79.1 under the new dxgi-perf spec at the user's window size, well above the 30 FPS regression floor — vs Phase 2's canvas-jpeg readback path's ~40-50 FPS at 3440×1440. Default new-UI path (env vars unset) is byte-identical to today.
+**Last updated:** 2026-05-25. [MT-11] Phase 3 **Stages 0–5 all shipped on `origin/lt-4` (after Stage 5 FF).** Stage 5 (scene-rect transform on engine visual) closes Phase 3: under composition mode, React-side `layout/scene-rect` dispatches now wire into both `Compositor::SetEngineVisualTransform` (DComp clip to scene-rect on screen) and `Engine::SetSceneViewport` (engine viewport + per-pixel-FoV projection scoped to scene-rect). User-observable result: chrome panels no longer bleed engine pixels, and pane / window resize "cleanly reveals more of the scene" rather than distorting existing content. Variant **B-γ** with per-pixel-FoV-vs-current-RT keeps `fovY ≤ 45°` always — engine renders at-or-LESS world than pre-Stage-5 across all window sizes. Composite rate ~70 fps at 3440×1440 (Stage 4's 79.1 mean baseline, within parity).
 
-**Test counts at handoff:** vitest **338 / 338** · Playwright native HWND baseline **99 passed + 22 skipped** (default dist/, no env vars; new dxgi-* + composition-hosting specs auto-skip cleanly) · composition mode **118 passed + 3 skipped + 0 failed** (composition-built dist/ + `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) · MSBuild Debug + Release x64 clean · tsc -b 0 errors.
+**Test counts at handoff:** vitest **338 / 338** · Playwright native HWND baseline **99 passed + 26 skipped + 0 failed** (default dist/, no env vars; new dxgi-scene-rect + Stage 4's dxgi-* + composition-hosting specs all auto-skip cleanly) · composition mode **122 passed + 3 skipped + 0 failed** (composition-built dist/ + `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) · MSBuild Debug + Release x64 clean · tsc -b 0 errors.
 
 **Repo state at handoff:**
 
 | | |
 |---|---|
-| **`origin/lt-4` HEAD** | `936d937` (Stage 4f: Playwright DXGI specs + harness/host hardening) |
-| **Session branch** | `claude/flamboyant-johnson-cd061a`, FF'd into origin/lt-4 |
-| **Working tree** | clean (untracked: AGENTS.md, user-managed Codex sibling-doc) |
+| **`origin/lt-4` HEAD** | (post-FF target) Stage 5 T8 commit chain on top of `936d937` |
+| **Session branch** | `claude/affectionate-euclid-5d1c8f`, T1-T8 committed |
+| **Working tree** | clean |
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
-| **Phase 3 status** | **All 5 stages shipped to `origin/lt-4`.** Stages 0 (spike + GO), 1 (D3D9Ex), 2 (shared-handle infrastructure), 3 (composition hosting), 4 (DXGI engine bridge). Sub-stage 4e (first-frame ClearRenderTargetView guard) deferred — not observed as a problem during smoke; ship-if-surfaces. |
-| **Stage 4 sub-stages** | 4a (skeleton) + 4b (real AttachEngineVisual) + 4c (real CompositeEngineFrame) + 4c.1 (ViewportSlot composition opt-out) + 4d (lazy resize re-open) + 4d.1 (ALPHA_MODE_IGNORE) + 4f (Playwright specs + harness/host hardening) all on origin/lt-4 |
-| **Stage 4 commits** | `16c8c87` (4a) · `cb44e2e` (4b) · `b417066` (4c) · `a509cf5` (4c.1) · `c787152` (4d) · `d9b690f` (4d.1) · `936d937` (4f) |
+| **Phase 3 status** | **All 5 stages shipped.** Stages 0 (spike + GO), 1 (D3D9Ex), 2 (shared-handle infrastructure), 3 (composition hosting), 4 (DXGI engine bridge), 5 (scene-rect transform on engine visual). Sub-stage 4e (first-frame ClearRenderTargetView guard) deferred — not observed during smoke. |
+| **Stage 5 sub-stages** | T1 (Compositor::SetEngineVisualTransform) + T2 (LayoutBroker DComp seam) + T3 (Engine::SetSceneViewport B-γ) + T4 (LayoutBroker fan-out) + T5 (HostWindow attach + seed + teardown) + T6 (corrections + smoke) + T7 (Playwright spec) + T8 (docs). 8 commits on session branch. |
+
+## Stage 5 — what shipped, in plain English
+
+Under `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`:
+
+- React's `layout/scene-rect` bridge dispatch (already used to drive AlphaCompositor's band-mask + scene-rect cache) now also routes into `Engine::SetSceneViewport` and `Compositor::SetEngineVisualTransform` via the new LayoutBroker fan-out, gated on `m_dcompCompositor != nullptr` (the composition-mode signal per the sub-plan's R9 mitigation c).
+- **Engine viewport scoping (B-γ).** `Engine::SetSceneViewport(x, y, w, h)` stashes the rect, recomputes `m_projection` at per-pixel-FoV with reference = current `BackBufferHeight` (`fovY = 45° × sceneH / RT_H` — sceneH ≤ RT_H always, so fovY ≤ 45°), pushes the new projection to the device via `SetTransform(D3DTS_PROJECTION, ...)`, recomputes `m_viewProjection = m_view * m_projection` for shader-effect consumers. `Engine::Render`'s scene pass scopes `SetViewport` to the scene-rect AFTER the existing full-RT `Clear` (the **D12 ordering rule** — Clear at default viewport ensures m_pSceneTexture outside scene-rect is filled with engine clear color every frame, eliminating post-process bleed across the scene-rect boundary). Post-process passes (bloom, distort) restore the cached viewport so they still operate at full-RT-sized intermediates.
+- **DComp clip transform.** `Compositor::SetEngineVisualTransform(x, y, w, h)` sets the engine visual to `SetOffsetX/Y(0, 0) + SetClip({x, y, x+w, y+h})` (clip in ABSOLUTE host-client coords since the visual's local-coord space equals the parent root visual's coord space). Defaults to `immediate=false`, which queues the transform on `Impl::pending*` fields; `CompositeEngineFrame`'s tail applies it after `Present1` so swapchain content + DComp clip arrive at the same DWM cycle (the **deferred-clip mechanism**). Boot-time seed callers pass `immediate=true` to bypass the queue.
+- **Engine::Reset re-apply (R8).** After `ResetParameters` rebuilds `m_projection` at full-RT-aspect on window resize, `Engine::Reset`'s tail re-fires `SetSceneViewport` with the cached state so the per-pixel-FoV projection survives the device reset.
+- **HostWindow attach seed.** `OnCompositionControllerReady` calls `layout.SetCompositor(m_compositor.get())` after `AttachEngineVisual` succeeds + seeds initial DComp clip + engine viewport at full-client values (so per-pixel-FoV computes `fovY = 45°` at attach, matching pre-Stage-5 projection exactly).
+- **Symmetric teardown.** WM_DESTROY + `WM_APP_COMPOSITION_FALLBACK` clear `layout.SetCompositor(nullptr)` before `m_compositor.reset()` so a late SetSceneRect dispatch can't dereference a freed Compositor.
+
+## What's verified end-to-end (T6 smoke + T7 spec)
+
+Manual smoke (user-driven during T6, four bug-iteration corrections shaped the final design):
+
+- ✓ Chrome panels no longer bleed engine pixels (engine fills the scene-rect sub-region of its RT; DComp clip carves the scene-rect quadrant on screen).
+- ✓ Pane resize reveals more world content at the widened edges; existing world content stays at the same pixel position + scale (per-pixel angular extent constant via per-pixel-FoV).
+- ✓ Window maximize / restore tracks cleanly through Engine::Reset → R8 re-apply.
+- ✓ Click into preview no longer causes "aspect snap to correct" (projection now pushed to device synchronously on SetSceneViewport instead of relying on next SetCamera).
+- ✓ Idle FPS at maximized 3440×1440: ~70 fps composite rate (Stage 4 baseline 79.1 mean — close to parity).
+- ✓ User verdict: "wow that's fantastic. that resize behavior is perfect."
+
+Automated regression gate (Stage 5 T7, 4 new dxgi-scene-rect assertions):
+
+- ✓ Boot seed produced [COMP-engine-transform] with non-degenerate clip
+- ✓ `layout/scene-rect` dispatch produces matching `[COMP-engine-transform] clip=(L,T,R,B)` line
+- ✓ Three sequential dispatches produce three transform lines in order
+- ✓ No `[COMP-engine-fail]` lines from SetEngineVisualTransform / ApplyTransform
+
+## Known follow-ups (out of scope for Stage 5)
+
+Surfaced during Stage 5 work but not part of the Stage 5 ship:
+
+1. **L-019 (DXSDK linker-twin) + L-020 (spike-config-vs-production audit) + L-021 (verify rendered geometry pre-handoff) candidate lessons retro-doc.** Stage 4 surfaced two patterns; Stage 5 added L-021 (the displacement bug emerged because the sub-plan described independent components without verifying the COMBINED math against rendered geometry). Worth a single-session retro to formalize all three alongside L-016/L-017/L-018.
+2. **Latent projection-not-pushed bug in `ResetParameters`.** Same class as Stage 5 Iter 4 — `ResetParameters` rebuilds `m_projection` but doesn't call `SetTransform(D3DTS_PROJECTION, ...)`. Pre-Stage-5 nobody noticed because window resize was always followed by camera interaction (which calls `SetCamera` → `SetTransform`). Stage 5 fixed it inside `SetSceneViewport` only; the latent `ResetParameters` bug remains for non-composition transports. Single-line fix when someone gets to it.
+3. **Stage 4 sub-stage 4e — first-frame ClearRenderTargetView guard.** Sub-plan queued this; not observed during smoke; ship-if-surfaces.
+4. **`canvas-architecture.spec.ts` test.fixme markers (L-012 instrumentation issue).** Pre-existing Phase 2 fault; three documented fix approaches.
+5. **Test harness env-var pre-flight check.** Stage 4f surfaced — harness should fail-fast or auto-rebuild on ALO_*/VITE_* mismatch.
+
+## Stage 5 commits (session branch)
+
+```
+T1 — feat(LT-4): [MT-11] Phase 3 Stage 5 T1 — Compositor::SetEngineVisualTransform
+T2 — refactor(LT-4): [MT-11] Phase 3 Stage 5 T2 — LayoutBroker DComp seam + GetSceneRect
+T3 — feat(LT-4): [MT-11] Phase 3 Stage 5 T3 — Engine::SetSceneViewport + Render hook + Reset re-apply (B-γ)
+T4 — feat(LT-4): [MT-11] Phase 3 Stage 5 T4 — LayoutBroker scene-rect → Compositor + Engine
+T5 — feat(LT-4): [MT-11] Phase 3 Stage 5 T5 — HostWindow attach + seed + teardown
+T6 — fix(LT-4): [MT-11] Phase 3 Stage 5 T6 — corrections + smoke evidence
+T7 — test(LT-4): [MT-11] Phase 3 Stage 5 T7 — dxgi-scene-rect Playwright gate
+T8 — docs(LT-4): [MT-11] Phase 3 Stage 5 T8 — CHANGELOG + HANDOFF refresh (this commit)
+```
+
+T6 contains the lion's share of the work — four user-driven correction iterations (displacement coord-space, aspect distortion, blue-bar lag, snap-on-click projection-push) reshaped T1's and T3's design before stabilization. See [`tasks/stage-5-smoke-result.md`](stage-5-smoke-result.md) for the iter-by-iter bug log.
+
+## Phase 3 closing notes
+
+With Stage 5 shipped, Phase 3's full scope ("migrate engine rendering to architecture C via DComp") is delivered:
+
+- **Stages 0-2**: Spike + GO decision, D3D9Ex migration, shared-handle texture infrastructure
+- **Stage 3**: WebView2 composition hosting migration (`ALO_WEBVIEW2_HOSTING=composition`)
+- **Stage 4**: DXGI engine bridge (engine pixels reach screen via shared texture → D3D11 alias → DXGI composition swapchain → DComp engine visual)
+- **Stage 5**: Scene-rect transform on engine visual (chrome panel backgrounds visible; pane/window resize reveals more scene without distortion)
+
+Next dispatch could pick up: (a) Phase 3 close-out (Stage 3h a11y suite + Stage 3i final acceptance smoke if not yet done); (b) lessons retro-doc (L-019/L-020/L-021 formalization); (c) latent `ResetParameters` projection push bug fix; (d) next-roadmap-item from [`ROADMAP.md`](../ROADMAP.md).
 
 ## Stage 4 — what shipped, in plain English
 
@@ -43,15 +107,7 @@ Automated regression gate (Stage 4f, 10 new dxgi-* assertions, all PASS under co
 - ✓ `dxgi-resize-stress.spec.ts` (2 tests) — 50 layout/viewport-rect cycles + targeted resize, both pass
 - ✓ `dxgi-perf.spec.ts` (1 test) — mean FPS 79.1 over 10s (floor: 30)
 
-## What's NOT in Stage 4 (deferred to Stage 5)
-
-Per sub-plan §1 Out of Scope: **scene-rect transform on the engine visual.** Engine pixels currently fill the FULL host client (DComp engine visual at (0,0,W,H)); the swapchain stretches engine RT contents to host-client size. Chrome with opaque backgrounds occludes; transparent regions show engine. This is functionally correct (the user can see + interact with engine pixels) but VISUALLY DIFFERENT from the eventual scene-rect-quadrant-constrained rendering. User-surfaced observation during 4d smoke: "if i resize the panes, it reveals more background color but not more of the ground plane" — that's the engine rendering at its frustum size with the rest of the RT being engine clear color, the DComp visual painting all of it at full client size. Stage 5 adds an `IDCompositionVisual::SetTransform` on the engine visual to constrain it to the LayoutBroker's scene-rect quadrant.
-
-## Stage 5 entry points
-
-The Compositor class already models the engine visual as a separate IDCompositionVisual sibling. Stage 5's seam is a new `Compositor::SetEngineVisualTransform(x, y, w, h)` method (or equivalent SetSize/SetOffset combo) called from LayoutBroker's scene-rect change path. The DXGI swapchain itself stays at engine RT size; DComp's per-visual transform handles the on-screen positioning + scaling. Reference pattern: spike doesn't do this (single full-screen workload), so design from scratch using IDCompositionVisual's documented `SetTransform`/`SetOffsetX`/`SetOffsetY` API. Estimated 2-3 days per parent plan §4.
-
-## Known follow-ups (out of scope for Stage 4)
+## Known follow-ups (out of scope for Stage 4 — Stage 5 has since shipped, see top of file)
 
 Surfaced during Stage 4 work but not part of the Stage 4 ship:
 

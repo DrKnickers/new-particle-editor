@@ -343,11 +343,59 @@ items that genuinely require a human (screen reader, IME).
 - [ ] **Perf threshold** `tests/native/dxgi-perf.spec.ts`: drive FPS counter for 10s; assert mean FPS > 80 at 1080p AND > 60 at 3440×1440 (vs Phase 2's 20 FPS — 3× improvement is the bar)
 - [ ] **Resize stress**: 50 programmatic resizes; assert no crash, no log errors, FPS recovers to baseline after settling
 
-### Stage 5 (input routing) acceptance
+### Stage 5 (scene-rect transform on engine visual) acceptance — SHIPPED 2026-05-25
 
-- [ ] **All Phase 2 mouse + keyboard gestures** work under DXGI: LMB/MMB/RMB drag, wheel zoom, Ctrl modifier, Shift+LMB placement, Shift-only spawn, Alt-Tab cleanup
-- [ ] **Extension** of `canvas-architecture.spec.ts` runs under DXGI mode
-- [ ] **Focus regression** test: clicking viewport then clicking inspector field doesn't trap focus
+**Reframing note.** Original Stage 5 framing was "input routing rework"
+(the bullets below). Most of that scope was actually covered earlier:
+mouse forwarding shipped under Stage 3c (`SendMouseInput`), keyboard
+focus under Stage 3f (`MoveFocus`), Shift+spawn user-verified during
+Stage 4c. The remaining "scene-rect transform on engine visual" item
+— originally an §1 Out-of-Scope on the Stage 4 sub-plan — was elevated
+to be Stage 5's actual scope and shipped at session
+`claude/affectionate-euclid-5d1c8f`. See [CHANGELOG.md](../CHANGELOG.md)
+top entry + [HANDOFF.md](HANDOFF.md) "Stage 5 — what shipped" for the
+full ship description.
+
+What Stage 5 actually delivered (each verified at T6 smoke + T7 spec):
+
+- [x] **`Compositor::SetEngineVisualTransform`** — DComp engine visual
+      clips to scene-rect quadrant via `SetOffset(0, 0) + SetClip` in
+      absolute host-client coords. Deferred-clip mechanism applies
+      transform after `Present1` so swapchain + clip arrive on same
+      DWM cycle.
+- [x] **`Engine::SetSceneViewport` (Variant B-γ)** — engine scene-pass
+      viewport scoped to scene-rect after the full-RT Clear (D12
+      ordering rule). Per-pixel-FoV projection with reference =
+      current `BackBufferHeight` keeps `fovY ≤ 45°` always — engine
+      renders at-or-less world than pre-Stage-5.
+- [x] **LayoutBroker scene-rect fan-out** under composition-mode gate
+      (`m_dcompCompositor != nullptr`) → Engine + Compositor.
+- [x] **HostWindow attach seed + teardown** — initial seed via
+      `immediate=true`; symmetric clear at WM_DESTROY +
+      WM_APP_COMPOSITION_FALLBACK.
+- [x] **`tests/dxgi-scene-rect.spec.ts`** — 4 log-evidence assertions
+      on `[COMP-engine-transform]` lines (composition-mode-conditional;
+      HWND baseline auto-skips).
+- [x] **HWND baseline regression gate**: 99 passed + 26 skipped + 0
+      failed (was 99 + 22 pre-T7; +4 new tests skipping cleanly).
+- [x] **Composition mode gate**: 122 passed + 3 skipped + 0 failed
+      (was 118 + 3; +4 new tests passing).
+- [x] **User-verified visual**: pane resize "cleanly reveals more of
+      the scene" without distortion; no chrome panel bleed; aspect
+      tracks correctly through drag without snap-on-click.
+
+Original "input routing" acceptance items, retained for historical
+context (most were superseded by earlier stages):
+
+- [x] **All Phase 2 mouse + keyboard gestures** work under DXGI —
+      shipped under Stage 3c (mouse) + Stage 3f (keyboard) + Stage 4c
+      user smoke (Shift+spawn).
+- [ ] **Extension** of `canvas-architecture.spec.ts` runs under DXGI
+      mode — DEFERRED (L-012 instrumentation fault — fixme markers in
+      the spec; three documented fix approaches).
+- [ ] **Focus regression** test: clicking viewport then clicking
+      inspector field doesn't trap focus — manually verified, not
+      formalized in a spec yet.
 
 ### Stage 6 (test harness) acceptance — runs through prior stages
 
