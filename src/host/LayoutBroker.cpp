@@ -232,6 +232,22 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
         // collapses.
         m_sceneX = m_sceneY = m_sceneW = m_sceneH = 0;
         if (m_alphaCompositor) m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
+
+        // [MT-11] Phase 3 Stage 5 — clear engine-side scene viewport
+        // so the engine reverts to full-RT projection + viewport
+        // (matches pre-Stage-5 behavior when scene-rect is undispatched).
+        // We do NOT clear the Compositor's engine-visual transform —
+        // there's no "clear" semantic on SetEngineVisualTransform, and
+        // leaving it at the last scene-rect is harmless because either
+        // (a) React is mid-boot before its first dispatch (T5's initial
+        // seed at full-client covers this), or (b) the centre quadrant
+        // truly collapsed and chrome covers the whole client anyway.
+        // Gated on the same DComp-compositor presence used as the
+        // composition-mode signal (sub-plan R9 mitigation c).
+        if (m_dcompCompositor && m_engine)
+        {
+            m_engine->SetSceneViewport(0, 0, 0, 0);
+        }
         return;
     }
     m_sceneX = x;
@@ -245,6 +261,22 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
         // arithmetic as SetOcclusion above.
         m_alphaCompositor->SetSceneRect(x - m_lastX, y - m_lastY, w, h);
     }
+
+    // [MT-11] Phase 3 Stage 5 — composition-mode scene-rect transform.
+    // Compositor's engine visual lives in host-client coords (root-
+    // visual child) — NO translation. Engine RT is sized to full host
+    // client — also host-client coords. Both consumers receive (x, y,
+    // w, h) verbatim. Gating on m_dcompCompositor != nullptr IS the
+    // composition-mode signal (sub-plan R9 mitigation c — keeps
+    // canvas-jpeg / arch-A paths byte-identical to today).
+    if (m_dcompCompositor)
+    {
+        m_dcompCompositor->SetEngineVisualTransform(x, y, w, h);
+        if (m_engine)
+        {
+            m_engine->SetSceneViewport(x, y, w, h);
+        }
+    }
 }
 
 bool LayoutBroker::CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH)
@@ -255,42 +287,71 @@ bool LayoutBroker::CaptureSnapshotPng(std::string& outBase64, int& outW, int& ou
 
 void LayoutBroker::ReemitOcclusions()
 {
-    if (!m_alphaCompositor) return;
+    if (!m_alphaCompositor && !m_dcompCompositor) return;
+
     if (m_lastW <= 0 || m_lastH <= 0)
     {
-        // Viewport collapsed — nothing to stamp; clear everything so
-        // a stale set doesn't persist into the next non-degenerate
-        // Apply. The compositor's own per-frame loop is a no-op when
-        // the occlusion map is empty and the scene rect is zero.
-        for (const auto& kv : m_occlusions)
-            m_alphaCompositor->RemoveOcclusion(kv.first);
-        m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
+        // Viewport collapsed — nothing to stamp on the AlphaCompositor;
+        // clear everything so a stale set doesn't persist into the
+        // next non-degenerate Apply.
+        if (m_alphaCompositor)
+        {
+            for (const auto& kv : m_occlusions)
+                m_alphaCompositor->RemoveOcclusion(kv.first);
+            m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
+        }
+        // [MT-11] Phase 3 Stage 5 — DComp Compositor + Engine on
+        // collapsed-popup: leave at their current state. The DComp
+        // engine visual is sized to host-client which hasn't changed;
+        // engine RT same. No-op intentional (idempotence on the next
+        // SetSceneRect dispatch picks up the right state).
         return;
     }
 
-    for (const auto& [id, occ] : m_occlusions)
+    if (m_alphaCompositor)
     {
-        const RECT popupRect = {
-            occ.x - m_lastX,
-            occ.y - m_lastY,
-            occ.x - m_lastX + occ.w,
-            occ.y - m_lastY + occ.h
-        };
-        m_alphaCompositor->SetOcclusion(id, popupRect, occ.feather);
+        for (const auto& [id, occ] : m_occlusions)
+        {
+            const RECT popupRect = {
+                occ.x - m_lastX,
+                occ.y - m_lastY,
+                occ.x - m_lastX + occ.w,
+                occ.y - m_lastY + occ.h
+            };
+            m_alphaCompositor->SetOcclusion(id, popupRect, occ.feather);
+        }
+
+        // B1.4 T4c: re-stamp the scene rect with a fresh translation
+        // whenever the popup origin changes. If the React side hasn't
+        // dispatched a scene rect yet (m_sceneW == 0), forward zeros to
+        // keep the compositor mask disabled.
+        if (m_sceneW > 0 && m_sceneH > 0)
+        {
+            m_alphaCompositor->SetSceneRect(
+                m_sceneX - m_lastX, m_sceneY - m_lastY, m_sceneW, m_sceneH);
+        }
+        else
+        {
+            m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
+        }
     }
 
-    // B1.4 T4c: re-stamp the scene rect with a fresh translation
-    // whenever the popup origin changes. If the React side hasn't
-    // dispatched a scene rect yet (m_sceneW == 0), forward zeros to
-    // keep the compositor mask disabled.
-    if (m_sceneW > 0 && m_sceneH > 0)
+    // [MT-11] Phase 3 Stage 5 — re-emit the cached scene-rect onto the
+    // DComp Compositor + Engine. Both consume main-client coords
+    // directly so the popup-origin translation above doesn't apply.
+    // SetCompositor (T2) calls ReemitOcclusions to replay state onto
+    // a newly-attached compositor; idempotence guards inside
+    // SetEngineVisualTransform + SetSceneViewport make repeated calls
+    // from popup-origin-changes effectively free.
+    if (m_dcompCompositor && m_sceneW > 0 && m_sceneH > 0)
     {
-        m_alphaCompositor->SetSceneRect(
-            m_sceneX - m_lastX, m_sceneY - m_lastY, m_sceneW, m_sceneH);
-    }
-    else
-    {
-        m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
+        m_dcompCompositor->SetEngineVisualTransform(
+            m_sceneX, m_sceneY, m_sceneW, m_sceneH);
+        if (m_engine)
+        {
+            m_engine->SetSceneViewport(
+                m_sceneX, m_sceneY, m_sceneW, m_sceneH);
+        }
     }
 }
 
