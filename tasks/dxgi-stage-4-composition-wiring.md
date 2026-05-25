@@ -71,8 +71,8 @@ arch-A readback path continues as today.
   `AttachWebView2` OR re-stack via `RemoveVisual` + re-`AddVisual` —
   ordering decision below.
 - **Auto-attach under composition mode.** Inside
-  `OnCompositionControllerReady` (HostWindow.cpp:1029), after
-  `AttachWebView2` succeeds, call `m_compositor->AttachEngineVisual(
+  `OnCompositionControllerReady` (HostWindow.cpp:1090 post-F8 / post-host-polish-bundle), after
+  `AttachWebView2` succeeds (~line 1203), call `m_compositor->AttachEngineVisual(
   engine->GetSharedTextureHandle(), aSize.cx, aSize.cy)`. No
   separate env var — composition mode IS DXGI mode for engine
   pixels. The existing `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` env-var
@@ -173,8 +173,9 @@ arch-A readback path continues as today.
 | Spike's `BuildVisualTree` engine block | [src/host/spike/dxgi_spike.cpp:460-477](../src/host/spike/dxgi_spike.cpp:460) | Engine-visual creation + `engineVisual->SetContent(swapchain)` + `AddVisual(engine, TRUE, nullptr)` (insertAbove=TRUE+NULL = behind all per L-016/spike-line-488 inversion). |
 | Spike's `RenderD3D9Frame` + `CompositeD3D11Frame` | [src/host/spike/dxgi_spike.cpp:665-708](../src/host/spike/dxgi_spike.cpp:665) | Per-frame sequence: engine draws into shared surface → D3D9 event query Issue(END) + spin GetData → D3D11 CopyResource(back, alias) → swapChain->Present1. Production split: engine half stays in Engine::Render (where the D3D9 device is); D3D11 half is `Compositor::CompositeEngineFrame`. |
 | HostWindow's `RenderD3D9` path | grep `m_framePublisher->OnFrameComposited` in [HostWindow.cpp](../src/host/HostWindow.cpp) | The per-frame seam where the new `m_compositor->CompositeEngineFrame()` call lands. Today the path is: engine->Render() → engine present-equivalent (D3D9 doesn't Present to anything when render target is the shared texture) → FramePublisher encodes JPEG → AlphaCompositor stamps + UpdateLayeredWindow. Stage 4 adds: → Compositor::CompositeEngineFrame (under composition mode). |
-| `OnCompositionControllerReady` | [src/host/HostWindow.cpp:1029](../src/host/HostWindow.cpp:1029) | Stage 3's wire-up site. After `m_compositor->AttachWebView2(ctl)` succeeds, Stage 4 adds the `AttachEngineVisual` call. Engine + AlphaCompositor are already up by the time this callback fires (constructed synchronously in WM_CREATE before InitWebView2's async chain). |
-| WM_DESTROY teardown order | [src/host/HostWindow.cpp:1537-1584](../src/host/HostWindow.cpp:1537) | Already correctly drops `m_compositionController` → `m_compositor` → framePublisher → inputDispatcher → alphaCompositor → engine. Stage 4 needs NO additional teardown wiring — Compositor's dtor releases the engine visual + swapchain + D3D11 alias + D3D11 device via Impl's ComPtr destruction order. AlphaCompositor still owns the underlying shared D3D9 texture and releases it last. |
+| `OnCompositionControllerReady` | [src/host/HostWindow.cpp:1090](../src/host/HostWindow.cpp:1090) | Stage 3's wire-up site (line shifted from 1029 → 1090 post-F8 + host-polish bundle). After `m_compositor->AttachWebView2(ctl)` succeeds at ~line 1203, Stage 4 adds the `AttachEngineVisual` call. Engine + AlphaCompositor are already up by the time this callback fires (constructed synchronously in WM_CREATE before InitWebView2's async chain). |
+| WM_DESTROY teardown order | [src/host/HostWindow.cpp:1690-1730](../src/host/HostWindow.cpp:1690) | Already correctly drops `webMessageTok` (G5 cleanup) → `webController->Close()` → `m_compositionController` → `m_compositor` (reset at line 1724) → framePublisher → inputDispatcher → alphaCompositor → engine. Stage 4 needs NO additional teardown wiring — Compositor's dtor releases the engine visual + swapchain + D3D11 alias + D3D11 device via Impl's ComPtr destruction order. AlphaCompositor still owns the underlying shared D3D9 texture and releases it last. |
+| F8 `WM_APP_COMPOSITION_FALLBACK` | [src/host/HostWindow.cpp:1526](../src/host/HostWindow.cpp:1526) (handler) + 1100/1118/1127 (PostMessage sites) | Stage 3h-equivalent fallback that tears down composition state and re-dispatches via HWND mode when the controller-creation chain fails async. Stage 4 adds a NEW failure surface (`AttachEngineVisual`) that DOES NOT use this mechanism — see §3.8 for the two-level failure design. |
 | L-016 per-file include override | [src/ParticleEditor.vcxproj](../src/ParticleEditor.vcxproj) Compositor.cpp entry | Already in place. Stage 4 adds no new TU; the existing override already excludes DXSDK June 2010 from Compositor.cpp's include path, so `<d3d11.h>`, `<dxgi1_2.h>`, etc. resolve to Win10 SDK. |
 | `shared_texture_test.exe` | [src/host/spike/shared_texture_test.cpp](../src/host/spike/shared_texture_test.cpp) | Stage 2's bit-exact validator (PASS on user's RTX 3080). Stays valid Stage-4-relevant regression: if engine pixels show garbage under composition, run this exe first to confirm the D3D9 → D3D11 path itself still works in isolation. |
 | Playwright native-CDP harness | [run-native-tests.mjs](../web/apps/editor/scripts/run-native-tests.mjs) | Stage 3g's `composition-hosting.spec.ts` pattern (skip when env-var absent, registered next to alpha-compositor specs) is the template for the four new dxgi-* specs. |
@@ -426,9 +427,9 @@ free.
 
 ### 3.6 Teardown — no new wiring required
 
-WM_DESTROY today (HostWindow.cpp:1537-1584) drops `m_compositor` AFTER
-controller / cursor handler / m_compositionController, BEFORE
-framePublisher → inputDispatcher → alphaCompositor → engine.
+WM_DESTROY today (HostWindow.cpp:1690-1730 post-G5) drops `m_compositor` AFTER
+webMessageTok cleanup / webController->Close() / cursor handler / m_compositionController,
+BEFORE framePublisher → inputDispatcher → alphaCompositor → engine.
 
 Stage 4's additions to `Compositor::Impl` (D3D11 device, swapchain,
 visual, shared-resource alias) destruct via the Impl's ComPtr
@@ -473,6 +474,68 @@ Following Stage 3's `[COMP-...]` convention, Stage 4 tags:
 
 Removed pre-ship per CLAUDE.md debug-instrumentation lifecycle (Stage 7).
 1 Hz throttle on per-frame line keeps the log readable.
+
+### 3.8 Interaction with F8's `WM_APP_COMPOSITION_FALLBACK`
+
+Stage 3h (shipped as `f0a8695` in the post-audit autonomous queue)
+added a fallback path that tears down composition state and
+re-dispatches via HWND mode when async controller-creation fails.
+The mechanism is a `WM_APP_COMPOSITION_FALLBACK = WM_APP + 1` custom
+message, posted from three sites inside `OnCompositionControllerReady`
+when the chain breaks (controller completion, base-controller QI,
+FinishWebView2ControllerSetup). The handler at
+[HostWindow.cpp:1526](../src/host/HostWindow.cpp:1526) tears down
+`webController` / `m_compositionController` / `m_compositor` /
+`m_compositionMode` and re-dispatches via the stashed `webEnv`
+through `DispatchHwndModeController`.
+
+**Stage 4 introduces a fourth failure surface — `AttachEngineVisual`
+— but explicitly does NOT chain into this F8 mechanism.** Two-level
+failure design:
+
+| Failure class | Where | Action | User-visible outcome |
+|---|---|---|---|
+| **Chrome itself broken.** Controller-creation chain fails async. | HostWindow.cpp:1100 / 1118 / 1127 (F8 sites) | `PostMessage(WM_APP_COMPOSITION_FALLBACK)` → F8 handler tears down + re-dispatches HWND mode | Chrome works in HWND mode; no engine visual; full Phase 2 / arch-A behaviour. |
+| **AttachWebView2 fails** (Stage 3 case). | OnCompositionControllerReady, ~line 1206 | Existing inline path: log + return; chrome stays in composition mode but tree never commits | (Recovered to F8 path by line-1127 PostMessage at FinishWebView2ControllerSetup failure.) |
+| **`AttachEngineVisual` fails** (Stage 4 new case). LUID mismatch, D3D11 device create fail, OpenSharedResource fail, swapchain create fail. | OnCompositionControllerReady, after Stage 4 wires the AttachEngineVisual call | Log `[COMP-engine-fail]` + skip-engine-attach. Composition mode + WebView2 chrome stay intact; engine visual just isn't in the tree. | Chrome works in **composition** mode; viewport quadrant is empty (no engine pixels). User sees mostly-working editor; a runtime warning surfaces the GPU mismatch. |
+
+**Rationale for NOT chaining into F8.** F8's fallback is for "chrome
+itself unusable" — the React UI can't load, the controller can't be
+queried. When `AttachEngineVisual` fails, chrome is fine; only the
+GPU bridge to the engine's pixels is broken. Demoting the user from
+composition-mode-WebView2 to HWND-mode-WebView2 would lose all of
+Stage 3's chrome composition wins (no cutout artifact in dropdowns,
+correct DComp-tree z-order, etc.) for no benefit — the engine
+pixels still wouldn't appear.
+
+The runtime warning at attach-failure time (e.g. LUID mismatch
+diagnostic per risk #1) tells the user "your GPU configuration
+doesn't support the DXGI bridge; viewport will be empty." A future
+Stage 6/7 dispatch could add a full arch-A fallback at this point
+(unhide popup, re-enable AlphaCompositor's UpdateLayeredWindow
+consumer), but that's out of scope for Stage 4.
+
+**Code shape.** Inside `OnCompositionControllerReady` after
+`AttachWebView2`:
+
+```cpp
+if (m_compositor)
+{
+    HRESULT bhr = m_compositor->AttachWebView2(ctl);
+    if (FAILED(bhr)) { /* existing Stage 3 path */ return bhr; }
+
+    // Stage 4 addition — no PostMessage(WM_APP_COMPOSITION_FALLBACK)
+    // on failure; skip-engine-attach is the design.
+    HRESULT ehr = m_compositor->AttachEngineVisual(
+        engine->GetSharedTextureHandle(), w, h, engine->GetDeviceForSync());
+    if (FAILED(ehr))
+    {
+        Log("[COMP-engine-fail] AttachEngineVisual hr=0x%08lx — composition mode "
+            "continues without engine visual (viewport area will be empty)\n", ehr);
+        // No PostMessage. No state teardown. Chrome continues in composition mode.
+    }
+}
+```
 
 ---
 
@@ -641,7 +704,7 @@ Automated gates dominate; manual reserved for visual confirmation.
 
 ### Pre-coding gate (all green BEFORE 4a)
 
-- [ ] vitest 335/335 pass
+- [ ] vitest 338/338 pass (was 335 pre-`d3f0fae`; the CI-allowlist guard added +3 tests)
 - [ ] tsc -b 0 errors
 - [ ] MSBuild Debug + Release x64 clean
 - [ ] Playwright native HWND baseline 99/99 (composition specs
@@ -655,7 +718,7 @@ Automated gates dominate; manual reserved for visual confirmation.
 ### Sub-stage 4a (skeleton + Engine sync helpers) — additive
 
 - [ ] MSBuild Debug + Release x64 clean
-- [ ] vitest 335/335 / tsc / native 99/99 unchanged
+- [ ] vitest 338/338 / tsc / native 99/99 unchanged
 - [ ] `Compositor::AttachEngineVisual` + `CompositeEngineFrame` +
       `RefreshEngineSharedHandle` declared in header, stubs in .cpp
       returning S_OK/S_FALSE
@@ -830,6 +893,19 @@ vs hard-fail launch (forces user to set env var unset).** Recommend
 skip-attach: chrome works, viewport empty. Single-GPU systems
 unaffected. *Surface for OK before 4b.*
 
+**D7. `AttachEngineVisual` failure handling — skip-engine-attach
+(recommended) vs chain into F8's `WM_APP_COMPOSITION_FALLBACK`.** Per
+§3.8, Stage 4's recommended path is: on AttachEngineVisual failure
+(LUID mismatch, D3D11 device, OpenSharedResource, swapchain create),
+log `[COMP-engine-fail]` and leave composition mode intact with no
+engine visual in the tree (chrome works, viewport area is empty).
+Do NOT post `WM_APP_COMPOSITION_FALLBACK` — that mechanism is for
+chrome-itself-broken failures (F8 paths A/B/C). The two-level design
+preserves Stage 3's chrome composition wins (no cutout artifact in
+dropdowns, DComp z-order) when only the engine-pixels bridge is
+broken. *Surface for OK before 4b. This decision generalizes D6's
+LUID-mismatch case to all AttachEngineVisual failure modes.*
+
 ---
 
 ## 9. Stage gate (per CLAUDE.md "Verification before done")
@@ -840,7 +916,7 @@ Stage 4 ships when:
 - [ ] Final composition-mode screenshot shows engine pixels behind
       WebView2 chrome
 - [ ] Default new-UI HWND path unchanged (99/99 native PASS,
-      vitest 335/335, MSBuild clean)
+      vitest 338/338, MSBuild clean)
 - [ ] Perf gate met: > 80 FPS at 1080p AND > 60 FPS at 3440×1440
       under composition mode
 - [ ] 50-resize stress without crash, log errors, or perf drift
