@@ -26,6 +26,13 @@ class ITextureManager
 public:
 	virtual IDirect3DTexture9* getTexture(IDirect3DDevice9* pDevice, std::string name) = 0;
 	virtual void Clear() = 0;
+	// Drop every cached resource before a device reset. Distinct from
+	// Clear(): Clear preserves the missing-texture placeholder so
+	// hot-reload doesn't flash it; OnLostDevice releases everything
+	// because under D3D9Ex the D3DX helpers create D3DPOOL_DEFAULT
+	// textures that must be released before IDirect3DDevice9::Reset.
+	// See tasks/post-audit-followups.md F6.
+	virtual void OnLostDevice() = 0;
 };
 
 class IShaderManager

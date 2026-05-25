@@ -1302,6 +1302,16 @@ void Engine::Reset()
 	// never reset). The Resize() call at the end of this function
 	// recreates the RT against the new back-buffer size.
 	if (m_pAlphaCompositor) m_pAlphaCompositor->ReleaseGpuResources();
+	// [Post-audit F6] D3DX texture helpers (D3DXCreateTextureFromFileInMemory,
+	// D3DXCreateTextureFromResource) silently substitute D3DPOOL_DEFAULT
+	// for D3DPOOL_MANAGED under D3D9Ex — the documented MANAGED default
+	// inside the helper hits D3D9Ex's pool restriction and the helper
+	// falls back to DEFAULT. TextureManager caches the result, so every
+	// cached handle is a DEFAULT-pool resource that must be released
+	// before Reset. Stage 1 sub-plan named this as Risk 4.7 but the
+	// chosen mitigation (grep for D3DPOOL_MANAGED literal) couldn't
+	// find it because the helper hides the pool argument.
+	m_textureManager.OnLostDevice();
 	if (FAILED(m_pDevice->Reset(&m_presentationParameters)))
 	{
 		throw wruntime_error(LoadString(IDS_ERROR_RENDERER_RESET));
