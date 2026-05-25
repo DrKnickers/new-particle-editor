@@ -17,6 +17,7 @@
 
 #include <cstring>
 #include <stdexcept>
+#include "third_party/nlohmann/json.hpp"
 
 #pragma comment(lib, "OleAut32.lib")
 
@@ -107,8 +108,16 @@ HRESULT STDMETHODCALLTYPE HostBridgeProxy::Invoke(DISPID dispIdMember, REFIID /*
         catch (const std::exception& e)
         {
             // Build a defensive error envelope so the JS side still
-            // gets a well-formed response object to parse.
-            res = std::string("{\"type\":\"res\",\"ok\":false,\"error\":\"") + e.what() + "\"}";
+            // gets a well-formed response object to parse. Post-audit G4:
+            // pre-fix this concatenated e.what() into a hand-rolled JSON
+            // string, so quotes/backslashes/control chars in exception
+            // text would malform the JSON — defeating the entire purpose
+            // of the catch.
+            res = nlohmann::json{
+                {"type",  "res"},
+                {"ok",    false},
+                {"error", e.what() ? e.what() : "(no message)"},
+            }.dump();
         }
         catch (...)
         {
