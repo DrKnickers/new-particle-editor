@@ -158,6 +158,12 @@ async function main() {
       "tests/dxgi-transport.spec.ts",
       "tests/dxgi-resize-stress.spec.ts",
       "tests/dxgi-perf.spec.ts",
+      // [MT-11] Phase 3 Stage 5 T7 — scene-rect transform gate. Skips
+      // when ALO_WEBVIEW2_HOSTING != "composition" (LayoutBroker's
+      // new wiring is composition-mode-only per R9 mitigation c).
+      // Asserts [COMP-engine-transform] log lines fire on
+      // layout/scene-rect dispatch with the expected absolute clip.
+      "tests/dxgi-scene-rect.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
