@@ -232,18 +232,6 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
         // collapses.
         m_sceneX = m_sceneY = m_sceneW = m_sceneH = 0;
         if (m_alphaCompositor) m_alphaCompositor->SetSceneRect(0, 0, 0, 0);
-
-        // [MT-11] Phase 3 Stage 5 — clear engine-side scene viewport
-        // so the engine reverts to full-RT projection + viewport
-        // (matches pre-Stage-5 behavior when scene-rect is undispatched).
-        // We do NOT clear the Compositor's engine-visual transform —
-        // there's no "clear" semantic on SetEngineVisualTransform, and
-        // leaving it at the last scene-rect is harmless because either
-        // (a) React is mid-boot before its first dispatch (T5's initial
-        // seed at full-client covers this), or (b) the centre quadrant
-        // truly collapsed and chrome covers the whole client anyway.
-        // Gated on the same DComp-compositor presence used as the
-        // composition-mode signal (sub-plan R9 mitigation c).
         if (m_dcompCompositor && m_engine)
         {
             m_engine->SetSceneViewport(0, 0, 0, 0);
@@ -271,11 +259,25 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
     // canvas-jpeg / arch-A paths byte-identical to today).
     if (m_dcompCompositor)
     {
-        m_dcompCompositor->SetEngineVisualTransform(x, y, w, h);
+        // [MT-11] Phase 3 Stage 5 T6 follow-up (rev 2) — B-γ engine
+        // viewport scoping restored, with per-pixel-FoV reference =
+        // CURRENT engine RT height (not the boot-time scene-rect
+        // height that an earlier iteration captured). With reference
+        // = RT_H, scene-rect H ≤ RT_H always, so fovY ≤ 45° — engine
+        // renders LESS world per frame at large windows, not more.
+        // Net perf at maximized should be ≥ pre-Stage-5 (less
+        // rasterization in the scene pass, narrower projection).
+        //
+        // Order: engine first so it knows the new viewport before
+        // CompositeEngineFrame runs; Compositor's queued transform
+        // applies at the end of the next CompositeEngineFrame
+        // (deferred-clip mechanism), syncing the DComp clip with
+        // the fresh engine pixels.
         if (m_engine)
         {
             m_engine->SetSceneViewport(x, y, w, h);
         }
+        m_dcompCompositor->SetEngineVisualTransform(x, y, w, h);
     }
 }
 

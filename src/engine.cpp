@@ -1544,10 +1544,7 @@ void Engine::SetSceneViewport(int x, int y, int w, int h)
 	{
 		if (!m_sceneViewportActive) return;   // already cleared / never set
 
-		// Restore the full-RT-aspect projection to match ResetParameters'
-		// setup. If the device has no live presentation params (pre-Init
-		// state, or post-Reset before ResetParameters runs), skip the
-		// projection rebuild — the next ResetParameters will set it up.
+		// Restore full-RT projection (matches ResetParameters' default).
 		if (m_presentationParameters.BackBufferWidth > 0 &&
 		    m_presentationParameters.BackBufferHeight > 0)
 		{
@@ -1557,6 +1554,15 @@ void Engine::SetSceneViewport(int x, int y, int w, int h)
 			    (float)m_presentationParameters.BackBufferHeight, n, 1000.0f);
 			m_projection._33 = -1.0f;
 			m_projection._43 = -2 * n;
+			// Push to device + recompute m_viewProjection so shader
+			// effects (engine.cpp:613, 616) see the fresh matrix. Without
+			// this, the device keeps the stale projection until something
+			// else calls SetCamera (visible as "aspect snaps on click").
+			D3DXMatrixMultiply(&m_viewProjection, &m_view, &m_projection);
+			if (m_pDevice)
+			{
+				m_pDevice->SetTransform(D3DTS_PROJECTION, &m_projection);
+			}
 		}
 
 		m_sceneViewportX      = 0;
@@ -1585,17 +1591,51 @@ void Engine::SetSceneViewport(int x, int y, int w, int h)
 	m_sceneViewportH      = h;
 	m_sceneViewportActive = true;
 
-	// Recompute projection at scene-rect aspect.
+	// Per-pixel-FoV projection — reference is the CURRENT engine RT
+	// height (BackBufferHeight). At sceneH = RT_H (no chrome around
+	// the viewport): fovY = 45°, matching ResetParameters' default
+	// exactly. At sceneH < RT_H (chrome occupies some of the client):
+	// fovY < 45° proportionally — engine renders LESS world per frame
+	// than at full-RT, so engine.Render is at-or-faster than pre-
+	// Stage-5 across all window sizes.
+	//
+	// Combined with aspect = W/H, the horizontal FoV scales such
+	// that 1 RT pixel ≡ 1 scene-rect pixel angular extent. Pane
+	// resize widens scene-rect → horizontal FoV widens → new world
+	// content appears at the right/left edges. No "shrinking
+	// distortion" of existing content (each pixel keeps its angular
+	// extent constant across resizes).
+	//
+	// Falls back to 45° at scene-rect aspect when BackBufferHeight
+	// isn't yet known (pre-Init / pre-first-Reset). Engine::Reset's
+	// R8 re-apply at end of Reset uses the post-Reset BackBufferHeight
+	// so the reference always matches the live RT.
 	float n      = 1.0f;
+	float refH   = (m_presentationParameters.BackBufferHeight > 0)
+	                 ? (float)m_presentationParameters.BackBufferHeight
+	                 : (float)h;
+	float fovY   = D3DXToRadian(45.0f) * (float)h / refH;
 	float aspect = (float)w / (float)h;
-	D3DXMatrixPerspectiveFovRH(&m_projection, D3DXToRadian(45), aspect, n, 1000.0f);
+	D3DXMatrixPerspectiveFovRH(&m_projection, fovY, aspect, n, 1000.0f);
 	m_projection._33 = -1.0f;
 	m_projection._43 = -2 * n;
+	// Push the new projection to the device + recompute m_viewProjection
+	// for shader-effect consumers (engine.cpp:613, 616). Without these,
+	// the device retains whatever projection SetCamera last pushed
+	// (typically from boot) until SetCamera fires again — visible as
+	// "aspect snaps to correct on click in viewport" because click
+	// triggers a camera op which calls SetCamera and finally pushes
+	// the latest m_projection.
+	D3DXMatrixMultiply(&m_viewProjection, &m_view, &m_projection);
+	if (m_pDevice)
+	{
+		m_pDevice->SetTransform(D3DTS_PROJECTION, &m_projection);
+	}
 
-	char buf[192];
+	char buf[224];
 	snprintf(buf, sizeof(buf),
-	    "[engine] SetSceneViewport x=%d y=%d w=%d h=%d (aspect=%.3f)\n",
-	    x, y, w, h, aspect);
+	    "[engine] SetSceneViewport x=%d y=%d w=%d h=%d (fovY=%.2f° aspect=%.3f refH=%.0f)\n",
+	    x, y, w, h, fovY * (180.0f / 3.14159265f), aspect, refH);
 	OutputDebugStringA(buf);
 	printf("%s", buf);
 	fflush(stdout);

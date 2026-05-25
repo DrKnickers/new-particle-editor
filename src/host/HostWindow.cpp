@@ -1320,11 +1320,25 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
                 sw = clientW;
                 sh = clientH;
 
-                HRESULT thr = m_compositor->SetEngineVisualTransform(sx, sy, sw, sh);
+                // immediate=true — apply the seed straight through
+                // rather than queueing it for CompositeEngineFrame.
+                // At attach time the engine hasn't rendered yet under
+                // the new transform, so there's nothing to coordinate
+                // with; queueing would just delay the visible clip
+                // until the first composite.
+                HRESULT thr = m_compositor->SetEngineVisualTransform(sx, sy, sw, sh, /*immediate=*/true);
                 if (FAILED(thr) && thr != S_FALSE)
                 {
                     Log("[host] composition: initial seed SetEngineVisualTransform hr=0x%08lx (non-fatal)\n", thr);
                 }
+                // [MT-11] Phase 3 Stage 5 T6 follow-up (rev 2) —
+                // restore engine viewport seed under B-γ with per-
+                // pixel-FoV-vs-current-RT reference. At seed time
+                // sceneH equals BackBufferHeight (full client), so
+                // SetSceneViewport's per-pixel-FoV computes
+                // fovY = 45° × clientH/RT_H = 45° — matches pre-
+                // Stage-5 projection exactly. No FoV explosion at
+                // attach.
                 if (engine)
                 {
                     engine->SetSceneViewport(sx, sy, sw, sh);

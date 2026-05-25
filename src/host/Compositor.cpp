@@ -143,6 +143,20 @@ struct Compositor::Impl
     int engineLastTransformW = 0;
     int engineLastTransformH = 0;
 
+    // [MT-11] Phase 3 Stage 5 (T6 follow-up) — pending transform queue.
+    // SetEngineVisualTransform with default (immediate=false) writes
+    // the new args here and returns; CompositeEngineFrame applies the
+    // pending transform at the END of the frame, after Present1 has
+    // pushed fresh swapchain pixels for the new viewport. The next
+    // DWM composition cycle sees both the new pixels and the new clip
+    // simultaneously — no transient "engine clear color at the new
+    // clip edge" artifact during pane-drag resize storms.
+    bool pendingTransform  = false;
+    int  pendingX          = 0;
+    int  pendingY          = 0;
+    int  pendingW          = 0;
+    int  pendingH          = 0;
+
     // [MT-11] Phase 3 Stage 4c — 1 Hz throttled diagnostics for
     // [COMP-engine-frame] + [COMP-engine-handle-hash]. Per-frame
     // emission would dominate the log; per-second is enough to spot
@@ -155,7 +169,73 @@ struct Compositor::Impl
     {
         if (log) log(s);
     }
+
+    // [MT-11] Phase 3 Stage 5 T6 follow-up — apply a scene-rect
+    // transform immediately. Shared by SetEngineVisualTransform's
+    // immediate path and CompositeEngineFrame's pending-apply tail.
+    // Caller validates engineVisualAttached + engineVisual + device
+    // exist and (w, h) > 0.
+    HRESULT ApplyTransform(int x, int y, int w, int h);
 };
+
+HRESULT Compositor::Impl::ApplyTransform(int x, int y, int w, int h)
+{
+    HRESULT hr;
+
+    // SetOffset to (0, 0) — visual's local coord space equals parent's
+    // (the root visual at host-client coords). Explicit even though
+    // (0, 0) is the default, because a previously-stale offset from
+    // a pre-fix build would otherwise survive (visible to debuggers /
+    // smoke after upgrade-in-place builds).
+    hr = engineVisual->SetOffsetX(0.0f);
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-engine-fail] ApplyTransform SetOffsetX hr=" + FormatHresult(hr));
+        return hr;
+    }
+    hr = engineVisual->SetOffsetY(0.0f);
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-engine-fail] ApplyTransform SetOffsetY hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    // SetClip in local coord space (which equals parent / host-client
+    // coords because the visual has zero offset). The clip is the
+    // scene-rect rectangle in absolute host-client coords:
+    // (left=x, top=y, right=x+w, bottom=y+h).
+    D2D_RECT_F clip = {
+        static_cast<float>(x),
+        static_cast<float>(y),
+        static_cast<float>(x + w),
+        static_cast<float>(y + h)
+    };
+    hr = engineVisual->SetClip(clip);
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-engine-fail] ApplyTransform SetClip hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    hr = device->Commit();
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-engine-fail] ApplyTransform Commit hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    engineLastX          = x;
+    engineLastY          = y;
+    engineLastTransformW = w;
+    engineLastTransformH = h;
+
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "[COMP-engine-transform] clip=(%d,%d,%d,%d) (absolute host-client)",
+             x, y, x + w, y + h);
+    LogLine(buf);
+    return S_OK;
+}
 
 Compositor::Compositor(HWND hostHwnd, LogFn log) noexcept
     : m_impl(std::make_unique<Impl>())
@@ -734,6 +814,43 @@ HRESULT Compositor::CompositeEngineFrame(HANDLE currentSharedHandle) noexcept
         return hr;
     }
 
+    // [MT-11] Phase 3 Stage 5 T6 follow-up — apply any pending scene-
+    // rect transform NOW that the swapchain has fresh pixels from the
+    // engine's render at the new viewport. Without this deferral
+    // (i.e. if SetEngineVisualTransform Commit'd the new clip
+    // immediately on dispatch), the next DWM composition cycle would
+    // composite the OLD swapchain content (pre-render with the old
+    // viewport) through the NEW clip rect — visible as a transient
+    // engine-clear-color strip at the widened clip edges during
+    // pane-drag resize storms. Applying after Present1 ensures the
+    // clip update arrives at the same DWM cycle as the new pixels.
+    if (m_impl->pendingTransform)
+    {
+        // Idempotence vs already-applied — if the engine's render +
+        // CopyResource above already corresponded to a viewport
+        // matching the pending transform (the common case during
+        // smooth drags), there's still a clip update to push because
+        // SetEngineVisualTransform deferred it. Apply unconditionally
+        // unless the pending value matches the cached LAST one (also
+        // a common case after a single-tick stall where the pending
+        // got queued and immediately overwritten by a no-op).
+        if (m_impl->pendingX != m_impl->engineLastX ||
+            m_impl->pendingY != m_impl->engineLastY ||
+            m_impl->pendingW != m_impl->engineLastTransformW ||
+            m_impl->pendingH != m_impl->engineLastTransformH)
+        {
+            (void)m_impl->ApplyTransform(
+                m_impl->pendingX, m_impl->pendingY,
+                m_impl->pendingW, m_impl->pendingH);
+            // Best-effort: log and proceed even on failure (the visible
+            // result is "scene-rect doesn't update," which is the same
+            // shape the user already sees during drag storms — not a
+            // worse state, just a missed sync). ApplyTransform itself
+            // logs the failure via [COMP-engine-fail].
+        }
+        m_impl->pendingTransform = false;
+    }
+
     // 1 Hz throttled diagnostics. GetTickCount() wraps after ~49 days
     // of uptime; we don't care because the editor session is unlikely
     // to span that.
@@ -861,31 +978,45 @@ HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,
 
 // ---------- [MT-11] Phase 3 Stage 5 — scene-rect transform ----------
 //
-// Positions + clips the DComp engine visual to the LayoutBroker's
-// scene-rect sub-region of the host client. See Compositor.h for the
-// public contract.
+// Positions the visible portion of the DComp engine visual to the
+// LayoutBroker's scene-rect sub-region of the host client. See
+// Compositor.h for the public contract.
 //
-// Design (sub-plan §3.1 / D1 — Option A):
-//   - Swapchain stays at engine RT size (current full-host-client).
-//     No ResizeBuffers per scene-rect update; DComp's per-visual
-//     SetOffset + SetClip is sufficient and orders-of-magnitude
-//     cheaper than swapchain resize storms during pane drags.
-//   - SetClip is in the visual's OWN coord space post-offset, so
-//     `{0, 0, w, h}` means "from the visual's local origin, show
-//     w×h" — NOT "in parent coord space, this rect at (x, y)."
-//   - Engine visual is a child of the root visual whose coord space
-//     equals host-client coords; engine-visual SetOffset(scene.x,
-//     scene.y) places the visual at scene-rect's top-left within
-//     the root, which equals host-client coords. (Sub-plan §3.3 +
-//     Risk R2 — no popup-origin translation because the engine
-//     visual is over host-client, not popup-client.)
-//   - Under B-γ (sub-plan §1.1 + §3.4), the engine itself constrains
-//     its scene-pass viewport to the scene-rect sub-region of its
-//     full-client RT via Engine::SetSceneViewport. So the w×h clip
-//     here windows the scene-pass-rendered region exactly; the
-//     surrounding engine clear color (from the D12 Clear-before-
-//     SetViewport ordering rule) is hidden by DComp's clip.
-HRESULT Compositor::SetEngineVisualTransform(int x, int y, int w, int h) noexcept
+// Design (sub-plan §3.1 / D1 — Option A, post-fix):
+//   - Swapchain stays at engine RT size (full host client). No
+//     ResizeBuffers per scene-rect update; DComp's per-visual
+//     SetClip is cheap (nanoseconds) vs swapchain resize storms
+//     during pane drags.
+//
+// COORDINATE-SPACE CONTRACT (load-bearing — initial Stage 5 ship
+// had this inverted; see lessons.md L-021 candidate). Under B-γ,
+// the engine renders its scene into the SCENE-RECT SUB-REGION of
+// its full-client RT (Engine::SetSceneViewport calls SetViewport
+// with (sceneX, sceneY, sceneW, sceneH) after the full-RT Clear,
+// per the D12 ordering rule). The CopyResource at every frame
+// makes the swapchain back-buffer a verbatim copy of the RT, so
+// the scene lives at swapchain pixels [sceneX..sceneX+W,
+// sceneY..sceneY+H] and engine clear color is elsewhere.
+//
+// The DComp engine visual paints its swapchain content at its
+// local (0, 0) onwards. With SetOffset(0, 0) (default), the
+// visual's local coord space EQUALS its parent's (the root
+// visual, which is at host-client coords). So swapchain pixel
+// (X, Y) is painted at host-client (X, Y) — which is exactly
+// where the engine drew the scene. SetClip({x, y, x+w, y+h})
+// constrains the visible region to the scene-rect rectangle on
+// screen.
+//
+// We do NOT use SetOffset(sceneX, sceneY) here. That would shift
+// the entire swapchain by (sceneX, sceneY), creating a double-
+// offset against the engine's already-scene-rect-positioned RT
+// content (visible as the scene appearing in the bottom-right
+// corner of the scene-rect quadrant). The original sub-plan §3.1
+// described SetOffset + clip-at-(0,0,W,H), which would have worked
+// IF the engine rendered at RT (0, 0); under B-γ, the engine
+// renders at RT (sceneX, sceneY), so SetOffset(0, 0) + clip at
+// absolute coords is the matching shape.
+HRESULT Compositor::SetEngineVisualTransform(int x, int y, int w, int h, bool immediate) noexcept
 {
     if (!m_impl->engineVisualAttached) return S_FALSE;
     if (!m_impl->engineVisual || !m_impl->device)
@@ -900,56 +1031,45 @@ HRESULT Compositor::SetEngineVisualTransform(int x, int y, int w, int h) noexcep
 
     // Idempotence — same scene-rect, no-op. Silent (no log line) so
     // resize storms during a pane drag at 60+ Hz don't flood host.log.
-    if (x == m_impl->engineLastX && y == m_impl->engineLastY &&
-        w == m_impl->engineLastTransformW &&
-        h == m_impl->engineLastTransformH)
+    // Compare against the cache (last actually-applied) AND any pending
+    // queued transform, so back-to-back identical SetSceneRect events
+    // collapse to nothing.
+    const bool sameAsApplied =
+        (x == m_impl->engineLastX && y == m_impl->engineLastY &&
+         w == m_impl->engineLastTransformW &&
+         h == m_impl->engineLastTransformH);
+    const bool sameAsPending =
+        (m_impl->pendingTransform &&
+         x == m_impl->pendingX && y == m_impl->pendingY &&
+         w == m_impl->pendingW && h == m_impl->pendingH);
+    if (sameAsApplied && !m_impl->pendingTransform) return S_OK;
+    if (sameAsPending) return S_OK;
+
+    if (immediate)
     {
-        return S_OK;
+        // Apply right now — for the attach-time seed where no engine
+        // render has happened yet and there's nothing to coordinate
+        // with. Clear any stale pending queue too.
+        m_impl->pendingTransform = false;
+        return m_impl->ApplyTransform(x, y, w, h);
     }
 
-    HRESULT hr;
-    hr = m_impl->engineVisual->SetOffsetX(static_cast<float>(x));
-    if (FAILED(hr))
-    {
-        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetOffsetX hr=" + FormatHresult(hr));
-        return hr;
-    }
-    hr = m_impl->engineVisual->SetOffsetY(static_cast<float>(y));
-    if (FAILED(hr))
-    {
-        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetOffsetY hr=" + FormatHresult(hr));
-        return hr;
-    }
-
-    D2D_RECT_F clip = {
-        0.0f, 0.0f,
-        static_cast<float>(w),
-        static_cast<float>(h)
-    };
-    hr = m_impl->engineVisual->SetClip(clip);
-    if (FAILED(hr))
-    {
-        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform SetClip hr=" + FormatHresult(hr));
-        return hr;
-    }
-
-    hr = m_impl->device->Commit();
-    if (FAILED(hr))
-    {
-        m_impl->LogLine("[COMP-engine-fail] SetEngineVisualTransform Commit hr=" + FormatHresult(hr));
-        return hr;
-    }
-
-    m_impl->engineLastX          = x;
-    m_impl->engineLastY          = y;
-    m_impl->engineLastTransformW = w;
-    m_impl->engineLastTransformH = h;
-
-    char buf[160];
-    snprintf(buf, sizeof(buf),
-             "[COMP-engine-transform] offset=(%d,%d) clip=%dx%d",
-             x, y, w, h);
-    m_impl->LogLine(buf);
+    // Default: queue for application at the end of the next
+    // CompositeEngineFrame, AFTER Present1 has pushed fresh swapchain
+    // pixels for the new viewport. Eliminates the transient
+    // engine-clear-color strip at new clip edges during pane-drag
+    // resize storms (visible because DComp's clip widens on Commit
+    // while the engine's render of the new viewport lags by one frame).
+    //
+    // The queue holds only the MOST RECENT pending transform — earlier
+    // queued transforms are replaced. With drag dispatching at 60+ Hz
+    // and engine rendering at ~100 Hz, this means at most a 1-frame
+    // delay between dispatch and visible clip update, never a backlog.
+    m_impl->pendingTransform = true;
+    m_impl->pendingX = x;
+    m_impl->pendingY = y;
+    m_impl->pendingW = w;
+    m_impl->pendingH = h;
     return S_OK;
 }
 

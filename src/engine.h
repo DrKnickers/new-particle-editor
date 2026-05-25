@@ -443,6 +443,11 @@ private:
 	int  m_sceneViewportH      = 0;
 	bool m_sceneViewportActive = false;
 
+	// (Stage 5 T6 follow-up: per-pixel-FoV reference fields removed —
+	// reference is now the current m_presentationParameters.BackBuffer
+	// Height read inline at SetSceneViewport time. See SetSceneViewport
+	// for the rationale.)
+
     COLORREF    m_background;
 	bool		m_showGround;
 	float		m_groundZ;
