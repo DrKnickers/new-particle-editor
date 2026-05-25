@@ -1,18 +1,90 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stages 0+1+2+3a–3g shipped on session branch, awaiting user FF + smoke verification)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stage 4 SHIPPED; Stage 5 next)
 
-**Last updated:** 2026-05-22 (post-Stage-3g landed; 3f manual keyboard smoke pending user, 3h/3i not started). Phase 3 Stages 0 (spike + GO decision), 1 (D3D9Ex migration), and 2 (shared-handle infrastructure) shipped on `origin/lt-4` at **`b5fd14f`** (sibling-session-shipped Stage 1 follow-up cache deferral integrated cleanly via rebase). Stages **3a (Compositor skeleton), 3b (composition controller swap + FD6 gate cleared), 3c (mouse forwarding), 3d (cursor sync), 3e (DPI), 3f (keyboard focus transfer via MoveFocus), 3g (composition-hosting A/B parity spec)** are on this session branch awaiting end-of-session FF + the keyboard manual smoke.
+**Last updated:** 2026-05-25. [MT-11] Phase 3 **Stages 0–4 all shipped on `origin/lt-4`.** Stage 4 (DXGI composition wiring) is the headline ship: engine pixels reach the screen via D3D9Ex shared texture → D3D11 alias → DXGI composition swapchain → DComp engine visual UNDER the WebView2 visual, fully interactive, resize-robust, alpha-correct. Mean engine FPS 79.1 under the new dxgi-perf spec at the user's window size, well above the 30 FPS regression floor — vs Phase 2's canvas-jpeg readback path's ~40-50 FPS at 3440×1440. Default new-UI path (env vars unset) is byte-identical to today.
 
-**Test counts at handoff:** vitest **335 / 335** · Playwright native **HWND baseline 99/99** + **8 skipped** for composition-mode-only specs; **composition-mode 106/107 (1 self-skip)** under `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` · MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning unchanged; the C4996 Release breakage from `fd5481a` is **FIXED** in this session at commit `ba3fbc4`) · tsc -b 0 errors.
+**Test counts at handoff:** vitest **338 / 338** · Playwright native HWND baseline **99 passed + 22 skipped** (default dist/, no env vars; new dxgi-* + composition-hosting specs auto-skip cleanly) · composition mode **118 passed + 3 skipped + 0 failed** (composition-built dist/ + `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) · MSBuild Debug + Release x64 clean · tsc -b 0 errors.
 
 **Repo state at handoff:**
 
 | | |
 |---|---|
-| **`origin/lt-4` HEAD** | `b5fd14f` (sibling session's Modal backdrop unblurred-flash fix, on top of Stage 1 follow-up cache deferral) |
-| **Session branch** | `claude/upbeat-diffie-24f7fc`, 11 commits ahead of `origin/lt-4` (Stage 3 sub-plan + 3a + 3b + 3b smoke + 3c + 3d + 3e + 3f + Release-fix + 3g + sub-plan/lessons updates) |
-| **Working tree** | clean |
+| **`origin/lt-4` HEAD** | `936d937` (Stage 4f: Playwright DXGI specs + harness/host hardening) |
+| **Session branch** | `claude/flamboyant-johnson-cd061a`, FF'd into origin/lt-4 |
+| **Working tree** | clean (untracked: AGENTS.md, user-managed Codex sibling-doc) |
 | **Phase 2 status** | Shipped at `4896aa7` behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`. Default new-UI uses arch-A (visible popup with AlphaCompositor + UpdateLayeredWindow). |
-| **Phase 3 status** | Stages 0/1/2 on lt-4. Stages 3a–3g on session branch behind new env var `ALO_WEBVIEW2_HOSTING=composition` (default unset = HWND mode, byte-identical to today). 3f manual smoke + 3h/3i pending. |
+| **Phase 3 status** | **All 5 stages shipped to `origin/lt-4`.** Stages 0 (spike + GO), 1 (D3D9Ex), 2 (shared-handle infrastructure), 3 (composition hosting), 4 (DXGI engine bridge). Sub-stage 4e (first-frame ClearRenderTargetView guard) deferred — not observed as a problem during smoke; ship-if-surfaces. |
+| **Stage 4 sub-stages** | 4a (skeleton) + 4b (real AttachEngineVisual) + 4c (real CompositeEngineFrame) + 4c.1 (ViewportSlot composition opt-out) + 4d (lazy resize re-open) + 4d.1 (ALPHA_MODE_IGNORE) + 4f (Playwright specs + harness/host hardening) all on origin/lt-4 |
+| **Stage 4 commits** | `16c8c87` (4a) · `cb44e2e` (4b) · `b417066` (4c) · `a509cf5` (4c.1) · `c787152` (4d) · `d9b690f` (4d.1) · `936d937` (4f) |
+
+## Stage 4 — what shipped, in plain English
+
+Under `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` + a `dist/` built with the matching `VITE_*` env-var pair:
+
+- Engine renders its scene to the AlphaCompositor's shared D3D9Ex texture (unchanged from Stage 2).
+- Compositor stands up a parallel D3D11 device, opens that texture via `OpenSharedResource`, creates a DXGI `CreateSwapChainForComposition` back buffer, builds a DComp engine visual, inserts it BEHIND the Stage 3 WebView2 visual via `AddVisual(engine, TRUE, nullptr)` (the MSDN-naming inversion at L-016 / dxgi_spike.cpp:488).
+- Per frame: `engine->Render()` → `engine->IssueEndFrameQuery()` (D3D9 event-query marker) → `engine->WaitEndFrameQuery()` (spin on GetData, spike's 100k cap) → `Compositor::CompositeEngineFrame()` does the D3D11 `CopyResource(backBuffer, sharedAlias)` → `swapChain->Present1(0, 0, &empty)`. DComp picks up the new content on the next composition cycle.
+- **Resize robustness via lazy per-frame handle check.** Every AlphaCompositor::Resize creates a new shared HANDLE; CompositeEngineFrame compares against cached, calls RefreshEngineSharedHandle on mismatch which drops the old D3D11 alias + re-opens + ResizeBuffers on the swapchain. Single-frame stutter at resize boundary, steady-state resumes.
+- **Multi-GPU LUID guard.** `Engine::GetAdapterLuid()` (new accessor) compared against the D3D11 device's adapter LUID via IDXGIDevice → GetAdapter → GetDesc. Mismatch returns `DXGI_ERROR_GRAPHICS_VIDPN_SOURCE_IN_USE`, skips engine attach, composition mode stays intact with chrome-only viewport (sub-plan §3.8 / D7 — explicit no-chain-into-F8: engine-attach failures don't trigger the chrome-itself-broken fallback).
+- **ViewportSlot composition opt-out (4c.1).** Build-time `VITE_WEBVIEW2_HOSTING` env var mirrors runtime `ALO_WEBVIEW2_HOSTING`. When set to `composition`, the canvas-jpeg `<img>` element's `viewport/frame-ready` subscription is SKIPPED — `<img>` stays empty/transparent, DXGI engine pixels show through the WebView2 visual where it's transparent. The `<canvas>` overlay's input listeners stay active either way (Phase 2's input bridge is still the engine input pathway).
+- **DXGI ALPHA_MODE_IGNORE (4d.1).** Originally PREMULTIPLIED per spike (its workload was D3DClear → clean alpha). Production engine's particle blend states leave the RT alpha in arbitrary states the engine never cared about (legacy arch-A used stamped popup alpha, not RT alpha). Under PREMULTIPLIED, DComp's compositing math darkened additive sprites over alpha-blended smoke. IGNORE matches legacy semantics.
+
+## What's verified end-to-end
+
+Manual smoke (user-driven during 4c/4d/4d.1):
+- ✓ Engine pixels visible behind transparent canvas via DXGI
+- ✓ Shift+click in viewport spawns cursor-bound particle instance correctly
+- ✓ Camera drag (LMB/MMB/RMB), wheel zoom, click in viewport — all interactive
+- ✓ Loaded `.alo` file with smoke + additive fire emitters renders correctly (no dark-rectangle artifacts post-4d.1)
+- ✓ Window resize: engine pixels track new viewport size without freezing
+- ✓ Repeated resize-then-interact cycles work
+
+Automated regression gate (Stage 4f, 10 new dxgi-* assertions, all PASS under composition mode):
+- ✓ `dxgi-transport.spec.ts` (7 tests) — `[COMP-engine-attach]` present + composite count grows + handle stability + no failure lines + format / bind / share flags correct
+- ✓ `dxgi-resize-stress.spec.ts` (2 tests) — 50 layout/viewport-rect cycles + targeted resize, both pass
+- ✓ `dxgi-perf.spec.ts` (1 test) — mean FPS 79.1 over 10s (floor: 30)
+
+## What's NOT in Stage 4 (deferred to Stage 5)
+
+Per sub-plan §1 Out of Scope: **scene-rect transform on the engine visual.** Engine pixels currently fill the FULL host client (DComp engine visual at (0,0,W,H)); the swapchain stretches engine RT contents to host-client size. Chrome with opaque backgrounds occludes; transparent regions show engine. This is functionally correct (the user can see + interact with engine pixels) but VISUALLY DIFFERENT from the eventual scene-rect-quadrant-constrained rendering. User-surfaced observation during 4d smoke: "if i resize the panes, it reveals more background color but not more of the ground plane" — that's the engine rendering at its frustum size with the rest of the RT being engine clear color, the DComp visual painting all of it at full client size. Stage 5 adds an `IDCompositionVisual::SetTransform` on the engine visual to constrain it to the LayoutBroker's scene-rect quadrant.
+
+## Stage 5 entry points
+
+The Compositor class already models the engine visual as a separate IDCompositionVisual sibling. Stage 5's seam is a new `Compositor::SetEngineVisualTransform(x, y, w, h)` method (or equivalent SetSize/SetOffset combo) called from LayoutBroker's scene-rect change path. The DXGI swapchain itself stays at engine RT size; DComp's per-visual transform handles the on-screen positioning + scaling. Reference pattern: spike doesn't do this (single full-screen workload), so design from scratch using IDCompositionVisual's documented `SetTransform`/`SetOffsetX`/`SetOffsetY` API. Estimated 2-3 days per parent plan §4.
+
+## Known follow-ups (out of scope for Stage 4)
+
+Surfaced during Stage 4 work but not part of the Stage 4 ship:
+
+1. **`canvas-architecture.spec.ts` test.fixme markers (L-012 instrumentation issue).** Pre-existing Phase 2 fault: spec proxies `window.bridge.request` (TestHostBridge under `--test-host`) but ViewportSlot dispatches via its `bridge` prop (NativeBridge from App.tsx's useMemo). Different objects. Proper fix is rewiring the spec to use host-side log inspection (the dxgi-transport pattern) OR exposing NativeBridge on window.bridge in test mode OR using a Playwright init-script to replace React's bridge prop. Three approaches documented in the spec's FIXME comment block.
+2. **Stage 4 sub-stage 4e — first-frame ClearRenderTargetView guard.** Sub-plan queued this as defence-in-depth against uninitialized back-buffer flash on first attach. Not observed during user-driven smoke; ship-if-surfaces. Implementation would be a 5-line addition to Compositor::AttachEngineVisual after CreateSwapChainForComposition: `D3D11_RENDER_TARGET_VIEW_DESC` → `CreateRenderTargetView` → `ClearRenderTargetView(rtv, {0,0,0,0})` → release the RTV.
+3. **L-019 (DXSDK linker-twin) + L-020 (spike-config-vs-production audit) candidate.** Stage 4 surfaced two lesson patterns worth retro-documenting alongside L-016/L-017/L-018. The DXSDK lib-path shadowing on `CreateDXGIFactory2` (resolved via `CreateDXGIFactory1` + QI) is L-016's exact twin on the linker side. The PREMULTIPLIED-vs-IGNORE alpha pivot is "audit every const/enum the spike picked AGAINST the production workload's data flow — don't assume spike choices are correct for production just because the spike was a passing reference."
+4. **Test harness env-var pre-flight check.** The harness should fail-fast (or auto-rebuild) when runtime ALO_* env vars and dist/ build-time VITE_* env vars are inconsistent. Surfaced during Stage 4f when my own composition-mode smoke ran against a default-built dist/ (and vice versa). Pragmatic fix: harness reads dist/ manifest for baked env vars + compares against process.env, errors out on mismatch.
+
+## How to run composition mode locally
+
+```powershell
+# Set env vars (PowerShell session)
+$env:ALO_WEBVIEW2_HOSTING = "composition"
+$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+
+# Build dist/ with matching VITE_* counterparts
+cd web
+$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
+$env:VITE_WEBVIEW2_HOSTING = "composition"
+pnpm --filter @particle-editor/editor build
+
+# Launch
+cd ..
+./x64/Debug/ParticleEditor.exe --new-ui
+
+# OR run native tests
+cd web
+pnpm --filter @particle-editor/editor test:native
+```
+
+To reset to default HWND mode: `Remove-Item Env:ALO_WEBVIEW2_HOSTING; Remove-Item Env:ALO_VIEWPORT_TRANSPORT` + rebuild dist/ without the VITE_* env vars.
+
+---
 
 ## Autonomous queue execution — final summary (2026-05-24)
 
