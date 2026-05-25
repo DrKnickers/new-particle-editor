@@ -534,7 +534,30 @@ HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
     scDesc.BufferCount = 2;
     scDesc.SampleDesc.Count = 1;
     scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-    scDesc.AlphaMode  = DXGI_ALPHA_MODE_PREMULTIPLIED; // engine pixels carry premultiplied alpha
+    // [MT-11] Phase 3 Stage 4d.1 — ALPHA_MODE_IGNORE, NOT PREMULTIPLIED.
+    //
+    // The spike's swapchain used DXGI_ALPHA_MODE_PREMULTIPLIED (its
+    // engine workload was D3DClear() to solid color, alpha was clean).
+    // The production engine's particle blend states (additive for
+    // fire, alpha-blend for smoke, etc.) leave the engine RT's alpha
+    // channel in an arbitrary state — the engine never cared because
+    // legacy arch-A's UpdateLayeredWindow uses the popup's STAMPED
+    // alpha (from AlphaCompositor::Composite), not the RT's alpha.
+    //
+    // Under DXGI with PREMULTIPLIED, DComp interpreted the RT's RGB
+    // as already-multiplied-by-alpha. When alpha was less than full
+    // over particle-blended regions, DComp's compositing math
+    // darkened the output — visible as "additive fire sprites
+    // overlapping smoke render with dark/black backgrounds" during
+    // 4d smoke (the user-surfaced bug that originally read as a
+    // separate issue).
+    //
+    // IGNORE tells DComp "treat this surface as fully opaque; don't
+    // try to blend with what's behind." Engine visual becomes an
+    // opaque rectangle at (0,0,W,H); WebView2 chrome composites on
+    // top where the WebView2 visual is opaque, transparent regions
+    // show full-opacity engine. That's the legacy parity.
+    scDesc.AlphaMode  = DXGI_ALPHA_MODE_IGNORE;
     scDesc.Scaling    = DXGI_SCALING_STRETCH;          // tolerates engine/swapchain size mismatch
 
     m_impl->engineSwapChain.Reset();
