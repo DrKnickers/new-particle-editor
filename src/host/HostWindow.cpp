@@ -1282,6 +1282,56 @@ HRESULT HostWindowImpl::OnCompositionControllerReady(
                 engine ? engine->GetSharedTextureHandle() : nullptr);
         }
 
+        // [MT-11] Phase 3 Stage 5 — inject the DComp Compositor into the
+        // LayoutBroker so React-side layout/scene-rect dispatches start
+        // routing into Compositor::SetEngineVisualTransform + Engine::
+        // SetSceneViewport. The setter also replays the cached scene-
+        // rect onto the newly-attached compositor via ReemitOcclusions
+        // (sub-plan §3.5), so if React HAS already dispatched a scene-
+        // rect by this point, the engine visual + engine viewport
+        // immediately match it. (In practice React's first dispatch
+        // typically arrives AFTER this site because React is still
+        // booting inside the WebView2 visual; the explicit full-client
+        // seed below covers the in-between frames.)
+        if (m_compositor)
+        {
+            layout.SetCompositor(m_compositor.get());
+
+            // If LayoutBroker has no cached scene-rect yet (React hasn't
+            // dispatched layout/scene-rect yet — the common case at
+            // composition-controller-ready time), explicitly seed the
+            // engine visual + engine viewport to full client so the
+            // first frame is sized correctly. Without this seed, the
+            // engine visual's offset/clip stays at the DComp default
+            // (0,0,inf,inf) — visually OK but inconsistent with the
+            // post-Stage-5 invariant "engine visual ALWAYS has an
+            // explicit transform under composition mode."
+            //
+            // The seed also makes the boot-time
+            // [COMP-engine-transform] / [engine] SetSceneViewport log
+            // lines appear before React's first dispatch — useful as
+            // a positive control + asserted by T7's dxgi-scene-rect
+            // Playwright spec.
+            int sx, sy, sw, sh;
+            if (!layout.GetSceneRect(sx, sy, sw, sh))
+            {
+                sx = 0;
+                sy = 0;
+                sw = clientW;
+                sh = clientH;
+
+                HRESULT thr = m_compositor->SetEngineVisualTransform(sx, sy, sw, sh);
+                if (FAILED(thr) && thr != S_FALSE)
+                {
+                    Log("[host] composition: initial seed SetEngineVisualTransform hr=0x%08lx (non-fatal)\n", thr);
+                }
+                if (engine)
+                {
+                    engine->SetSceneViewport(sx, sy, sw, sh);
+                }
+            }
+        }
+
         Log("[host] composition hosting ready (DComp tree committed)\n");
     }
 
@@ -1608,6 +1658,13 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             webController.Reset();
         }
         m_compositionController.Reset();
+        // [MT-11] Phase 3 Stage 5 — clear LayoutBroker's pointer BEFORE
+        // releasing the Compositor so any late SetSceneRect dispatch
+        // that slips through (e.g. an in-flight BridgeDispatcher message
+        // queued before the fallback) doesn't dereference a freed
+        // Compositor. Mirrors the SetAlphaCompositor(nullptr) pattern
+        // and the symmetric WM_DESTROY teardown below.
+        layout.SetCompositor(nullptr);
         m_compositor.reset();
         m_compositionMode = false;
 
@@ -1792,6 +1849,12 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         m_webViewCursor = nullptr;
         m_compositionController.Reset();
+        // [MT-11] Phase 3 Stage 5 — clear LayoutBroker's pointer BEFORE
+        // releasing the Compositor so any late SetSceneRect dispatch
+        // (e.g. an in-flight BridgeDispatcher message that's already
+        // past the WM_DESTROY barrier in the message-pump shutdown
+        // sequence) doesn't dereference a freed Compositor.
+        layout.SetCompositor(nullptr);
         m_compositor.reset();
         // FD9b: detach the compositor from Engine BEFORE either is
         // destroyed so Render() (if scheduled before WM_QUIT drains
