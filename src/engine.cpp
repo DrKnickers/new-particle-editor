@@ -1312,6 +1312,12 @@ void Engine::Reset()
 	// chosen mitigation (grep for D3DPOOL_MANAGED literal) couldn't
 	// find it because the helper hides the pool argument.
 	m_textureManager.OnLostDevice();
+	// [MT-11] Phase 3 Stage 4a — release the event query before Reset.
+	// IDirect3DQuery9 is not in any D3DPOOL_*, but D3D9Ex's device Reset
+	// invalidates queries the same way it invalidates D3DPOOL_DEFAULT
+	// resources. Lazy-recreated by the next IssueEndFrameQuery call
+	// against the post-Reset device.
+	SAFE_RELEASE(m_pEndFrameQuery);
 	if (FAILED(m_pDevice->Reset(&m_presentationParameters)))
 	{
 		throw wruntime_error(LoadString(IDS_ERROR_RENDERER_RESET));
@@ -1357,6 +1363,55 @@ void Engine::Reset()
 HANDLE Engine::GetSharedTextureHandle() const
 {
 	return m_pAlphaCompositor ? m_pAlphaCompositor->GetSharedHandle() : nullptr;
+}
+
+// [MT-11] Phase 3 Stage 4a — cross-device GPU sync. See engine.h for
+// the design rationale (sub-plan §3.3 path b — engine-exposed helpers,
+// host orchestrates call sites under composition mode only).
+//
+// IssueEndFrameQuery lazily creates the IDirect3DQuery9 event query on
+// first call (m_pDevice must already exist — Engine::Reset releases the
+// query so subsequent first-call-after-Reset triggers recreation).
+// Query-create failure logs once via OutputDebugString and leaves
+// m_pEndFrameQuery null — subsequent Issue/Wait calls are no-ops.
+// Issue's D3DISSUE_END markers the moment in the D3D9 command stream
+// after the engine's current frame submissions; the D3D9 driver
+// guarantees the query reports SIGNALED only after all preceding
+// commands have completed.
+void Engine::IssueEndFrameQuery()
+{
+	if (m_pDevice == NULL) return;
+	if (m_pEndFrameQuery == NULL)
+	{
+		HRESULT hr = m_pDevice->CreateQuery(D3DQUERYTYPE_EVENT, &m_pEndFrameQuery);
+		if (FAILED(hr) || m_pEndFrameQuery == NULL)
+		{
+			OutputDebugStringA("[Engine] CreateQuery(EVENT) failed; cross-device sync disabled this run\n");
+			m_pEndFrameQuery = NULL;
+			return;
+		}
+	}
+	m_pEndFrameQuery->Issue(D3DISSUE_END);
+}
+
+// WaitEndFrameQuery spins on GetData with the spike's 100k cap (see
+// dxgi_spike.cpp:687-697 for the original). On timeout, logs once and
+// returns — degraded mode where the D3D11 CopyResource may read
+// partially-finished VRAM (visible tearing). Safer than blocking the
+// host message pump indefinitely on a hung GPU.
+void Engine::WaitEndFrameQuery()
+{
+	if (m_pEndFrameQuery == NULL) return;
+	BOOL done = FALSE;
+	int spins = 0;
+	while (m_pEndFrameQuery->GetData(&done, sizeof(done), D3DGETDATA_FLUSH) == S_FALSE)
+	{
+		if (++spins > 100000)
+		{
+			OutputDebugStringA("[Engine] D3D9 sync query never signalled after 100k spins\n");
+			break;
+		}
+	}
 }
 
 void Engine::ResetParameters()

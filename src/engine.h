@@ -155,6 +155,29 @@ public:
 	// Resize hasn't run yet. Stage 4 wires this into the DXGI / DComp
 	// path; Stage 2 only exposes + verifies the handle.
 	HANDLE GetSharedTextureHandle() const;
+
+	// [MT-11] Phase 3 Stage 4a — cross-device GPU sync helpers.
+	// Under composition mode (Stage 4+), HostWindow's per-frame loop
+	// calls these between engine->Render() (D3D9 draws into the shared
+	// texture) and m_compositor->CompositeEngineFrame() (D3D11
+	// CopyResource from alias to swapchain back buffer). Without the
+	// spin, the D3D11 read may race against in-flight D3D9 writes —
+	// symptoms: tearing, one-frame-stale appearance, half-frame updates.
+	//
+	// Production port of dxgi_spike.cpp:687-697 with the same 100k-
+	// iteration spin cap. Spike measured 0.30 ms total at 3440x1440;
+	// the spin doesn't dominate. Sub-plan §3.3 path (b): Engine owns
+	// the query (it has the D3D9 device anyway), host orchestrates the
+	// call sites under composition mode only — zero overhead on the
+	// non-composition paths (arch-A, canvas-jpeg) which never call.
+	//
+	// Lazy creation on first Issue. m_pEndFrameQuery is released in
+	// Engine::Reset before m_pDevice->Reset (queries aren't D3DPOOL_*
+	// but DO get invalidated by IDirect3DDevice9::Reset under D3D9Ex).
+	// Next Issue lazy-recreates against the post-Reset device.
+	void IssueEndFrameQuery();
+	void WaitEndFrameQuery();
+
 	const std::wstring& GetGroundSlotCustomPath(int slot) const;
 	// Does the slot currently have a loadable texture (either bundled
 	// default or user-supplied custom path)? Used by the picker dialog
@@ -471,6 +494,13 @@ private:
 	D3DPRESENT_PARAMETERS			m_presentationParameters;
 	IDirect3DDevice9Ex*				m_pDevice;
 	IDirect3DVertexDeclaration9*	m_pDeclaration;
+
+	// [MT-11] Phase 3 Stage 4a — D3D9Ex event query for cross-device
+	// GPU sync. Lazy-created on first IssueEndFrameQuery; released in
+	// Engine::Reset before m_pDevice->Reset; lazy-recreated on next
+	// Issue. See IssueEndFrameQuery / WaitEndFrameQuery declarations
+	// in the public section for usage.
+	IDirect3DQuery9*				m_pEndFrameQuery = NULL;
 
 	// FD9b: non-owning. When non-null, Render targets its off-screen
 	// RT and Composite() replaces Present(). Lifetime managed by

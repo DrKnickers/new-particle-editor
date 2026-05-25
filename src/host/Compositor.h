@@ -111,6 +111,68 @@ public:
     // commit themselves.
     HRESULT Commit();
 
+    // ---------- [MT-11] Phase 3 Stage 4 — engine visual ----------
+
+    // Stage 4. Stand up the D3D11 device + DXGI factory, open the
+    // engine's shared texture as a D3D11 alias, create a composition
+    // swapchain, build the engine IDCompositionVisual, insert it
+    // BEHIND the WebView2 visual (via AddVisual(engine, TRUE, nullptr)
+    // — the spike-bisected MSDN-naming inversion places "behind all
+    // siblings"; see Compositor.cpp's body + dxgi_spike.cpp:488 for
+    // the long-form comment), and SetContent(swapchain). Idempotent
+    // on identical (sharedTexture, w, h). A different handle triggers
+    // re-open via the lazy detection in CompositeEngineFrame.
+    //
+    // On any failure (LUID mismatch, D3D11 device create, OpenShared
+    // Resource, swapchain create), returns the failure HRESULT and
+    // leaves the engine visual NOT attached. Caller logs
+    // [COMP-engine-fail] and continues with composition mode intact
+    // (chrome works in composition mode; viewport area is empty).
+    // Sub-plan §3.8 documents the explicit no-chain-into-F8 design.
+    //
+    // Engine-side cross-device sync (D3D9 event query) is owned by
+    // Engine; host orchestrates the spin between engine->Render() and
+    // CompositeEngineFrame() — see Engine::IssueEndFrameQuery /
+    // WaitEndFrameQuery and sub-plan §3.3 path (b).
+    //
+    // 4a stub: returns S_OK and logs a single line; no D3D11/DXGI/
+    // DComp resources are created. Real implementation in 4b.
+    HRESULT AttachEngineVisual(HANDLE sharedTexture,
+                               int    w,
+                               int    h) noexcept;
+
+    // Per-frame composite step. Called from HostWindow's RenderD3D9
+    // path AFTER engine->Render() + engine->WaitEndFrameQuery() under
+    // composition mode. Sequence:
+    //   1. Lazy (handle, w, h) check against the cached AttachEngineVisual
+    //      tuple — re-open via RefreshEngineSharedHandle if changed.
+    //   2. D3D11 immediate context: CopyResource(backBuffer, alias).
+    //   3. swapChain->Present1(0, 0, &emptyParams).
+    //
+    // Returns S_OK on success; S_FALSE when no engine visual is
+    // attached (Stage 3 baseline state, or AttachEngineVisual-failed
+    // state per §3.8 — chrome works, viewport empty).
+    //
+    // 4a stub: returns S_FALSE unconditionally. Real implementation
+    // in 4c.
+    HRESULT CompositeEngineFrame() noexcept;
+
+    // Drop the D3D11 alias and re-open against a fresh shared handle.
+    // Called implicitly by CompositeEngineFrame's lazy check on
+    // (handle, w, h) mismatch (the AlphaCompositor::Resize path
+    // invalidates the shared HANDLE each call — every resize creates
+    // a new handle). Exposed publicly so HostWindow can trigger eager
+    // re-open if the lazy detection ever falls behind. Stage 4 ships
+    // with lazy-only (D4); the explicit path is dormant until 4d/
+    // beyond.
+    //
+    // 4a stub: returns S_OK without doing anything. Real impl in 4d.
+    HRESULT RefreshEngineSharedHandle(HANDLE sharedTexture,
+                                      int    w,
+                                      int    h) noexcept;
+
+    // ---------------------------------------------------------------
+
     // Diagnostic accessors. IsReady() returns true after
     // AttachWebView2 has committed the tree at least once.
     bool IsReady() const noexcept;

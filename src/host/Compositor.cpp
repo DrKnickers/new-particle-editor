@@ -311,6 +311,51 @@ HRESULT Compositor::Commit()
     return m_impl->device->Commit();
 }
 
+// ---------- [MT-11] Phase 3 Stage 4 — engine visual stubs ----------
+// 4a: declarations exist on the public surface (see Compositor.h's
+// engine-visual block); these bodies are no-ops returning the
+// documented "not yet attached" / "no-op success" status codes so
+// callers can wire their per-frame and OnCompositionControllerReady
+// call sites against the real signatures without behavioral effect.
+// 4b/4c/4d ship the real D3D11 device + DXGI swapchain + DComp
+// engine visual + per-frame composite + lazy handle re-open.
+
+HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
+                                       int    w,
+                                       int    h) noexcept
+{
+    (void)sharedTexture;
+    (void)w;
+    (void)h;
+    if (m_impl) m_impl->LogLine("[COMP-engine-init] AttachEngineVisual stub (4a — no D3D11 device yet)");
+    return S_OK;
+}
+
+HRESULT Compositor::CompositeEngineFrame() noexcept
+{
+    // 4a: no engine visual attached → return S_FALSE per the documented
+    // contract (S_OK = composited, S_FALSE = no engine visual). Host's
+    // per-frame loop will treat S_FALSE as "skip the composite step
+    // this frame." Real implementation lands in 4c.
+    return S_FALSE;
+}
+
+HRESULT Compositor::RefreshEngineSharedHandle(HANDLE sharedTexture,
+                                              int    w,
+                                              int    h) noexcept
+{
+    (void)sharedTexture;
+    (void)w;
+    (void)h;
+    // 4a: no D3D11 alias to refresh. The lazy detection in
+    // CompositeEngineFrame is the primary path under D4; this method
+    // gets a real implementation in 4d alongside resize-robustness
+    // work + the 50-resize stress smoke.
+    return S_OK;
+}
+
+// ---------------------------------------------------------------
+
 bool Compositor::IsReady() const noexcept
 {
     return m_impl && m_impl->treeBuilt;
