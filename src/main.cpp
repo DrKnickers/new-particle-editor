@@ -214,6 +214,18 @@ public:
 		textures.clear();
 	}
 
+	// Post-audit F6: drop every cached resource (including the missing-
+	// texture placeholder) for the device-reset path. Under D3D9Ex,
+	// D3DXCreateTextureFromFileInMemory and D3DXCreateTextureFromResource
+	// silently use D3DPOOL_DEFAULT — those handles are stale after
+	// IDirect3DDevice9::Reset, so all of them must go. getTexture()
+	// lazy-reloads on next call.
+	void OnLostDevice() override
+	{
+		Clear();
+		SAFE_RELEASE(pDefaultTexture);
+	}
+
 	TextureManager(IFileManager* fileManager, const std::string& basePath)
 	{
 		this->basePath		  = basePath;
