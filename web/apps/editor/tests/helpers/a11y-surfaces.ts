@@ -304,3 +304,52 @@ export const DIALOG_SURFACES: SurfaceCapture[] = [
     teardown: async (page) => { await dismissModals(page); },
   },
 ];
+
+// ─── T7: keyboard / interaction surfaces ──────────────────────────────
+//
+// These drivers are mode-agnostic — the same setup/teardown recipes are
+// consumed by the HWND UIA specs (T9) and the composition DOM-snapshot
+// specs (T10). No menu or dialog is left open by any driver here, so
+// dismissModals() is not needed; teardowns are either a single Escape
+// (cancel rename) or no-op.
+//
+// Assumption: kbd-emitter-rename-mode assumes the loaded fixture exposes
+// at least one root emitter and that F2 on the focused row enters rename
+// mode. Whether rename-mode actually appears in the captured UIA tree is
+// validated in T9 when goldens are generated.
+
+export const KEYBOARD_SURFACES: SurfaceCapture[] = [
+  {
+    id: "kbd-tab-cycle-stop-1",
+    setup: async (page) => {
+      await page.locator('[data-testid="app-shell"]').focus();
+      await page.keyboard.press("Tab");
+    },
+    teardown: async (_page) => { /* no-op */ },
+  },
+  {
+    id: "kbd-tab-cycle-stop-2",
+    setup: async (page) => {
+      await page.locator('[data-testid="app-shell"]').focus();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+    },
+    teardown: async (_page) => { /* no-op */ },
+  },
+  {
+    id: "kbd-emitter-rename-mode",
+    setup: async (page) => {
+      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().click();
+      await page.keyboard.press("F2");
+    },
+    teardown: async (page) => { await page.keyboard.press("Escape"); },
+  },
+  {
+    id: "kbd-arrow-tree-expanded",
+    setup: async (page) => {
+      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().focus();
+      await page.keyboard.press("ArrowRight");
+    },
+    teardown: async (_page) => { /* no-op */ },
+  },
+];
