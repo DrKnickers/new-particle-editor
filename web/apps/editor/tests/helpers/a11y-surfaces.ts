@@ -130,3 +130,177 @@ export const CHROME_SURFACES: SurfaceCapture[] = [
     teardown: async (_page) => { /* no-op */ },
   },
 ];
+
+// ─── T6: dialog surfaces ──────────────────────────────────────────────
+//
+// Every dialog captured here renders through `<Modal>` (Radix Dialog
+// primitives) or `<ToolPanel>` (a self-rendered `role="dialog"`
+// container). The two share enough structural a11y semantics — a
+// labelled, dismissable, role="dialog" container with an X close
+// glyph — that they can sit alongside each other in one surface list.
+//
+// Trigger discovery:
+//   - Menu-triggered dialogs: click the Menubar.Trigger, then click
+//     the Menubar.Item by visible text. The menu items render
+//     `role="menuitem"` via Radix.
+//   - Context-menu-triggered dialogs (tree-context atom): right-click
+//     the first emitter-tree row to open the row's ContextMenu, then
+//     click the item. Assumes the T9 fixture loads at least one root
+//     emitter (a11y-base-state.alo).
+//   - mod-nickname: no menu trigger in production. The `?demo=mod-
+//     nickname` route auto-fires `promptModNickname()` so the dialog
+//     is visible at first paint. Captured by navigating to the demo
+//     route — works without the full AppShell.
+//
+// Deferred surfaces (see tasks/a11y-deferred-surfaces.md for reasoning):
+//   - dialog-save-changes (needs a dirty in-memory document)
+//   - dialog-link-group-settings (needs an emitter with linkGroup > 0)
+//   - background-picker / ground-texture (no longer Modal — replaced
+//     by toolbar Popovers in NT-5/D6)
+//   - primitives-gallery (separate ?demo=primitives route, full-page
+//     replacement — not a dialog overlay)
+//   - spawner (always-on right column, not a dialog)
+//
+// Teardown: most dialogs close on Esc. The tree-context dialogs close
+// via Esc too (Radix Dialog handles it), then a second Esc clears any
+// lingering context-menu state for safety. The ?demo=mod-nickname
+// surface navigates back to the editor root to restore AppShell for
+// subsequent captures.
+
+export const DIALOG_SURFACES: SurfaceCapture[] = [
+  // ── Menu-triggered Modal dialogs ─────────────────────────────────
+  {
+    id: "dialog-about",
+    setup: async (page) => {
+      await page.locator('button:has-text("Help")').click();
+      await page.locator('[role="menuitem"]:has-text("About")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+  {
+    id: "dialog-rescale-system",
+    setup: async (page) => {
+      await page.locator('button:has-text("Edit")').click();
+      await page.locator('[role="menuitem"]:has-text("Rescale")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+  {
+    id: "dialog-reset-view-settings",
+    setup: async (page) => {
+      await page.locator('button:has-text("View")').click();
+      await page.locator('[role="menuitem"]:has-text("Reset View Settings")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+  {
+    id: "dialog-import-emitters",
+    setup: async (page) => {
+      // Modal opens with body in its "no file picked" state — the
+      // Browse… button is the only enabled control. We capture this
+      // state, not the post-preview tree state (which needs a real
+      // file/open round-trip).
+      await page.locator('button:has-text("File")').click();
+      await page.locator('[role="menuitem"]:has-text("Import Emitters")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+
+  // ── Menu-triggered ToolPanel dialogs (role="dialog" container) ───
+  {
+    id: "dialog-lighting",
+    setup: async (page) => {
+      await page.locator('button:has-text("View")').click();
+      await page.locator('[role="menuitem"]:has-text("Lighting")').click();
+      // ToolPanel renders `<div role="dialog" aria-label="Lighting">`
+      // — not portalled like Modal, but still queryable as a dialog.
+      await page.waitForSelector('[role="dialog"][aria-label="Lighting"]');
+    },
+    teardown: async (page) => {
+      // ToolPanel does NOT close on Esc by design (modeless tool
+      // window). Click its X glyph instead.
+      await page
+        .locator('[role="dialog"][aria-label="Lighting"] [aria-label="Close"]')
+        .click();
+    },
+  },
+  {
+    id: "dialog-bloom-settings",
+    setup: async (page) => {
+      await page.locator('button:has-text("View")').click();
+      await page.locator('[role="menuitem"]:has-text("Bloom Settings")').click();
+      await page.waitForSelector('[role="dialog"][aria-label="Bloom Settings"]');
+    },
+    teardown: async (page) => {
+      await page
+        .locator('[role="dialog"][aria-label="Bloom Settings"] [aria-label="Close"]')
+        .click();
+    },
+  },
+
+  // ── Demo-route auto-open ─────────────────────────────────────────
+  {
+    id: "dialog-mod-nickname",
+    setup: async (page) => {
+      // The ?demo=mod-nickname route mounts ModNicknameDemo, which
+      // fires promptModNickname() on mount, so the dialog is visible
+      // immediately after navigation completes.
+      await page.goto("/?demo=mod-nickname");
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => {
+      // Dismiss the dialog, then return to the editor root so the next
+      // surface (if any) sees AppShell again. T9's beforeEach re-loads
+      // the base fixture per surface, so this just clears the URL.
+      await page.keyboard.press("Escape");
+      await page.goto("/");
+    },
+  },
+
+  // ── Tree-context (right-click) Modal dialogs ─────────────────────
+  // Each requires the fixture to have at least one root emitter so
+  // `[data-testid="emitter-tree"] [role="treeitem"]` resolves to a
+  // clickable row. The tree-context atom in lib/tree-context.ts is
+  // driven by the row's onSelect handlers, which call
+  // openDialog(<kind>, emitterId).
+  {
+    id: "dialog-increment-index",
+    setup: async (page) => {
+      const firstRow = page
+        .locator('[data-testid="emitter-tree"] [role="treeitem"]')
+        .first();
+      await firstRow.click({ button: "right" });
+      await page.locator('[role="menuitem"]:has-text("Increment Index")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+  {
+    id: "dialog-rescale-emitter",
+    setup: async (page) => {
+      const firstRow = page
+        .locator('[data-testid="emitter-tree"] [role="treeitem"]')
+        .first();
+      await firstRow.click({ button: "right" });
+      await page.locator('[role="menuitem"]:has-text("Rescale Emitter")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+  {
+    id: "dialog-set-link-group",
+    setup: async (page) => {
+      const firstRow = page
+        .locator('[data-testid="emitter-tree"] [role="treeitem"]')
+        .first();
+      await firstRow.click({ button: "right" });
+      await page.locator('[role="menuitem"]:has-text("Set Link Group")').click();
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => { await dismissModals(page); },
+  },
+];
