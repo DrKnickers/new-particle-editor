@@ -1850,3 +1850,133 @@ clean") should now name the invocation form
 (`MSBuild .\ParticleEditor.sln`) so future readers don't reproduce
 the issue by reaching for `MSBuild .\src\ParticleEditor.vcxproj` as
 a "more direct" form.
+
+---
+
+## L-024 — UIA golden non-determinism: WebView2 topology drift + live React subscriptions; solve at the source, not at the normalizer
+
+**Rule.** Win32 UIA captures over WebView2 are prone to non-determinism
+from two distinct sources, and the right fix for each lives at a
+different layer:
+
+1. **WebView2 / Chromium tree-shape drift** — Chromium presents internal
+   chrome containers (`Chrome_WidgetWin_1`, `BrowserRootView`,
+   `NonClientView`, `EmbeddedBrowserTabRootView`, etc.) at different
+   depths depending on initialization state, profile, and prior captures.
+   These are wrapper visuals around the React subtree, not semantic
+   content. **Fix layer: normalizer.** Add to
+   `a11y-allowlist.json#alwaysStripWrappers` so they're replaced by their
+   children. Cost: one allowlist entry per wrapper class.
+
+2. **React components subscribed to live host streams** — e.g. StatusBar
+   re-renders every 250 ms on `stats/tick` (FPS, particle counts), and
+   intermittently on `cursor/position-3d` (mouse-over-viewport
+   coordinates). Capturing the UIA tree mid-tick produces values that
+   change run-to-run. **Fix layer: source.** Add a test-only bridge knob
+   (e.g. `stats/set-frozen`) that suppresses the host emission AND tells
+   the React component to clear its local state. The existing
+   placeholder render path (`—` for null values) then naturally produces
+   a deterministic snapshot WITH the StatusBar's structural a11y still
+   captured.
+
+**Anti-pattern: a normalizer-side "drop the whole subtree" concept.**
+The first attempt at the StatusBar problem added an
+`alwaysDropSubtrees: ["status-bar"]` list to the normalizer (parallel
+to `alwaysStripWrappers` but removing node + descendants). Visible cost:
+~30 lines in the normalizer for a new concept plus an `id="status-bar"`
+on the React component to give it a stable UIA AutomationId. Invisible
+cost: zero StatusBar coverage in goldens (a future regression that
+deletes StatusBar or breaks its labels wouldn't be caught), and every
+future live-value cell (e.g. a hypothetical "files in mod" counter)
+either needs to be in the drop list or shows up as a flake. Choose the
+source-side fix; the bridge knob scales to any future live UI for free.
+
+**Cross-spec contamination is part of "non-determinism."** A test
+spec's `beforeEach` that freezes state (or loads a fixture) MUST have
+an `afterAll` that restores the host to a state subsequent spec files
+can rely on. In MT-11 T9.3, two failures surfaced in cross-spec
+contamination only after the first determinism rerun: `app-shell.spec.ts`
+expected `stats/tick` to fire (the a11y freeze persisted across the
+spec-file boundary), and `emitter-mutations.spec.ts` expected the host
+to seed with one root emitter (the a11y fixture's 3-emitter tree
+persisted). Fix: a11y `afterAll` calls both `stats/set-frozen
+{ frozen: false }` and `file/new {}`. The host process is shared
+across spec files (per `run-native-tests.mjs`), so any state mutation
+that's "test-only" must be paired with an opposite mutation in
+`afterAll`.
+
+**Trigger.** Symptoms that indicate this lesson:
+
+- UIA goldens generated cleanly under `UPDATE_A11Y_GOLDENS=1`, then a
+  no-update rerun fails with golden diffs in nodes you didn't touch
+  (e.g. a node moves from `children[0]` to `children[2].children[0]`).
+- Cross-spec flake where the failing spec doesn't reference any
+  WebView2 / UIA / a11y machinery — e.g. an unrelated bridge spec
+  times out waiting for an event that should fire every 250 ms.
+- A normalizer that's growing extra concepts (drop-this, replace-that,
+  ignore-this-subtree) every time a new surface is captured.
+
+**How to apply.**
+
+1. **Wrapper drift goes in the allowlist.** When a UIA dump shows a
+   Chromium/WebView2 chrome container that's not semantic, add it to
+   `alwaysStripWrappers` (matches by AutomationId, ControlType, OR
+   ClassName).
+2. **Live data goes in a source-side freeze.** If a React component
+   subscribes to a host stream, add a test-only freeze handler that
+   suppresses the stream emission AND emits a "frozen" event the React
+   component listens for to clear local state. Reuse the existing
+   placeholder render path.
+3. **Spec `afterAll` MUST undo `beforeEach` for shared-process tests.**
+   Stats freeze → unfreeze. Fixture load → `file/new`. Selection
+   change → `emitters/selected null`. Whatever your `beforeEach`
+   touches, restore in `afterAll`.
+4. **Use ordinal byte comparison for canonical sort keys.**
+   `String.prototype.localeCompare` is locale-sensitive and can order
+   separator characters (`|`, `_`) inconsistently across Windows ICU
+   table versions and OS language packs. Use `a < b ? -1 : a > b ? 1
+   : 0` for sort keys that need to be stable across machines.
+
+**Source incident (2026-05-26, [MT-11] Phase 3 T9.3 first try +
+recovery).** The first T9.3 dispatch generated 29 goldens cleanly,
+then the determinism rerun failed across multiple goldens with two
+classes of diff: (a) `EmbeddedBrowserTabRootView` appearing at depth
+3 vs depth 0 in different runs, (b) StatusBar FPS values changing
+between runs. The first-pass fix shipped `alwaysDropSubtrees` to drop
+the whole StatusBar subtree — which made the dropped commit's run
+pass but cost StatusBar a11y coverage entirely and added a new
+normalizer concept. The recovery pivoted to a source-side
+`stats/set-frozen` bridge knob (request takes `{frozen: bool}`, emits
+a `stats/frozen-changed` event; React StatusBar listens and clears
+local state when frozen=true). The existing `placeholder = s === null`
+render path then produces deterministic `—` values for FPS, Emitters,
+Particles, Instances, Cursor — StatusBar a11y is preserved in goldens.
+
+A second contamination surfaced during the recovery's first
+determinism rerun: `app-shell.spec.ts` failed because the a11y
+`stats/set-frozen` had no symmetric unfreeze in `afterAll`.
+`emitter-mutations.spec.ts` failed because the a11y `file/open` of a
+3-emitter fixture left the tree state for the next spec to see. Both
+fixed by adding `stats/set-frozen { frozen: false }` + `file/new`
+to a11y `afterAll`. Second rerun: 132 passed, 0 failed, 26 skipped
+— twice consecutively.
+
+**Cross-reference.**
+[`web/apps/editor/tests/helpers/a11y-normalizer.ts`](../web/apps/editor/tests/helpers/a11y-normalizer.ts)
+holds the normalizer; the allowlist lives next to it as
+[`a11y-allowlist.json`](../web/apps/editor/tests/helpers/a11y-allowlist.json).
+The `stats/set-frozen` request handler is at
+[`src/host/BridgeDispatcher.cpp`](../src/host/BridgeDispatcher.cpp)
+(grep for `"stats/set-frozen"`); the schema is in
+[`web/packages/bridge-schema/src/index.ts`](../web/packages/bridge-schema/src/index.ts).
+The React listener is at
+[`web/apps/editor/src/components/StatusBar.tsx`](../web/apps/editor/src/components/StatusBar.tsx).
+The cross-spec `afterAll` patterns live in the 4
+`web/apps/editor/tests/a11y-*.spec.ts` files. Related lessons:
+[L-006](#l-006--dont-clear-react-optimistic-state-on-every-host-data-refresh)
+on React-state-vs-host-state separation;
+[L-022](#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan)
+on verifying claims (the original "1 failed (emitter-mutations
+pre-existing flake)" handoff claim was wrong — the failure was
+caused by the first T9.3 dispatch's own cross-spec contamination,
+not pre-existing flake).
