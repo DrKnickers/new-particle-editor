@@ -16,6 +16,43 @@ Conventions:
 
 ## Changelog
 
+### [MT-12 follow-up] Skip FramePublisher under composition mode — fixes maximize FPS drop
+
+*2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Single-line guard on the [MT-12] default flip that just shipped:
+the host's per-frame JPEG encode pipeline (FramePublisher) no
+longer runs under composition mode, where it was pure wasted work
+anyway (the React `<img>` consumer of `viewport/frame-ready` has
+been skipping under composition since Phase 3 Stage 4c.1). User-
+observed regression that prompted the fix: maximizing the editor
+window under default architecture C caused a substantial FPS drop;
+under `ALO_HOSTING_MODE=legacy` (architecture A) the same workload
+showed no discernable hit. At 3440×1440 the JPEG encode is
+~5 MP/frame, scaling quadratically with window area — large
+enough to push composition mode below legacy parity once
+maximized. With the guard applied, maximized FPS at 3440×1440
+recovers to ~90 fps (windowed mid-100s), much closer to legacy.
+
+**How we tackled it.** Added `&& !m_compositionMode` to the
+per-frame `m_framePublisher->OnFrameComposited()` call site at
+[`src/host/HostWindow.cpp:751`](src/host/HostWindow.cpp:751).
+FramePublisher's *construction* stays coupled to `m_archCMode`
+for now — the per-frame call was the hot path that mattered, and
+broader cleanup belongs in the future architecture-A deletion.
+Pre-fix the call was always running under composition because the
+prior MT-11 design left the producer wired in as "harmless until
+architecture-A deletion" (`ViewportSlot.tsx:177`); MT-12's flip
+to composition-as-default surfaced the cost at scale.
+
+**Issues encountered and resolutions.** None. The hypothesis filed
+as HANDOFF "Known follow-ups" item 15 ("the JPEG encode is the
+problem; one-line guard should fix it") was correct on the first
+test. Resolves items 13 (FramePublisher dead-code elimination)
+and 15 (composition perf regression on maximize) together.
+
+---
+
 ### [MT-12] Flip default to architecture C (DXGI composition) + retire env-var dual-toggle
 
 *2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

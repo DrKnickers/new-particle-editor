@@ -289,13 +289,13 @@ it into a dispatch.
     happen frequently in practice; the symptom (broken viewport)
     is self-evident so the banner is quality-of-life, not safety-
     critical.
-13. **FramePublisher dead-code elimination ([MT-12] cosmetic).**
-    `FramePublisher` continues encoding JPEG frames host-side even
-    under composition mode (where DXGI handles engine pixels and
-    the React `<img>` consumer is skipped). Wasted CPU cycles per
-    frame; harmless until architecture A is deleted. Could be
-    short-circuited under composition mode now (one `if` guard) or
-    deferred to the architecture-A deletion dispatch.
+13. ~~**FramePublisher dead-code elimination ([MT-12] cosmetic).**~~
+    ✅ **RESOLVED** at `d3a4776` — one-line `!m_compositionMode`
+    guard at [`src/host/HostWindow.cpp:751`](../src/host/HostWindow.cpp:751)
+    skips the per-frame JPEG encode call under composition. Turned
+    out not to be cosmetic — see resolved item 15. Construction of
+    `m_framePublisher` stays coupled to `m_archCMode` for now;
+    full removal is part of the future architecture-A deletion.
 14. **Cursor-bound spawn offset under architecture C ([MT-12] T10
     smoke).** Clicking to spawn a cursor-bound particle places the
     particle visibly offset (~tens of screen pixels) from the
@@ -313,26 +313,15 @@ it into a dispatch.
     before the architecture-A deletion dispatch (item 11) ships** —
     if it's composition-only, default-mode daily use will hit it
     every spawner click.
-15. **Composition-mode perf regression on maximize ([MT-12] T10
-    smoke).** Under default architecture C, maximizing the editor
-    window causes a substantial FPS drop; under
-    `ALO_HOSTING_MODE=legacy` (architecture A), maximizing the
-    same window has no discernable performance hit. **Strong
-    hypothesis: this is the same bug as item 13 (FramePublisher
-    wasted-work)** — JPEG encode at 3440×1440 ≈ 5 MP/frame of
-    pointless work, scales quadratically with window area; legacy
-    mode doesn't run FramePublisher at all so it's perf-flat across
-    sizes. Cheap test: add `&& !m_compositionMode` guard to the
-    `m_framePublisher->OnFrameComposited()` call site at
-    [`src/host/HostWindow.cpp:748`](../src/host/HostWindow.cpp:748)
-    and re-measure maximized FPS. If perf recovers, ship the guard
-    (resolves items 13 + 15 in one line). If perf delta survives
-    the guard, investigate `AlphaCompositor::GetRenderTargetData`
-    readback (full-frame CPU copy that may not be bypassed under
-    composition) + DXGI swapchain present cost at large sizes.
-    **This is gating the architecture-A deletion (item 11)** —
-    fix this before deleting A, otherwise post-deletion users
-    have no fallback for a real perf issue.
+15. ~~**Composition-mode perf regression on maximize ([MT-12] T10
+    smoke).**~~ ✅ **RESOLVED** at `d3a4776`. The hypothesis was
+    correct on the first test: skipping FramePublisher's per-frame
+    JPEG encode under composition mode recovers maximized FPS at
+    3440×1440 from "substantial drop" to ~90 fps (windowed
+    mid-100s) — close to legacy-mode parity. Same one-line guard
+    resolved item 13. Daily-use composition mode no longer has the
+    perf cliff that was blocking the architecture-A deletion
+    (item 11) on this axis.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
