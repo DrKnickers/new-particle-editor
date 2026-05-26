@@ -2056,6 +2056,20 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             Log("[ArchC-engine] SHIFT+LMB spawn cx=%d cy=%d pos=(%.3f,%.3f,%.3f) result=%p\n",
                 cx, cy, pos.x, pos.y, pos.z,
                 static_cast<void*>(m_attachedParticleSystem));
+#ifndef NDEBUG
+            // [LT-4 / HANDOFF item 14] Mirror the cursor-unproject
+            // diagnostic at this alternate spawn entry. Consistent
+            // grep prefix lets all three call sites (WM_MOUSEMOVE
+            // throttled emit, WM_KEYDOWN VK_SHIFT, WM_LBUTTONDOWN
+            // SHIFT-fallback) be filtered together.
+            int dx, dy, dw, dh;
+            const bool dscene = engine->GetSceneViewport(dx, dy, dw, dh);
+            Log("[cursor-unproject] SHIFT+LMB in=(%d,%d) mode=%s vp=(%d,%d,%d,%d) world=(%.2f,%.2f,%.2f)\n",
+                cx, cy,
+                dscene ? "scene" : "full-rt",
+                dscene ? dx : 0, dscene ? dy : 0, dscene ? dw : 0, dscene ? dh : 0,
+                pos.x, pos.y, pos.z);
+#endif
             m_dragMode     = DragMode::OBJECT_Z;
             m_dragStartCam = engine->GetCamera();
             m_dragStartX   = cx;
@@ -2162,6 +2176,22 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         {
             m_lastCursorEmitTick = now;
             dispatcher->EmitCursorPosition3D(cursorWorld.x, cursorWorld.y, cursorWorld.z);
+#ifndef NDEBUG
+            // [LT-4 / HANDOFF item 14] Throttled diagnostic for the
+            // cursor-unproject path. Piggybacks on the bridge-emit gate
+            // so the cadence is ~30 Hz (rather than per-WM_MOUSEMOVE,
+            // which is 60+ Hz and would flood host.log). `mode` names
+            // which viewport GetCursorPos3D used — `scene` under
+            // composition mode (architecture C), `full-rt` under legacy
+            // mode (architecture A, or pre-scene-rect-dispatch boot).
+            int dx, dy, dw, dh;
+            const bool dscene = engine->GetSceneViewport(dx, dy, dw, dh);
+            Log("[cursor-unproject] in=(%d,%d) mode=%s vp=(%d,%d,%d,%d) world=(%.2f,%.2f,%.2f)\n",
+                mx, my,
+                dscene ? "scene" : "full-rt",
+                dscene ? dx : 0, dscene ? dy : 0, dscene ? dw : 0, dscene ? dh : 0,
+                cursorWorld.x, cursorWorld.y, cursorWorld.z);
+#endif
         }
 
         if (m_dragMode == DragMode::NONE) return 0;
@@ -2271,6 +2301,19 @@ LRESULT HostWindowImpl::ViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         m_mouseCursor.SetPosition(pos);
         m_attachedParticleSystem =
             engine->SpawnParticleSystem(*particleSystem, &m_mouseCursor);
+#ifndef NDEBUG
+        // [LT-4 / HANDOFF item 14] One-shot diagnostic at the actual
+        // spawn site so a misplaced spawn can be tied to the input
+        // coords + viewport in host.log without re-running with a
+        // breakpoint. Per-Shift-press, not per-frame, so untrottled.
+        int dx, dy, dw, dh;
+        const bool dscene = engine->GetSceneViewport(dx, dy, dw, dh);
+        Log("[cursor-unproject] SPAWN in=(%d,%d) mode=%s vp=(%d,%d,%d,%d) world=(%.2f,%.2f,%.2f)\n",
+            cx, cy,
+            dscene ? "scene" : "full-rt",
+            dscene ? dx : 0, dscene ? dy : 0, dscene ? dw : 0, dscene ? dh : 0,
+            pos.x, pos.y, pos.z);
+#endif
         return 0;
     }
     case WM_KEYUP:

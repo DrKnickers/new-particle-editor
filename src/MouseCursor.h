@@ -51,13 +51,48 @@ public:
 // world-space ray, then intersect with the z=0 plane. Used by:
 //   - legacy WM_MOUSEMOVE / WM_KEYDOWN VK_SHIFT in src/main.cpp,
 //   - new-UI host's ViewportWndProc.
+//
+// [LT-4 / HANDOFF item 14] Under architecture C, the engine renders into
+// a SCENE sub-rect of the popup HWND and m_projection is built at
+// scene-rect aspect (per-pixel FoV referenced to scene-H, see
+// src/engine.cpp:1540 SetSceneViewport). But Engine::Render restores the
+// D3D9 device viewport to FULL-RT before returning (src/engine.cpp:687-
+// 699), so reading the device viewport here produces a viewport /
+// projection mismatch — D3DXVec3Unproject normalises (x - 0) / RT_W to
+// NDC and feeds it into a projection that expected (x - sceneX) /
+// sceneW. The world ray lands at the wrong NDC point, off by the
+// scene-rect offset. Symptom: cursor-bound particles spawn visibly
+// offset from the click point.
+//
+// Fix: when the engine reports an active scene viewport, build a
+// D3DVIEWPORT9 from that rect and pass it to D3DXVec3Unproject. The
+// function subtracts viewport.X / viewport.Y internally so the input
+// (x, y) stays in popup-client coords — no caller-side translate.
+// Architecture A (legacy popup) never activates the scene viewport
+// (LayoutBroker's SetSceneViewport call is composition-only), so
+// GetSceneViewport returns false and the device-viewport fallback runs
+// unchanged.
 inline void GetCursorPos3D(Engine* engine, short x, short y, D3DXVECTOR3& position)
 {
     D3DXVECTOR3  front, back;
     D3DVIEWPORT9 viewport;
     D3DXMATRIX   world;
     D3DXMatrixIdentity(&world);
-    engine->GetViewPort(&viewport);
+
+    int sx, sy, sw, sh;
+    if (engine->GetSceneViewport(sx, sy, sw, sh))
+    {
+        viewport.X      = static_cast<DWORD>(sx);
+        viewport.Y      = static_cast<DWORD>(sy);
+        viewport.Width  = static_cast<DWORD>(sw);
+        viewport.Height = static_cast<DWORD>(sh);
+        viewport.MinZ   = 0.0f;
+        viewport.MaxZ   = 1.0f;
+    }
+    else
+    {
+        engine->GetViewPort(&viewport);
+    }
 
     D3DXVec3Unproject(&front, &D3DXVECTOR3(x, y, 0.0f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
     D3DXVec3Unproject(&back,  &D3DXVECTOR3(x, y, 0.9f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
