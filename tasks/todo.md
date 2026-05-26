@@ -7,18 +7,38 @@
 
 **Predecessor:** [docs/superpowers/specs/2026-05-25-phase-3-a11y-closeout-design.md](../docs/superpowers/specs/2026-05-25-phase-3-a11y-closeout-design.md)
 **Target branch:** `lt-4`
-**Difficulty:** ★★★★ (upper edge)
-**Effort estimate:** ~3-4 days; possibly 5 with surface-driver complexity.
+**Difficulty:** ★★★★
+**Effort estimate:** ~2-3 days (re-planned after T0; was 3-4).
 
-**Architecture (one paragraph):** Playwright spec-per-category captures
-the Win32 UI Automation tree for each chrome surface via a small UIA
-inspector (Node lib if Phase 0 finds one, else a C++ standalone exe
-matching `dxgi_spike.cpp`). A normalizer drops volatile UIA fields and
-sorts deterministically; a custom `toMatchJSONGolden` matcher diffs
-against committed JSON goldens with `pnpm a11y:update` regeneration. A
-dedicated cross-mode equality spec asserts byte-equality between the
-HWND golden and composition golden for each surface — the FD6-class
-regression gate, encoded. Stage 3i manual checklist + Narrator-speech
+> **2026-05-25 re-plan note (post-T0):** the spike at
+> [`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)
+> proved the original cross-mode equality contract (Win32 UIA HWND ≡
+> Win32 UIA composition) is **structurally infeasible** — composition
+> mode exposes zero descendants under the host HWND because WebView2's
+> DComp visual has no HWND for `IUIAutomation::FromHandle` to walk.
+> User picked **Option 3 (Hybrid)**: keep Win32 UIA for HWND, switch
+> composition to Playwright's `page.accessibility.snapshot()` (CDP,
+> reaches the React tree regardless of hosting). Each lane has its own
+> independent regression gate; no cross-mode equality assertion. T10
+> rewritten; T11 replaced with a small negative-contract spec; surface
+> drivers (T5-T8) and HWND specs (T9) unchanged.
+
+**Architecture (one paragraph):** Two complementary lanes. **HWND
+lane**: Playwright spec-per-category captures the Win32 UI Automation
+tree for each chrome surface via a small C++ UIA inspector
+(`uia_inspector.cpp` matching `dxgi_spike.cpp`); a normalizer drops
+volatile UIA fields and strips Chromium chrome wrappers
+(`Chrome_WidgetWin_1`, `BrowserRootView`, etc.) so the React tree is
+front-and-center; a custom `toMatchJSONGolden` matcher diffs against
+committed JSON goldens with `pnpm a11y:update` regeneration.
+**Composition lane**: the same 4 spec files re-parametrize using
+`page.accessibility.snapshot()` (CDP-based, works regardless of
+WebView2 hosting mode), producing a separate set of composition
+goldens in a different format. The two lanes are independent — no
+cross-mode equality. A small negative-contract spec documents that
+composition mode's host HWND exposes zero UIA descendants by design
+(the FD6-class hosting regression, if it ever happens, surfaces as
+this invariant flipping). Stage 3i manual checklist + Narrator-speech
 recording archive the one-time confidence pass.
 
 **Tech stack:** TypeScript (Playwright + Vitest), C++ (only if Phase 0
@@ -29,25 +49,35 @@ primitives already in chrome.
 
 ## 1. Goal + scope
 
-**When this ships:** the new-UI chrome has a durable Playwright a11y
-regression gate covering ~30 interactive surfaces, runs in both HWND
-default mode and composition mode, asserts cross-mode equality as an
-explicit invariant, and has a one-time manual Narrator-speech recording
-archived. Phase 3 acceptance can be declared closed.
+**When this ships:** the new-UI chrome has two complementary a11y
+regression gates — Win32 UIA for HWND mode, DOM-level a11y snapshot
+for composition mode — each covering ~30 interactive surfaces. A
+small negative-contract spec documents the structural divergence
+between the two modes (composition mode's host HWND has zero UIA
+descendants by design). Stage 3i manual + Narrator-speech recording
+archive the one-time confidence pass. Phase 3 acceptance closed.
 
-**In scope:** Phase 0 spike (Node-lib search + cross-mode probe); UIA
-inspector tool; normalizer + allowlist + custom matcher; surface
-drivers (~30); 4 spec files (chrome / dialogs / keyboard / curve-spinner);
-cross-mode equality spec; Stage 3i manual checklist + Narrator
-recording; ROADMAP + CHANGELOG + HANDOFF updates.
+**In scope:** ✅ Phase 0 spike COMPLETE (Node-lib NO, cross-mode probe
+STOP-and-replan → Option 3 Hybrid). UIA inspector tool (C++); UIA
+normalizer + allowlist + custom matcher; surface drivers (~30); 4
+HWND spec files using Win32 UIA; 4 composition spec files using
+`page.accessibility.snapshot()`; 1 negative-contract spec
+(composition host-HWND has zero UIA descendants); Stage 3i manual
+checklist + Narrator recording; ROADMAP + CHANGELOG + HANDOFF
+updates.
 
-**Out of scope:** programmatic Narrator-speech automation (out-of-spec
-deferral); a11y *improvements* (this dispatch measures; fixes are
-separate dispatches); surfaces requiring >30 min of fixture setup
-(drop + file follow-up per R3); per-Windows-version test matrix.
+**Out of scope:** programmatic Narrator-speech automation;
+cross-mode equality assertion (proven infeasible at T0); a11y
+*improvements* (this dispatch measures; fixes are separate
+dispatches); surfaces requiring >30 min fixture setup (R3 drop list);
+per-Windows-version test matrix; CoreWebView2 internal a11y bridge
+investigation (filed as potential future ROADMAP item; not gating).
 
-**Explicitly not happening:** silently allowing per-mode goldens to
-diverge to make the cross-mode spec pass. R2 mitigation handles this.
+**Explicitly not happening:** mapping Win32 UIA properties to
+`page.accessibility.snapshot()` properties to force a cross-mode
+equality comparison (the property models differ enough that the
+mapping would either lose semantic content or invite false
+positives — not worth the engineering for the catch-rate).
 
 ---
 
@@ -86,10 +116,16 @@ See spec §4 for full diagrams. Key points reproduced here:
 
 - **R1** — No Node UIA lib found. **Mitigation:** budget C++ inspector
   (~3-4h) as expected case.
-- **R2** — Cross-mode equality not feasible. **Mitigation:** Phase 0
-  probe answers before any helper code; normalizer's "always strip"
-  step handles wrapper-visual case; structural divergence triggers
-  STOP-and-replan.
+- **R2** — Cross-mode equality not feasible. **MANIFEST 2026-05-25
+  (post-T0):** the probe at [`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)
+  proved structural infeasibility — composition mode has zero UIA
+  descendants under host HWND. **Resolution:** pivoted to Option 3
+  (hybrid) — Win32 UIA for HWND, `page.accessibility.snapshot()` for
+  composition. T10/T11 rewritten. The original "FD6-class regression
+  gate" framing is replaced with a small negative-contract spec that
+  flags if composition mode's UIA-empty invariant ever changes
+  (which would signal a substantive WebView2-side a11y plumbing
+  change worth investigating).
 - **R3** — Surface drivers (C4) 2-4× harder than they look.
   **Mitigation:** hard 4h cap on C4; drop surfaces needing >30 min
   setup; file as follow-up.
@@ -375,6 +411,7 @@ unit-testable. Foundation for T9+ specs.
   "stable": [
     "Name",
     "ControlType",
+    "ClassName",
     "AutomationId",
     "IsKeyboardFocusable",
     "IsEnabled",
@@ -396,13 +433,19 @@ unit-testable. Foundation for T9+ specs.
     "FrameworkId"
   ],
   "alwaysStripWrappers": [
+    "Chrome_WidgetWin_1",
+    "Intermediate D3D Window",
+    "BrowserRootView",
+    "NonClientView"
   ]
 }
 ```
 
-Note: `alwaysStripWrappers` starts empty. T0.3 probe outcome
-populates it (e.g. `["WebView2CompositionRoot"]` if such a wrapper
-exists).
+Note: `alwaysStripWrappers` populated from T0 probe findings (see
+[`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)).
+These Chromium/WebView2 chrome wrappers sit between the React tree
+and the host HWND in HWND mode; stripping them keeps the goldens
+focused on the React app's a11y semantics.
 
 #### T1.2 — Normalizer test scaffolding (TDD step 1)
 
@@ -450,6 +493,7 @@ Expected: FAIL with "Cannot find module '@/lib/a11y-normalizer'".
 export type UIANode = {
   Name?: string;
   ControlType?: string;
+  ClassName?: string;
   AutomationId?: string;
   IsKeyboardFocusable?: boolean;
   IsEnabled?: boolean;
@@ -479,13 +523,16 @@ export function normalize(node: UIANode, allowlist: Allowlist): UIANode {
     if (stable.has(k)) stripped[k] = v;
   }
   let children = (node.children ?? []).map((c) => normalize(c, allowlist));
-  // Strip wrapper visuals: if a child's AutomationId or ControlType
-  // matches alwaysStripWrappers, replace it with its children.
+  // Strip wrapper visuals: if a child's AutomationId, ControlType, OR
+  // ClassName matches alwaysStripWrappers, replace it with its
+  // children. ClassName match is what catches the Chromium/WebView2
+  // chrome wrappers (Chrome_WidgetWin_1 etc.) — see T0 probe findings.
   const wrappers = new Set(allowlist.alwaysStripWrappers);
   children = children.flatMap((c) => {
     const isWrapper =
       (c.AutomationId && wrappers.has(c.AutomationId)) ||
-      (c.ControlType && wrappers.has(c.ControlType));
+      (c.ControlType && wrappers.has(c.ControlType)) ||
+      (c.ClassName && wrappers.has(c.ClassName));
     return isWrapper ? (c.children ?? []) : [c];
   });
   // Deterministic sort: AutomationId first, then Name, then ControlType.
@@ -539,10 +586,10 @@ it("sorts children deterministically by AutomationId then Name", () => {
 
 Run, verify PASS (sorting was already in the impl).
 
-- [ ] **Step 2:** Add test for wrapper-visual stripping.
+- [ ] **Step 2:** Add tests for wrapper-visual stripping (ControlType AND ClassName matches).
 
 ```typescript
-it("strips wrapper visuals listed in alwaysStripWrappers", () => {
+it("strips wrapper visuals matched by ControlType", () => {
   const customAllowlist = { ...allowlist, alwaysStripWrappers: ["WebView2Wrapper"] };
   const raw = {
     Name: "Host",
@@ -561,9 +608,48 @@ it("strips wrapper visuals listed in alwaysStripWrappers", () => {
   expect(out.children).toHaveLength(1);
   expect(out.children?.[0]?.ControlType).toBe("MenuBar");
 });
+
+it("strips wrapper visuals matched by ClassName (real Chromium chrome pattern)", () => {
+  // Mirrors the actual HWND-mode tree from the T0 probe:
+  // AloHostMain → Chrome_WidgetWin_1 → BrowserRootView → NonClientView → ...React
+  const raw = {
+    Name: "AloParticleEditor",
+    ControlType: "Window",
+    ClassName: "AloHostMain",
+    children: [
+      {
+        Name: "AloParticleEditor",
+        ControlType: "Pane",
+        ClassName: "Chrome_WidgetWin_1",
+        children: [
+          {
+            Name: "AloParticleEditor - Web content",
+            ControlType: "Pane",
+            ClassName: "BrowserRootView",
+            children: [
+              {
+                Name: "",
+                ControlType: "Pane",
+                ClassName: "NonClientView",
+                children: [
+                  { Name: "MenuBar", ControlType: "MenuBar", AutomationId: "menubar", children: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const out = normalize(raw, allowlist);  // uses the production allowlist
+  // After stripping: root → menubar (chrome wrappers removed)
+  expect(out.ClassName).toBe("AloHostMain");
+  expect(out.children).toHaveLength(1);
+  expect(out.children?.[0]?.ControlType).toBe("MenuBar");
+});
 ```
 
-Run, verify PASS.
+Run, verify both PASS.
 
 - [ ] **Step 3:** Add test for recursive normalization.
 
@@ -878,6 +964,10 @@ static void EmitNode(IUIAutomationElement* elem, int depth, int maxDepth, std::o
     CComBSTR autoId;
     elem->get_CurrentAutomationId(&autoId);
     out << indent << "  \"AutomationId\": \"" << BstrToUtf8(autoId) << "\",\n";
+
+    CComBSTR className;
+    elem->get_CurrentClassName(&className);
+    out << indent << "  \"ClassName\": \"" << BstrToUtf8(className) << "\",\n";
 
     BOOL focusable = FALSE;
     elem->get_CurrentIsKeyboardFocusable(&focusable);
@@ -1595,15 +1685,14 @@ import allowlist from "./helpers/a11y-allowlist.json";
 import "./helpers/toMatchJSONGolden";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition"
-  ? "composition"
-  : "default";
+const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
 
 let browser: Browser;
 let page: Page;
 let hostHwnd: bigint;
 
 test.beforeAll(async () => {
+  if (COMPOSITION_MODE) return;  // skip body; per-test skip handles individual tests
   browser = await chromium.connectOverCDP(CDP_ENDPOINT);
   const context = browser.contexts()[0];
   if (!context) throw new Error("CDP: no browser contexts attached");
@@ -1620,7 +1709,21 @@ test.afterAll(async () => {
   await browser?.close();
 });
 
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
+  // Post-T0 re-plan: this HWND-mode spec auto-skips under composition.
+  // Composition coverage is via T10's a11y-*-composition.spec.ts files
+  // using page.accessibility.snapshot() (Win32 UIA can't reach the React
+  // tree in composition mode — see tasks/phase-0-a11y-cross-mode-probe.md).
+  if (COMPOSITION_MODE) {
+    testInfo.annotations.push({
+      type: "skip-reason",
+      description:
+        "ALO_WEBVIEW2_HOSTING == 'composition' — HWND Win32 UIA spec " +
+        "auto-skips in composition mode. Use a11y-chrome-composition.spec.ts " +
+        "(DOM snapshot) for the composition lane."
+    });
+    test.skip();
+  }
   // Reset to known-clean state — close any open menus / dialogs left
   // by the previous test. Cheaper than relaunching the binary.
   await page.keyboard.press("Escape");
@@ -1633,18 +1736,17 @@ test.beforeEach(async () => {
   });
 });
 
-test.describe("a11y/chrome", () => {
+test.describe("a11y/chrome [hwnd]", () => {
   for (const surface of CHROME_SURFACES) {
-    test(`${surface.id} [${MODE}]`, async () => {
+    test(`${surface.id} [hwnd]`, async () => {
       try {
         await surface.setup(page);
         const raw = await captureUIA(hostHwnd, surface.id);
         const normalized = normalize(raw, allowlist);
-        const goldenPath =
-          MODE === "default"
-            ? `a11y-goldens/${surface.id}.golden.json`
-            : `a11y-goldens/${surface.id}.composition.golden.json`;
-        expect(normalized).toMatchJSONGolden(goldenPath, { rawForDebug: raw });
+        expect(normalized).toMatchJSONGolden(
+          `a11y-goldens/${surface.id}.golden.json`,
+          { rawForDebug: raw }
+        );
       } finally {
         await surface.teardown(page);
       }
@@ -1738,10 +1840,25 @@ HWND mode.
 
 ---
 
-### Task T10: Composition-mode goldens
+### Task T10: Composition specs via page.accessibility.snapshot() (DOM-level)
 
-**Why:** spec §4.1, second lane. Same spec files; different mode
-env vars + dist/ build; produces parallel set of goldens.
+**Why:** post-T0 re-plan. Composition-mode Win32 UIA tree is empty
+(structurally; not a bug). To still get a composition-mode a11y
+regression gate, we use Playwright's `page.accessibility.snapshot()`
+which goes through CDP and reaches the React DOM regardless of
+WebView2 hosting mode. Different API, different golden format than
+T9's HWND lane; no cross-mode equality (the two representations
+aren't structurally comparable without a property-mapper we
+explicitly chose not to build).
+
+**Files:**
+- Create: `web/apps/editor/tests/helpers/a11y-dom-snapshot.ts`
+  (small wrapper + canonical-JSON helper for `page.accessibility.snapshot()`)
+- Create: `web/apps/editor/tests/a11y-chrome-composition.spec.ts`
+- Create: `web/apps/editor/tests/a11y-dialogs-composition.spec.ts`
+- Create: `web/apps/editor/tests/a11y-keyboard-composition.spec.ts`
+- Create: `web/apps/editor/tests/a11y-curve-spinner-composition.spec.ts`
+- Create (via update flag): `web/apps/editor/tests/a11y-goldens/<surface>.composition.golden.json` (~30 files)
 
 #### T10.1 — Build composition-mode dist/
 
@@ -1753,145 +1870,316 @@ pnpm --filter @particle-editor/editor build
 cd ..
 ```
 
-#### T10.2 — Run with composition env vars + update flag
+#### T10.2 — DOM-snapshot wrapper
+
+- [ ] **Step 1:** Create `web/apps/editor/tests/helpers/a11y-dom-snapshot.ts`:
+
+```typescript
+import type { Page } from "@playwright/test";
+
+// Playwright's accessibility snapshot type, normalized for golden
+// comparison. We canonicalize children order (DOM order is already
+// deterministic) and strip transient properties (e.g. `disabled`
+// values that depend on transient state covered by other specs).
+export type DomA11yNode = {
+  role?: string;
+  name?: string;
+  description?: string;
+  value?: string | number;
+  checked?: boolean | "mixed";
+  selected?: boolean;
+  expanded?: boolean;
+  level?: number;
+  children?: DomA11yNode[];
+};
+
+export async function captureDomA11y(
+  page: Page,
+  options?: { interestingOnly?: boolean }
+): Promise<DomA11yNode> {
+  const snap = await page.accessibility.snapshot({
+    interestingOnly: options?.interestingOnly ?? true,
+  });
+  if (!snap) {
+    throw new Error("page.accessibility.snapshot() returned null");
+  }
+  return normalizeDom(snap as unknown as DomA11yNode);
+}
+
+function normalizeDom(node: DomA11yNode): DomA11yNode {
+  const out: DomA11yNode = {};
+  if (node.role !== undefined) out.role = node.role;
+  if (node.name !== undefined) out.name = node.name;
+  if (node.description !== undefined) out.description = node.description;
+  if (node.value !== undefined) out.value = node.value;
+  if (node.checked !== undefined) out.checked = node.checked;
+  if (node.selected !== undefined) out.selected = node.selected;
+  if (node.expanded !== undefined) out.expanded = node.expanded;
+  if (node.level !== undefined) out.level = node.level;
+  if (node.children && node.children.length > 0) {
+    out.children = node.children.map(normalizeDom);
+  }
+  return out;
+}
+```
+
+#### T10.3 — Composition spec template (per file)
+
+- [ ] **Step 1:** Create `a11y-chrome-composition.spec.ts`. Mirrors
+      T9's HWND template but uses `captureDomA11y(page)` instead of
+      `captureUIA(hwnd, surface.id)`. The surface drivers from T5
+      (CHROME_SURFACES) are mode-agnostic — they leave the editor in
+      the captured state, which is exactly what
+      `page.accessibility.snapshot()` reads. No HWND needed.
+
+```typescript
+import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
+import { captureDomA11y } from "./helpers/a11y-dom-snapshot";
+import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
+import "./helpers/toMatchJSONGolden";
+
+const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
+const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+
+let browser: Browser;
+let page: Page;
+
+test.beforeAll(async () => {
+  browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+  const context = browser.contexts()[0];
+  if (!context) throw new Error("CDP: no browser contexts attached");
+  page = context.pages()[0] ?? (await context.waitForEvent("page"));
+  await page.waitForFunction(
+    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
+    null,
+    { timeout: 15_000 }
+  );
+});
+
+test.afterAll(async () => { await browser?.close(); });
+
+test.beforeEach(async ({}, testInfo) => {
+  if (!COMPOSITION_MODE) {
+    testInfo.annotations.push({
+      type: "skip-reason",
+      description:
+        "ALO_WEBVIEW2_HOSTING != 'composition' — composition-mode " +
+        "DOM-snapshot specs only run when the editor is in composition mode."
+    });
+    test.skip();
+  }
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.evaluate(async () => {
+    const bridge = (window as { bridge: { request: (k: string, p: unknown) => Promise<unknown> } }).bridge;
+    await bridge.request("file/open", { path: "tests/fixtures/a11y-base-state.alo" });
+  });
+});
+
+test.describe("a11y/chrome [composition]", () => {
+  for (const surface of CHROME_SURFACES) {
+    test(`${surface.id} [composition]`, async () => {
+      try {
+        await surface.setup(page);
+        const snap = await captureDomA11y(page);
+        expect(snap).toMatchJSONGolden(
+          `a11y-goldens/${surface.id}.composition.golden.json`,
+          { rawForDebug: snap }
+        );
+      } finally {
+        await surface.teardown(page);
+      }
+    });
+  }
+});
+```
+
+- [ ] **Step 2:** Repeat for the other three: `a11y-dialogs-composition.spec.ts`,
+      `a11y-keyboard-composition.spec.ts`, `a11y-curve-spinner-composition.spec.ts`.
+      Same shape; only the `import {...} from "./helpers/a11y-surfaces"`
+      and the `test.describe` label change.
+
+#### T10.4 — Generate composition goldens
 
 ```powershell
 $env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
 $env:ALO_WEBVIEW2_HOSTING = "composition"
 $env:UPDATE_A11Y_GOLDENS = "1"
 cd web
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
+pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"
 Remove-Item Env:UPDATE_A11Y_GOLDENS
 cd ..
 ```
 
 Expected: ~30 `*.composition.golden.json` files written.
 
-#### T10.3 — Re-run for green
+- [ ] **Eyeball check:** each composition golden should contain a tree
+      with `role`/`name`/`children` properties (Playwright snapshot
+      shape) — NOT `ControlType`/`AutomationId`/`ClassName` (Win32 UIA
+      shape). Cross-format-leakage check.
+
+#### T10.5 — Re-run for green; determinism check
 
 ```powershell
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
+pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"
+pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"  # second run for flake check
 ```
 
-Expected: all green under composition mode.
+Both should be all-green.
 
-#### T10.4 — Reset to default mode
+#### T10.6 — Reset to default mode
 
 ```powershell
-Remove-Item Env:ALO_VIEWPORT_TRANSPORT
-Remove-Item Env:ALO_WEBVIEW2_HOSTING
-Remove-Item Env:VITE_VIEWPORT_TRANSPORT
-Remove-Item Env:VITE_WEBVIEW2_HOSTING
+Remove-Item Env:ALO_VIEWPORT_TRANSPORT -ErrorAction SilentlyContinue
+Remove-Item Env:ALO_WEBVIEW2_HOSTING -ErrorAction SilentlyContinue
+Remove-Item Env:VITE_VIEWPORT_TRANSPORT -ErrorAction SilentlyContinue
+Remove-Item Env:VITE_WEBVIEW2_HOSTING -ErrorAction SilentlyContinue
 cd web
 pnpm --filter @particle-editor/editor build
 cd ..
 ```
 
-Verify default-mode HWND goldens still pass:
+Verify HWND specs still pass (composition specs auto-skip without env var):
 
 ```powershell
 pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
 ```
 
-#### T10.5 — Commit
+#### T10.7 — Commit
 
-```powershell
-git add web/apps/editor/tests/a11y-goldens/*.composition.golden.json
-git commit -m @'
-test(LT-4): [MT-11 a11y] T10 — composition-mode UIA goldens
+```bash
+git add web/apps/editor/tests/helpers/a11y-dom-snapshot.ts \
+        web/apps/editor/tests/a11y-chrome-composition.spec.ts \
+        web/apps/editor/tests/a11y-dialogs-composition.spec.ts \
+        web/apps/editor/tests/a11y-keyboard-composition.spec.ts \
+        web/apps/editor/tests/a11y-curve-spinner-composition.spec.ts \
+        web/apps/editor/tests/a11y-goldens/*.composition.golden.json
+git commit -m "$(cat <<'EOF'
+test(LT-4): [MT-11 a11y] T10 — composition DOM-snapshot specs + goldens
 
-Same 4 specs re-run under ALO_WEBVIEW2_HOSTING=composition; N parallel
-*.composition.golden.json files generated. HWND lane unaffected.
-'@
+Re-planned post-T0 (cross-mode Win32 UIA equality infeasible — composition
+mode has zero UIA descendants under host HWND). Composition lane uses
+page.accessibility.snapshot() via CDP (works regardless of WebView2
+hosting). 4 composition spec files mirror T9's HWND quartet; N
+composition goldens generated. HWND lane unchanged.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
 
-### Task T11: Cross-mode equality spec
+### Task T11: Negative-contract spec (composition host-HWND is UIA-empty)
 
-**Why:** spec §4.5 / §5 C6. The FD6-class regression gate, encoded.
+**Why:** post-T0 re-plan. The original cross-mode equality spec was
+infeasible. The closest surviving regression gate is a tiny spec
+that asserts the invariant T0 discovered: composition mode's host
+HWND has **zero** Win32 UIA descendants. If this invariant ever
+flips (e.g. WebView2 ships a new build that bridges the DComp visual
+into the host's UIA tree), the spec fails — and that's a substantive
+WebView2 a11y-plumbing change worth investigating. Plus it documents
+the boundary so a future reader doesn't waste time on the same
+discovery.
 
 **Files:**
-- Create: `web/apps/editor/tests/a11y-cross-mode.spec.ts`
+- Create: `web/apps/editor/tests/a11y-uia-composition-empty.spec.ts`
 
 #### T11.1 — Implementation
 
 - [ ] **Step 1:** Write spec.
 
 ```typescript
-import { test, expect } from "@playwright/test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { normalize } from "./native/helpers/a11y-normalizer";
-import allowlist from "./native/a11y-allowlist.json";
+import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
+import { discoverHostHwnd, captureUIA } from "./helpers/uia";
 
-const GOLDENS = path.resolve(__dirname, "native", "a11y-goldens");
+const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
+const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
 
-function listSurfaces(): string[] {
-  const all = fs.readdirSync(GOLDENS);
-  return all
-    .filter((f) => f.endsWith(".golden.json") && !f.endsWith(".composition.golden.json"))
-    .map((f) => f.replace(".golden.json", ""));
-}
+let browser: Browser;
+let page: Page;
 
-test.describe("a11y/cross-mode equality", () => {
-  for (const surface of listSurfaces()) {
-    test(`${surface}: HWND === composition`, () => {
-      const hwndPath = path.join(GOLDENS, `${surface}.golden.json`);
-      const compPath = path.join(GOLDENS, `${surface}.composition.golden.json`);
+test.beforeAll(async () => {
+  if (!COMPOSITION_MODE) return;
+  browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+  const context = browser.contexts()[0];
+  if (!context) throw new Error("CDP: no browser contexts attached");
+  page = context.pages()[0] ?? (await context.waitForEvent("page"));
+  await page.waitForFunction(
+    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
+    null,
+    { timeout: 15_000 }
+  );
+});
 
-      if (!fs.existsSync(compPath)) {
-        throw new Error(
-          `Composition golden missing for surface "${surface}". ` +
-          `Run \`pnpm a11y:update\` under composition mode.`
-        );
-      }
+test.afterAll(async () => { await browser?.close(); });
 
-      const hwndRaw = JSON.parse(fs.readFileSync(hwndPath, "utf8"));
-      const compRaw = JSON.parse(fs.readFileSync(compPath, "utf8"));
-
-      const hwndN = normalize(hwndRaw, allowlist);
-      const compN = normalize(compRaw, allowlist);
-
-      if (JSON.stringify(hwndN) !== JSON.stringify(compN)) {
-        throw new Error(
-          `A11y cross-mode divergence: ${surface}\n` +
-          `  HWND golden:        ${hwndPath}\n` +
-          `  Composition golden: ${compPath}\n` +
-          `  This is the FD6-class regression gate. Investigate before forcing.`
-        );
-      }
-      expect(JSON.stringify(compN)).toBe(JSON.stringify(hwndN));
+test.beforeEach(async ({}, testInfo) => {
+  if (!COMPOSITION_MODE) {
+    testInfo.annotations.push({
+      type: "skip-reason",
+      description:
+        "ALO_WEBVIEW2_HOSTING != 'composition' — UIA-empty invariant " +
+        "is composition-mode-specific (HWND mode exposes the full Chromium tree)."
     });
+    test.skip();
   }
+});
+
+test.describe("a11y/uia-composition-empty (FD6-adjacent invariant)", () => {
+  test("host HWND has zero UIA descendants in composition mode", async () => {
+    const hwnd = await discoverHostHwnd();
+    const tree = await captureUIA(hwnd, "composition-empty-check", { depth: 3 });
+
+    // Documented invariant per tasks/phase-0-a11y-cross-mode-probe.md:
+    // WebView2 composition hosting renders to an IDCompositionVisual
+    // which has no HWND, so Win32 UIA cannot reach the React tree
+    // from outside the process. Host HWND exposes the shell only.
+    //
+    // If THIS test starts failing — i.e. the composition-mode host
+    // HWND suddenly exposes descendants — that's a substantive
+    // WebView2-side a11y-plumbing change. Investigate before
+    // updating this spec. Document the discovery in lessons.md.
+
+    expect(tree.children ?? []).toHaveLength(0);
+
+    // The shell root itself should still be present and look like
+    // the AloHostMain window class (defensive check that we captured
+    // the right HWND).
+    expect(tree.ClassName).toBe("AloHostMain");
+  });
 });
 ```
 
-#### T11.2 — Run
+#### T11.2 — Run (composition mode only)
 
 ```powershell
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/cross-mode"
+$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
+$env:ALO_WEBVIEW2_HOSTING = "composition"
+pnpm --filter @particle-editor/editor test:native -- --grep "a11y/uia-composition-empty"
+Remove-Item Env:ALO_VIEWPORT_TRANSPORT
+Remove-Item Env:ALO_WEBVIEW2_HOSTING
 ```
 
-Expected: all surfaces pass. If a surface fails, you've hit R2 in
-practice. Open the two goldens, diff them, decide whether to:
-1. Add the divergent property to the `volatile` allowlist (cosmetic).
-2. Add the divergent wrapper to `alwaysStripWrappers` (structural).
-3. Treat as a real bug — fix the chrome to expose identical UIA
-   semantics in both modes.
+Expected: 1 test, passes. (Skips cleanly without the env var.)
 
 #### T11.3 — Commit
 
-```powershell
-git add web/apps/editor/tests/a11y-cross-mode.spec.ts
-# If allowlist tuning happened: commit separately per the two-step pattern
-git commit -m @'
-test(LT-4): [MT-11 a11y] T11 — cross-mode equality spec
+```bash
+git add web/apps/editor/tests/a11y-uia-composition-empty.spec.ts
+git commit -m "$(cat <<'EOF'
+test(LT-4): [MT-11 a11y] T11 — composition UIA-empty invariant spec
 
-Asserts each surface's HWND golden equals its composition golden after
-re-normalization. FD6-class regression gate. Pure file IO; doesn't need
-either dist/ active.
-'@
+Post-T0 re-plan: cross-mode equality (HWND ≡ composition) was infeasible.
+This spec encodes the surviving regression contract — composition mode's
+host HWND has zero UIA descendants (the structural reason cross-mode
+equality is impossible). If the invariant ever flips, that's a meaningful
+WebView2 a11y-plumbing change worth investigating. See
+tasks/phase-0-a11y-cross-mode-probe.md for the discovery.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
@@ -2099,25 +2387,40 @@ completes Phase 3 hygiene.
   following the formatting in `CHANGELOG.md`'s header notes.
 
 ```markdown
-### Phase 3 a11y close-out — UIA-tree regression gate + manual smoke
+### Phase 3 a11y close-out — dual-API regression gate (Win32 UIA + DOM snapshot) + manual smoke
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
-Phase 3 acceptance hygiene closes: the new-UI chrome now has a durable
-Playwright a11y regression gate covering ~30 interactive surfaces,
-runs in both HWND default mode and composition mode, and asserts
-cross-mode equality as an explicit invariant.
+Phase 3 acceptance hygiene closes: the new-UI chrome now has two
+complementary Playwright a11y regression gates. HWND mode is covered
+by a Win32 UIA capture via a small C++ standalone inspector; composition
+mode is covered by Playwright's `page.accessibility.snapshot()` over
+CDP. Each gate covers ~30 interactive surfaces with committed JSON
+goldens, regeneratable via `pnpm a11y:update`. Stage 3i manual
+checklist + Narrator-speech recording archive the one-time confidence
+pass.
 
-**How we tackled it.** [Playwright spec-per-category](web/apps/editor/tests/a11y-chrome.spec.ts:1)
-structure captures the Win32 UIA tree for each chrome surface via a
-small standalone C++ inspector tool [`src/host/spike/uia_inspector.cpp`](src/host/spike/uia_inspector.cpp:1)
-(Phase 0 ruled out maintained Node libs). A
-[normalizer](web/apps/editor/tests/helpers/a11y-normalizer.ts:1)
-drops volatile UIA fields and sorts deterministically, then a custom
-`toMatchJSONGolden` matcher diffs against committed JSON goldens.
-A dedicated [cross-mode equality spec](web/apps/editor/tests/a11y-cross-mode.spec.ts:1)
-asserts byte-equality between HWND and composition goldens — the
-FD6-class regression gate, encoded.
+**How we tackled it.** Phase 0 spike at [`tasks/phase-0-a11y-cross-mode-probe.md`](tasks/phase-0-a11y-cross-mode-probe.md:1)
+discovered that composition-mode WebView2 renders to an
+`IDCompositionVisual` which has no HWND, so `IUIAutomation::FromHandle`
+cannot reach the React tree from outside the process — composition
+mode's host HWND has zero UIA descendants. The originally planned
+cross-mode equality spec (HWND UIA ≡ composition UIA) was therefore
+infeasible. The dispatch pivoted to a dual-API approach: HWND mode
+keeps Win32 UIA via a small [C++ inspector](src/host/spike/uia_inspector.cpp:1)
+matching the existing `dxgi_spike.cpp` pattern (Phase 0 ruled out
+maintained Node UIA libs — see [`tasks/phase-0-a11y-uia-node-lib-search.md`](tasks/phase-0-a11y-uia-node-lib-search.md:1));
+composition mode uses [Playwright's DOM accessibility snapshot](web/apps/editor/tests/a11y-chrome-composition.spec.ts:1).
+The structural divergence between the two modes is itself encoded as
+a [negative-contract spec](web/apps/editor/tests/a11y-uia-composition-empty.spec.ts:1):
+if composition mode's host HWND ever starts exposing UIA descendants,
+that's a substantive WebView2 a11y-plumbing change worth
+investigating. A shared [normalizer](web/apps/editor/tests/helpers/a11y-normalizer.ts:1)
++ allowlist drives the HWND lane (strips Chromium chrome wrappers like
+`Chrome_WidgetWin_1`, `BrowserRootView` so goldens focus on the React
+tree); a smaller [DOM snapshot wrapper](web/apps/editor/tests/helpers/a11y-dom-snapshot.ts:1)
+canonicalizes the composition lane's output. Both lanes use a custom
+`toMatchJSONGolden` matcher with `UPDATE_A11Y_GOLDENS=1` regeneration.
 
 **Issues encountered and resolutions.** [fill in during build-out]
 
@@ -2141,15 +2444,19 @@ FD6-class regression gate, encoded.
 
 #### T15.4 — Commit (docs-only)
 
-```powershell
+```bash
 git add ROADMAP.md CHANGELOG.md tasks/HANDOFF.md
-git commit -m @'
+git commit -m "$(cat <<'EOF'
 docs(LT-4): [MT-11 a11y] T15 — CHANGELOG + ROADMAP + HANDOFF refresh
 
-Phase 3 a11y close-out shipped: UIA-tree regression gate + cross-mode
-equality spec + Stage 3i manual + Narrator recording. ROADMAP MT-11
-marked closed; deferred surfaces (if any from T6) carry forward.
-'@
+Phase 3 a11y close-out shipped: dual-API regression gate (HWND Win32
+UIA + composition DOM snapshot) + UIA-empty negative-contract spec +
+Stage 3i manual + Narrator recording. ROADMAP MT-11 marked closed;
+deferred surfaces (if any from T6) carry forward.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
@@ -2174,8 +2481,8 @@ Expected: 343 + N passing (N = normalizer unit tests added in T1.4).
 pnpm --filter @particle-editor/editor test:native
 ```
 
-Expected: baseline 103 + 26 + 0 + N new a11y tests passing + 1 cross-mode
-spec passing.
+Expected: baseline 103 + 26 + 0 + N new HWND a11y tests passing
+(composition-only specs auto-skip cleanly under default mode).
 
 - [ ] **Step 3:** Rebuild composition-mode dist/ + Playwright composition
   lane:
@@ -2196,7 +2503,9 @@ pnpm --filter @particle-editor/editor build
 cd ..
 ```
 
-Expected: 122 + 3 + 0 + N a11y tests passing.
+Expected: 122 + 3 + 0 baseline + N new composition DOM-snapshot a11y
+tests passing + 1 UIA-empty negative-contract spec passing
+(HWND-only specs auto-skip under composition mode).
 
 - [ ] **Step 4:** MSBuild Debug + Release x64 clean (per L-023):
 
@@ -2233,8 +2542,8 @@ Expected: both clean. New artifact: `x64/{Debug,Release}/uia_inspector.exe`.
 - [ ] **Step 1:** Summarize for the user:
   - All 9 verification gate items met
   - Vitest count: 343 + N
-  - Playwright HWND: 103 + 26 + 0 + N
-  - Playwright composition: 122 + 3 + 0 + N
+  - Playwright HWND: 103 + 26 + 0 + N HWND a11y tests passing
+  - Playwright composition: 122 + 3 + 0 + N composition DOM-snapshot a11y tests + 1 UIA-empty negative-contract spec passing
   - MSBuild clean
   - Stage 3i manual + recording in place
   - Deferred surfaces (if any) filed in `tasks/a11y-deferred-surfaces.md`
@@ -2245,36 +2554,39 @@ Expected: both clean. New artifact: `x64/{Debug,Release}/uia_inspector.exe`.
 ## 7. Sequencing summary
 
 ```
-T0 (Phase 0 spike) ───┬──> T3 (UIA inspector)
-                      │
-T1 (normalizer) ──────┤
-T2 (matcher) ─────────┘
-                      │
-                      └──> T4 (wrapper)
-                              │
-                              └──> T5/T6/T7/T8 (surface drivers)
-                                       │
-                                       └──> T9 (specs + HWND goldens)
+T0 (Phase 0 spike) ✅ DONE — pivoted to Option 3 (hybrid)
+                                │
+T1 (normalizer) ────────────────┤
+T2 (matcher) ───────────────────┤
+T3 (C++ UIA inspector) ─────────┘
+                                │
+                                └──> T4 (UIA wrapper)
+                                        │
+                                        └──> T5/T6/T7/T8 (surface drivers)
                                                 │
-                                                └──> T10 (composition goldens)
-                                                         │
-                                                         └──> T11 (cross-mode spec)
-                                                                  │
-                                                                  └──> T12 (scripts)
-                                                                           │
-                                                                           └──> T13 (manual md)
-                                                                                    │
-                                                                                    └──> T14 (recording)
-                                                                                             │
-                                                                                             └──> T15 (docs)
-                                                                                                      │
-                                                                                                      └──> T16 (verify)
+                                                └──> T9 (HWND UIA specs + goldens)
+                                                        │
+                                                        └──> T10 (composition DOM specs + goldens)
+                                                                │
+                                                                └──> T11 (UIA-empty negative-contract spec)
+                                                                        │
+                                                                        └──> T12 (pnpm scripts)
+                                                                                │
+                                                                                └──> T13 (manual md)
+                                                                                        │
+                                                                                        └──> T14 (recording)
+                                                                                                │
+                                                                                                └──> T15 (docs)
+                                                                                                        │
+                                                                                                        └──> T16 (verify)
 ```
 
-T0 is a **hard gate**. T1 + T2 + T3 can run in parallel after T0.
-T5 + T6 + T7 + T8 can run in parallel after T4 (all modify the same
-`a11y-surfaces.ts` so coordinate merge points; or land in sequence to
-avoid trivial conflicts).
+T0 was the **hard gate** — DONE_WITH_CONCERNS, pivoted to Option 3.
+T1 + T2 + T3 can run in parallel. T5 + T6 + T7 + T8 can run in parallel
+after T4 (all modify `tests/helpers/a11y-surfaces.ts` so either
+coordinate merge points or land in sequence to avoid trivial conflicts).
+T10 reuses the surface drivers from T5-T8 unchanged; only the capture
+mechanism differs (DOM snapshot vs Win32 UIA).
 
 ---
 
@@ -2283,8 +2595,10 @@ avoid trivial conflicts).
 Per CLAUDE.md "If something goes sideways: STOP and re-plan
 immediately":
 
-- **T0.3 step 7** — cross-mode UIA trees structurally different →
-  cross-mode contract not feasible → re-plan.
+- ✅ **T0.3 step 7 — TRIGGERED 2026-05-25.** Composition mode has
+  zero UIA descendants under host HWND (structural; not normalizable).
+  Re-planned to Option 3 (hybrid: Win32 UIA for HWND, DOM snapshot
+  for composition). T10/T11 rewritten; rest of plan unchanged.
 - **R3 4h cap exceeded during T5/T6/T7/T8** → stop dropping surfaces,
   re-plan whether to defer the whole dispatch or trim further.
 - **R4 limit (50 goldens per mode) reached during T9/T10** → stop
