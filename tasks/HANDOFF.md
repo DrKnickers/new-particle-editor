@@ -313,6 +313,26 @@ it into a dispatch.
     before the architecture-A deletion dispatch (item 11) ships** —
     if it's composition-only, default-mode daily use will hit it
     every spawner click.
+15. **Composition-mode perf regression on maximize ([MT-12] T10
+    smoke).** Under default architecture C, maximizing the editor
+    window causes a substantial FPS drop; under
+    `ALO_HOSTING_MODE=legacy` (architecture A), maximizing the
+    same window has no discernable performance hit. **Strong
+    hypothesis: this is the same bug as item 13 (FramePublisher
+    wasted-work)** — JPEG encode at 3440×1440 ≈ 5 MP/frame of
+    pointless work, scales quadratically with window area; legacy
+    mode doesn't run FramePublisher at all so it's perf-flat across
+    sizes. Cheap test: add `&& !m_compositionMode` guard to the
+    `m_framePublisher->OnFrameComposited()` call site at
+    [`src/host/HostWindow.cpp:748`](../src/host/HostWindow.cpp:748)
+    and re-measure maximized FPS. If perf recovers, ship the guard
+    (resolves items 13 + 15 in one line). If perf delta survives
+    the guard, investigate `AlphaCompositor::GetRenderTargetData`
+    readback (full-frame CPU copy that may not be bypassed under
+    composition) + DXGI swapchain present cost at large sizes.
+    **This is gating the architecture-A deletion (item 11)** —
+    fix this before deleting A, otherwise post-deletion users
+    have no fallback for a real perf issue.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
