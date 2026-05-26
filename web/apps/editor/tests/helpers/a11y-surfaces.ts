@@ -249,7 +249,16 @@ export const DIALOG_SURFACES: SurfaceCapture[] = [
       // The ?demo=mod-nickname route mounts ModNicknameDemo, which
       // fires promptModNickname() on mount, so the dialog is visible
       // immediately after navigation completes.
-      await page.goto("/?demo=mod-nickname");
+      //
+      // Use window.location.href instead of page.goto() — WebView2's
+      // CDP implementation rejects relative URLs in Page.navigate
+      // ("Cannot navigate to invalid URL"). Setting location.href via
+      // page.evaluate() works because it operates in the existing
+      // context (see primitives.spec.ts for the same pattern).
+      await page.evaluate(() => {
+        const base = window.location.href.split("?")[0];
+        window.location.href = base + "?demo=mod-nickname";
+      });
       await page.waitForSelector('[role="dialog"]');
     },
     teardown: async (page) => {
@@ -257,7 +266,13 @@ export const DIALOG_SURFACES: SurfaceCapture[] = [
       // surface (if any) sees AppShell again. T9's beforeEach re-loads
       // the base fixture per surface, so this just clears the URL.
       await page.keyboard.press("Escape");
-      await page.goto("/");
+      // Use window.location.href (not page.goto) — same WebView2 CDP
+      // relative-URL restriction as in setup above.
+      await page.evaluate(() => {
+        window.location.href = window.location.href.split("?")[0];
+      });
+      // Wait for the main app shell to reload.
+      await page.waitForSelector('[data-testid="app-shell"]');
     },
   },
 
@@ -389,6 +404,12 @@ export const CUSTOM_PRIMITIVE_SURFACES: SurfaceCapture[] = [
   {
     id: "curve-editor-focused",
     setup: async (page) => {
+      // Select the first emitter explicitly — file/open in beforeEach does
+      // NOT reset m_selectedEmitterId in BridgeDispatcher, so selection
+      // state may be -1 (no emitter) depending on test ordering. Without
+      // an explicit selection, curve-editor-svg shows a placeholder
+      // instead of the SVG and the locator never resolves.
+      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().click();
       await page.locator('[role="tab"]:has-text("Basic")').click();
       await page.locator('[data-testid="curve-editor-svg"]').click();
     },
@@ -397,6 +418,9 @@ export const CUSTOM_PRIMITIVE_SURFACES: SurfaceCapture[] = [
   {
     id: "spinner-focused",
     setup: async (page) => {
+      // Same selection-state reason as curve-editor-focused above.
+      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().click();
+      await page.locator('[role="tab"]:has-text("Basic")').click();
       await page.locator('[data-testid="spinner-particles-per-second"] input').focus();
     },
     teardown: async (_page) => { /* no-op */ },

@@ -1,9 +1,10 @@
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { captureUIA, discoverHostHwnd } from "./helpers/uia";
 import { normalize } from "./helpers/a11y-normalizer";
 import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
-import allowlist from "./helpers/a11y-allowlist.json";
+import allowlist from "./helpers/a11y-allowlist.json" with { type: "json" };
 import "./helpers/toMatchJSONGolden";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
@@ -11,6 +12,8 @@ const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
 // Absolute path because the editor's CWD is repo-root (per run-native-tests.mjs:66),
 // not the tests dir — a relative path here would resolve to <repo>/tests/fixtures/...
 // which doesn't exist. Resolve from this spec's __dirname instead. See T9.0 pre-flight.
+// ESM-equivalent of __dirname (package is "type": "module").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(__dirname, "fixtures/a11y-base-state.alo");
 
 let browser: Browser;
@@ -32,7 +35,29 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await browser?.close();
+  // Unfreeze stats so subsequent spec files (in the same host process)
+  // get stats/tick again. Without this, the next file's app-shell /
+  // status-bar tests time out waiting for FPS updates that never come.
+  // Guard with page-undefined since afterAll may fire when beforeAll
+  // never ran (e.g. composition-mode skip).
+  if (page && !COMPOSITION_MODE) {
+    await page.evaluate(async () => {
+      const bridge = (window as { bridge?: { request: (req: { kind: string; params: unknown }) => Promise<unknown> } }).bridge;
+      if (bridge) {
+        await bridge.request({ kind: "stats/set-frozen", params: { frozen: false } });
+        // Reset the document to a fresh one-root-emitter state. The a11y
+        // fixture (a11y-base-state.alo) had 3 emitters; leaving it loaded
+        // contaminates downstream specs (emitter-mutations expects "host
+        // seeds with one root"). file/new mirrors legacy DoNewFile.
+        await bridge.request({ kind: "file/new", params: {} });
+      }
+    });
+  }
+  // Don't close the CDP connection — all a11y HWND specs connect to the
+  // same underlying WebView2 process. Closing here triggers async Target
+  // cleanup that races with the next spec's beforeAll reconnect, causing
+  // "Target page closed" mid-test. The host process is killed by
+  // run-native-tests.mjs after the full suite finishes.
 });
 
 test.beforeEach(async ({}, testInfo) => {
@@ -54,12 +79,28 @@ test.beforeEach(async ({}, testInfo) => {
   // the previous test. Cheaper than relaunching the binary.
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
+  // Move mouse to (0,0) so the cursor/position-3d emitter doesn't fire
+  // mid-capture with non-deterministic coordinates. (0,0) is outside the
+  // viewport canvas; no cursor event fires from there.
+  await page.mouse.move(0, 0);
   // Load deterministic base state from fixture. Absolute path resolves from
   // this spec's __dirname (see FIXTURE_PATH comment above).
   await page.evaluate(
     async (fixturePath) => {
-      const bridge = (window as { bridge: { request: (k: string, p: unknown) => Promise<unknown> } }).bridge;
-      await bridge.request("file/open", { path: fixturePath });
+      const bridge = (window as { bridge: { request: (req: { kind: string; params: unknown }) => Promise<unknown> } }).bridge;
+      await bridge.request({ kind: "file/open", params: { path: fixturePath } });
+      // Pause the particle simulation so live particle values (positions,
+      // velocities, counts) don't appear in UIA spinner/edit Name fields
+      // and cause non-determinism between golden captures. The fixture's
+      // stored values are deterministic; the running simulation's values
+      // are not.
+      await bridge.request({ kind: "engine/set/paused", params: { paused: true } });
+      // [MT-11 T9] Freeze the 4 Hz stats/tick stream and clear React's
+      // StatusBar local state so FPS/Emitters/Particles/Instances/Cursor
+      // all render as `—` placeholders. Without this, the StatusBar's
+      // live readout makes every captured tree non-deterministic. See
+      // BridgeDispatcher.cpp stats/set-frozen handler.
+      await bridge.request({ kind: "stats/set-frozen", params: { frozen: true } });
     },
     FIXTURE_PATH
   );

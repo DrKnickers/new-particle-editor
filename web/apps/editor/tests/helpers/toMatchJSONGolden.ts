@@ -21,6 +21,10 @@
 import { expect, type MatcherReturnType } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM-equivalent of __dirname (package is "type": "module").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const UPDATE = process.env.UPDATE_A11Y_GOLDENS === "1";
 // __dirname is .../tests/helpers, so FAILURE_DIR resolves to .../tests/a11y-failures.

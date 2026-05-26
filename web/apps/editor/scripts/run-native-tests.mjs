@@ -56,16 +56,26 @@ async function main() {
   // and freezes the entire host thread — Playwright then times out,
   // ALL in-flight specs cascade-fail. Surfaced during Stage 4f smoke.
   //
-  // Fix: discard child stdio + windowsHide:true. All host diagnostics
-  // are duplicated to %LOCALAPPDATA%\AloParticleEditor\host.log via
-  // the Log() macro, so test diagnostics don't lose anything. If the
-  // host stderr is genuinely needed for future debugging, switch to
-  // ["ignore", "pipe", "pipe"] and pipe child.stderr to a log file
-  // (NOT to process.stderr, which has the same QuickEdit risk).
+  // Fix: discard child stdio. All host diagnostics are duplicated to
+  // %LOCALAPPDATA%\AloParticleEditor\host.log via the Log() macro, so
+  // test diagnostics don't lose anything.
+  //
+  // [MT-11 T9.3] windowsHide:true removed. Win32 UIA does not expose
+  // WebView2's accessibility tree when the host window is hidden
+  // (SW_HIDE) — UIA can't traverse into the Chrome_WidgetWin_1 →
+  // BrowserRootView → React DOM subtree. The window must be visible
+  // (SW_SHOW) for the a11y specs (T9) to capture meaningful trees.
+  // The Stage 4f QuickEdit risk only applies to `stdio:"inherit"`;
+  // with stdio:"ignore" there is no inherited console window for the
+  // user to click into, so windowsHide is not needed for safety.
+  //
+  // If host stderr is genuinely needed for debugging, use
+  // ["ignore", "pipe", "pipe"] + pipe child.stderr to a log file
+  // (NOT process.stderr, which has the same QuickEdit risk if an
+  // inherited console is present).
   const child = spawn(exe, ["--new-ui", "--test-host"], {
     cwd: repoRoot,
     stdio: ["ignore", "ignore", "ignore"],
-    windowsHide: true,
     detached: false,
   });
 

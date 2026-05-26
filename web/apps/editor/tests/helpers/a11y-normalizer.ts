@@ -70,10 +70,14 @@ export function normalize(node: UIANode, allowlist: Allowlist): UIANode {
     return isWrapper ? (c.children ?? []) : [c];
   });
   // Deterministic sort: AutomationId first, then Name, then ControlType.
+  // Use ordinal (byte-value) comparison, NOT localeCompare — locale-sensitive
+  // comparison produces inconsistent ordering for separator characters like `|`
+  // vs alphabetic characters across runs and environments (Windows ICU table
+  // version, OS language pack). Surfaced during T9.4 determinism reruns.
   children.sort((a, b) => {
     const ka = `${a.AutomationId ?? ""}|${a.Name ?? ""}|${a.ControlType ?? ""}`;
     const kb = `${b.AutomationId ?? ""}|${b.Name ?? ""}|${b.ControlType ?? ""}`;
-    return ka.localeCompare(kb);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
   });
   stripped.children = children;
   return stripped as UIANode;

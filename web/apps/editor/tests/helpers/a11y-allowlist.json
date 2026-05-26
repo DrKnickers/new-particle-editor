@@ -27,6 +27,7 @@
     "Chrome_WidgetWin_1",
     "Intermediate D3D Window",
     "BrowserRootView",
-    "NonClientView"
+    "NonClientView",
+    "EmbeddedBrowserTabRootView"
   ]
 }
