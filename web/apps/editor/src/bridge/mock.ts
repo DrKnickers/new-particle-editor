@@ -1100,8 +1100,17 @@ export class MockBridge implements Bridge {
       // ---------------- emitters / undo: Phase 3+ ----------------
       case "emitters/update":
       case "emitters/import-from-file":
-      case "undo/perform":
         throw new Error(`MockBridge: '${req.kind}' not implemented (Phase 3+)`);
+
+      // Browser-mode undo is a no-op — the mock doesn't capture
+      // snapshots of its multi-store state, so there's nothing to
+      // restore. Native host (BridgeDispatcher.cpp) implements full
+      // snap-restore via UndoStack + ParticleSystem write/read. Return
+      // `{applied: false}` so accelerator + menu paths don't blow up
+      // in browser mode while the native host owns the real undo
+      // behaviour.
+      case "undo/perform":
+        return { applied: false };
 
       default: {
         // Exhaustiveness check — TS forces this to be `never`.

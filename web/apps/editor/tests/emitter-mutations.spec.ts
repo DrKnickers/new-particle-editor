@@ -317,31 +317,27 @@ test("NT-5: leaving a 2-member link group demotes the survivor to linkGroup=0", 
   expect(result.dupLinkGroup).toBe(0);
 });
 
-test.fixme("NT-5: undo restores the pre-mutation linkGroups (atomicity of capture + sweep)", async () => {
-  // FIXME (NT-5 dispatch): this test is structurally correct but
-  // depends on `undo/perform` actually restoring the ParticleSystem
-  // state — which the C++ handler at
-  // [BridgeDispatcher.cpp:1421-1425](../../src/host/BridgeDispatcher.cpp)
-  // explicitly defers ("the ParticleSystem swap-and-restore lives
-  // here — Deserialize the snapshot, hand it to the engine, fire
-  // EmitEngineStateChanged. Today's stack stays empty so there's
-  // nothing to apply"). `captureUndo()` IS wiring snapshots in
-  // (verified via code review of the mutation handlers' upstream
-  // captureUndo lambda call at BridgeDispatcher.cpp:2087-2091), so
-  // `m_undo->Undo()` returns `applied: true` — but the
-  // ParticleSystem state doesn't actually rewind.
+test("NT-5: undo restores the pre-mutation linkGroups (atomicity of capture + sweep)", async () => {
+  // Atomicity contract: NT-5's `EnforceSingleMemberLinkGroups()`
+  // sweep fires AFTER the mutation in both `emitters/delete` and
+  // `linkGroups/set-membership`. The single PRE-mutation
+  // `captureUndo()` in each handler covers BOTH the mutation and
+  // the sweep — Ctrl+Z restores the state before either ran. If a
+  // future refactor splits the sweep into a separate undoable step,
+  // this invariant breaks and the test catches it.
   //
-  // Un-fixme this test when the snap-restore lands in undo/perform.
-  // The test's intent IS to encode the atomicity contract: NT-5's
-  // enforcement sweep fires AFTER captureUndo() in both mutation
-  // handlers, so a future refactor that splits the sweep into a
-  // separate undoable step would break the invariant tested below.
+  // Cross-reference: snap-restore handler at
+  // [BridgeDispatcher.cpp's undo/perform block](../../src/host/BridgeDispatcher.cpp)
+  // uses head-of-history auto-capture to reconcile the new-UI's
+  // PRE-mutation captureUndo convention with UndoStack's
+  // POST-mutation cursor invariant. See tasks/todo.md §3.
   await page.keyboard.press("Escape").catch(() => {});
   const result = await page.evaluate(async () => {
     const bridge = (window as Window & {
       bridge?: {
         request: (req: { kind: string; params: unknown }) =>
-          Promise<{ ok?: boolean; newId?: number; root?: {
+          Promise<{ ok?: boolean; applied?: boolean; newId?: number;
+                    root?: {
             children: { id: number; linkGroup: number }[];
           }}>;
       };
@@ -425,14 +421,15 @@ test.fixme("NT-5: undo restores the pre-mutation linkGroups (atomicity of captur
     });
 
     return {
-      undoOk: undoResult.ok,
+      undoApplied: undoResult.applied,
       undoFirstLinkGroup: undoFirst?.linkGroup,
       undoDupPresent: undoDup !== undefined,
     };
   });
 
-  // Undo must have succeeded.
-  expect(result.undoOk).toBe(true);
+  // Undo must have applied (snap-restore returned a non-null
+  // snapshot and swapped the ParticleSystem).
+  expect(result.undoApplied).toBe(true);
   // Atomicity invariant: undo restored firstId to 99 (its pre-delete
   // value) AND restored dup to the tree. Both halves of the
   // capture+sweep atom rolled back together.

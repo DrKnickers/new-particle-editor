@@ -16,6 +16,111 @@ Conventions:
 
 ## Changelog
 
+### `undo/perform` snap-restore lands; new-UI Ctrl+Z / Ctrl+Shift+Z rewinds the ParticleSystem
+
+*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The new-UI host now services `undo/perform { direction: "undo"|"redo" }`
+end-to-end. Ctrl+Z (and the Edit → Undo menu) rewinds the host-owned
+`ParticleSystem` to the snapshot taken by the last mutation's
+`captureUndo()`; Ctrl+Shift+Z (Edit → Redo) re-applies. Selection
+follows: `m_selectedEmitterId` is restored from the snapshot's
+captured selection index, with an `emitters/selected` event emitted
+so the React panel re-fetches. Engine state — emitter graph, track
+keys, all per-emitter parameters, link groups — comes back exactly
+as it was at the captured moment because the full system is
+serialised via `ParticleSystem::write` (the same code path
+`file/save` uses) and deserialised through the
+[`ParticleSystem(IFile*)` ctor](src/ParticleSystem.cpp). The NT-5
+[atomicity Playwright test](web/apps/editor/tests/emitter-mutations.spec.ts:320)
+un-fixme'd as part of this entry: deleting one member of a 2-member
+link group + Ctrl+Z restores the deleted emitter AND demotes the
+NT-5 sweep — both halves of the capture-covers-sweep atom rolled
+back together.
+
+**How we tackled it.** Discovered a convention mismatch during
+planning: legacy [`main.cpp:864 CaptureUndo`](src/main.cpp:864)
+takes snapshots POST-mutation paired with a load-time baseline-seed,
+while the new-UI bridge takes them PRE-mutation across 22 call sites
+in [`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp). The
+existing [`UndoStack::Undo`](src/UndoStack.cpp:129) math is hardwired
+for the POST-mutation convention — naïvely implementing the handler
+on top of the new-UI's PRE-mutation captures would return
+state-two-mutations-back instead of state-one-mutation-back.
+Resolved with a **head-of-history auto-capture** inside the
+`undo/perform` handler itself: when the cursor is at the live end of
+history (`Cursor() == Depth()`), snapshot the current state once
+before calling `Undo()`. That single trick restores the cursor
+invariant locally — the auto-capped entry IS the live state, so
+`Undo()`'s `cursor-- ; return entries[cursor-1]` now returns the
+PRE-mutation snapshot. Trade-off: keeps the existing PRE-mutation
+convention at all 22 call sites; one extra entry on the stack per
+undo-chain start. Full trace in
+[`tasks/todo.md`](tasks/todo.md) §3.
+
+The restore itself ([`BridgeDispatcher::ApplyUndoSnapshot`](src/host/BridgeDispatcher.cpp))
+mirrors legacy [`RestoreFromSnapshot`](src/main.cpp:916) adapted for
+the new-UI host-state plumbing: kill any cursor-bound attached
+`ParticleSystemInstance` first (else `KillParticleSystem` on the
+about-to-be-freed system would crash), `Engine::Clear`, swap the
+`unique_ptr<ParticleSystem>`, `OnParticleSystemChanged(-1) +
+ReloadTextures`, then restore selection + emit. Wrapped in
+`UndoStack::BeginApplying/EndApplying` so the swap doesn't
+recursively trigger a `Capture()`. `m_undo->Clear()` was also added
+to the `file/new` and `file/open` handlers — without it, a prior
+session's stack entries reference the now-freed system and would
+crash a future restore (mirrors legacy
+[`main.cpp:1103`](src/main.cpp:1103)).
+
+**Issues encountered and resolutions.**
+
+1. **Test response-field name drift.** The FIXME scaffolding at
+   [`emitter-mutations.spec.ts:320`](web/apps/editor/tests/emitter-mutations.spec.ts:320)
+   read `undoResult.ok`, but the C++ handler returns
+   `{ applied: bool }` (no `ok` field). Fixed by extending the
+   inline bridge type to include `applied?: boolean` and reading
+   the right field. The test author had written the structure
+   under FIXME without exercising it.
+
+2. **Mock-side `undo/perform` was throwing.** Switching the mock
+   from `throw new Error(...)` to `return { applied: false }`
+   makes browser-mode Ctrl+Z a documented no-op rather than a
+   crash. A full mock undo (deep-cloning multiple Zustand stores
+   per mutation) was out of scope: native host owns the real
+   behaviour, the Playwright native suite exercises it end-to-end,
+   and browser-mode editing surfaces don't gate on undo correctness.
+
+3. **R7 (stack leak across file/new + file/open) caught at planning
+   time, not impl time.** A `Capture()` entry from a prior file
+   session holds a serialised snapshot, not a pointer to the freed
+   system — so it wouldn't actually crash on restore, just produce
+   a confusing "Ctrl+Z restored emitters from a file you closed
+   10 minutes ago" experience. Cleaned up by `m_undo->Clear()` in
+   both handlers; cheap, mirrors legacy.
+
+4. **`MarkSaved` on `file/save` is missing in new-UI.** Audit during
+   impl (R9 from the plan): the dispatcher's `file/save` doesn't
+   call `m_undo->MarkSaved()`, so `IsAtSavedState()` is always
+   false. The title-bar asterisk won't clear when undoing back to a
+   saved state. Recorded as known and acceptable for now; the
+   restore handler sets dirty unconditionally on undo, which is
+   under-correct but never wrong. Independent follow-up — not
+   gating snap-restore.
+
+Test counts at ship: vitest **343 / 343** (unchanged). Playwright
+native (default HWND dist/): **103 passed + 26 skipped + 0 failed**
+(was 102 + 27 + 0; the un-fixme'd NT-5 atomicity test moved from
+skip to pass). MSBuild Debug + Release x64 clean via the .sln (per
+L-023). Files touched: 1 .h decl + 1 .cpp impl + comment hygiene +
+file/new + file/open `m_undo->Clear()` in
+[`src/host/BridgeDispatcher.{h,cpp}`](src/host/BridgeDispatcher.cpp);
+mock no-op in [`web/apps/editor/src/bridge/mock.ts`](web/apps/editor/src/bridge/mock.ts);
+test un-fixme + FIXME-block removal in
+[`emitter-mutations.spec.ts`](web/apps/editor/tests/emitter-mutations.spec.ts).
+Full plan + review at [`tasks/todo.md`](tasks/todo.md).
+
+---
+
 ### NT-5 follow-up — native test verification + load-time fixture + undo round-trip (fixme'd)
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

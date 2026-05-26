@@ -64,13 +64,12 @@ public:
     void SetEngine(Engine* engine) { m_engine = engine; }
 
     // Inject the UndoStack used to service `undo/perform` requests.
-    // Task 2.4: stack is constructed by HostWindow alongside the Engine.
-    // Null is treated as "no undo available, applied:false". Caveat:
-    // the new-UI bridge surface does not yet *capture* into this stack
-    // — engine setters (background/skydome/ground-z) are not wrapped in
-    // Capture() calls. Phase 3 emitter work will start populating the
-    // stack via per-mutation captures. Until then `undo/perform` is a
-    // schema-reachable no-op.
+    // Stack is constructed by HostWindow alongside the Engine. Null is
+    // treated as "no undo available, applied:false". Phase 3+ emitter
+    // mutation handlers wrap each mutating Request in a captureUndo()
+    // call PRE-mutation; `undo/perform` deserializes the recorded
+    // ParticleSystem snapshot and swaps it into the host-owned slot via
+    // ApplyUndoSnapshot below.
     void SetUndoStack(UndoStack* undo) { m_undo = undo; }
 
     // The HostWindow's top-level HWND. Required by file/open's
@@ -220,6 +219,18 @@ private:
     // Emits a `recent/changed` event with the current m_recentFiles
     // serialised as a JSON array of strings.
     void EmitRecentChanged();
+
+    // Deserialize a ParticleSystem snapshot from an UndoStack entry and
+    // swap it into the host-owned slot. Mirrors legacy
+    // `RestoreFromSnapshot` at src/main.cpp:916 — same teardown
+    // ordering (kill attached → engine Clear → swap → OnPSChanged →
+    // ReloadTextures), adapted for the new-UI host-state plumbing.
+    // Selection scalar is restored from the snapshot's captured
+    // selectedIndex; out-of-range maps to -1 (no selection). Wrapped
+    // in UndoStack::BeginApplying/EndApplying so the swap doesn't
+    // recursively trigger Capture(). Caller is responsible for emitting
+    // engine/state/changed + emitters/tree/changed after this returns.
+    void ApplyUndoSnapshot(const std::vector<char>& buf, size_t selIdx);
 
     // [NT-5] Walks the currently-bound ParticleSystem's emitters and,
     // for every positive linkGroup with exactly one member, demotes

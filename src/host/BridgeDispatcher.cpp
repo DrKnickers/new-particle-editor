@@ -1395,21 +1395,41 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
     // -------- undo/perform --------
     //
-    // Task 2.4: the bridge surface for undo/redo is reachable, but the
-    // new-UI mutation handlers above don't yet *capture* into m_undo —
-    // Phase 3 emitter work will wrap each mutating Request with a
-    // Capture() call. Until then the stack will be empty and
-    // CanUndo/CanRedo return false, so `applied` is false. The handler
-    // still routes through the real UndoStack so a future capture
-    // surfaces immediately without touching this code.
+    // New-UI mutation handlers call captureUndo() PRE-mutation, so the
+    // snapshot at entries[cursor-1] represents the state BEFORE the
+    // most recent mutation — not the current live state. UndoStack's
+    // Undo() is built around the legacy POST-mutation convention
+    // (cursor-- ; return entries[cursor-1] = the previous live state).
+    // To reconcile: at the head of history (cursor == size), snapshot
+    // the current live state once before stepping back. That auto-
+    // capped entry IS the live state, so Undo's math now returns the
+    // PRE-mutation snapshot — which is exactly what Ctrl+Z should
+    // restore. Skip the auto-cap mid-redo-branch (the post-state is
+    // already at entries[cursor]) or on an empty stack (CanUndo would
+    // be false anyway). See tasks/todo.md §3 for the full trace.
     if (kind == "undo/perform")
     {
         std::string dir = params.value("direction", std::string("undo"));
         bool applied = false;
-        if (m_undo)
+        if (m_undo && m_pParticleSystem && *m_pParticleSystem)
         {
+            if (dir == "undo"
+                && m_undo->Cursor() == m_undo->Depth()
+                && m_undo->Depth() > 0)
+            {
+                const ParticleSystem* sys = m_pParticleSystem->get();
+                size_t selIdxNow = SIZE_MAX;
+                if (m_selectedEmitterId >= 0
+                    && static_cast<size_t>(m_selectedEmitterId)
+                           < sys->getEmitters().size())
+                {
+                    selIdxNow = static_cast<size_t>(m_selectedEmitterId);
+                }
+                m_undo->Capture(*sys, selIdxNow, 0);
+            }
+
             const std::vector<char>* snap = nullptr;
-            size_t selIdx = 0;
+            size_t selIdx = SIZE_MAX;
             if (dir == "undo" && m_undo->CanUndo())
             {
                 applied = m_undo->Undo(&snap, &selIdx);
@@ -1418,14 +1438,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             {
                 applied = m_undo->Redo(&snap, &selIdx);
             }
-            // NOTE: when Phase 3 begins capturing into m_undo, the
-            // ParticleSystem swap-and-restore lives here — Deserialize
-            // the snapshot, hand it to the engine, fire
-            // EmitEngineStateChanged. Today's stack stays empty so
-            // there's nothing to apply.
+
+            if (applied && snap != nullptr)
+            {
+                ApplyUndoSnapshot(*snap, selIdx);
+            }
         }
         sendOk(json{{"applied", applied}});
-        if (applied) EmitEngineStateChanged();
+        if (applied)
+        {
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+        }
         return res;
     }
 
@@ -1475,6 +1499,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             m_engine->Clear();
             m_engine->OnParticleSystemChanged(-1);
         }
+        // Reset undo stack — prior session's entries reference the
+        // now-freed ParticleSystem and would crash a future restore.
+        // Mirrors legacy LoadFile at src/main.cpp:1103.
+        if (m_undo) m_undo->Clear();
         m_currentFilePath.clear();
         sendOk(json::object());
         SetDirty(false);
@@ -1598,6 +1626,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // even when the user makes no further changes. Subsequent
         // mutations re-fire the sweep via the same helper.
         EnforceSingleMemberLinkGroups();
+        // Reset undo stack — prior session's entries reference the
+        // now-freed ParticleSystem. Mirrors legacy LoadFile at
+        // src/main.cpp:1103.
+        if (m_undo) m_undo->Clear();
         // LT-4 render loop: same notification sequence as file/new —
         // the engine's cached per-instance / per-emitter state is now
         // stale and must be cleared. Matches legacy DoOpenFile path
@@ -2068,10 +2100,14 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
     // -------- Screen 4 Batch B1 — emitter mutations -----------------
     //
-    // Each handler validates the target emitter, captures an undo
-    // snapshot before mutating (best-effort — the UndoStack baseline
-    // is still empty pre-Phase-3 capture wiring), mutates via the
+    // Each handler validates the target emitter, captures a PRE-
+    // mutation undo snapshot via captureUndo(), mutates via the
     // ParticleSystem API, then emits `emitters/tree/changed` + dirty.
+    // The PRE-mutation timing pairs with undo/perform's head-of-
+    // history auto-capture above (see lines ~1396) so Ctrl+Z restores
+    // the state right before the mutation ran. NT-5 link-group sweeps
+    // sit BETWEEN the mutation and the next captureUndo — covered by
+    // the same snapshot atomically.
 
     // Lookup helper: find an emitter pointer by integer index. Returns
     // nullptr on out-of-range / no-system / null-slot. Used by all
@@ -3686,6 +3722,89 @@ void BridgeDispatcher::EmitRecentChanged()
         {"payload", {{"paths", paths}}},
     };
     m_emit(env.dump());
+}
+
+// Deserialize a ParticleSystem snapshot from an UndoStack entry and
+// swap it into the host-owned slot. Teardown order mirrors file/open
+// at BridgeDispatcher.cpp's file/open handler: kill any cursor-bound
+// attached ParticleSystemInstance first (else KillParticleSystem on
+// the about-to-be-freed system crashes), then Engine::Clear (drops
+// cached per-instance state), then swap the unique_ptr (deletes old
+// PS), then OnParticleSystemChanged(-1) + ReloadTextures so the
+// engine re-binds + re-acquires textures for the restored system.
+// Wrapped in UndoStack::BeginApplying/EndApplying so the swap doesn't
+// recursively trigger a Capture(). Cross-reference legacy
+// RestoreFromSnapshot at src/main.cpp:916 for the original pattern.
+void BridgeDispatcher::ApplyUndoSnapshot(const std::vector<char>& buf,
+                                         size_t selIdx)
+{
+    if (m_undo == nullptr) return;
+    if (m_pParticleSystem == nullptr) return;
+
+    m_undo->BeginApplying();
+
+    ParticleSystem* sys = nullptr;
+    try
+    {
+        sys = UndoStack::Deserialize(buf);
+    }
+    catch (...)
+    {
+        m_undo->EndApplying();
+        return;
+    }
+    if (sys == nullptr)
+    {
+        m_undo->EndApplying();
+        return;
+    }
+
+    if (m_ppAttachedParticleSystem
+        && *m_ppAttachedParticleSystem
+        && m_engine)
+    {
+        m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
+        *m_ppAttachedParticleSystem = nullptr;
+    }
+    if (m_engine) m_engine->Clear();
+
+    *m_pParticleSystem = std::unique_ptr<ParticleSystem>(sys);
+
+    if (m_engine)
+    {
+        m_engine->OnParticleSystemChanged(-1);
+        m_engine->ReloadTextures();
+    }
+
+    if (selIdx != SIZE_MAX
+        && selIdx < (*m_pParticleSystem)->getEmitters().size())
+    {
+        m_selectedEmitterId = static_cast<int>(selIdx);
+    }
+    else
+    {
+        m_selectedEmitterId = -1;
+    }
+    if (m_emit)
+    {
+        json env = {
+            {"type",    "evt"},
+            {"kind",    "emitters/selected"},
+            {"payload", json{{"id", m_selectedEmitterId < 0
+                                       ? json(nullptr)
+                                       : json(m_selectedEmitterId)}}},
+        };
+        m_emit(env.dump());
+    }
+
+    // The new-UI host doesn't call MarkSaved on the save-state entry
+    // today (file/save just toggles m_dirty), so IsAtSavedState is
+    // always false. Set dirty unconditionally — any undo IS a state
+    // change relative to the saved file under the current convention.
+    // Revisit alongside any future MarkSaved-on-save work.
+    SetDirty(true);
+
+    m_undo->EndApplying();
 }
 
 // [NT-5] Demote single-member link groups to linkGroup=0 so the data
