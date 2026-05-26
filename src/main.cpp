@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <iomanip>
+#include <memory>
 #include <string>
 #include <algorithm>
 #include <cfloat>
@@ -20,6 +21,7 @@
 #include "Autosave.h"
 #include "utils.h"
 #include "engine.h"
+#include "ParticleSystem.h"
 #include "ParticleSystemInstance.h"
 #include "Rescale.h"
 #include "ParticleSystemIO.h"
@@ -8086,11 +8088,57 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		bool newUi    = false;
 		bool devUi    = false;
 		bool testHost = false;
+		// [NT-5] --gen-nt5-fixture <path>: one-shot CLI to produce a
+		// .alo file with a known pre-NT-5 singleton link group. Used
+		// to exercise the load-time enforcement sweep at file/open.
+		// Since the production save path always runs through
+		// post-mutation enforcement (which would have demoted the
+		// singleton already), no other code path can produce such a
+		// file. This flag bypasses BridgeDispatcher entirely and
+		// constructs the singleton state directly via the
+		// ParticleSystem API + SaveParticleSystem.
+		std::wstring genNt5FixturePath;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
 			if (argv[i] == L"--new-ui")    newUi    = true;
 			if (argv[i] == L"--dev-ui")    devUi    = true;
 			if (argv[i] == L"--test-host") testHost = true;
+			if (argv[i] == L"--gen-nt5-fixture" && i + 1 < argv.size())
+			{
+				genNt5FixturePath = argv[i + 1];
+			}
+		}
+		if (!genNt5FixturePath.empty())
+		{
+			auto sys = std::make_unique<ParticleSystem>();
+			sys->addRootEmitter();
+			sys->addRootEmitter();
+			auto& emitters = sys->getEmitters();
+			if (emitters.size() < 2 || !emitters[0] || !emitters[1])
+			{
+				fwprintf(stderr, L"gen-nt5-fixture: failed to add 2 root emitters\n");
+				return 2;
+			}
+			// Put both in link group 1 (transient — valid 2-member
+			// state), then manually demote emitter 0 back to 0.
+			// Result on disk: emitter 0 at linkGroup=0, emitter 1
+			// alone at linkGroup=1 — the pre-NT-5 "singleton group"
+			// state that file/open's enforcement sweep must demote.
+			emitters[0]->linkGroup = 1;
+			emitters[1]->linkGroup = 1;
+			emitters[0]->linkGroup = 0;
+			std::string err;
+			const bool ok = SaveParticleSystem(sys.get(), genNt5FixturePath, &err);
+			if (!ok)
+			{
+				fwprintf(stderr, L"gen-nt5-fixture: SaveParticleSystem failed: %hs\n",
+				         err.c_str());
+				return 2;
+			}
+			fwprintf(stderr, L"gen-nt5-fixture: wrote %s "
+			                 L"(emitter 0 linkGroup=0, emitter 1 linkGroup=1 — singleton)\n",
+			         genNt5FixturePath.c_str());
+			return 0;
 		}
 		if (newUi)
 		{

@@ -16,6 +16,73 @@ Conventions:
 
 ## Changelog
 
+### NT-5 follow-up — native test verification + load-time fixture + undo round-trip (fixme'd)
+
+*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Follow-up verification pass on the NT-5 ship. Playwright native tests
+under default dist/ + no env vars: **102 passed + 27 skipped + 0
+failed** (was 99 + 26 + 0). Three new tests added against the C++
+host: (1) "leaving a 2-member link group demotes the survivor" —
+exercises NT-5's mutation-path sweep end-to-end; (2) "deleting one
+member of a 2-member link group demotes the survivor" — exercises
+the deletion-path sweep; (3) "load-time sweep — opening a pre-NT-5
+`.alo` with a singleton group auto-demotes it; dirty bit stays
+clean" — exercises the file/open call site against a real
+disk-saved fixture. One additional test
+("NT-5: undo restores the pre-mutation linkGroups (atomicity of
+capture + sweep)") was added as `test.fixme(...)` — it's structurally
+correct but depends on `undo/perform`'s snap-restore implementation
+which is explicitly deferred at
+[BridgeDispatcher.cpp:1421-1425](src/host/BridgeDispatcher.cpp:1421).
+Un-fixme when the snap-restore lands.
+
+**How we tackled it.** The load-time fixture test required a `.alo`
+file containing a pre-NT-5 singleton group — a state no NT-5-aware
+codepath can produce (mutation handlers + file/open all run through
+`EnforceSingleMemberLinkGroups`, so a clean save can't write a
+singleton). Solved by adding a `--gen-nt5-fixture <path>` CLI flag
+to [`src/main.cpp`](src/main.cpp): a one-shot mode that bypasses
+BridgeDispatcher entirely, constructs a 2-emitter ParticleSystem
+in-memory, sets `emitters[1]->linkGroup = 1` while leaving
+`emitters[0]->linkGroup = 0` (the singleton state), and calls
+`SaveParticleSystem` directly. The generated fixture lives at
+[`web/apps/editor/tests/fixtures/nt-5-singleton.alo`](web/apps/editor/tests/fixtures/nt-5-singleton.alo)
+(1754 bytes). The CLI flag stays in `main.cpp` as the regeneration
+tool — if the `.alo` chunk format ever changes, re-run
+`ParticleEditor.exe --gen-nt5-fixture <path>` to refresh the fixture.
+
+The undo-round-trip test was originally meant as a vitest contract
+test but was moved to Playwright when the MockBridge's
+`undo/perform` was found to throw "Phase 3+ not implemented." The
+host-side handler at
+[`BridgeDispatcher.cpp:1405-1430`](src/host/BridgeDispatcher.cpp:1405)
+DOES route the request through `UndoStack::Undo()` (returns
+`{applied: true|false}`), but the comment block at lines 1421-1425
+explicitly notes that "the ParticleSystem swap-and-restore lives
+here — Deserialize the snapshot, hand it to the engine, fire
+EmitEngineStateChanged. Today's stack stays empty so there's
+nothing to apply." The snap-restore step is missing, so the test
+that asserts post-undo linkGroup values would fail even though
+`captureUndo()` IS wiring snapshots in. The `test.fixme(...)` marker
+preserves the intent: when snap-restore lands, un-fixme + the
+NT-5 atomicity contract becomes loud-failing against future
+refactors.
+
+Test counts at ship: vitest 343/343 (unchanged from NT-5 entry).
+Playwright native: **102 passed + 27 skipped + 0 failed** (default
+dist/, no env vars). C++ touched:
+[`src/main.cpp`](src/main.cpp) (~50 net lines for the
+`--gen-nt5-fixture` argv branch + `#include "ParticleSystem.h"`
++ `<memory>`). Tests touched:
+[`web/apps/editor/tests/emitter-mutations.spec.ts`](web/apps/editor/tests/emitter-mutations.spec.ts)
+(+~170 lines for the undo-round-trip fixme + load-time spec +
+ESM `__dirname` shim via `import.meta.url`). Fixtures added:
+[`web/apps/editor/tests/fixtures/nt-5-singleton.alo`](web/apps/editor/tests/fixtures/nt-5-singleton.alo)
+(binary; regeneratable via the CLI flag).
+
+---
+
 ### Engine-side single-member link-group enforcement ([NT-5]) — leaving or deleting reduces a link group to 1 member; lone survivor auto-demotes to `linkGroup = 0`; legacy `.alo` files with pre-NT-5 singletons self-correct on load
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

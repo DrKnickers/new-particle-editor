@@ -16,6 +16,12 @@
 // seeding mocks; the native host owns the live system.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM-equivalent of __dirname for fixture-path resolution. The package
+// is `"type": "module"` so __dirname isn't available directly.
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
 
@@ -309,6 +315,210 @@ test("NT-5: leaving a 2-member link group demotes the survivor to linkGroup=0", 
   // post-mutation sweep.
   expect(result.firstLinkGroup).toBe(0);
   expect(result.dupLinkGroup).toBe(0);
+});
+
+test.fixme("NT-5: undo restores the pre-mutation linkGroups (atomicity of capture + sweep)", async () => {
+  // FIXME (NT-5 dispatch): this test is structurally correct but
+  // depends on `undo/perform` actually restoring the ParticleSystem
+  // state — which the C++ handler at
+  // [BridgeDispatcher.cpp:1421-1425](../../src/host/BridgeDispatcher.cpp)
+  // explicitly defers ("the ParticleSystem swap-and-restore lives
+  // here — Deserialize the snapshot, hand it to the engine, fire
+  // EmitEngineStateChanged. Today's stack stays empty so there's
+  // nothing to apply"). `captureUndo()` IS wiring snapshots in
+  // (verified via code review of the mutation handlers' upstream
+  // captureUndo lambda call at BridgeDispatcher.cpp:2087-2091), so
+  // `m_undo->Undo()` returns `applied: true` — but the
+  // ParticleSystem state doesn't actually rewind.
+  //
+  // Un-fixme this test when the snap-restore lands in undo/perform.
+  // The test's intent IS to encode the atomicity contract: NT-5's
+  // enforcement sweep fires AFTER captureUndo() in both mutation
+  // handlers, so a future refactor that splits the sweep into a
+  // separate undoable step would break the invariant tested below.
+  await page.keyboard.press("Escape").catch(() => {});
+  const result = await page.evaluate(async () => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) =>
+          Promise<{ ok?: boolean; newId?: number; root?: {
+            children: { id: number; linkGroup: number }[];
+          }}>;
+      };
+    }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+
+    // Set up: 2 emitters in group 99 (positive id picked to avoid
+    // colliding with anything the seed produced).
+    const initial = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const firstId = initial.root?.children[0]?.id;
+    if (firstId === undefined) throw new Error("no seed");
+    const dup = await bridge.request({
+      kind: "emitters/duplicate",
+      params: { id: firstId },
+    });
+    const dupId = dup.newId;
+    if (typeof dupId !== "number" || dupId < 0) {
+      throw new Error("duplicate failed");
+    }
+    await bridge.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [firstId, dupId], groupId: 99 },
+    });
+
+    // Snapshot the post-setup state — both at 99 (group has 2 members,
+    // no sweep needed).
+    const preDelete = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const preFirst = preDelete.root?.children.find((c) => c.id === firstId);
+    const preDup   = preDelete.root?.children.find((c) => c.id === dupId);
+    if (preFirst?.linkGroup !== 99 || preDup?.linkGroup !== 99) {
+      throw new Error(`setup failed — first=${preFirst?.linkGroup} dup=${preDup?.linkGroup}`);
+    }
+
+    // Delete the duplicate — captureUndo() snapshots the pre-delete
+    // state (both at 99), then deleteEmitter prunes dup, then NT-5's
+    // sweep demotes firstId to 0 because group 99 is now a singleton.
+    await bridge.request({
+      kind: "emitters/delete",
+      params: { id: dupId },
+    });
+    const postDelete = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const postFirst = postDelete.root?.children.find((c) => c.id === firstId);
+    if (postFirst?.linkGroup !== 0) {
+      throw new Error(`post-delete sweep failed — first=${postFirst?.linkGroup}`);
+    }
+
+    // Undo. The snapshot was taken BEFORE delete and BEFORE sweep, so
+    // undo restores both: dup is back in the tree, firstId is back at
+    // linkGroup=99.
+    const undoResult = await bridge.request({
+      kind: "undo/perform",
+      params: {},
+    });
+
+    const postUndo = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const undoFirst = postUndo.root?.children.find((c) => c.id === firstId);
+    const undoDup   = postUndo.root?.children.find((c) => c.id === dupId);
+
+    // Cleanup before returning so a failing assertion still leaves a
+    // tidy tree for subsequent specs. Belt-and-suspenders — if undo
+    // didn't restore dup, the delete call no-ops.
+    if (undoDup) {
+      await bridge.request({ kind: "emitters/delete", params: { id: dupId } });
+    }
+    // Clear firstId's link group regardless of state.
+    await bridge.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [firstId], groupId: null },
+    });
+
+    return {
+      undoOk: undoResult.ok,
+      undoFirstLinkGroup: undoFirst?.linkGroup,
+      undoDupPresent: undoDup !== undefined,
+    };
+  });
+
+  // Undo must have succeeded.
+  expect(result.undoOk).toBe(true);
+  // Atomicity invariant: undo restored firstId to 99 (its pre-delete
+  // value) AND restored dup to the tree. Both halves of the
+  // capture+sweep atom rolled back together.
+  expect(result.undoFirstLinkGroup).toBe(99);
+  expect(result.undoDupPresent).toBe(true);
+});
+
+test("NT-5: load-time sweep — opening a pre-NT-5 .alo with a singleton group auto-demotes it; dirty bit stays clean", async () => {
+  // The fixture `tests/fixtures/nt-5-singleton.alo` was produced by
+  // `ParticleEditor.exe --gen-nt5-fixture <path>` (see main.cpp's
+  // argv branch) and contains a state no NT-5-aware codepath can
+  // produce: emitter 0 at linkGroup=0, emitter 1 at linkGroup=1
+  // (alone — a pre-NT-5 singleton). On file/open, the host's
+  // load-time `EnforceSingleMemberLinkGroups` sweep
+  // ([BridgeDispatcher.cpp:1591](../../src/host/BridgeDispatcher.cpp))
+  // fires right after the ParticleSystem swap, demoting emitter 1
+  // to linkGroup=0. The dirty bit MUST stay false — the correction
+  // is normalization, not user-driven mutation.
+  await page.keyboard.press("Escape").catch(() => {});
+
+  // The .alo lives at web/apps/editor/tests/fixtures/ relative to this
+  // file. Resolve to absolute so the host's file/open (which doesn't
+  // resolve relative paths) gets a clean wide-string.
+  const fixturePath = resolve(__dirname, "fixtures/nt-5-singleton.alo");
+
+  const result = await page.evaluate(async (path) => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) => Promise<{
+          ok?: boolean;
+          path?: string;
+          root?: { children: { id: number; linkGroup: number }[] };
+          dirty?: boolean;
+        }>;
+      };
+    }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+
+    // Stash current state so we restore-or-bail cleanly.
+    const openRes = await bridge.request({
+      kind: "file/open",
+      params: { path },
+    });
+    if (openRes.ok !== true) {
+      return { error: `file/open failed: ${JSON.stringify(openRes)}` };
+    }
+
+    // Read back: tree should show emitter 1 demoted to linkGroup=0
+    // by the load-time sweep. The list endpoint returns the
+    // synthetic root with the two emitters as children.
+    const listed = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+
+    // engine/state/snapshot exposes the dirty flag.
+    const snap = await bridge.request({
+      kind: "engine/state/snapshot",
+      params: {},
+    });
+
+    return {
+      childrenLinkGroups: listed.root?.children.map((c) => c.linkGroup) ?? [],
+      childrenCount: listed.root?.children.length ?? 0,
+      dirty: snap.dirty,
+    };
+  }, fixturePath);
+
+  expect(result.error).toBeUndefined();
+  // Two root emitters were saved; both should be present.
+  expect(result.childrenCount).toBe(2);
+  // NT-5 load-time sweep demoted the singleton. Both should be at 0.
+  expect(result.childrenLinkGroups).toEqual([0, 0]);
+  // Sweep must NOT have triggered a dirty flag — opening a legacy
+  // file shouldn't force a save-prompt for the normalization fix.
+  expect(result.dirty).toBe(false);
+
+  // Reset to file/new so subsequent specs see a fresh tree.
+  await page.evaluate(async () => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+      };
+    }).bridge;
+    if (bridge) await bridge.request({ kind: "file/new", params: {} });
+  });
 });
 
 test("NT-5: deleting one member of a 2-member link group demotes the survivor", async () => {
