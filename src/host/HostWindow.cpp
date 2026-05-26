@@ -779,7 +779,17 @@ HRESULT HostWindowImpl::InitWebView2()
         auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
         if (opts)
         {
-            opts->put_AdditionalBrowserArguments(L"--remote-debugging-port=9222");
+            // [MT-11 T9] --force-renderer-accessibility enables Blink's
+            // accessibility subsystem at startup so the UIA tree is
+            // immediately available to out-of-process clients
+            // (uia_inspector). Without it, Blink's a11y is lazily
+            // initialized only when a UIA client fires a cross-process
+            // structure-change event — which uia_inspector.exe does
+            // not do, leaving the RenderWidgetHostView node with empty
+            // children. Gated by the outer `if (useTestHost)` block —
+            // release builds are untouched.
+            opts->put_AdditionalBrowserArguments(
+                L"--remote-debugging-port=9222 --force-renderer-accessibility");
             opts.As(&envOptions);
         }
     }

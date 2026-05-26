@@ -245,6 +245,31 @@ int wmain(int argc, wchar_t* argv[]) {
     hr = uia->ElementFromHandle(hwnd, &root);
     if (FAILED(hr) || !root) { fprintf(stderr, "ElementFromHandle failed\n"); return 3; }
 
+    // [MT-11 T9 warmup] Chromium/WebView2 uses lazy Blink accessibility
+    // initialization: the inner React DOM UIA tree is not built until a
+    // UIA client has triggered cross-process activation of the Blink
+    // accessibility subsystem. GetFocusedElement() forces a cross-process
+    // roundtrip that wakes up the Blink a11y provider. Without this, the
+    // BrowserView subtree returns empty children even though the React UI
+    // is fully rendered and interactive. After the warmup we sleep 300 ms
+    // to give the renderer time to build and expose its subtree.
+    {
+        ComPtr<IUIAutomationElement> focused;
+        uia->GetFocusedElement(&focused);
+        // Also try ElementFromPoint at the center of the target window —
+        // belt-and-suspenders in case focus is elsewhere.
+        RECT wr;
+        if (GetWindowRect(hwnd, &wr)) {
+            POINT center = {
+                (wr.left + wr.right) / 2,
+                (wr.top + wr.bottom) / 2
+            };
+            ComPtr<IUIAutomationElement> atPoint;
+            uia->ElementFromPoint(center, &atPoint);
+        }
+        Sleep(300);
+    }
+
     fprintf(stderr, "[A11Y-CAPTURE] surface=%ls hwnd=0x%llx\n",
             capture.c_str(),
             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(hwnd)));
