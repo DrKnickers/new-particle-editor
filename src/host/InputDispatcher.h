@@ -9,10 +9,11 @@
 // and decodes coords from MAKEPOINTS(lParam), so the host-side
 // reconstruction is mechanical.
 //
-// Constructed only when `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` is set
-// (alongside FramePublisher). When unset, the legacy popup is visible
-// and receives input directly from the OS — InputDispatcher is unused
-// and BridgeDispatcher's `viewport/input` arm returns ok with a no-op.
+// Constructed when the host runs in architecture-C mode (default
+// under [MT-12], opt-out via ALO_HOSTING_MODE=legacy), alongside
+// FramePublisher. In legacy mode the popup is visible and receives
+// input directly from the OS — InputDispatcher is unused and
+// BridgeDispatcher's `viewport/input` arm returns ok with a no-op.
 //
 // All operations are UI-thread only. PostMessage on a window owned by
 // the calling thread queues the message on that thread's message

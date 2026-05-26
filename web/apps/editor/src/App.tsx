@@ -239,9 +239,35 @@ function ModNicknameDemo() {
   );
 }
 
+// [MT-12] Log the React-side baked hosting mode on app load, matching
+// the host's startup `[host] hosting mode: ...` log line. If the two
+// log lines don't agree, the editor will look broken (viewport
+// placeholder visible where engine pixels should be, or DXGI engine
+// visible behind an empty <canvas>) — these two lines side-by-side
+// are the fastest path to spotting build/runtime mismatch.
+// Full mode-consistency banner deferred to a follow-up dispatch per
+// [MT-12] R2 scope-trim — see tasks/HANDOFF.md "Known follow-ups."
+function logReactHostingMode() {
+  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_HOSTING_MODE;
+  const fromProcess = typeof process !== "undefined" && process.env
+    ? process.env.VITE_HOSTING_MODE
+    : undefined;
+  const legacy = fromImportMeta === "legacy" || fromProcess === "legacy";
+  const mode = legacy ? "legacy (architecture A)" : "composition (architecture C, default)";
+  // eslint-disable-next-line no-console
+  console.log(`[mode] React build mode: ${mode}`);
+}
+
 // App — root entry point. Routes to the primitives gallery when ?demo=primitives
 // is present; otherwise renders the full editor shell.
 export function App() {
+  // [MT-12] Fires once per App mount (typically once per page load).
+  // Gated on first render via useEffect+[] deps so dev-time React.StrictMode
+  // double-mount doesn't double-log.
+  useEffect(() => {
+    logReactHostingMode();
+  }, []);
+
   if (DEMO_PARAM === "primitives") {
     return <PrimitivesGallery />;
   }

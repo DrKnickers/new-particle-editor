@@ -31,7 +31,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
-#include <cstdlib>     // [MT-11] _wgetenv / _wtoi for ALO_VIEWPORT_TRANSPORT
+#include <cstdlib>     // [MT-11/MT-12] _wgetenv / _wtoi for ALO_HOSTING_MODE etc.
 #include <cstring>
 #include <share.h>     // [MT-11] Stage 4f: _SH_DENYNO for _wfsopen sharing
 #include <filesystem>
@@ -450,13 +450,13 @@ struct HostWindowImpl
 
     // [MT-11] Phase 3 Stage 3: WebView2 composition hosting.
     //
-    // m_compositionMode is the env-var-gated kill switch (set in the
-    // ctor from ALO_WEBVIEW2_HOSTING=composition). When true,
-    // InitWebView2 takes the CreateCoreWebView2CompositionController
-    // path instead of CreateCoreWebView2Controller, and a host::Compositor
-    // owns the DirectComposition visual tree that WebView2 plugs into
-    // via put_RootVisualTarget. The default new-UI path is unchanged
-    // when the env var is unset.
+    // m_compositionMode is the env-var-gated mode flag (set in the
+    // ctor from ALO_HOSTING_MODE; defaults to true under [MT-12], opt
+    // out via ALO_HOSTING_MODE=legacy). When true, InitWebView2 takes
+    // the CreateCoreWebView2CompositionController path instead of
+    // CreateCoreWebView2Controller, and a host::Compositor owns the
+    // DirectComposition visual tree that WebView2 plugs into via
+    // put_RootVisualTarget.
     //
     // m_compositionController is the composition-mode controller
     // returned by CreateCoreWebView2CompositionController. We also QI
@@ -514,42 +514,68 @@ struct HostWindowImpl
         modManager->DiscoverMods();
         modManager->RestoreLastSelectedMod();
 
-        // [MT-11] Phase 0 spike: ALO_VIEWPORT_TRANSPORT env var.
-        // "canvas-jpeg" → enable Path A. Anything else → legacy popup.
-        // ALO_VIEWPORT_JPEG_Q overrides the JPEG quality (default 70).
-        if (const wchar_t* v = _wgetenv(L"ALO_VIEWPORT_TRANSPORT"))
+        // [MT-12] Default rendering path is architecture C (DXGI
+        // composition + DComp engine visual + WebView2 composition
+        // hosting). Opt out via ALO_HOSTING_MODE=legacy → architecture
+        // A (AlphaCompositor popup + HWND-hosted WebView2, the
+        // pre-MT-12 default). Unknown values warn and fall through to
+        // default. See ROADMAP §5.x [MT-11] (architecture-C wire-up)
+        // and [MT-12] (default flip + dual-env-var retirement).
+        m_archCMode = true;
+        m_compositionMode = true;
+        if (const wchar_t* v = _wgetenv(L"ALO_HOSTING_MODE"))
         {
-            if (wcscmp(v, L"canvas-jpeg") == 0) m_archCMode = true;
+            if (wcscmp(v, L"legacy") == 0)
+            {
+                m_archCMode = false;
+                m_compositionMode = false;
+            }
+            else if (v[0] != L'\0' && wcscmp(v, L"composition") != 0)
+            {
+                fprintf(stderr,
+                    "[host] WARNING: ALO_HOSTING_MODE=\"%ls\" unrecognized; "
+                    "valid values: \"composition\" (default) or \"legacy\". "
+                    "Falling through to default (composition).\n", v);
+                fflush(stderr);
+            }
         }
-        // [MT-11] Phase 3 Stage 3: ALO_WEBVIEW2_HOSTING env var.
-        // "composition" → switch WebView2 from HWND hosting to
-        // composition hosting via CreateCoreWebView2CompositionController.
-        // Anything else (including unset) → default HWND-mode hosting,
-        // behaviour byte-identical to today.
-        if (const wchar_t* v = _wgetenv(L"ALO_WEBVIEW2_HOSTING"))
+
+        // [MT-12] Boot-mode log line — unconditional (release builds
+        // too) so issue reports include the active mode in their
+        // first log line. Cost: one printf per process launch.
+        fprintf(stderr, "[host] hosting mode: %s\n",
+                m_compositionMode ? "composition (architecture C, default)"
+                                  : "legacy (architecture A, opt-out)");
+        fflush(stderr);
+
+        // [MT-12] Deprecated env-var detection (R7 mitigation). The
+        // four-var toggle (ALO_WEBVIEW2_HOSTING + ALO_VIEWPORT_TRANSPORT
+        // and their VITE_* twins) was retired by [MT-12]; warn loudly
+        // if any is still set so users update muscle memory and shell
+        // scripts. Remove in the future [MT-13]-style cleanup that
+        // deletes architecture A entirely.
+        for (const wchar_t* deprecated : { L"ALO_WEBVIEW2_HOSTING",
+                                           L"ALO_VIEWPORT_TRANSPORT" })
         {
-            if (wcscmp(v, L"composition") == 0) m_compositionMode = true;
+            if (const wchar_t* v = _wgetenv(deprecated))
+            {
+                if (v[0] != L'\0')
+                {
+                    fprintf(stderr,
+                        "[host] WARNING: %ls=\"%ls\" is set, but this env "
+                        "var was retired by [MT-12]. Use ALO_HOSTING_MODE "
+                        "(values: \"composition\" default or \"legacy\") "
+                        "instead. Ignoring %ls.\n",
+                        deprecated, v, deprecated);
+                    fflush(stderr);
+                }
+            }
         }
 
         if (const wchar_t* q = _wgetenv(L"ALO_VIEWPORT_JPEG_Q"))
         {
             int n = _wtoi(q);
             if (n >= 1 && n <= 100) m_archCQuality = n;
-        }
-
-        // Post-audit F11: composition hosting without canvas-jpeg
-        // leaves the legacy viewport popup visible underneath the
-        // composition tree — two surfaces fight for the same viewport
-        // rect. The env-var combination is unsupported; warn loudly
-        // so the inconsistent state is obvious in logs.
-        if (m_compositionMode && !m_archCMode)
-        {
-            fprintf(stderr,
-                "[host] WARNING: ALO_WEBVIEW2_HOSTING=composition requires "
-                "ALO_VIEWPORT_TRANSPORT=canvas-jpeg; the legacy viewport popup "
-                "will remain visible underneath the composition tree. Set "
-                "both env vars together.\n");
-            fflush(stderr);
         }
     }
 
@@ -716,9 +742,12 @@ void HostWindowImpl::RenderD3D9()
 
     // [MT-11] Phase 1: hand the just-composited frame to FramePublisher
     // for encode + base64 + emit. Lifecycle is gated on m_framePublisher
-    // being non-null (only constructed when ALO_VIEWPORT_TRANSPORT=canvas-jpeg
-    // was set in the ctor). See [MT-11] L-015 for why the transport is
-    // inline-in-payload rather than WebResourceRequested.
+    // being non-null (constructed in architecture-C mode — default
+    // under [MT-12], opt-out via ALO_HOSTING_MODE=legacy). See [MT-11]
+    // L-015 for why the transport is inline-in-payload rather than
+    // WebResourceRequested. FramePublisher still runs under composition
+    // mode (frames are wasted host-side work, harmless until future
+    // architecture-A deletion).
     if (m_framePublisher) m_framePublisher->OnFrameComposited();
 
     // spawner/active-count: emit when GetNumInstances() differs from the
@@ -808,7 +837,8 @@ HRESULT HostWindowImpl::InitWebView2()
                 webEnv = env;
 
                 // [MT-11] Phase 3 Stage 3b: composition hosting branch.
-                // Gate is ALO_WEBVIEW2_HOSTING=composition. Stand up the
+                // Gate is m_compositionMode (default true under [MT-12],
+                // false only when ALO_HOSTING_MODE=legacy). Stand up the
                 // host::Compositor (DComp V1 device only, no tree yet —
                 // tree assembly is deferred until inside the composition-
                 // controller completion callback, per FD6 v3 lesson) and

@@ -1,10 +1,11 @@
 // FramePublisher — [MT-11] Phase 1 production transport.
 //
 // Owns the per-frame "encode → base64 → emit" pipeline for the
-// canvas-in-DOM viewport (architecture C). Constructed only when the
-// `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` env var is set; the legacy
-// WS_EX_LAYERED popup path bypasses this class entirely (HostWindow
-// holds the pointer as a nullable unique_ptr).
+// canvas-in-DOM viewport (architecture C). Constructed when the host
+// runs in architecture-C mode (default under [MT-12], opt-out via
+// ALO_HOSTING_MODE=legacy); the legacy WS_EX_LAYERED popup path
+// bypasses this class entirely (HostWindow holds the pointer as a
+// nullable unique_ptr).
 //
 // Lifecycle: constructed alongside the AlphaCompositor (which it does
 // not own), destroyed before the compositor in WM_DESTROY. Calls

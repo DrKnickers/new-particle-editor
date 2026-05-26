@@ -12,52 +12,31 @@ type Props = { bridge: Bridge };
 
 const SLOT_BORDER_PX = 0;  // The real shell doesn't paint a slot border; D3D9 fills the whole rect.
 
-// [MT-11] Phase 1: when VITE_VIEWPORT_TRANSPORT=canvas-jpeg, mount
-// a <canvas> inside the slot and paint frames delivered via the typed
-// `viewport/frame-ready` bridge event (base64 JPEG inline in the payload;
-// see L-015 for why this is inline rather than WebResourceRequested).
-// Default "legacy" behaves identically to pre-MT-11: the slot stays an
-// empty <div> and the WS_EX_LAYERED popup paints engine pixels above the
-// WebView.
+// [MT-12] Default rendering path is architecture C (DXGI composition
+// + DComp engine visual + WebView2 composition hosting). Engine
+// pixels reach the screen via DXGI swapchain → DComp engine visual
+// UNDER the WebView2 visual; transparent regions in the React app
+// show engine through. The frame-ready / <img>-decode pipeline is
+// skipped (FramePublisher still publishes host-side — wasted work,
+// kept until architecture A is deleted in a future cleanup).
 //
-// Read the flag inside a function (not a module-level const) so vitest
-// can override the env var per-test via vi.stubEnv() without needing
-// vi.resetModules() chains. Check BOTH import.meta.env (Vite bakes the
-// build-time value here in production) and process.env (vi.stubEnv
-// writes here in vitest's node runtime). The cost is one property
-// lookup per ViewportSlot mount, which is trivial.
-function isArchCEnabled(): boolean {
-  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_VIEWPORT_TRANSPORT;
-  const fromProcess = typeof process !== "undefined" && process.env
-    ? process.env.VITE_VIEWPORT_TRANSPORT
-    : undefined;
-  return fromImportMeta === "canvas-jpeg" || fromProcess === "canvas-jpeg";
-}
-
-// [MT-11] Phase 3 Stage 4c.1 — composition-mode detection. When the
-// host runs with ALO_WEBVIEW2_HOSTING=composition, engine pixels reach
-// the screen via DXGI swapchain → DComp engine visual UNDER the
-// WebView2 visual (transparent regions show engine through). The
-// canvas-jpeg <img> would paint JPEG-decoded engine frames on TOP of
-// the DXGI source, occluding it and rendering Stage 4's whole GPU
-// pipeline invisible. So under composition mode we SKIP the
-// frame-ready subscription — the <img> stays empty / transparent and
-// DXGI pixels show through. The <canvas> input listeners stay active
-// (Phase 2's viewport/input bridge is still the engine input pathway
-// under composition mode — host's SendMouseInput forwards mouse to
-// WebView2 → DOM canvas → bridge → InputDispatcher → popup HWND →
-// engine WndProc).
+// Opt out via VITE_HOSTING_MODE=legacy at build time → architecture A
+// (legacy AlphaCompositor popup + HWND-hosted WebView2 + JPEG decode
+// into <img>). Mirrors the runtime ALO_HOSTING_MODE check in
+// HostWindow.cpp; a mismatch between build-time and runtime modes
+// triggers the boot-time consistency banner (see App.tsx mode-claim).
 //
-// Build-time gate via VITE_WEBVIEW2_HOSTING env var (mirrors the
-// host's runtime ALO_WEBVIEW2_HOSTING). Both must be set together
-// when building a composition-mode bundle. Stage 7 cleanup will
-// collapse the env-var pair into a single mode.
-function isCompositionMode(): boolean {
-  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_WEBVIEW2_HOSTING;
+// Read the flag inside a function (not a module-level const) so
+// vitest can override the env var per-test via vi.stubEnv() without
+// needing vi.resetModules() chains. Check BOTH import.meta.env
+// (Vite bakes the build-time value here in production) and
+// process.env (vi.stubEnv writes here in vitest's node runtime).
+function isLegacyMode(): boolean {
+  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_HOSTING_MODE;
   const fromProcess = typeof process !== "undefined" && process.env
-    ? process.env.VITE_WEBVIEW2_HOSTING
+    ? process.env.VITE_HOSTING_MODE
     : undefined;
-  return fromImportMeta === "composition" || fromProcess === "composition";
+  return fromImportMeta === "legacy" || fromProcess === "legacy";
 }
 
 export function ViewportSlot({ bridge }: Props) {
@@ -69,12 +48,19 @@ export function ViewportSlot({ bridge }: Props) {
   // these two responsibilities lets the browser handle the resize-
   // friendly atomic-decode-swap that canvas drawImage can't match.
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const archCEnabled = isArchCEnabled();
-  // [MT-11] Phase 3 Stage 4c.1 — see isCompositionMode() comment for
-  // rationale. When true, the frame-ready subscription below is
-  // skipped so the <img> stays empty and DXGI engine pixels show
-  // through. Input handlers on the canvas stay active either way.
-  const compositionMode = isCompositionMode();
+  // [MT-12] Both flags derive from a single legacy-mode check. Under
+  // default (architecture C), legacyMode=false → archCEnabled=true +
+  // compositionMode=true. Under VITE_HOSTING_MODE=legacy, both go
+  // false and the frame-ready subscription / canvas-jpeg path becomes
+  // the active engine-pixel pipeline (architecture A). Kept as
+  // distinct named aliases because each gates a conceptually
+  // different thing (archCEnabled = JPEG transport active;
+  // compositionMode = WebView2 composition hosting active); a future
+  // [MT-13]-style cleanup that deletes architecture A can collapse
+  // them.
+  const legacyMode = isLegacyMode();
+  const archCEnabled = !legacyMode;
+  const compositionMode = !legacyMode;
 
   useEffect(() => {
     const el = ref.current;

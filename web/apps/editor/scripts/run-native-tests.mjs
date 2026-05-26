@@ -52,6 +52,20 @@ async function main() {
     console.log("[run-native-tests] --update flag → UPDATE_A11Y_GOLDENS=1");
   }
 
+  // [MT-12] `--legacy` flag: run the host + Playwright tests in
+  // architecture A (legacy AlphaCompositor popup + HWND-hosted
+  // WebView2) instead of the new default (architecture C / composition).
+  // Caller is responsible for having a matching dist/ baked with
+  // `VITE_HOSTING_MODE=legacy`; the boot-time consistency log in
+  // App.tsx + the host's [host] hosting mode line surface mismatches
+  // immediately. Used by `pnpm test:native:legacy` for the legacy
+  // regression lane (132/0/56 baseline pre-MT-12; same lane still
+  // exists, just opt-in now).
+  if (process.argv.includes("--legacy")) {
+    process.env.ALO_HOSTING_MODE = "legacy";
+    console.log("[run-native-tests] --legacy flag → ALO_HOSTING_MODE=legacy");
+  }
+
   await killAny();
   // Give Windows a moment to release file locks.
   await sleep(300);
@@ -156,14 +170,14 @@ async function main() {
       "tests/alpha-compositor-snapshot.spec.ts",
       // [MT-11] Phase 2 — DOM-event → viewport/input bridge wiring
       // under architecture-C (canvas-in-DOM viewport). Skips with a
-      // clear annotation when ALO_VIEWPORT_TRANSPORT != "canvas-jpeg",
+      // clear annotation when ALO_HOSTING_MODE == "legacy",
       // so runs WITHOUT the env var are a no-op. Included in the
       // harness so the moment canvas-jpeg is enabled (Phase 4 default
       // flip) the bridge surface is gated automatically.
       "tests/canvas-architecture.spec.ts",
       // [MT-11] Phase 3 Stage 3g — composition-hosting A/B parity
       // gate. Tests skip with a clear annotation when
-      // ALO_WEBVIEW2_HOSTING != "composition", so running the
+      // ALO_HOSTING_MODE == "legacy" (composition mode inactive), so running the
       // harness WITHOUT the env var (HWND-mode baseline) is a no-op
       // for this file. Running WITH the env-var pair gates the
       // composition path's bridge layer.
@@ -180,7 +194,7 @@ async function main() {
       "tests/dxgi-resize-stress.spec.ts",
       "tests/dxgi-perf.spec.ts",
       // [MT-11] Phase 3 Stage 5 T7 — scene-rect transform gate. Skips
-      // when ALO_WEBVIEW2_HOSTING != "composition" (LayoutBroker's
+      // when ALO_HOSTING_MODE == "legacy" (composition mode inactive) (LayoutBroker's
       // new wiring is composition-mode-only per R9 mitigation c).
       // Asserts [COMP-engine-transform] log lines fire on
       // layout/scene-rect dispatch with the expected absolute clip.
@@ -188,7 +202,7 @@ async function main() {
       // [MT-11] Phase 3 a11y T9.1 — HWND Win32 UIA snapshot specs.
       // Each parametrizes over its surface-driver array (T5–T8) and
       // golden-compares the normalized UIA tree. Auto-skip under
-      // ALO_WEBVIEW2_HOSTING=composition (T10 covers that lane).
+      // ALO_HOSTING_MODE != legacy (default) (T10 covers that lane).
       // Goldens are generated separately (UPDATE_A11Y_GOLDENS=1 run
       // in T9.3); without goldens these specs fail — run via
       // pnpm test:native only after T9.3 has landed the golden files.
@@ -200,7 +214,7 @@ async function main() {
       // Mirror the T9 HWND quartet but capture via
       // page.accessibility.snapshot() (CDP) instead of Win32 UIA.
       // Auto-skip under default HWND mode (T9 covers that lane);
-      // active only when ALO_WEBVIEW2_HOSTING=composition. Reuse the
+      // active only when ALO_HOSTING_MODE != legacy (default). Reuse the
       // surface-driver arrays from T5-T8 unchanged.
       "tests/a11y-chrome-composition.spec.ts",
       "tests/a11y-dialogs-composition.spec.ts",
