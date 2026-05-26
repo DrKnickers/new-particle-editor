@@ -1503,6 +1503,12 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // now-freed ParticleSystem and would crash a future restore.
         // Mirrors legacy LoadFile at src/main.cpp:1103.
         if (m_undo) m_undo->Clear();
+        // Refresh the "saved" reference snapshot — the fresh-with-
+        // one-root state is the new dirty-bit baseline. Mutate + Ctrl+Z
+        // back here clears the title-bar asterisk in
+        // ApplyUndoSnapshot's content-compare.
+        if (m_pParticleSystem && *m_pParticleSystem)
+            m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         m_currentFilePath.clear();
         sendOk(json::object());
         SetDirty(false);
@@ -1630,6 +1636,12 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // now-freed ParticleSystem. Mirrors legacy LoadFile at
         // src/main.cpp:1103.
         if (m_undo) m_undo->Clear();
+        // Refresh the "saved" reference snapshot — the just-loaded
+        // state IS the saved file's content. Captured AFTER the NT-5
+        // sweep so legacy singleton-link-group .alo files don't show
+        // as dirty when the user undoes back to "as loaded".
+        if (m_pParticleSystem && *m_pParticleSystem)
+            m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         // LT-4 render loop: same notification sequence as file/new —
         // the engine's cached per-instance / per-emitter state is now
         // stale and must be cleared. Matches legacy DoOpenFile path
@@ -1711,6 +1723,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
+        // Refresh the "saved" reference snapshot — what we just wrote
+        // to disk IS the new saved state. ApplyUndoSnapshot uses this
+        // to clear the title-bar asterisk when the user undoes back
+        // to a content-equal state.
+        m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
         SetDirty(false);
         EmitRecentChanged();
@@ -1764,6 +1781,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         m_currentFilePath = path;
         m_recentFiles = WriteRecentFile(path);
+        // Refresh the "saved" reference snapshot — see file/save above.
+        m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
         SetDirty(false);
         EmitRecentChanged();
@@ -3797,12 +3816,15 @@ void BridgeDispatcher::ApplyUndoSnapshot(const std::vector<char>& buf,
         m_emit(env.dump());
     }
 
-    // The new-UI host doesn't call MarkSaved on the save-state entry
-    // today (file/save just toggles m_dirty), so IsAtSavedState is
-    // always false. Set dirty unconditionally — any undo IS a state
-    // change relative to the saved file under the current convention.
-    // Revisit alongside any future MarkSaved-on-save work.
-    SetDirty(true);
+    // Dirty bit follows content-equality against the saved baseline.
+    // `buf` IS the serialized form of the just-restored state (no
+    // engine call between Deserialize and here mutates PS content),
+    // so a direct byte compare against m_savedSnapshot is sufficient
+    // and faster than re-serializing. m_savedSnapshot is refreshed
+    // on file/new + file/open + file/save success; empty means
+    // "no saved baseline" (boot before any file action) and the
+    // compare always reports dirty.
+    SetDirty(buf != m_savedSnapshot);
 
     m_undo->EndApplying();
 }

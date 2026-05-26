@@ -276,6 +276,20 @@ private:
     bool                      m_dirty = false;
     std::vector<std::wstring> m_recentFiles;
 
+    // Serialized "last saved" state for dirty-bit recomputation on
+    // undo / redo. Refreshed on file/new + file/open + file/save
+    // success (the three points where the user's "saved" reference
+    // moves). ApplyUndoSnapshot content-compares the restored
+    // ParticleSystem against this buffer to clear the dirty bit when
+    // the user undoes back to the saved state. Empty buffer means
+    // "no saved baseline yet" (boot state); restores always stay
+    // dirty in that case. Replaces the legacy
+    // UndoStack::MarkSaved/IsAtSavedState pair, which doesn't fit
+    // the new-UI's PRE-mutation captureUndo convention — the cursor
+    // after undo lands on the pre-mutation snapshot, not the
+    // post-save snapshot, so the legacy isSavedState flag misses.
+    std::vector<char>         m_savedSnapshot;
+
     // Phase 3 Screen 8 Batch 4 — spawner config cache for snapshot
     // parity. The host doesn't yet own a SpawnerDriver* (matches Batch 3
     // for ParticleSystem*); spawner/start handlers cache the incoming

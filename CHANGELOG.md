@@ -16,6 +16,63 @@ Conventions:
 
 ## Changelog
 
+### Dirty bit clears on undo-back-to-saved (snap-restore follow-up)
+
+*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Tightening on the snap-restore ship that just landed. After Ctrl+Z
+restores a state that matches the last saved (or `file/new`'d)
+content, the dirty bit now clears — the next File → New no longer
+pops the "Save changes?" prompt for a state the user has effectively
+returned to. Matches legacy `IsAtSavedState()` semantics in user-
+visible behaviour.
+
+**How we tackled it.** The legacy `UndoStack::MarkSaved` /
+`IsAtSavedState` pair doesn't fit the new-UI's PRE-mutation
+`captureUndo()` convention — the cursor after an undo lands on the
+pre-mutation snapshot, not the post-save entry, so the legacy
+isSavedState flag is checked on the wrong row. Replaced it with a
+content-compare against a stored `m_savedSnapshot` byte buffer
+([`src/host/BridgeDispatcher.h`](src/host/BridgeDispatcher.h)):
+refreshed on `file/new` + `file/open` + `file/save` / `file/save-as`
+success via `UndoStack::Serialize(**m_pParticleSystem)`, then
+[`ApplyUndoSnapshot`](src/host/BridgeDispatcher.cpp) compares the
+incoming snapshot bytes directly against the buffer to compute
+`SetDirty(buf != m_savedSnapshot)`. Since `buf` IS the serialized
+form of the just-restored state, no re-serialize is needed at compare
+time. Cost: one extra `Serialize` per file-state-baseline transition
+(microseconds for typical scenes); zero cost on the mutation hot path.
+
+**Issues encountered and resolutions.**
+
+1. **Boot-state baseline gap.** `m_savedSnapshot` starts empty —
+   before the user does any `file/new` / `file/open` / `file/save`,
+   the boot-state ParticleSystem has no recorded baseline. Ctrl+Z
+   back to a content-equal boot state still reports dirty (the
+   compare against an empty buffer always fails). Documented as a
+   known minor edge case; user does File → New once to establish
+   the baseline. Smoke test confirmed: the user-visible behaviour
+   matches the design intent both *with* (silent File → New) and
+   *without* (Save changes? prompt) a baseline established.
+
+2. **Smoke-test surface.** The dirty flag isn't reflected in the
+   title bar in --new-ui mode (only consumed by the save-prompt
+   gate on file/new and file/open). The smoke used the
+   presence/absence of the "Save changes?" prompt on File → New as
+   a proxy for `dirty=true`/`dirty=false`. Two scenarios were
+   exercised end-to-end: (a) File → New → rename → Ctrl+Z → File →
+   New silent (cleared via post-new baseline); (b) File → New →
+   rename → File → Save As → rename → Ctrl+Z → File → New silent
+   (cleared via post-save baseline). Both passed.
+
+Test counts at ship: vitest **343/343** (unchanged). Playwright
+native (default HWND dist/): **103 passed + 26 skipped + 0 failed**
+(unchanged). MSBuild Debug + Release x64 clean via the .sln (per
+L-023). Files touched: 1 .h field + 4 baseline-refresh sites and 1
+content-compare site in [`src/host/BridgeDispatcher.{h,cpp}`](src/host/BridgeDispatcher.cpp).
+
+---
+
 ### `undo/perform` snap-restore lands; new-UI Ctrl+Z / Ctrl+Shift+Z rewinds the ParticleSystem
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
