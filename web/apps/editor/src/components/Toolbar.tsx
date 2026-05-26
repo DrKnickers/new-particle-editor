@@ -46,7 +46,7 @@ export function Toolbar({ bridge }: Props) {
   const { visible: spawnerVisible, toggle: toggleSpawner } = useSpawnerVisibility();
 
   return (
-    <div className="toolbar">
+    <div data-testid="toolbar" className="toolbar">
       {/* Group 1: file actions. New / Open route through promptSaveChanges
           so a dirty document gets the Save/Discard/Cancel prompt before
           being replaced (same gate the MenuBar uses). Save + Save As are

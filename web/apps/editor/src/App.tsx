@@ -154,7 +154,7 @@ function AppShell() {
 
   return (
     <BridgeContext.Provider value={bridge}>
-    <div className="flex h-full w-full flex-col text-text">
+    <div data-testid="app-shell" className="flex h-full w-full flex-col text-text">
       {/* Top bar */}
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-bg px-4 text-sm">
         <span className="font-semibold">AloParticleEditor</span>

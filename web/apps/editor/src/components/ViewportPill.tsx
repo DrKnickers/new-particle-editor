@@ -47,7 +47,7 @@ export function ViewportPill({ bridge }: Props) {
   const leave = snap?.leaveParticles ?? true;
 
   return (
-    <div ref={ref} className="vp-tools" role="group" aria-label="Viewport toggles">
+    <div ref={ref} data-testid="viewport-pill" className="vp-tools" role="group" aria-label="Viewport toggles">
       <button
         type="button"
         className={`tool ${ground ? "active" : ""}`}
