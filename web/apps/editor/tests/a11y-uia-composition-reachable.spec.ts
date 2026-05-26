@@ -63,7 +63,7 @@ import { captureUIA, discoverHostHwnd } from "./helpers/uia";
 import type { UIANode } from "./helpers/a11y-normalizer";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+const COMPOSITION_MODE = process.env.ALO_HOSTING_MODE !== "legacy" /* [MT-12] */;
 
 let browser: Browser;
 let page: Page;
@@ -94,7 +94,7 @@ test.beforeEach(async ({}, testInfo) => {
     testInfo.annotations.push({
       type: "skip-reason",
       description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — the composition-mode " +
+        "ALO_HOSTING_MODE == 'legacy' (composition mode inactive) — the composition-mode " +
         "UIA backbone is composition-specific (HWND mode has an extra " +
         "AloHostViewport Pane + deeper wrapper chain)."
     });

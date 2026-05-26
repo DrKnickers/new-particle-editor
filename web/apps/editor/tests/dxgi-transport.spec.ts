@@ -39,7 +39,7 @@
 //     swapchain create, Present1 — all emit [COMP-engine-fail])
 //
 // Skip behaviour: each test no-ops with a clear message when
-// ALO_WEBVIEW2_HOSTING != "composition". Running the harness without
+// ALO_HOSTING_MODE == "legacy" (composition mode inactive). Running the harness without
 // the env var (HWND-mode baseline) silently skips this file.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
@@ -47,7 +47,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+const COMPOSITION_MODE = process.env.ALO_HOSTING_MODE !== "legacy" /* [MT-12] */;
 
 // Host.log path — written by the host's Log() macro, see HostWindow.cpp.
 // Path mirrors what the [host] WebView2 user-data folder line points at.
@@ -81,9 +81,9 @@ test.beforeEach(({}, testInfo) => {
     testInfo.annotations.push({
       type: "skip-reason",
       description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — DXGI transport gate not " +
-        "applicable to this run. Set both ALO_WEBVIEW2_HOSTING=composition " +
-        "and ALO_VIEWPORT_TRANSPORT=canvas-jpeg to enable.",
+        "ALO_HOSTING_MODE == 'legacy' (composition mode inactive) — DXGI transport gate not " +
+        "applicable to this run. Set both ALO_HOSTING_MODE != legacy (default) " +
+        "and [MT-12] retired to enable.",
     });
     test.skip();
   }

@@ -3,7 +3,7 @@
 // Pins the contract that the `viewport/capture-snapshot` bridge command
 // continues to produce a valid base64 PNG after the per-frame
 // `lastRawDib` cache was deferred. The host runs in arch B (FD9b
-// WS_EX_LAYERED popup, no `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) under
+// WS_EX_LAYERED popup, no `[MT-12] retired`) under
 // the default Playwright config, so this spec exercises exactly the
 // path that lost its cache: `Composite()` skips the cache copy, and
 // `CaptureSnapshotPng()` must do its own `GetRenderTargetData` +

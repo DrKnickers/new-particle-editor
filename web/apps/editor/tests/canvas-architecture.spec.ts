@@ -10,7 +10,7 @@
 // attachment, encoder logic, or TYPING_TAGS guard is caught in CI.
 //
 // Skip-handling: when the host is launched WITHOUT
-// `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`, the canvas isn't mounted and
+// `[MT-12] retired`, the canvas isn't mounted and
 // the listeners aren't attached — every test in this file skips. Once
 // canvas-jpeg becomes the default (Phase 4), the skip turns into a
 // hard requirement automatically.
@@ -84,7 +84,7 @@ async function archCEnabled(p: Page): Promise<boolean> {
 
 test.beforeEach(async () => {
   const enabled = await archCEnabled(page);
-  test.skip(!enabled, "canvas-jpeg transport not active — set ALO_VIEWPORT_TRANSPORT=canvas-jpeg + VITE_VIEWPORT_TRANSPORT=canvas-jpeg");
+  test.skip(!enabled, "canvas-jpeg transport not active — set [MT-12] retired + VITE_HOSTING_MODE != legacy (default)");
   await installBridgeProxy(page);
 });
 

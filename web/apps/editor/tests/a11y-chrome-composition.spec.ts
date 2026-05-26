@@ -6,7 +6,7 @@ import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
 import "./helpers/toMatchJSONGolden";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+const COMPOSITION_MODE = process.env.ALO_HOSTING_MODE !== "legacy" /* [MT-12] */;
 // Absolute path because the editor's CWD is repo-root (per run-native-tests.mjs:66),
 // not the tests dir — see the matching comment in a11y-chrome.spec.ts (HWND lane).
 // ESM-equivalent of __dirname (package is "type": "module").
@@ -53,7 +53,7 @@ test.beforeEach(async ({}, testInfo) => {
     testInfo.annotations.push({
       type: "skip-reason",
       description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — composition-mode " +
+        "ALO_HOSTING_MODE == 'legacy' (composition mode inactive) — composition-mode " +
         "DOM-snapshot specs only run when the editor is in composition mode. " +
         "Use a11y-chrome.spec.ts (Win32 UIA) for the default HWND lane."
     });

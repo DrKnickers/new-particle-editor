@@ -27,12 +27,12 @@
 // extend via layout/viewport-rect which DOES change the engine RT
 // size, but that doesn't shift the host window outer rect).
 //
-// Skip behaviour: gates on ALO_WEBVIEW2_HOSTING=composition.
+// Skip behaviour: gates on ALO_HOSTING_MODE != legacy (default).
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+const COMPOSITION_MODE = process.env.ALO_HOSTING_MODE !== "legacy" /* [MT-12] */;
 
 // Tuneable thresholds. The mean-FPS gate is intentionally generous
 // — local dev rigs vary, CI machines (if this spec ever runs on CI)
@@ -67,7 +67,7 @@ test.beforeEach(({}, testInfo) => {
     testInfo.annotations.push({
       type: "skip-reason",
       description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — DXGI perf gate not " +
+        "ALO_HOSTING_MODE == 'legacy' (composition mode inactive) — DXGI perf gate not " +
         "applicable to HWND-mode runs.",
     });
     test.skip();

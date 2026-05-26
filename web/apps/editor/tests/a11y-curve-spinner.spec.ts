@@ -8,7 +8,7 @@ import allowlist from "./helpers/a11y-allowlist.json" with { type: "json" };
 import "./helpers/toMatchJSONGolden";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
+const COMPOSITION_MODE = process.env.ALO_HOSTING_MODE !== "legacy" /* [MT-12] */;
 // Absolute path because the editor's CWD is repo-root (per run-native-tests.mjs:66),
 // not the tests dir — a relative path here would resolve to <repo>/tests/fixtures/...
 // which doesn't exist. Resolve from this spec's __dirname instead. See T9.0 pre-flight.
@@ -65,7 +65,7 @@ test.beforeEach(async ({}, testInfo) => {
     testInfo.annotations.push({
       type: "skip-reason",
       description:
-        "ALO_WEBVIEW2_HOSTING == 'composition' — HWND Win32 UIA spec " +
+        "ALO_HOSTING_MODE != 'legacy' (composition mode active) — HWND Win32 UIA spec " +
         "auto-skips in composition mode. Use a11y-curve-spinner-composition.spec.ts " +
         "(DOM snapshot) for the composition lane."
     });
