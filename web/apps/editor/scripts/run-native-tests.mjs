@@ -185,6 +185,16 @@ async function main() {
       "tests/a11y-dialogs.spec.ts",
       "tests/a11y-keyboard.spec.ts",
       "tests/a11y-curve-spinner.spec.ts",
+      // [MT-11] Phase 3 a11y T10 — composition-mode DOM-snapshot specs.
+      // Mirror the T9 HWND quartet but capture via
+      // page.accessibility.snapshot() (CDP) instead of Win32 UIA.
+      // Auto-skip under default HWND mode (T9 covers that lane);
+      // active only when ALO_WEBVIEW2_HOSTING=composition. Reuse the
+      // surface-driver arrays from T5-T8 unchanged.
+      "tests/a11y-chrome-composition.spec.ts",
+      "tests/a11y-dialogs-composition.spec.ts",
+      "tests/a11y-keyboard-composition.spec.ts",
+      "tests/a11y-curve-spinner-composition.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
