@@ -221,6 +221,18 @@ private:
     // serialised as a JSON array of strings.
     void EmitRecentChanged();
 
+    // [NT-5] Walks the currently-bound ParticleSystem's emitters and,
+    // for every positive linkGroup with exactly one member, demotes
+    // that lone member's linkGroup to 0. Idempotent — a second call
+    // produces no change. Matches the render-layer filter at
+    // computeLinkGroupBrackets (web/.../link-group-colors.ts) which
+    // hides single-member groups from the gutter, so data and view
+    // agree end-to-end. No-op when the ParticleSystem isn't bound.
+    // O(emitters): two passes (count + demote). Does NOT call
+    // captureUndo or SetDirty — callers decide how the sweep
+    // composes with their own undo/dirty semantics.
+    void EnforceSingleMemberLinkGroups();
+
     Engine*            m_engine;
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;

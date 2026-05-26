@@ -16,6 +16,84 @@ Conventions:
 
 ## Changelog
 
+### Engine-side single-member link-group enforcement ([NT-5]) — leaving or deleting reduces a link group to 1 member; lone survivor auto-demotes to `linkGroup = 0`; legacy `.alo` files with pre-NT-5 singletons self-correct on load
+
+*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+ROADMAP §1.1 [NT-5]. Three C++ mutation paths can leave a link group
+with exactly one member: `linkGroups/set-membership` when leaving a
+2-member group OR joining a different group that shrinks the previous,
+`linkGroups/set-membership` with `groupId: -1` and a single-id input
+list (creating a new group with one member), and `emitters/delete` when
+one of a 2-member group's members is deleted. Pre-NT-5, the render
+layer already filtered single-member groups out of the gutter
+([`computeLinkGroupBrackets:71`](web/apps/editor/src/lib/link-group-colors.ts:71)),
+but the data layer still carried the orphaned `linkGroup = N`. The
+Inspector's "Link Group: N" field on a de-facto-unlinked emitter
+read honestly-but-confusingly. NT-5 closes the data/render gap by
+running a post-mutation sweep that demotes any singleton group's
+lone member to `linkGroup = 0`, so the data layer matches the
+rendered view end-to-end. The save format is unchanged; legacy
+`.alo` files with pre-NT-5 singletons self-correct on `file/open` via
+a load-time sweep at the same helper. The sweep is idempotent — a
+second call on an already-enforced tree is a no-op.
+
+**How we tackled it.** New private member method
+[`BridgeDispatcher::EnforceSingleMemberLinkGroups()`](src/host/BridgeDispatcher.cpp)
+walks the bound `ParticleSystem`'s emitters in two passes: first
+counts members per positive linkGroup via `std::map<uint32_t, int>`;
+second demotes the lone member of every singleton. Null-checked
+iteration matches the existing `groupId == -1` scan pattern at the
+`linkGroups/set-membership` handler. Three call sites land it:
+(1) after the mutation loop in `linkGroups/set-membership` (covers
+ROADMAP paths 1 and 3 — same handler, different parameter shapes);
+(2) after `sys->deleteEmitter(target)` + the wasSelected block in
+`emitters/delete` (covers path 2); (3) immediately after
+`*m_pParticleSystem = std::move(loaded)` in `file/open` (the
+load-time sweep — see below). Both mutation sites already call
+`captureUndo()` upstream, so the auto-demotion is captured in the
+same undo snapshot as the explicit mutation — Ctrl-Z restores the
+pre-mutation `linkGroup` values atomically. The load-time sweep does
+NOT call `markDirty()` since the correction is normalization, not
+user-driven mutation; marking dirty would force a save-prompt on
+every open of a legacy file even when the user makes no further
+changes. The JS-side mock at
+[`mock-state.ts`](web/apps/editor/src/bridge/mock-state.ts) gains a
+parallel `enforceSingleMemberLinkGroups(tree)` pure function chained
+into `setLinkGroupMembership` and `deleteEmitter` returns; the mock
+handlers in [`mock.ts`](web/apps/editor/src/bridge/mock.ts) need no
+change because the mutation helpers themselves now return
+enforce-clean trees. The mock has no `file/open` handler — load-time
+parity is a host-only concern.
+
+Test counts at ship: vitest **343 / 343** (was 338; +5 new NT-5
+tests covering path 1 leave-2-member, path 1b shrink-via-join,
+path 2 delete-one-of-2, regression guard for 3-member groups, and
+idempotence; +1 existing test updated to reflect the path-3 contract
+change at
+[`bridge-contract.test.ts:732`](web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts:732)
+where `groupId: -1` + single id now demotes to 0 instead of
+landing at the resolved positive id). Two new Playwright spec
+entries in
+[`emitter-mutations.spec.ts`](web/apps/editor/tests/emitter-mutations.spec.ts)
+verify the same invariants end-to-end against the C++ host (leave +
+delete paths; expected native count: **101 passed + 26 skipped +
+0 failed** under default dist/, no env vars). MSBuild Debug + Release
+x64 clean. C++ touched:
+[`src/host/BridgeDispatcher.{h,cpp}`](src/host/BridgeDispatcher.h)
+(~75 net lines for the new helper + three call sites + `<map>` include
++ updated handler comments). Web touched:
+[`web/apps/editor/src/bridge/mock-state.ts`](web/apps/editor/src/bridge/mock-state.ts)
+(+~35 lines for `enforceSingleMemberLinkGroups` + wiring into the two
+mutation helpers);
+[`web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts`](web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts)
+(+~120 lines for the 5 new NT-5 tests + 1 updated assertion + comment
+refresh);
+[`web/apps/editor/tests/emitter-mutations.spec.ts`](web/apps/editor/tests/emitter-mutations.spec.ts)
+(+~120 lines for the 2 new Playwright tests).
+
+---
+
 ### Lessons retro-doc for [MT-11] Phase 3 — L-019/L-020/L-021/L-022 formalized; HANDOFF latent-bug claim retracted
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

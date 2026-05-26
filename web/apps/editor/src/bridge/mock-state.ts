@@ -405,7 +405,10 @@ export function duplicateEmitter(
 }
 
 /** Delete the emitter at `id` (and its subtree). Returns the new tree
- *  or null when the id isn't found / is the synthetic root. */
+ *  or null when the id isn't found / is the synthetic root.
+ *  Post-deletion, runs `enforceSingleMemberLinkGroups` (NT-5) so the
+ *  survivor of a 2-member group whose other member was just deleted
+ *  drops to `linkGroup = 0` automatically. */
 export function deleteEmitter(
   tree: EmitterTreeDto,
   id: number,
@@ -423,7 +426,7 @@ export function deleteEmitter(
   };
   const next = prune(tree.root);
   if (next === null) return null;  // can't prune synthetic root
-  return { root: next };
+  return enforceSingleMemberLinkGroups({ root: next });
 }
 
 /** Rename the emitter at `id`. Returns the new tree (always defined;
@@ -616,7 +619,9 @@ export function findUnusedLinkGroupId(tree: EmitterTreeDto): number {
 
 /** Update linkGroup membership on a batch of emitters. `groupId === -1`
  *  means "create a new group" (picks the smallest unused positive id
- *  via `findUnusedLinkGroupId`). `null` or `0` clears membership. */
+ *  via `findUnusedLinkGroupId`). `null` or `0` clears membership.
+ *  Post-mutation, runs `enforceSingleMemberLinkGroups` to keep the
+ *  data layer aligned with the render-layer filter — see NT-5. */
 export function setLinkGroupMembership(
   tree: EmitterTreeDto,
   ids: number[],
@@ -637,7 +642,43 @@ export function setLinkGroupMembership(
       : n;
     return { ...transformed, children: transformed.children.map(walk) };
   };
-  return { root: walk(tree.root) };
+  return enforceSingleMemberLinkGroups({ root: walk(tree.root) });
+}
+
+/** [NT-5] Sweep the tree and demote any positive `linkGroup` with
+ *  exactly one member to 0. Idempotent — a second call produces no
+ *  further change. Mirrors the host-side `EnforceSingleMemberLinkGroups`
+ *  in `src/host/BridgeDispatcher.cpp` AND the render-layer filter at
+ *  `computeLinkGroupBrackets` in `src/lib/link-group-colors.ts` so
+ *  data and view agree end-to-end. Pure function — returns a new tree
+ *  DTO; doesn't mutate the input. */
+export function enforceSingleMemberLinkGroups(
+  tree: EmitterTreeDto,
+): EmitterTreeDto {
+  // Pass 1: count members per positive linkGroup.
+  const counts = new Map<number, number>();
+  const visit = (n: EmitterTreeNode) => {
+    if (n.linkGroup > 0) {
+      counts.set(n.linkGroup, (counts.get(n.linkGroup) ?? 0) + 1);
+    }
+    n.children.forEach(visit);
+  };
+  visit(tree.root);
+
+  // Short-circuit: if every group has ≥ 2 members already, no rewrite.
+  // (Common case once enforcement has been running — a no-op call.)
+  let anySingleton = false;
+  counts.forEach((c) => { if (c === 1) anySingleton = true; });
+  if (!anySingleton) return tree;
+
+  // Pass 2: rebuild with singletons demoted to linkGroup=0.
+  const demote = (n: EmitterTreeNode): EmitterTreeNode => {
+    const shouldDemote =
+      n.linkGroup > 0 && counts.get(n.linkGroup) === 1;
+    const next = shouldDemote ? { ...n, linkGroup: 0 } : n;
+    return { ...next, children: next.children.map(demote) };
+  };
+  return { root: demote(tree.root) };
 }
 
 // ─── Batch B3 helpers — drag/drop reorder + reparent ────────────────

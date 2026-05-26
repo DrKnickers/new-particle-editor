@@ -1,3 +1,444 @@
+# [NT-5] Engine-side single-member link-group enforcement
+
+> **Active plan.** ROADMAP §1.1 NT-5 item. Picked up after the
+> post-[MT-11] Phase 3 retro-doc dispatch shipped earlier this
+> session (`origin/lt-4` at `84907d3`). The retro-doc dispatch
+> plan + review section is preserved below for traceability — see
+> "Prior dispatch in this session" header.
+
+**Difficulty:** ★★ (2/5) — small, contained data-layer fix matching
+an existing render-layer filter. Touches 2 handlers + 1 helper on
+each side (C++ and JS mock) + new contract tests.
+
+**Effort estimate:** ~3-4 hours including drafting, tests,
+verification, FF + push.
+
+**Owner:** this session (`claude/festive-hoover-6abdbf`).
+
+**Target:** fast-forward into `lt-4` and push to `origin/lt-4` at end.
+
+**Status:** plan drafted 2026-05-25 after codebase exploration
+confirmed the 2 host handlers + 2 mock handlers and the existing
+render-layer filter at
+[`computeLinkGroupBrackets`](../web/apps/editor/src/lib/link-group-colors.ts:51).
+**Awaiting user OK before any code edits.**
+
+---
+
+## 1. Goal + scope
+
+**Goal.** When any mutation leaves a link group with exactly one
+member, auto-demote that lone member to `linkGroup = 0` before
+the operation returns. The data layer ends up matching the
+render-layer's existing filter
+([`computeLinkGroupBrackets:71`](../web/apps/editor/src/lib/link-group-colors.ts:71)
+already hides single-member groups from the gutter). Inspector
+panels reading `linkGroup` directly will then show `0` for
+de-facto-unlinked emitters instead of "Link Group: 3" on an
+emitter with no bracket.
+
+**In:**
+
+- **C++ host.** New private helper
+  `BridgeDispatcher::EnforceSingleMemberLinkGroups()` that walks
+  the current particle system's emitters, counts members per
+  positive `linkGroup`, and demotes the lone member to 0 for any
+  group with count = 1. O(N) sweep.
+- Call the new helper from inside the **three** handlers that
+  can leave singletons:
+  1. `linkGroups/set-membership` (covers ROADMAP paths 1 + 3 —
+     same handler). Mutation + sweep both captured by the
+     pre-existing `captureUndo()`.
+  2. `emitters/delete` (covers ROADMAP path 2). Same undo
+     coverage.
+  3. `file/open` after `*m_pParticleSystem = std::move(loaded)`
+     at [`BridgeDispatcher.cpp:1589`](../src/host/BridgeDispatcher.cpp:1589)
+     — **load-time sweep** so old `.alo` files with pre-NT-5
+     singletons self-correct on open. NOT marked dirty (the
+     correction is a normalization, not user-driven mutation;
+     a dirty bit would force a save-prompt on every open of a
+     legacy file). `EmitEmittersTreeChanged()` at line 1619
+     propagates the corrected state to React subscribers.
+  `file/new` doesn't need the sweep — fresh ParticleSystem has
+  one root emitter at `linkGroup = 0`, no singleton possible.
+- **JS mock.** Mirror helper `enforceSingleMemberLinkGroups(tree)`
+  in [`mock-state.ts`](../web/apps/editor/src/bridge/mock-state.ts)
+  + chain it into the existing `setLinkGroupMembership` and
+  `deleteEmitter` mock helpers. Pure function over the immutable
+  tree DTO — fits the existing pattern.
+- **bridge-schema.** No changes — wire shape is unchanged. The
+  enforcement is invisible from the bridge contract; only the
+  resulting tree state differs.
+- **New vitest contract tests** in
+  [`bridge-contract.test.ts`](../web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts)
+  covering each path:
+  1. Leaving a 2-member group → both members at `linkGroup = 0`
+  2. Deleting one of 2 members → survivor at `linkGroup = 0`
+  3. `set-membership { ids: [single], groupId: -1 }` → that
+     emitter ends at `linkGroup = 0`, no new group created
+  4. 3-member group losing one → 2 members stay in the group
+     (regression guard against over-eager demotion)
+- **New Playwright spec** entry in
+  [`emitter-mutations.spec.ts`](../web/apps/editor/tests/emitter-mutations.spec.ts)
+  covering the same invariants against the C++ host. One end-to-end
+  test per path; uses the existing `installBridgeProxy` pattern.
+- **CHANGELOG entry** with TODO-HASH/TODO-PR placeholders matching
+  Phase 3 + lessons-retro-doc pattern. Section title plain prose
+  ("Engine-side single-member link-group enforcement (NT-5)").
+- **End-of-session FF + push** per CLAUDE.md branch workflow.
+
+**Out:**
+
+- **ROADMAP.md update.** Per CLAUDE.md, ROADMAP items get
+  strikethrough + ✅ Shipped #NN **when they merge to master**, not
+  to lt-4. NT-5 hasn't reached master yet; the strikethrough +
+  `✅ Shipped (#NN)` lands in a later master-merge dispatch. Leaving
+  ROADMAP.md alone here.
+- **NT-6 (visual-stability lane assignment for bracket gutter)** —
+  separate roadmap item, explicitly conditioned on user feedback.
+- **Other mutation paths** beyond the two named. Surveyed during
+  pre-coding:
+  - `emitters/duplicate-with-index-increment` — duplicate inherits
+    source's `linkGroup`. Duplicating a sole member of a group
+    bumps count from 1 → 2 (group becomes valid; no further
+    enforcement needed at duplicate time AND would actually defeat
+    the data-layer demotion that should have already fired when
+    the group went to 1 member). Not in scope.
+  - `emitters/drop` (reparent / reorder) — does not touch
+    `linkGroup`. Not a hazard path.
+  - `emitters/import-from-file` — currently throws "Phase 3+ not
+    implemented" in the mock; native handler missing entirely
+    (G1 from post-audit-followups). Not in scope.
+- **L-022 audit of NT-5 itself.** The ROADMAP entry was authored
+  during MT-9 / MT-10 (per its mention of `kBracketPalette` and the
+  B1 render-layer filter); the 3 enumerated mutation paths describe
+  current handler state accurately based on this dispatch's pre-
+  coding verification. No retraction needed.
+
+## 2. What the codebase already gives us
+
+- **C++ host:** [`src/host/BridgeDispatcher.cpp:2429`](../src/host/BridgeDispatcher.cpp:2429)
+  is the `emitters/delete` handler. [`src/host/BridgeDispatcher.cpp:3233`](../src/host/BridgeDispatcher.cpp:3233)
+  is the `linkGroups/set-membership` handler. Both call
+  `captureUndo()` before mutating + `EmitEmittersTreeChanged()`
+  after. The new helper inserts cleanly between mutation and emit.
+- **C++ tree access:** `m_pParticleSystem->get()->getEmitters()`
+  returns the flat `vector<Emitter*>` used by the existing
+  `groupId == -1` scan at
+  [`BridgeDispatcher.cpp:3257`](../src/host/BridgeDispatcher.cpp:3257)
+  — same iteration pattern fits the enforce helper.
+- **JS mock:** [`mock-state.ts:620`](../web/apps/editor/src/bridge/mock-state.ts:620)
+  is `setLinkGroupMembership`. [`mock-state.ts:409`](../web/apps/editor/src/bridge/mock-state.ts:409)
+  is `deleteEmitter`. Both return a new immutable tree DTO; the
+  new enforce helper chains in as `enforce(setLinkGroupMembership(...))`
+  before the caller's `setTree(...)` call.
+- **Render-layer reference:** [`link-group-colors.ts:51-79`](../web/apps/editor/src/lib/link-group-colors.ts:51)
+  `computeLinkGroupBrackets` already counts members per group
+  and filters `range.count < 2`. The new helper uses the same
+  counting pattern (Map<groupId, count>) — porting the existing
+  shape to a data-layer pass.
+- **Existing contract-test patterns:**
+  [`bridge-contract.test.ts:463`](../web/apps/editor/src/bridge/__tests__/bridge-contract.test.ts:463),
+  `:635`, `:741`, `:742` already assert `linkGroup === 0` on
+  known-detached emitters. New tests follow the same
+  `expect(node.linkGroup).toBe(0)` shape.
+- **Existing Playwright spec:**
+  [`emitter-mutations.spec.ts`](../web/apps/editor/tests/emitter-mutations.spec.ts)
+  is the natural home for the end-to-end test — covers the same
+  mutation surface.
+
+## 3. Architecture / implementation approach
+
+The fix is **post-mutation full-tree sweep** ("Option α"), not
+incremental tracking ("Option β"). Reasoning:
+
+- Trees are tiny in practice (typically <100 emitters); O(N) sweep
+  is sub-millisecond. The `groupId == -1` branch in
+  `set-membership` already does an O(N) tree walk; we're adding
+  one more.
+- Mirrors the render-layer filter's logic (count members per
+  group, treat count < 2 specially) — the data-layer pass becomes
+  the same shape, just mutating instead of filtering.
+- Incremental tracking would need to know which groups were
+  "affected" by each mutation — derivable but adds code, and is
+  brittle to future mutation paths. Full sweep is robust.
+
+**C++ implementation:**
+
+New private helper in `BridgeDispatcher.{h,cpp}`:
+
+```cpp
+// Walk the current particle system's emitters; for every positive
+// linkGroup with exactly one member, demote that member's
+// linkGroup to 0. Matches the render layer's
+// `computeLinkGroupBrackets` filter (which hides single-member
+// groups from the gutter) so data and view agree end-to-end.
+// O(emitters) — uses two passes: first to count, second to
+// demote. Idempotent: a second call is a no-op.
+void BridgeDispatcher::EnforceSingleMemberLinkGroups();
+```
+
+Called from two sites:
+
+1. `linkGroups/set-membership` — inserted between the `for (const
+   auto& v : idsJson)` loop (line 3275-3281) and the `sendOk` call
+   (line 3282).
+2. `emitters/delete` — inserted after the `sys->deleteEmitter(target)`
+   call (line 2445) and the wasSelected block (lines 2447-2459),
+   before the `sendOk` (line 2461).
+
+Both sites already have `captureUndo()` upstream — the auto-demotion
+is captured in the same undo snapshot as the explicit mutation.
+
+**JS mock implementation:**
+
+New exported helper in [`mock-state.ts`](../web/apps/editor/src/bridge/mock-state.ts):
+
+```typescript
+/** Sweep the tree and demote any linkGroup that has exactly one
+ *  member down to 0. Idempotent. Mirrors the host-side
+ *  EnforceSingleMemberLinkGroups + the render-layer's
+ *  computeLinkGroupBrackets filter — keeps data and view in
+ *  agreement end-to-end. */
+export function enforceSingleMemberLinkGroups(
+  tree: EmitterTreeDto,
+): EmitterTreeDto;
+```
+
+Wired into the two existing mutation helpers:
+- `setLinkGroupMembership` returns `enforce(walked)` instead of
+  `walked`
+- `deleteEmitter` returns `enforce(prunedTree)` instead of
+  `prunedTree`
+
+The implementation is a two-pass walker: pass 1 counts groups,
+pass 2 mapNode-style rewrites singletons.
+
+**bridge-contract.test.ts additions:** Four new tests under the
+existing `describe("linkGroups/set-membership", ...)` and
+`describe("emitters/delete", ...)` blocks. Each test seeds a tree
+fixture with a known linkGroup configuration, dispatches the
+mutation, then asserts the resulting tree's linkGroup values.
+
+**emitter-mutations.spec.ts addition:** One new test
+`"single-member link group auto-demotes data layer"` that exercises
+all three paths against the C++ host via the existing bridge proxy.
+Uses the same fixture-loading pattern as the existing tests in
+that file.
+
+**CHANGELOG entry:** Following the established shape — section title
+plain prose, italicized date line with TODO-HASH/TODO-PR
+placeholders, three paragraphs (What ships / How we tackled it /
+Issues encountered if any).
+
+## 4. Risks named up front + mitigations
+
+1. **Risk — Fixture brittleness.** The mock fixture in
+   `mock-state.ts:165-204` has roots "Smoke" + "Sparks" at
+   `linkGroup: 1` and "Flash" at `linkGroup: 0`. With NT-5's
+   enforcement, the fixture's initial state remains valid (Smoke +
+   Sparks = 2 members in group 1). But if any contract test
+   currently asserts a single-member-group existence, it'd break.
+   *Mitigation:* before drafting code, grep `bridge-contract.test.ts`
+   for `linkGroup: <positive>` assertions and verify each tested
+   scenario stays valid post-enforcement. The current `linkGroup
+   === 0` assertions (lines 463, 635, 741, 742) are unaffected.
+
+2. **Risk — Undo snapshot drift.** Both handlers call
+   `captureUndo()` upstream of the mutation. The auto-demotion fires
+   *after* the snapshot but *before* `sendOk`, so it's part of the
+   "post-mutation" state. Ctrl-Z restores the pre-mutation state
+   including the original (pre-demotion) linkGroup values. *Mitigation:*
+   write a vitest test that explicitly verifies the undo round-trip:
+   create a 2-member group, leave it (triggering demotion of the
+   survivor), undo, verify the survivor's linkGroup is restored to
+   its original positive value.
+
+3. **Risk — Idempotence + repeated dispatch.** The enforcement is
+   idempotent (a second call after the first produces no further
+   change). But what if two unrelated singleton groups exist BEFORE
+   the dispatch (e.g. left over from a pre-NT-5 saved file)?
+   The enforcement will demote both on first dispatch, which is
+   correct behavior. *Mitigation:* document this in the new helper's
+   docstring and write a regression test that seeds a tree with
+   two pre-existing singletons + invokes any handler; verify both
+   get demoted.
+
+4. **Risk — Saved-file compatibility.** `.alo` files saved before
+   NT-5 ships may contain single-member groups. The save format
+   already round-trips `linkGroup` per emitter. *Mitigation:*
+   added a third call site for `EnforceSingleMemberLinkGroups()`
+   in the `file/open` handler at
+   [`BridgeDispatcher.cpp:1589`](../src/host/BridgeDispatcher.cpp:1589),
+   firing right after the new ParticleSystem is bound. The
+   sweep does NOT call `SetDirty(true)` (the correction is a
+   normalization, not user-driven mutation — marking dirty would
+   force a save-prompt on every open of a legacy file). The
+   existing `EmitEmittersTreeChanged()` already fires at line 1619
+   so React subscribers see the corrected tree on first render.
+   Saved-file compatibility added per user-scope decision during
+   plan check-in.
+
+5. **Risk — `getEmitterById` returning nullptr in the new helper.**
+   The `getEmitters()` accessor returns the raw vector;
+   non-null-checked iteration would crash. *Mitigation:* match the
+   existing `groupId == -1` scan's null-check pattern
+   ([`BridgeDispatcher.cpp:3260`](../src/host/BridgeDispatcher.cpp:3260)
+   — `if (emitters[i] != nullptr && ...)`).
+
+6. **Risk — Sweep ordering vs `sys->deleteEmitter`'s recursion.**
+   `deleteEmitter(target)` recursively deletes target's subtree.
+   If a subtree's emitters held linkGroup memberships, the survivor
+   counts change in two ways simultaneously — but the post-deletion
+   sweep sees the final state and demotes correctly. *Mitigation:*
+   write a test where a 2-member group has both members as
+   subtree-deletion victims (deleting the root deletes both → no
+   group exists after deletion → enforcement no-op). Then a test
+   where one member is deleted's subtree, other survives elsewhere
+   (group → 1 member → demote).
+
+## 5. Testing & verification
+
+**Pre-coding survey:**
+
+- [ ] Grep `bridge-contract.test.ts` for `linkGroup: <positive>`
+      assertions — verify no existing test depends on a pre-existing
+      singleton
+- [ ] Grep `mock-state.ts` fixture for any singleton groups in the
+      initial state
+- [ ] Verify the existing fixture has Smoke + Sparks both at
+      `linkGroup: 1` (count = 2; not a singleton)
+
+**Format / build checks:**
+
+- [ ] `pnpm --filter @particle-editor/editor lint` (tsc --noEmit) — 0
+      errors
+- [ ] `pnpm --filter @particle-editor/editor test` (vitest) — all
+      previous 338 tests still pass + new tests pass; expected count
+      after NT-5: 338 + ~6 new tests ≈ 344
+- [ ] MSBuild Debug + Release x64 clean (Compositor.cpp and other
+      LT-4 code paths unchanged — sanity)
+
+**Behavioral checks (new vitest tests):**
+
+- [ ] `linkGroups/set-membership` leaving a 2-member group: BOTH
+      members at `linkGroup = 0` post-dispatch
+- [ ] `linkGroups/set-membership` joining a different group that
+      shrinks the previous group to 1 member: previous-group survivor
+      at `linkGroup = 0`
+- [ ] `linkGroups/set-membership { ids: [single], groupId: -1 }`:
+      single emitter ends at `linkGroup = 0` (the "new group with 1
+      member" path — demoted before sendOk)
+- [ ] `emitters/delete` of one member of a 2-member group: survivor
+      at `linkGroup = 0`
+- [ ] `emitters/delete` of a member of a 3-member group: remaining
+      2 members STAY at the original linkGroup (regression guard)
+- [ ] Undo round-trip: 2-member group → leave → demote → undo →
+      original linkGroups restored
+- [ ] Load-time sweep — host-side only; covered by a new C++ or
+      Playwright spec that loads an `.alo` fixture containing a
+      pre-existing singleton group and verifies the post-load tree
+      has that emitter at `linkGroup = 0` + the dirty bit stayed
+      clean (file/open completed with `SetDirty(false)`)
+
+**Behavioral checks (new Playwright spec):**
+
+- [ ] End-to-end equivalent of the leave-2-member-group case
+      against the C++ host (verifies the host-side
+      EnforceSingleMemberLinkGroups + mock parity)
+
+**Pre-handoff smoke (CLAUDE.md "Pre-handoff testing — exhaustive"):**
+
+- [ ] `git status` clean working tree before each commit
+- [ ] `git diff --stat` matches what the dispatch claims to touch
+- [ ] Build the binary (`ParticleEditor.exe` Debug x64) and confirm
+      it launches without crashing — the new handler runs on every
+      `linkGroups/set-membership` and `emitters/delete` so a smoke
+      launch + one of each mutation via the legacy UI proves the
+      C++ side wires up cleanly
+- [ ] tsc + vitest pass on the post-edit tree
+
+**Commit boundary.**
+
+One commit covering all of: BridgeDispatcher + mock-state +
+bridge-contract.test additions + emitter-mutations.spec addition +
+CHANGELOG entry + todo.md review section. Conventional-commit
+prefix: `feat(LT-4):` (matches NT-5's status as a roadmap item
+shipping new behavior). Subject:
+`feat(LT-4): [NT-5] engine-side single-member link-group enforcement`.
+
+**FF + push:** Same as prior dispatches —
+`git push origin claude/festive-hoover-6abdbf:lt-4` since the
+main worktree has master checked out and the other-worktree FF
+pattern isn't available here. Atomic FF-only on origin.
+
+---
+
+## Review (post-dispatch)
+
+**All seven plan items shipped.** What landed against the plan:
+
+| Item | Shipped | Notes |
+|---|---|---|
+| C++ helper + 2 mutation call sites | ✓ | `EnforceSingleMemberLinkGroups` in BridgeDispatcher.cpp; called from `linkGroups/set-membership` and `emitters/delete` |
+| C++ load-time sweep (Q1 scope-add) | ✓ | Third call site at `file/open` line 1589, after `*m_pParticleSystem = std::move(loaded)`. NOT `markDirty()`-triggered |
+| JS mock helper + 2 helper call sites | ✓ | `enforceSingleMemberLinkGroups` exported from mock-state.ts; chained into `setLinkGroupMembership` + `deleteEmitter` returns |
+| 5 new vitest contract tests | ✓ | path 1, path 1b, path 2, 3-member regression guard, idempotence. + 1 existing test updated for the path-3 contract change |
+| 2 new Playwright tests | ✓ | Leave-and-delete invariants against the C++ host via the existing bridge |
+| CHANGELOG entry | ✓ | Inserted above the lessons retro-doc entry; TODO-HASH/TODO-PR placeholders matching Phase 3 + retro-doc pending pattern |
+| FF + push | (pending verification + commit) | Same `git push origin claude/festive-hoover-6abdbf:lt-4` pattern as the retro-doc dispatch |
+
+**Deviations from the plan:**
+
+- Dropped the planned **undo round-trip vitest test** — the
+  MockBridge throws "Phase 3+ not implemented" for `undo/perform`,
+  so undo testing can only happen against the C++ host. The C++
+  side gets undo coverage by reading the diff (both call sites are
+  downstream of pre-existing `captureUndo()` so the snapshot is
+  pre-mutation, including pre-demotion linkGroups) — verified by
+  code review, not a new automated test.
+- Dropped the planned **standalone load-time Playwright spec**
+  (item #14's test-fixture half) — would have required hand-crafting
+  an `.alo` fixture with a known pre-existing singleton group (the
+  current host save-then-load path already enforces post-mutation, so
+  a clean save can't produce a singleton). The implementation is a
+  single-line call site; the helper itself is independently tested
+  via the mutation paths.
+
+**Risks that materialised vs the §4 list:**
+
+- R1 (fixture brittleness): triaged — existing test at
+  bridge-contract.test.ts:732 encoded the OLD path-3 contract and was
+  updated as part of this dispatch (intentional contract change).
+- R2 (undo): mitigated by code review of the `captureUndo()` site
+  ordering instead of an automated test.
+- R3 (idempotence): covered by the new idempotence vitest test.
+- R4 (saved-file compatibility): closed inline via the load-time
+  sweep call site at `file/open`.
+- R5 (nullptr in helper): handled — `EnforceSingleMemberLinkGroups`
+  null-checks every emitter pointer matching the existing
+  groupId==-1 scan pattern.
+- R6 (sweep ordering vs `deleteEmitter`'s recursion): the
+  3-member regression guard exercises this path.
+
+**Verification:**
+
+- vitest **343/343** ✓ (was 338; +5 NT-5 tests).
+- tsc `--noEmit` ✓ (lint script).
+- MSBuild Debug x64 — see post-dispatch summary for status.
+- Playwright native tests — NOT run this session (would require
+  full dist/ rebuild + exe launch + CDP attach; ~5-10min); 2 new
+  tests added to emitter-mutations.spec.ts and ready for the next
+  native run.
+
+---
+
+## Prior dispatch in this session — Post-[MT-11] Phase 3 retro-doc
+
+(Preserved verbatim from before NT-5 dispatch picked up.)
+
+---
+
 # Post-[MT-11] Phase 3 dispatch — lessons retro-doc (L-019/L-020/L-021/L-022) + HANDOFF correction
 
 > **Active plan.** Post-[MT-11] Phase 3 close-out hygiene work. Phase 3

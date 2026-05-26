@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1588,6 +1589,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             *m_pParticleSystem = std::move(loaded);
         }
+        // [NT-5] Load-time sweep: pre-NT-5 .alo files may contain
+        // single-member link groups. Sweep once after binding so the
+        // data layer matches the render-layer filter from frame one.
+        // Does NOT call markDirty() — the correction is a
+        // normalization, not user-driven mutation; marking dirty
+        // would force a save-prompt on every open of a legacy file
+        // even when the user makes no further changes. Subsequent
+        // mutations re-fire the sweep via the same helper.
+        EnforceSingleMemberLinkGroups();
         // LT-4 render loop: same notification sequence as file/new —
         // the engine's cached per-instance / per-emitter state is now
         // stale and must be cleared. Matches legacy DoOpenFile path
@@ -2458,6 +2468,13 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             }
         }
 
+        // [NT-5] Demote any singleton groups left over from the
+        // recursive subtree deletion (member of a 2-member group
+        // deleted → survivor is now alone in the group → demote).
+        // captureUndo() above covers both the deletion AND the
+        // sweep atomically.
+        EnforceSingleMemberLinkGroups();
+
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();
@@ -3279,6 +3296,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             if (e == nullptr) continue;
             e->linkGroup = resolved;
         }
+        // [NT-5] Demote any singleton groups left over from the
+        // mutation (covers all three enumerated paths: leaving a
+        // 2-member group, joining a different group that shrinks
+        // the previous, and the -1 + single-id "new group with 1
+        // member" case where resolved>0 but only one id was
+        // assigned to it). captureUndo() above covers both the
+        // mutation AND the sweep — Ctrl-Z restores pre-mutation
+        // linkGroup values.
+        EnforceSingleMemberLinkGroups();
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();
@@ -3660,6 +3686,50 @@ void BridgeDispatcher::EmitRecentChanged()
         {"payload", {{"paths", paths}}},
     };
     m_emit(env.dump());
+}
+
+// [NT-5] Demote single-member link groups to linkGroup=0 so the data
+// layer matches the render layer's existing filter at
+// computeLinkGroupBrackets (web/apps/editor/src/lib/link-group-colors.ts).
+// Called from emitters/delete + linkGroups/set-membership (the two
+// mutation paths that can leave a group with exactly one member —
+// see ROADMAP §1.1 NT-5 for the enumeration) AND from file/open
+// after binding a loaded ParticleSystem (so pre-NT-5 saved files
+// with singletons self-correct on load). Callers handle their own
+// captureUndo() / SetDirty() — the sweep itself is silent on both.
+void BridgeDispatcher::EnforceSingleMemberLinkGroups()
+{
+    if (m_pParticleSystem == nullptr || !*m_pParticleSystem) return;
+    ParticleSystem* sys = m_pParticleSystem->get();
+    const auto& emitters = sys->getEmitters();
+
+    // Pass 1: count members per positive linkGroup. uint32_t key
+    // matches Emitter::linkGroup's type; std::map keeps the surface
+    // header-light (no extra include needed for unordered_map; map
+    // is already transitively visible via ParticleSystem.h).
+    std::map<uint32_t, int> counts;
+    for (size_t i = 0; i < emitters.size(); ++i)
+    {
+        if (emitters[i] == nullptr) continue;
+        uint32_t g = emitters[i]->linkGroup;
+        if (g == 0) continue;
+        ++counts[g];
+    }
+
+    // Pass 2: demote the lone member of every singleton group. Null-
+    // checked iteration matches the existing groupId==-1 scan pattern
+    // at BridgeDispatcher.cpp's linkGroups/set-membership handler.
+    for (size_t i = 0; i < emitters.size(); ++i)
+    {
+        if (emitters[i] == nullptr) continue;
+        uint32_t g = emitters[i]->linkGroup;
+        if (g == 0) continue;
+        auto it = counts.find(g);
+        if (it != counts.end() && it->second == 1)
+        {
+            emitters[i]->linkGroup = 0;
+        }
+    }
 }
 
 void BridgeDispatcher::EmitStatsTick(float fps, int emitters,

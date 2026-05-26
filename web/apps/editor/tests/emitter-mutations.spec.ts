@@ -219,3 +219,147 @@ test("linkGroups/list-exempt-fields returns the v1 default exempt set for a fres
     "colorTexture", "normalTexture", "trackIndex",
   ]));
 });
+
+// ── 5. NT-5 — engine-side single-member link-group enforcement ───────
+//
+// Drives the host's real `EnforceSingleMemberLinkGroups` via the bridge.
+// Sets up a 2-member group, then leaves one emitter — verifies the
+// surviving member auto-demotes to linkGroup=0 because group N would
+// otherwise have count=1 (matches the render-layer filter at
+// computeLinkGroupBrackets, which already hides single-member groups).
+
+test("NT-5: leaving a 2-member link group demotes the survivor to linkGroup=0", async () => {
+  await page.keyboard.press("Escape").catch(() => {});
+  const result = await page.evaluate(async () => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) =>
+          Promise<{ ok?: boolean; newId?: number; root?: {
+            children: { id: number; linkGroup: number; children: unknown[] }[];
+          }}>;
+      };
+    }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+
+    // Get the seeded root emitter; duplicate it so we have two.
+    const initial = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const firstId = initial.root?.children[0]?.id;
+    if (firstId === undefined) throw new Error("no seed emitter");
+    const dup = await bridge.request({
+      kind: "emitters/duplicate",
+      params: { id: firstId },
+    });
+    const dupId = dup.newId;
+    if (typeof dupId !== "number" || dupId < 0) {
+      throw new Error("duplicate failed");
+    }
+
+    // Assign both to a fresh group (use an explicit positive id to
+    // avoid relying on the -1 path's resolution; explicit id is the
+    // simplest setup).
+    await bridge.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [firstId, dupId], groupId: 42 },
+    });
+
+    // Confirm both are at 42 (group has 2 members, NT-5 does not
+    // demote).
+    const mid = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const midFirst = mid.root?.children.find((c) => c.id === firstId);
+    const midDup   = mid.root?.children.find((c) => c.id === dupId);
+    if (midFirst?.linkGroup !== 42 || midDup?.linkGroup !== 42) {
+      throw new Error(
+        `setup failed — first=${midFirst?.linkGroup} dup=${midDup?.linkGroup}`,
+      );
+    }
+
+    // Leave the duplicate (groupId=null). Group 42 now has 1 member
+    // (firstId), so NT-5's sweep demotes firstId to 0.
+    await bridge.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [dupId], groupId: null },
+    });
+
+    const after = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const afterFirst = after.root?.children.find((c) => c.id === firstId);
+    const afterDup   = after.root?.children.find((c) => c.id === dupId);
+
+    // Cleanup before returning so a failing assertion still leaves a
+    // tidy tree for subsequent specs.
+    await bridge.request({ kind: "emitters/delete", params: { id: dupId } });
+
+    return {
+      firstLinkGroup: afterFirst?.linkGroup,
+      dupLinkGroup:   afterDup?.linkGroup,
+    };
+  });
+
+  // NT-5 invariant: both members of the (former) 2-member group ended
+  // at linkGroup=0. The leaver dropped to 0 via the explicit
+  // groupId=null mutation; the survivor dropped to 0 via NT-5's
+  // post-mutation sweep.
+  expect(result.firstLinkGroup).toBe(0);
+  expect(result.dupLinkGroup).toBe(0);
+});
+
+test("NT-5: deleting one member of a 2-member link group demotes the survivor", async () => {
+  await page.keyboard.press("Escape").catch(() => {});
+  const result = await page.evaluate(async () => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) =>
+          Promise<{ ok?: boolean; newId?: number; root?: {
+            children: { id: number; linkGroup: number }[];
+          }}>;
+      };
+    }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+
+    // Set up: get seed + duplicate to 2 emitters; assign both to a
+    // fresh group.
+    const initial = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const firstId = initial.root?.children[0]?.id;
+    if (firstId === undefined) throw new Error("no seed");
+    const dup = await bridge.request({
+      kind: "emitters/duplicate",
+      params: { id: firstId },
+    });
+    const dupId = dup.newId;
+    if (typeof dupId !== "number" || dupId < 0) {
+      throw new Error("duplicate failed");
+    }
+    await bridge.request({
+      kind: "linkGroups/set-membership",
+      params: { ids: [firstId, dupId], groupId: 73 },
+    });
+
+    // Delete the duplicate. Group 73 now has 1 member (firstId) →
+    // NT-5 demotes firstId to 0.
+    await bridge.request({
+      kind: "emitters/delete",
+      params: { id: dupId },
+    });
+
+    const after = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    });
+    const afterFirst = after.root?.children.find((c) => c.id === firstId);
+
+    return { firstLinkGroup: afterFirst?.linkGroup };
+  });
+
+  expect(result.firstLinkGroup).toBe(0);
+});
