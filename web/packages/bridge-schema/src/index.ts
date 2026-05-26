@@ -505,6 +505,12 @@ export type Request =
   // Engine setters — view state (preview clock)
   | { kind: "engine/set/paused";              params: { paused: boolean } }
 
+  // [MT-11 T9] Test-only knob: suppress the 4 Hz stats/tick emission
+  // AND tell React's StatusBar to clear its local state via
+  // stats/frozen-changed. Used by a11y spec beforeEach for deterministic
+  // UIA goldens. `frozen` defaults to true on the host if omitted.
+  | { kind: "stats/set-frozen";               params: { frozen: boolean } }
+
   // Engine actions
   | { kind: "engine/action/clear";            params: Record<string, never> }
   | { kind: "engine/action/reload-shaders";   params: Record<string, never> }
@@ -788,6 +794,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/set/ambient" }                 ? Record<string, never> :
   R extends { kind: "engine/set/shadow" }                  ? Record<string, never> :
   R extends { kind: "engine/set/paused" }                  ? Record<string, never> :
+  R extends { kind: "stats/set-frozen" }                   ? Record<string, never> :
 
   // Engine actions — empty body
   R extends { kind: "engine/action/clear" }                       ? Record<string, never> :
@@ -896,6 +903,11 @@ export type Event =
   | { kind: "emitters/tree/changed";  payload: EmitterTreeDto }
   | { kind: "emitters/selected";      payload: { id: number | null } }
   | { kind: "stats/tick";             payload: { fps: number; emitters: number; particles: number; instances: number } }
+  // [MT-11 T9] Emitted whenever stats/set-frozen flips. When
+  // frozen=true, StatusBar clears its local state so the cells
+  // render `—` placeholders. Used by a11y spec beforeEach for
+  // deterministic UIA goldens.
+  | { kind: "stats/frozen-changed";   payload: { frozen: boolean } }
   | { kind: "dirty/changed";          payload: { dirty: boolean } }
   | { kind: "recent/changed";         payload: { paths: string[] } }
   | { kind: "undo/changed";           payload: { canUndo: boolean; canRedo: boolean; label?: string } }

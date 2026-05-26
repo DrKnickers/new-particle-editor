@@ -21,9 +21,22 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
     const offCursor = bridge.on("cursor/position-3d", (e) => {
       setCursor(e.payload);
     });
+    // [MT-11 T9] When the host signals stats are frozen (test-only
+    // knob set via stats/set-frozen), drop the local state so all
+    // cells fall back to `—` placeholders. The host stops emitting
+    // stats/tick while frozen, so the cleared state stays cleared.
+    // Cursor is cleared too since it's part of the StatusBar's
+    // volatile per-frame surface.
+    const offFreeze = bridge.on("stats/frozen-changed", (e) => {
+      if (e.payload.frozen) {
+        setStats(null);
+        setCursor(null);
+      }
+    });
     return () => {
       offStats();
       offCursor();
+      offFreeze();
     };
   }, [bridge]);
 

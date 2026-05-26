@@ -1267,6 +1267,28 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         EmitEngineStateChanged();
         return res;
     }
+    // [MT-11 T9] stats/set-frozen — test-only knob that suppresses
+    // the 4 Hz stats/tick emission AND tells React's StatusBar to
+    // clear its local state. Used by a11y spec beforeEach to bring
+    // the StatusBar to a deterministic placeholder render before
+    // capturing UIA goldens. Default-true for ergonomic test calls;
+    // pass {frozen: false} to resume normal emissions.
+    if (kind == "stats/set-frozen")
+    {
+        const bool frozen = params.value("frozen", true);
+        m_statsFrozen = frozen;
+        if (m_emit)
+        {
+            json env = {
+                {"type",    "evt"},
+                {"kind",    "stats/frozen-changed"},
+                {"payload", {{"frozen", frozen}}},
+            };
+            m_emit(env.dump());
+        }
+        sendOk(json::object());
+        return res;
+    }
 
     // -------- engine/action/reset-view-settings ----------------------
     //
@@ -3916,6 +3938,11 @@ void BridgeDispatcher::EmitStatsTick(float fps, int emitters,
                                      int particles, int instances)
 {
     if (!m_emit) return;
+    // [MT-11 T9] Gate test-driven freeze. When frozen, the React
+    // StatusBar has already cleared its state (via stats/frozen-
+    // changed) and is rendering placeholders; emitting would
+    // re-populate it with non-deterministic per-frame values.
+    if (m_statsFrozen) return;
     json env = {
         {"type",    "evt"},
         {"kind",    "stats/tick"},

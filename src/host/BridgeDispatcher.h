@@ -264,6 +264,15 @@ private:
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;
     EmitFn             m_emit;
+
+    // [MT-11 T9] When true, EmitStatsTick is a no-op and React's
+    // StatusBar receives a stats/frozen-changed event so it clears
+    // its local stats+cursor state and renders `—` placeholders.
+    // Set via the `stats/set-frozen` bridge request. Used by a11y
+    // spec beforeEach hooks to freeze the StatusBar's volatile
+    // FPS / Emitters / Particles / cursor values for deterministic
+    // UIA goldens; harmless in non-test mode (default false).
+    bool               m_statsFrozen = false;
     UndoStack*         m_undo     = nullptr;
     HWND               m_hostHwnd = nullptr;
     ::ModManager*      m_modManager = nullptr;  // LT-4 D6: mods/* surface

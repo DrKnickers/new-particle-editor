@@ -74,6 +74,8 @@ function isMutating(kind: Request["kind"]): boolean {
   // BridgeDispatcher.cpp.
   if (kind === "engine/set/paused") return false;
   if (kind === "engine/set/heat-debug") return false;
+  // [MT-11 T9] stats/set-frozen is a test-only knob; never mutating.
+  if (kind === "stats/set-frozen") return false;
   if (kind.startsWith("engine/set/")) return true;
   // engine/action/clear is destructive — destroying particles in the
   // world is a user-visible mutation worth a save-prompt gate.
@@ -301,6 +303,17 @@ export class MockBridge implements Bridge {
       // ---------------- engine setters: view state (preview clock) ----------------
       case "engine/set/paused":
         this.patchAndBroadcast({ paused: req.params.paused });
+        return {};
+
+      // ---------------- stats freeze (test-only knob) ----------------
+      // [MT-11 T9] Mock parity for native stats/set-frozen. Browser
+      // mode emits no stats/tick, so freezing is largely no-op, but
+      // emit the frozen-changed event for any consumer that listens.
+      case "stats/set-frozen":
+        this.emit({
+          kind: "stats/frozen-changed",
+          payload: { frozen: req.params.frozen },
+        });
         return {};
 
       // ---------------- engine actions ----------------
