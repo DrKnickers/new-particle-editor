@@ -2473,7 +2473,7 @@ EOF
 pnpm --filter @particle-editor/editor test
 ```
 
-Expected: 343 + N passing (N = normalizer unit tests added in T1.4).
+Expected: 348 + N additional tests (348 = post-T1 baseline of 343 + 5 normalizer unit tests).
 
 - [ ] **Step 2:** Playwright HWND lane (default dist/):
 
