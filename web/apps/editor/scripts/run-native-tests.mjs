@@ -164,6 +164,17 @@ async function main() {
       // Asserts [COMP-engine-transform] log lines fire on
       // layout/scene-rect dispatch with the expected absolute clip.
       "tests/dxgi-scene-rect.spec.ts",
+      // [MT-11] Phase 3 a11y T9.1 — HWND Win32 UIA snapshot specs.
+      // Each parametrizes over its surface-driver array (T5–T8) and
+      // golden-compares the normalized UIA tree. Auto-skip under
+      // ALO_WEBVIEW2_HOSTING=composition (T10 covers that lane).
+      // Goldens are generated separately (UPDATE_A11Y_GOLDENS=1 run
+      // in T9.3); without goldens these specs fail — run via
+      // pnpm test:native only after T9.3 has landed the golden files.
+      "tests/a11y-chrome.spec.ts",
+      "tests/a11y-dialogs.spec.ts",
+      "tests/a11y-keyboard.spec.ts",
+      "tests/a11y-curve-spinner.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
