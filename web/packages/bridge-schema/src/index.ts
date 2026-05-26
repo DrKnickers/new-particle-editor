@@ -197,6 +197,15 @@ export type EngineStateDto = {
   // the Mods menu's check-mark stays in sync with FileManager's
   // current mod basepath without a second round-trip after a select.
   activeModPath: string | null;
+
+  // Undo / redo availability — drives the Edit menu's Undo/Redo
+  // enable-state. Mirrors UndoStack::CanUndo / CanRedo on the host
+  // side, plus the head-of-history auto-cap logic in undo/perform
+  // (canUndo is true whenever the user has done at least one
+  // captureUndo-bearing mutation since the last undo-stack Clear,
+  // OR the cursor is mid-redo-branch).
+  canUndo: boolean;
+  canRedo: boolean;
 };
 
 // ─── Mods (LT-4 D6) ──────────────────────────────────────────────────

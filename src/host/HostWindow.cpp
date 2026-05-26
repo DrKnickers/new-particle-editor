@@ -2506,6 +2506,11 @@ int HostWindowImpl::Run(int nCmdShow)
     particleSystem->addRootEmitter();
     spawnerDriver  = std::make_unique<SpawnerDriver>();
     dispatcher->BindHostState(&particleSystem, spawnerDriver.get(), &fileManager);
+    // Seed the dirty-bit baseline against the freshly-bound boot-state
+    // ParticleSystem so Ctrl+Z back to it clears dirty without needing
+    // a File → New first. file/new + file/open + file/save re-seed via
+    // their own paths.
+    dispatcher->ResetSavedBaseline();
     // LT-4 shift-click-to-spawn: expose the attached-system slot so
     // file/new + file/open can kill any in-flight cursor-bound instance
     // before swapping the ParticleSystem under it.

@@ -500,7 +500,9 @@ json BuildEngineStateSnapshot(Engine* engine,
                               const json& spawnerConfig,
                               int selectedEmitterId,
                               const std::wstring& activeModPath,
-                              bool leaveParticles)
+                              bool leaveParticles,
+                              bool canUndo,
+                              bool canRedo)
 {
     if (!engine) return json::object();
 
@@ -601,6 +603,16 @@ json BuildEngineStateSnapshot(Engine* engine,
         {"activeModPath",         activeModPath.empty()
                                       ? json(nullptr)
                                       : json(WideToUtf8(activeModPath))},
+
+        // Undo/redo availability — drives the Edit menu enable-state.
+        // `canRedo` mirrors UndoStack::CanRedo. `canUndo` is computed
+        // by the caller to account for undo/perform's head-of-history
+        // auto-cap: when cursor==depth and depth>=1, the auto-cap
+        // makes the subsequent Undo() succeed even though UndoStack's
+        // own CanUndo (which requires cursor>=2) would report false.
+        // See undo/perform's comment block for the full design.
+        {"canUndo",               canUndo},
+        {"canRedo",               canRedo},
     };
 }
 
@@ -1047,7 +1059,9 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         const bool leaveParticles = (m_pParticleSystem != nullptr && *m_pParticleSystem)
             ? (*m_pParticleSystem)->getLeaveParticles()
             : true;
-        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles));
+        const bool canUndo = ComputeCanUndo();
+        const bool canRedo = m_undo ? m_undo->CanRedo() : false;
+        sendOk(BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles, canUndo, canRedo));
         return res;
     }
 
@@ -3695,12 +3709,37 @@ void BridgeDispatcher::EmitEngineStateChanged()
     const bool leaveParticles = (m_pParticleSystem != nullptr && *m_pParticleSystem)
         ? (*m_pParticleSystem)->getLeaveParticles()
         : true;
+    const bool canUndo = ComputeCanUndo();
+    const bool canRedo = m_undo ? m_undo->CanRedo() : false;
     json env = {
         {"type",    "evt"},
         {"kind",    "engine/state/changed"},
-        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles)},
+        {"payload", BuildEngineStateSnapshot(m_engine, m_currentFilePath, m_dirty, spawnerJson, m_selectedEmitterId, activeModPath, leaveParticles, canUndo, canRedo)},
     };
     m_emit(env.dump());
+}
+
+bool BridgeDispatcher::ComputeCanUndo() const
+{
+    // Auto-cap-aware: undo/perform inserts a snapshot of the current
+    // live state when cursor==depth, then calls Undo(). The Undo()
+    // succeeds when the post-auto-cap stack has cursor>=2, which
+    // requires depth>=1 (one captureUndo-bearing mutation has run).
+    // Mid-redo-branch (cursor<depth), no auto-cap fires and Undo()'s
+    // own CanUndo (cursor>=2) gates the call.
+    if (m_undo == nullptr) return false;
+    const size_t cursor = m_undo->Cursor();
+    const size_t depth  = m_undo->Depth();
+    if (cursor == depth) return depth >= 1;
+    return cursor >= 2;
+}
+
+void BridgeDispatcher::ResetSavedBaseline()
+{
+    if (m_pParticleSystem && *m_pParticleSystem)
+        m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
+    else
+        m_savedSnapshot.clear();
 }
 
 void BridgeDispatcher::SetDirty(bool dirty)

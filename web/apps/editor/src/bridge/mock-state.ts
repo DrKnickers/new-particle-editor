@@ -119,6 +119,13 @@ export function makeDefaultEngineState(): EngineStateDto {
     // no disk to scan; selecting a mock entry updates this field via
     // mods/select for menu check-mark parity.
     activeModPath: null,
+
+    // Browser-mode mock has no undo stack today (undo/perform is a
+    // documented no-op — see mock.ts). Both flags stay false so the
+    // Edit menu's Undo/Redo render as disabled in browser mode,
+    // which is the correct UX given the no-op behaviour.
+    canUndo: false,
+    canRedo: false,
   };
 }
 

@@ -1,8 +1,102 @@
-# Session Handoff — AloParticleEditor / LT-4 ([NT-5] SHIPPED — Phase 3 complete + lessons retro-doc + [NT-5] full coverage)
+# Session Handoff — AloParticleEditor / LT-4 (undo/perform snap-restore + dirty-bit polish + Edit menu enable-state shipped)
 
-**Last updated:** 2026-05-25 (post-NT-5 + L-023). `origin/lt-4` tip
-includes three commits from the post-Phase-3 session:
-[`84907d3`](https://github.com/DrKnickers/new-particle-editor/commit/84907d3)
+**Last updated:** 2026-05-25 (end of undo/perform session). `origin/lt-4`
+tip is at the dispatch's third commit on top of the [NT-5] follow-up
+chain. Three new commits in this session:
+[`e750142`](https://github.com/DrKnickers/new-particle-editor/commit/e750142)
+(undo/perform snap-restore — Ctrl+Z / Ctrl+Shift+Z rewinds the
+ParticleSystem; un-fixme's the NT-5 atomicity Playwright test),
+[`fb57acc`](https://github.com/DrKnickers/new-particle-editor/commit/fb57acc)
+(content-compare dirty bit — Ctrl+Z back to saved content clears
+the asterisk via `m_savedSnapshot` byte buffer), and a TODO-HASH
+commit (boot-state baseline init in BindHostState + Edit menu
+Undo/Redo enable-state via canUndo/canRedo on engine snapshot).
+
+## What shipped today (2026-05-25 — undo/perform polish chain)
+
+- **undo/perform snap-restore.** Real `BridgeDispatcher::ApplyUndoSnapshot`
+  + head-of-history auto-cap in the handler reconciles new-UI's
+  PRE-mutation captureUndo convention with `UndoStack`'s POST-mutation
+  cursor invariant. No 22-site refactor needed. NT-5 atomicity test
+  un-fixme'd; Playwright native moved from 102 + 27 + 0 to **103 +
+  26 + 0**. Mock returns `{applied:false}` (documented no-op).
+- **Content-compare dirty bit.** New `m_savedSnapshot` byte buffer on
+  BridgeDispatcher; refreshed on `file/new` + `file/open` + `file/save`
+  + `file/save-as` success. ApplyUndoSnapshot does
+  `SetDirty(buf != m_savedSnapshot)` instead of unconditional
+  `SetDirty(true)`. Ctrl+Z back to saved content now clears the
+  title-bar/save-prompt dirty gate. Bypasses legacy
+  `UndoStack::MarkSaved/IsAtSavedState` (which doesn't fit new-UI's
+  PRE-mutation captureUndo).
+- **Boot-state baseline.** `m_savedSnapshot` seeded in `BindHostState`
+  via new `ResetSavedBaseline()` method on `BridgeDispatcher`, called
+  from `HostWindow.cpp` right after the initial ParticleSystem is
+  bound. Ctrl+Z back to the boot-state content now clears dirty
+  without requiring a File → New first.
+- **Edit menu Undo/Redo enable-state.** `canUndo` + `canRedo` fields
+  added to `EngineStateDto` (bridge-schema). C++ snapshot builder
+  populates them with auto-cap-aware logic via new
+  `BridgeDispatcher::ComputeCanUndo()` helper. React MenuBar binds
+  `disabled={!state?.canUndo}` / `disabled={!state?.canRedo}` on
+  the items. Mock defaults to `false`/`false` (browser-mode undo is
+  a no-op).
+
+**Test counts at end of session:** vitest **343 / 343** (unchanged).
+Playwright native HWND baseline (default dist/, no env vars):
+**103 passed + 26 skipped + 0 failed** (was 102 + 27 + 0; un-fixme'd
+NT-5 atomicity moved skip → pass). MSBuild Debug + Release x64
+clean via the .sln (per L-023). tsc -b 0 errors. Live-binary smoke:
+rename + Ctrl+Z + Ctrl+Shift+Z + delete + Ctrl+Z (selection
+follows undo) + content-compare dirty-bit clears in two scenarios
+(file/new and file/save) + boot-state baseline confirms + Edit menu
+Undo disabled at boot / enabled after mutation / Redo enabled
+after Ctrl+Z.
+
+**Local `master` lag:** still 4 commits behind origin/master from
+the prior session — run `git pull --ff-only` in
+`C:\Modding\Particle Editor` when convenient.
+
+## Known follow-ups (out of scope for this session)
+
+Carried forward + spawned during this dispatch:
+
+1. **Stage 4 sub-stage 4e — first-frame `ClearRenderTargetView` guard.**
+   Inherited from Stage 5. Not observed during smoke; ship-if-surfaces.
+2. **`canvas-architecture.spec.ts` test.fixme markers.** Inherited
+   from Phase 2 (L-012 instrumentation issue). Three documented fix
+   approaches.
+3. **Test harness env-var pre-flight check.** Inherited from
+   Stage 4f. Harness should fail-fast or auto-rebuild on
+   `ALO_*` / `VITE_*` mismatch.
+4. **Phase 3 a11y close-out** — Stage 3h Playwright accessibility
+   snapshot suite + Stage 3i manual Narrator/IME smoke. Sized at
+   ~1-1.5d.
+5. **Coalesce-key tuning for spinner-drag undo.** Today's `captureUndo`
+   lambda uses key=0 (never coalesce), so a 100-tick spinner drag
+   produces 100 undo entries. Separate dispatch worth its own design
+   thought.
+6. **Full mock-side undo.** Today's mock `undo/perform` returns
+   `{applied:false}` (no-op). Implementing a real mock undo requires
+   snapshotting multiple Zustand stores per mutation — non-trivial,
+   not gating native behaviour.
+7. **F17 P2 verification.** Per-`post-audit-followups.md`:
+   confirm/refute that `attachedParticleSystem` isn't cleared on
+   LoadFile/RestoreFromAutosave. Pure-verification dispatch
+   (~30 min); may spawn a small fix or close as non-bug.
+8. **NT-6 visual-stability lane assignment** (ROADMAP §1.2).
+   Explicitly user-gated — only worth it if lane-bouncing has been
+   observed as a real ergonomic issue.
+
+Per [L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan):
+verify each carry-forward claim against current code before scoping
+it into a dispatch.
+
+## Pre-undo/perform session prior state (retained for context)
+
+`origin/lt-4` tip was `2f793c1` before this session — the L-023
+docs commit on top of the [NT-5] follow-up chain. Three commits
+from the post-Phase-3 session preceded this work:
+[`84927d3`](https://github.com/DrKnickers/new-particle-editor/commit/84927d3)
 (lessons retro-doc L-019/L-020/L-021/L-022 + HANDOFF retraction),
 [`5d4a9ba`](https://github.com/DrKnickers/new-particle-editor/commit/5d4a9ba)
 ([NT-5] engine-side single-member link-group enforcement — the
@@ -11,7 +105,7 @@ ROADMAP §1.1 item shipped), and
 ([NT-5] follow-up: native verification, load-time fixture spec,
 `--gen-nt5-fixture` CLI tool, undo-round-trip `test.fixme`). One more
 docs commit on top with L-023 (MSBuild `$(SolutionDir)` lesson) +
-this HANDOFF refresh + the post-NT-5 next-session prompt.
+the prior HANDOFF refresh + the post-NT-5 next-session prompt.
 
 **Session-end state:** Phase 3 fully shipped (5 stages), Phase 3
 documentation hygiene closed via the retro-doc dispatch, [NT-5] ROADMAP

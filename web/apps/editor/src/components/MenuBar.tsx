@@ -394,6 +394,7 @@ export function MenuBar({
           >
             <Menubar.Item
               className={ITEM}
+              disabled={!state?.canUndo}
               onSelect={send({
                 kind: "undo/perform",
                 params: { direction: "undo" },
@@ -403,6 +404,7 @@ export function MenuBar({
             </Menubar.Item>
             <Menubar.Item
               className={ITEM}
+              disabled={!state?.canRedo}
               onSelect={send({
                 kind: "undo/perform",
                 params: { direction: "redo" },

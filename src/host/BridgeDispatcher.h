@@ -131,6 +131,14 @@ public:
         m_ppAttachedParticleSystem = ppAttached;
     }
 
+    // Capture the currently-bound ParticleSystem as the "saved" baseline
+    // for the dirty-bit content-compare in ApplyUndoSnapshot. Called
+    // once by HostWindow after BindHostState seeds the boot-state PS,
+    // so Ctrl+Z back to the boot content clears dirty without requiring
+    // a File → New first. Subsequent file/new + file/open + file/save
+    // handlers re-seed via their own paths.
+    void ResetSavedBaseline();
+
     // [MT-11] Phase 2: inject the InputDispatcher that owns the hidden
     // viewport popup HWND. The `viewport/input` request arm forwards
     // its params object to InputDispatcher::Dispatch. Null is tolerated
@@ -219,6 +227,14 @@ private:
     // Emits a `recent/changed` event with the current m_recentFiles
     // serialised as a JSON array of strings.
     void EmitRecentChanged();
+
+    // Auto-cap-aware "can undo" check for the Edit menu enable-state.
+    // UndoStack::CanUndo requires cursor>=2; this method accounts for
+    // undo/perform's head-of-history auto-cap (which makes single-
+    // mutation history undoable too) by reporting true when cursor==
+    // depth AND depth>=1. See undo/perform's comment block for the
+    // full design.
+    bool ComputeCanUndo() const;
 
     // Deserialize a ParticleSystem snapshot from an UndoStack entry and
     // swap it into the host-owned slot. Mirrors legacy
