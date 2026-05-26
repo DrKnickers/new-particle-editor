@@ -16,6 +16,90 @@ Conventions:
 
 ## Changelog
 
+### [MT-12 follow-up] Fix cursor → spawn world-position offset under default architecture C
+
+*2026-05-26 · [`40b53c3`](https://github.com/DrKnickers/new-particle-editor/commit/40b53c3) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Under default architecture C (DXGI composition + DComp engine visual
++ WebView2 composition hosting — the post-[MT-12] default mode),
+holding Shift over the viewport and either pressing the key or
+clicking now spawns the cursor-bound particle *exactly* under the
+cursor instead of visibly offset by tens of pixels. The status-bar
+"Cursor X, Y, Z" world coordinates are now numerically correct too;
+pre-fix they were emitted through the same broken transform and
+*looked* right because abstract world floats are hard to eyeball.
+Architecture A (legacy popup, opt-in via `ALO_HOSTING_MODE=legacy`)
+is unchanged — the fallback branch in the patch makes the legacy
+path byte-identical to before.
+
+Closes [`tasks/HANDOFF.md`](tasks/HANDOFF.md) "Known follow-ups"
+item 14. Was the last default-mode regression gating the future
+architecture-A deletion (item 11); after this fix, item 11 has no
+known runtime blockers.
+
+**How we tackled it.** Single function changed:
+[`src/MouseCursor.h::GetCursorPos3D`](src/MouseCursor.h:54). Root
+cause was a viewport / projection mismatch — the helper called
+`engine->GetViewPort(&viewport)` which returns the D3D9 device's
+*current* viewport, and `Engine::Render` restores that viewport to
+FULL-RT before returning ([`src/engine.cpp:687-699`](src/engine.cpp:687)).
+But `m_projection` is built at *scene-rect* aspect by
+`SetSceneViewport` with per-pixel FoV referenced to scene-H. The
+result: `D3DXVec3Unproject` normalised `(x - 0) / RT_W` to NDC and
+fed it into a projection expecting `(x - sceneX) / sceneW`, putting
+the world ray at the wrong NDC point every time. Fix: when
+`Engine::GetSceneViewport()` returns true, build a `D3DVIEWPORT9`
+from the scene rect and pass it to `D3DXVec3Unproject` instead of
+the device viewport. `D3DXVec3Unproject` subtracts `viewport.X` /
+`viewport.Y` internally so input coords stay in popup-client space
+— no caller-side translate needed. Architecture A never activates
+the scene viewport (it's wired only through composition-gated
+`LayoutBroker::SetCompositor`) so the existing
+`engine->GetViewPort(&viewport)` fallback runs unchanged there.
+
+Two alternatives considered and rejected up-front. **(a)** Mutating
+the cursor coords to scene-relative at the call site duplicates the
+subtraction `D3DXVec3Unproject` already does internally — pure
+complexity tax. **(b)** Changing `Engine::GetViewPort` to lie and
+return the scene viewport when set would be a layer violation —
+the accessor's contract is "the device's current viewport," and
+future picking / debug-overlay callers might genuinely want that.
+
+Added `#ifndef NDEBUG` `[cursor-unproject]` diagnostic lines at all
+three spawn-related sites in [`src/host/HostWindow.cpp`](src/host/HostWindow.cpp)
+(WM_MOUSEMOVE throttled bridge emit, WM_KEYDOWN VK_SHIFT, WM_LBUTTONDOWN
+Shift-fallback) so a future regression lands in `host.log` with both
+input coords and viewport choice. The WM_MOUSEMOVE diagnostic
+piggybacks on the existing `m_lastCursorEmitTick` ~30 Hz gate so it
+doesn't flood the log at 60+ Hz frame rate.
+
+**Issues encountered and resolutions.** Two worth recording.
+
+1. *"Status bar correct, spawn wrong" was a measurement artefact,
+   not a divergence.* The original handoff framing suggested two
+   consumers feeding from the same upstream with different
+   transforms — which would have meant looking for an extra
+   per-consumer transform layer. Reading the code showed both
+   consumers (status-bar `cursor/position-3d` emit and
+   `WM_KEYDOWN VK_SHIFT` spawn) call `GetCursorPos3D` with the same
+   coords and same engine; they're the *same* transform. The
+   "status bar correct" claim was based on the StatusBar
+   responsively displaying floats as the cursor moved — but the
+   floats themselves were wrong by the same scene-rect offset as
+   the spawn position. Single fix corrects both.
+2. *A11y golden drift surfaced during verification, unrelated to
+   this fix.* Test pass on a clean `lt-4 @ da58968` (with the fix
+   stashed and rebuilt) showed `128 / 29 / 31` (composition lane)
+   and `103 / 29 / 56` (legacy lane) — the same 29 a11y golden
+   surfaces fail in each lane against the baselines `157 / 0 / 31`
+   and `132 / 0 / 56` claimed in [`tasks/HANDOFF.md`](tasks/HANDOFF.md).
+   Reproducible without any working-tree changes, so the drift
+   pre-dates this dispatch. Filed as HANDOFF item 16 for a separate
+   dispatch — likely a goldens-refresh after eyeballing the diffs,
+   not a code fix. Out of scope for the cursor-unproject work.
+
+---
+
 ### [MT-12 follow-up] Skip FramePublisher under composition mode — fixes maximize FPS drop
 
 *2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

@@ -296,23 +296,32 @@ it into a dispatch.
     out not to be cosmetic — see resolved item 15. Construction of
     `m_framePublisher` stays coupled to `m_archCMode` for now;
     full removal is part of the future architecture-A deletion.
-14. **Cursor-bound spawn offset under architecture C ([MT-12] T10
-    smoke).** Clicking to spawn a cursor-bound particle places the
-    particle visibly offset (~tens of screen pixels) from the
-    actual cursor position. Surfaced during [MT-12] default-flip
-    smoke at `dd5aa8c`. Status-bar reports world cursor coords
-    correctly, but the spawn lands somewhere else — coordinate-
-    transform mismatch in the InputDispatcher → engine pipeline,
-    likely interaction with Stage 5's scene-rect / per-pixel-FoV
-    projection. Verify whether bug reproduces under
-    `ALO_HOSTING_MODE=legacy` to know if it's composition-only or
-    pre-existed [MT-12]. Files to scout: `src/host/InputDispatcher.cpp`,
-    `src/host/BridgeDispatcher.cpp` (spawn handler), the
-    `cursor/position-3d` bridge surface, `web/apps/editor/src/components/ViewportSlot.tsx`
-    canvas dispatch. **This is a real-use regression worth fixing
-    before the architecture-A deletion dispatch (item 11) ships** —
-    if it's composition-only, default-mode daily use will hit it
-    every spawner click.
+14. ~~**Cursor-bound spawn offset under architecture C ([MT-12] T10
+    smoke).**~~ ✅ **RESOLVED** at `40b53c3`. Root cause was a
+    viewport / projection mismatch in `GetCursorPos3D`
+    ([`src/MouseCursor.h:54`](../src/MouseCursor.h:54)) — the helper
+    read the D3D9 device's *current* viewport (which `Engine::Render`
+    restores to FULL-RT at [`src/engine.cpp:687-699`](../src/engine.cpp:687)
+    before returning) and unprojected against `m_projection` (which
+    `SetSceneViewport` builds at scene-rect aspect with per-pixel
+    FoV referenced to scene-H). `D3DXVec3Unproject` normalised
+    `(x - 0) / RT_W` to NDC and fed it into a projection expecting
+    `(x - sceneX) / sceneW`, off by the scene-rect offset every
+    time. Fix: when `Engine::GetSceneViewport()` returns true, build
+    a `D3DVIEWPORT9` from the scene rect and pass it to
+    `D3DXVec3Unproject` (which subtracts viewport.X/Y internally, so
+    input coords stay popup-client). Architecture A never activates
+    the scene viewport so the fallback branch runs unchanged — same
+    behaviour as before this fix. The status-bar `cursor/position-3d`
+    emit also goes through `GetCursorPos3D` so it auto-fixes; the
+    "status-bar correct, spawn offset" framing in the original
+    handoff was a measurement artefact (both were wrong by the same
+    amount, but world coords as raw floats are hard to eyeball).
+    Three call sites in `HostWindow.cpp` (`WM_MOUSEMOVE`,
+    `WM_KEYDOWN VK_SHIFT`, `WM_LBUTTONDOWN` SHIFT-fallback)
+    additionally got `#ifndef NDEBUG` `[cursor-unproject]` diagnostic
+    lines so future regressions land in `host.log` with both input
+    coords and viewport choice.
 15. ~~**Composition-mode perf regression on maximize ([MT-12] T10
     smoke).**~~ ✅ **RESOLVED** at `d3a4776`. The hypothesis was
     correct on the first test: skipping FramePublisher's per-frame
@@ -322,6 +331,29 @@ it into a dispatch.
     resolved item 13. Daily-use composition mode no longer has the
     perf cliff that was blocking the architecture-A deletion
     (item 11) on this axis.
+16. **A11y golden drift (29 mismatches per lane, pre-existing on
+    `lt-4 @ da58968`).** Surfaced during the cursor-unproject
+    dispatch (item 14 close-out). The 29 a11y golden YAMLs
+    committed at [`a1000c8`](https://github.com/DrKnickers/new-particle-editor/commit/a1000c8)
+    no longer match the live DOM under either composition or HWND
+    mode at the tip of `lt-4`. Reproduced on a clean rebuild with
+    no working-tree changes (stashed the item-14 fix, ran
+    `pnpm test:native` and `pnpm test:native:legacy`):
+    - **Composition lane:** `128 passed / 29 failed / 31 skipped`
+      (handoff baseline claimed `157 / 0 / 31`).
+    - **HWND/legacy lane:** `103 passed / 29 failed / 56 skipped`
+      (handoff baseline claimed `132 / 0 / 56`).
+    Identical 29 surfaces fail in each lane — `a11y-chrome*`
+    (13), `a11y-dialogs*` (10), `a11y-curve-spinner*` (2),
+    `a11y-keyboard*` (4). The drift is downstream of MT-12's
+    default flip at `07ea8a7` or one of the later [MT-12]
+    cleanup / config / fix commits; bisecting between `a1000c8`
+    (golden commit) and `da58968` (current tip) will localise it.
+    **Treat as own dispatch.** Likely outcomes: (a) legitimate UI
+    drift, re-snapshot the goldens via `pnpm a11y:update`; or
+    (b) a real regression hiding in MT-12 that the golden refresh
+    would paper over — eyeball the diffs first. Don't bundle the
+    refresh with feature work.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
