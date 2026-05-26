@@ -16,6 +16,86 @@ Conventions:
 
 ## Changelog
 
+### [MT-12] Flip default to architecture C (DXGI composition) + retire env-var dual-toggle
+
+*2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Cold launch of `ParticleEditor.exe --new-ui` now boots architecture C
+(DXGI composition + DComp engine visual + WebView2 composition hosting)
+by default — no env vars required. Engine pixels reach the screen via
+the DXGI swapchain → DComp engine visual UNDER the WebView2 visual;
+chrome panels render naturally over the engine via DOM compositing,
+and pane / window resize cleanly reveals more scene content per the
+Stage 5 scene-rect transform. Architecture A (legacy AlphaCompositor
+popup + HWND-hosted WebView2 + JPEG decode into `<img>`) remains as
+an opt-out safety net via a single env var `ALO_HOSTING_MODE=legacy`
+(runtime) / `VITE_HOSTING_MODE=legacy` (build-time, must agree).
+Deletion of architecture A is deferred to a future dispatch contingent
+on default-mode stability confirmation; see `tasks/HANDOFF.md` "Known
+follow-ups" item 11.
+
+The four pre-MT-12 env vars (`ALO_WEBVIEW2_HOSTING`,
+`ALO_VIEWPORT_TRANSPORT`, `VITE_WEBVIEW2_HOSTING`,
+`VITE_VIEWPORT_TRANSPORT`) are retired and no longer have any effect;
+the host emits a loud startup warning if any is still set in the
+environment, naming the migration path to `ALO_HOSTING_MODE`.
+
+**How we tackled it.** The collapse is a single conditional inversion
+across two parallel sites — runtime ([`src/host/HostWindow.cpp:520-575`](src/host/HostWindow.cpp:520))
+and build-time ([`web/apps/editor/src/components/ViewportSlot.tsx:29-77`](web/apps/editor/src/components/ViewportSlot.tsx:29))
+— plus a test-harness flip ([`web/apps/editor/scripts/run-native-tests.mjs`](web/apps/editor/scripts/run-native-tests.mjs)
+adds `--legacy` flag; `package.json` adds `test:native:legacy`,
+`a11y:legacy`, `a11y:update:legacy` scripts) and a spec mode-gate
+migration across 17 spec files (`process.env.ALO_WEBVIEW2_HOSTING === "composition"`
+→ `process.env.ALO_HOSTING_MODE !== "legacy"`). New helper at
+[`web/apps/editor/tests/helpers/mode.ts`](web/apps/editor/tests/helpers/mode.ts)
+exposes `isLegacyMode()` + `isCompositionMode()` for any new spec
+that wants a cleaner API. Boot-mode log lines on both sides (host:
+`[host] hosting mode: <mode>`; React: `[mode] React build mode: <mode>`)
+bracket runtime + build modes for grep-based diagnosis of
+build/runtime desync — full top-of-app banner deferred to a follow-up
+(R2 scope-trim) since the symptom is self-evident. The pre-MT-11
+desync warning at HostWindow.cpp (which gated against `ALO_WEBVIEW2_HOSTING=composition`
+without `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) is deleted — a single
+env var eliminates the failure mode it guarded against. The two
+React-side helpers `isArchCEnabled()` + `isCompositionMode()`
+collapsed into one `isLegacyMode()`; callers keep two distinct named
+aliases (`archCEnabled = !legacyMode`, `compositionMode = !legacyMode`)
+so future architecture-A deletion can prune them cleanly.
+
+**Issues encountered and resolutions.**
+
+1. **Two ViewportSlot vitest tests asserted an intermediate
+   architecture-B state (canvas-jpeg without composition) that's
+   unreachable under the single-env-var model.** The "subscribes to
+   viewport/frame-ready" + "unsubscribes on unmount" pair under the
+   "canvas-jpeg path" describe block both expected the JPEG decode
+   path to be active — but under MT-12 default, architecture C is
+   active and the frame-ready subscription is intentionally skipped
+   (DXGI handles engine pixels directly). Collapsed the two tests
+   into a single positive assertion that the default mode does NOT
+   subscribe to frame-ready, and inline-commented the historical
+   context so a future reader understands the test-coverage shift.
+   Net vitest count: 348 → 347.
+
+2. **Test-harness `pnpm test:native` default profile changed.** Pre-MT-12,
+   `pnpm test:native` ran the HWND lane (132 / 0 / 56 baseline);
+   under MT-12 it runs the composition lane (157 / 0 / 31 baseline,
+   per the [MT-11] T16 verification). To run the legacy HWND lane
+   explicitly, use `pnpm test:native:legacy` (or `--legacy` on the
+   underlying script). HANDOFF "Test counts" table updated to label
+   both numbers by mode for future readers.
+
+3. **`FramePublisher` is now wasted work under default mode.** The
+   host-side JPEG encode + base64 + emit pipeline continues running
+   under composition mode (where DXGI is the actual engine-pixel
+   source and the React `<img>` consumer is skipped). Harmless per-
+   frame waste; flagged as HANDOFF follow-up item 13 for either a
+   one-line composition-mode short-circuit or eventual deletion
+   with architecture A.
+
+---
+
 ### Phase 3 a11y close-out — dual-mode Playwright regression gate (HWND Win32 UIA + composition DOM snapshot) + composition backbone reachability spec + Stage 3i manual smoke
 
 *2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

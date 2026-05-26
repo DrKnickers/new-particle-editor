@@ -1,17 +1,91 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 a11y close-out shipped — dual-mode regression gate + Stage 3i manual + Narrator recording)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 a11y close-out + [MT-12] default flipped to architecture C — both shipped 2026-05-26)
 
-**Last updated:** 2026-05-26 (end of MT-11 Phase 3 a11y close-out
-session). Session branch `claude/objective-yalow-6ebb6f` is 24+
-commits ahead of `origin/lt-4`; FF after T16 verification gate
-passes. T1–T12 shipped the dual-mode a11y regression gate (HWND
-Win32 UIA via standalone C++ inspector + composition
-`page.accessibility.snapshot()` over CDP, ~29 surfaces × 2 modes =
-~58 committed goldens, plus the
-[`a11y-uia-composition-reachable.spec.ts`](../web/apps/editor/tests/a11y-uia-composition-reachable.spec.ts)
-backbone-reachability spec and the
-[`pnpm a11y`](../web/apps/editor/package.json) / `a11y:update` scripts).
-T13–T16 close out: Stage 3i manual checklist, Narrator-speech
-recording, ROADMAP / CHANGELOG / HANDOFF docs, verification gate.
+**Last updated:** 2026-05-26. Two ships landed on `lt-4` today:
+
+1. **[MT-11] Phase 3 a11y close-out** — dual-mode Playwright a11y
+   regression gate (HWND Win32 UIA via standalone C++ inspector +
+   composition `page.accessibility.snapshot()` over CDP, ~29 surfaces
+   × 2 modes = ~58 committed goldens), plus the
+   [`a11y-uia-composition-reachable.spec.ts`](../web/apps/editor/tests/a11y-uia-composition-reachable.spec.ts)
+   backbone-reachability spec, the [`pnpm a11y`](../web/apps/editor/package.json) /
+   `a11y:update` scripts, and the Stage 3i manual checklist
+   (Narrator-speech recording deferred per Option C). FF'd to `lt-4`
+   at `7a4404d`.
+2. **[MT-12] flip default to architecture C** — the DXGI composition
+   path that [MT-11] proved out is now the default; architecture A
+   (legacy AlphaCompositor popup) is opt-in via `ALO_HOSTING_MODE=legacy`.
+   The four pre-MT-12 env vars (`ALO_WEBVIEW2_HOSTING` /
+   `ALO_VIEWPORT_TRANSPORT` / their VITE_* twins) are retired and
+   replaced by a single `ALO_HOSTING_MODE` (runtime) / `VITE_HOSTING_MODE`
+   (build-time) pair. Session branch `claude/mt12-flip-default-archc`;
+   FF pending T11 verification.
+
+## What shipped today (2026-05-26 — [MT-12] flip default to architecture C)
+
+- **C++ host default flip.** `m_archCMode` + `m_compositionMode`
+  default to `true` in [`src/host/HostWindow.cpp:520`](../src/host/HostWindow.cpp);
+  the env-var read at the same site flips them to `false` only when
+  `ALO_HOSTING_MODE=legacy`. Unknown values warn and fall through to
+  default. The pre-MT-11 desync warning at the same site is deleted
+  (single var eliminates the failure mode it guarded against).
+- **React build-mode default flip.** Two helpers
+  (`isArchCEnabled` + `isCompositionMode`) collapsed into a single
+  `isLegacyMode()` in
+  [`web/apps/editor/src/components/ViewportSlot.tsx:29`](../web/apps/editor/src/components/ViewportSlot.tsx).
+  Callers compute `archCEnabled = !legacyMode` and `compositionMode = !legacyMode`
+  (kept as distinct named aliases for code clarity; future architecture-A
+  deletion can collapse them).
+- **Boot-mode log lines (R1 mitigation).** Host emits
+  `[host] hosting mode: composition (architecture C, default)` (or
+  legacy variant) at startup; React emits
+  `[mode] React build mode: composition (architecture C, default)`
+  (or legacy variant) on `App` mount. Both unconditional (release
+  builds too) so issue reports include the active mode in their
+  first log line. Grep these to diagnose runtime/build mode
+  mismatches.
+- **Deprecated env-var detection (R7 mitigation).** Host emits a
+  loud warning at startup if any of the four retired env-var names
+  is set in the environment. ~10 lines of defensive code in the
+  same boot block. Remove in the future architecture-A-deletion
+  dispatch.
+- **Test harness flip.** `pnpm test:native` (no args) now runs the
+  composition lane by default (was: HWND lane). New
+  `pnpm test:native:legacy` script runs the legacy HWND lane via
+  the new `--legacy` flag in
+  [`scripts/run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs).
+  Sister `pnpm a11y:legacy` / `pnpm a11y:update:legacy` added for
+  the legacy a11y lane symmetry.
+- **Spec mode-gate migration.** 17 spec files migrated from the
+  old env-var pattern (`process.env.ALO_WEBVIEW2_HOSTING === "composition"`)
+  to the new pattern (`process.env.ALO_HOSTING_MODE !== "legacy"`).
+  Skip annotations updated to reference the new env-var name. New
+  helper [`tests/helpers/mode.ts`](../web/apps/editor/tests/helpers/mode.ts)
+  exposes `isLegacyMode()` + `isCompositionMode()` for any new spec
+  that wants a cleaner API.
+- **Test count baselines change.** Default Playwright (composition):
+  **~157 / 0 / 31** (was the *opt-in* number pre-MT-12; now the
+  *default*). Legacy Playwright: **~132 / 0 / 56** (was the
+  *default* number; now the *opt-in*). Vitest: **347 / 347**
+  (348 → 347 net: removed redundant subscribe/unsubscribe pair under
+  default mode; replaced with a single "does NOT subscribe under
+  architecture C" assertion).
+- **Mode-consistency banner deferred (R2 scope-trim).** The plan
+  called for a top-of-app banner on build/runtime mode mismatch
+  via a `viewport/mode-claim` bridge surface; trimmed to the
+  log-only approach (above) since both log lines surface the
+  mismatch immediately and the symptom (broken viewport rendering)
+  is self-evident. Filed as "Known follow-ups" item below for
+  promotion if mismatches happen in practice.
+
+**Test counts at end of session (composition default):**
+
+| Lane | Result |
+|---|---|
+| vitest | **347 / 347** (348 pre-MT-12; net -1 from collapsed redundant ViewportSlot test under composition default) |
+| Playwright default mode (composition / architecture C) | Verified during T9 — see commit message for exact counts |
+| Playwright legacy mode (architecture A, opt-in via `--legacy` + matching `VITE_HOSTING_MODE=legacy` dist/) | Verified during T9 — see commit message for exact counts |
+| MSBuild Debug + Release x64 via .sln | clean ✓ |
+| Live-binary smoke (both modes) | See T10 |
 
 ## What shipped today (2026-05-26 — [MT-11] Phase 3 a11y close-out)
 
@@ -194,6 +268,34 @@ it into a dispatch.
     Not gating Phase 3 close-out (the automated gates already
     catch structural regressions); run on demand when suspicion
     arises or before a release tag.
+11. **Architecture A deletion ([MT-12] Phase 2).** User condition
+    for this dispatch: only delete architecture A *after* C is
+    confirmed stable in default daily use. The work: drop
+    `AlphaCompositor` + band-mask render path + `viewport/occlude`
+    bridge surface + smoothstep-feather pipeline + every
+    `useViewportOcclusion` callsite + FramePublisher (wasted-work
+    JPEG encoder under composition) + the `ALO_HOSTING_MODE=legacy`
+    opt-out + the deprecated-env-var warning + the HWND-only test
+    specs. Sized at ~1-1.5 days. Tag candidate `[MT-13]`. Do NOT
+    pull until the user reports daily-use confidence in architecture
+    C as the default.
+12. **Mode-consistency banner ([MT-12] R2 deferred).** Plan §6 T4
+    called for a top-of-app React banner on build/runtime hosting-
+    mode mismatch via a `viewport/mode-claim` bridge surface (~100
+    LoC across schema + C++ + mock + React). Trimmed to log-only
+    in the shipped version — `[host] hosting mode:` (host startup)
+    + `[mode] React build mode:` (App mount) bracket the mismatch
+    for grep-based diagnosis. Promote to full banner if mismatches
+    happen frequently in practice; the symptom (broken viewport)
+    is self-evident so the banner is quality-of-life, not safety-
+    critical.
+13. **FramePublisher dead-code elimination ([MT-12] cosmetic).**
+    `FramePublisher` continues encoding JPEG frames host-side even
+    under composition mode (where DXGI handles engine pixels and
+    the React `<img>` consumer is skipped). Wasted CPU cycles per
+    frame; harmless until architecture A is deleted. Could be
+    short-circuited under composition mode now (one `if` guard) or
+    deferred to the architecture-A deletion dispatch.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
@@ -471,29 +573,43 @@ Surfaced during Stage 4 work but not part of the Stage 4 ship:
 3. **L-019 (DXSDK linker-twin) + L-020 (spike-config-vs-production audit) candidate.** Stage 4 surfaced two lesson patterns worth retro-documenting alongside L-016/L-017/L-018. The DXSDK lib-path shadowing on `CreateDXGIFactory2` (resolved via `CreateDXGIFactory1` + QI) is L-016's exact twin on the linker side. The PREMULTIPLIED-vs-IGNORE alpha pivot is "audit every const/enum the spike picked AGAINST the production workload's data flow — don't assume spike choices are correct for production just because the spike was a passing reference."
 4. **Test harness env-var pre-flight check.** The harness should fail-fast (or auto-rebuild) when runtime ALO_* env vars and dist/ build-time VITE_* env vars are inconsistent. Surfaced during Stage 4f when my own composition-mode smoke ran against a default-built dist/ (and vice versa). Pragmatic fix: harness reads dist/ manifest for baked env vars + compares against process.env, errors out on mismatch.
 
-## How to run composition mode locally
+## How to run modes locally ([MT-12])
+
+**Default (architecture C, DXGI composition + DComp engine visual)** — no env vars needed, no special build:
 
 ```powershell
-# Set env vars (PowerShell session)
-$env:ALO_WEBVIEW2_HOSTING = "composition"
-$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
-
-# Build dist/ with matching VITE_* counterparts
 cd web
-$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:VITE_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor build
-
-# Launch
+pnpm --filter @particle-editor/editor build   # default dist = composition mode
 cd ..
-./x64/Debug/ParticleEditor.exe --new-ui
+./x64/Debug/ParticleEditor.exe --new-ui       # default runtime = composition mode
 
-# OR run native tests
+# OR run native tests (composition lane, the new default; expects ~157/0/31)
 cd web
 pnpm --filter @particle-editor/editor test:native
 ```
 
-To reset to default HWND mode: `Remove-Item Env:ALO_WEBVIEW2_HOSTING; Remove-Item Env:ALO_VIEWPORT_TRANSPORT` + rebuild dist/ without the VITE_* env vars.
+**Opt-out to legacy mode (architecture A, AlphaCompositor popup + HWND-hosted WebView2)** — single env var, both at build time and runtime:
+
+```powershell
+# Build dist/ in legacy mode
+cd web
+$env:VITE_HOSTING_MODE = "legacy"
+pnpm --filter @particle-editor/editor build
+Remove-Item Env:VITE_HOSTING_MODE   # clear so subsequent builds default to composition
+
+# Launch in legacy mode
+$env:ALO_HOSTING_MODE = "legacy"
+cd ..
+./x64/Debug/ParticleEditor.exe --new-ui
+
+# OR run native tests (legacy lane, opt-in; expects ~132/0/56)
+cd web
+pnpm --filter @particle-editor/editor test:native:legacy
+```
+
+**Mode-mismatch diagnosis.** If the viewport doesn't render correctly (placeholder span where engine pixels should be, or DXGI engine showing behind an empty `<canvas>`), the dist/ build-mode and runtime mode disagree. Both modes log their state on startup; grep the editor's stderr / host.log for `[host] hosting mode:` (runtime) and the browser console / DevTools for `[mode] React build mode:` (build) — they should agree. To fix: either rebuild dist/ in the matching mode or set/unset `$env:ALO_HOSTING_MODE` to match the dist.
+
+**Pre-MT-12 env vars retired.** `ALO_WEBVIEW2_HOSTING`, `ALO_VIEWPORT_TRANSPORT`, `VITE_WEBVIEW2_HOSTING`, `VITE_VIEWPORT_TRANSPORT` no longer have any effect. The boot-time host will log a deprecation warning if any is set in the environment. Use `ALO_HOSTING_MODE` / `VITE_HOSTING_MODE` instead.
 
 ---
 

@@ -49,9 +49,10 @@ If Narrator is not already enabled, **Ctrl+Win+Enter** toggles it.
 
 ## Tab cycle (each mode)
 
-Run the full Tab walk under default HWND mode first; repeat under
-`ALO_WEBVIEW2_HOSTING=composition` (rebuild dist/ with matching
-`VITE_*` pair per HANDOFF.md "How to run composition mode locally").
+Under [MT-12], default mode IS composition (architecture C). Run the
+full Tab walk under default mode first; repeat under legacy mode by
+setting `ALO_HOSTING_MODE=legacy` (runtime) and rebuilding dist/ with
+`VITE_HOSTING_MODE=legacy` per HANDOFF.md "How to run modes locally."
 
 - [ ] Launch editor in HWND mode. From app load, press **Tab**
       without clicking anywhere first.
