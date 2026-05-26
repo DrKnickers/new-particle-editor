@@ -296,6 +296,23 @@ it into a dispatch.
     frame; harmless until architecture A is deleted. Could be
     short-circuited under composition mode now (one `if` guard) or
     deferred to the architecture-A deletion dispatch.
+14. **Cursor-bound spawn offset under architecture C ([MT-12] T10
+    smoke).** Clicking to spawn a cursor-bound particle places the
+    particle visibly offset (~tens of screen pixels) from the
+    actual cursor position. Surfaced during [MT-12] default-flip
+    smoke at `dd5aa8c`. Status-bar reports world cursor coords
+    correctly, but the spawn lands somewhere else — coordinate-
+    transform mismatch in the InputDispatcher → engine pipeline,
+    likely interaction with Stage 5's scene-rect / per-pixel-FoV
+    projection. Verify whether bug reproduces under
+    `ALO_HOSTING_MODE=legacy` to know if it's composition-only or
+    pre-existed [MT-12]. Files to scout: `src/host/InputDispatcher.cpp`,
+    `src/host/BridgeDispatcher.cpp` (spawn handler), the
+    `cursor/position-3d` bridge surface, `web/apps/editor/src/components/ViewportSlot.tsx`
+    canvas dispatch. **This is a real-use regression worth fixing
+    before the architecture-A deletion dispatch (item 11) ships** —
+    if it's composition-only, default-mode daily use will hit it
+    every spawner click.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
