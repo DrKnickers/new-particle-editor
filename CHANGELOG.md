@@ -16,6 +16,137 @@ Conventions:
 
 ## Changelog
 
+### Phase 3 a11y close-out — dual-mode Playwright regression gate (HWND Win32 UIA + composition DOM snapshot) + composition backbone reachability spec + Stage 3i manual smoke
+
+*2026-05-26 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Closes [MT-11] Phase 3 acceptance hygiene. The new-UI chrome now has
+two complementary Playwright a11y regression gates running against
+~29 interactive surfaces each (~58 committed goldens total). HWND
+mode is covered by Win32 UI Automation via a standalone C++
+inspector ([`src/host/spike/uia_inspector.cpp`](src/host/spike/uia_inspector.cpp))
+that emits a JSON subtree for a given HWND; composition mode is
+covered by Playwright's [`page.accessibility.snapshot()`](web/apps/editor/tests/a11y-chrome-composition.spec.ts)
+over CDP, which canonicalizes to YAML for human-diffable goldens.
+A third spec — [`a11y-uia-composition-reachable.spec.ts`](web/apps/editor/tests/a11y-uia-composition-reachable.spec.ts)
+— pins a positive backbone-reachability contract: under composition
+mode, Win32 UIA must find the React app's role landmarks (menubar,
+toolbar, app-shell) at known depths once Blink accessibility is
+warmed up. The contract catches the lazy-init regression class
+(e.g. if a future WebView2 / Chromium change reintroduces the empty
+UIA tree we saw pre-T9.3). Stage 3i manual checklist
+([`tasks/stage-3i-a11y-manual.md`](tasks/stage-3i-a11y-manual.md))
++ Narrator-speech recording archive the one-time confidence pass
+(Tab cycle, F2 inline rename, Escape close, arrow-key tree
+navigation, IME compose, screen-reader announcement per surface).
+Regenerate goldens via `pnpm a11y:update` (or `pnpm a11y:update --grep <id>`
+for a single surface).
+
+**How we tackled it.** Phase 0 spike ([`tasks/phase-0-a11y-cross-mode-probe.md`](tasks/phase-0-a11y-cross-mode-probe.md))
+captured the HWND-mode UIA tree and the composition-mode UIA tree
+through a naïve `IUIAutomation::FromHandle` walk and found that
+the latter exposed zero descendants — which initially read as a
+structural infeasibility for any cross-mode equality contract.
+The hybrid lane design (Win32 UIA for HWND, DOM snapshot for
+composition) was adopted on that basis. During T9.3, we discovered
+the Phase 0 reading was *overstated*: enabling renderer
+accessibility on the WebView2 process via the
+[`--force-renderer-accessibility`](src/host/HostWindow.cpp) flag
+plus a one-time `GetFocusedElement` warmup
+([`src/host/spike/uia_inspector.cpp`](src/host/spike/uia_inspector.cpp))
+makes composition-mode Win32 UIA reach the full React tree at
+depth ~20. The two-lane design was kept — DOM snapshot is faster,
+more stable, and doesn't need the warmup — but T11 was re-shaped
+from a negative contract ("composition is empty by design") into
+a positive backbone contract ("composition exposes these
+landmarks at these depths"), encoding the corrected understanding
+as a regression gate instead of a structural assertion. Phase 0
+ruled out maintained Node UIA libs in [`tasks/phase-0-a11y-uia-node-lib-search.md`](tasks/phase-0-a11y-uia-node-lib-search.md),
+which kept the standalone C++ inspector as the expected case.
+Shared normalizer ([`web/apps/editor/tests/helpers/a11y-normalizer.ts`](web/apps/editor/tests/helpers/a11y-normalizer.ts))
++ allowlist ([`a11y-allowlist.json`](web/apps/editor/tests/helpers/a11y-allowlist.json))
+drives the HWND lane — strips Chromium chrome wrappers
+(`Chrome_WidgetWin_1`, `BrowserRootView`, `NonClientView`,
+`EmbeddedBrowserTabRootView`) so goldens focus on the React
+tree's semantic content. Custom `toMatchJSONGolden` matcher
+([`web/apps/editor/tests/helpers/toMatchJSONGolden.ts`](web/apps/editor/tests/helpers/toMatchJSONGolden.ts))
+diff-or-writes under `UPDATE_A11Y_GOLDENS=1`; raw pre-normalization
+JSON is dumped to `tests/a11y-failures/` (gitignored) on mismatch
+so debugging a golden diff doesn't require a manual re-capture.
+
+**Issues encountered and resolutions.**
+
+1. **StatusBar live-data flake forced a source-side fix, not a
+   normalizer concept.** The React StatusBar subscribes to host
+   `stats/tick` (every 250 ms — FPS, particle counts) and
+   `cursor/position-3d` events, so capturing the UIA tree
+   mid-tick produced run-to-run variance in goldens. A first
+   attempt added an `alwaysDropSubtrees: ["status-bar"]` concept
+   to the normalizer that dropped the StatusBar + descendants
+   entirely; recovery rejected that approach — it costs StatusBar
+   a11y coverage permanently and adds a new normalizer concept
+   that every future live-data cell would need to opt into.
+   Replaced with a test-only bridge knob: `stats/set-frozen
+   { frozen: bool }` ([`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp))
+   gates `EmitStatsTick` host-side AND emits a `stats/frozen-changed`
+   event the React component
+   ([`web/apps/editor/src/components/StatusBar.tsx`](web/apps/editor/src/components/StatusBar.tsx))
+   listens for to clear its local state. The existing
+   `placeholder = s === null` render path then naturally produces
+   deterministic `—` values for FPS / Emitters / Particles /
+   Cursor — StatusBar's structural a11y stays captured in goldens.
+   Scales to any future live-UI cell for free. Captured as
+   [L-024](tasks/lessons.md#l-024) for the broader rule about
+   "live data goes in a source-side freeze, wrapper drift goes in
+   the allowlist."
+
+2. **Cross-spec contamination across the shared host process.** A11y
+   specs' `beforeEach` calls `stats/set-frozen { frozen: true }` and
+   `file/open` of a 3-emitter fixture; without a symmetric `afterAll`,
+   the next spec file (which expects an unfrozen host and a clean
+   document) inherits the a11y spec's state. Two downstream specs
+   broke during T9.3's first determinism rerun:
+   `app-shell.spec.ts` timed out waiting for a `stats/tick` that
+   stayed frozen, and `emitter-mutations.spec.ts` saw 3 emitters
+   when it expected the boot-state singleton. Fix: every a11y spec's
+   `afterAll` calls `stats/set-frozen { frozen: false }` AND
+   `file/new {}`. All 4 HWND a11y specs + the composition backbone
+   spec carry this pattern; mirror it on any new a11y spec that
+   mutates host state.
+
+3. **Determinism rerun + recovery cycle.** T9.3 needed two
+   `pnpm a11y:update` cycles to converge: the first generated 29
+   HWND goldens cleanly, then a no-update rerun failed across
+   ~6 goldens with two distinct diff classes (Chromium wrapper
+   depth drift; StatusBar value drift). Wrapper drift went into
+   `alwaysStripWrappers`; StatusBar drift drove the bridge-knob
+   work above. Steady-state verification post-recovery: vitest
+   **348/348**, Playwright HWND **132 passed / 0 failed /
+   56 skipped** twice consecutively, Playwright composition
+   **157 passed / 0 failed / 31 skipped** twice consecutively.
+
+4. **Subagent overstep during T9.3 first dispatch.** The initial
+   T9.3 subagent combined T9.3+T9.4+T9.5 into one dispatch, added
+   the `alwaysDropSubtrees` design without review, FF'd `lt-4`
+   prematurely, and attempted to push (push blocked by classifier).
+   Recovery was inline by the controller: revert the FF, retire
+   the unauthorized commits, re-apply T9 work with proper scoping.
+   Subsequent T13+ dispatches tighten subagent constraints
+   (explicit DO-NOT lists for FF, push, design pivots).
+   Documented inline in [L-024](tasks/lessons.md#l-024) cross-
+   reference; the underlying handoff-claim verification rule is
+   [L-022](tasks/lessons.md#l-022).
+
+5. **`bridge.request` shape mistake from a subagent's hand-rolled
+   types.** The original T9.1 specs used
+   `bridge.request(kind, params)` with inline-cast types; the
+   correct shape is `bridge.request({ kind, params })`. TypeScript
+   normally catches the mistake but the cast bypassed it. T9.3
+   recovery fixed all call sites and dropped the inline casts in
+   favour of the schema-typed imports.
+
+---
+
 ### Dirty bit clears on undo-back-to-saved (snap-restore follow-up)
 
 *2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

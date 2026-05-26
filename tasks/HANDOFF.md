@@ -1,18 +1,170 @@
-# Session Handoff — AloParticleEditor / LT-4 (undo/perform snap-restore + dirty-bit polish + Edit menu enable-state shipped)
+# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 a11y close-out shipped — dual-mode regression gate + Stage 3i manual + Narrator recording)
 
-**Last updated:** 2026-05-25 (end of undo/perform session). `origin/lt-4`
-tip is at the dispatch's third commit on top of the [NT-5] follow-up
-chain. Three new commits in this session:
-[`e750142`](https://github.com/DrKnickers/new-particle-editor/commit/e750142)
-(undo/perform snap-restore — Ctrl+Z / Ctrl+Shift+Z rewinds the
-ParticleSystem; un-fixme's the NT-5 atomicity Playwright test),
-[`fb57acc`](https://github.com/DrKnickers/new-particle-editor/commit/fb57acc)
-(content-compare dirty bit — Ctrl+Z back to saved content clears
-the asterisk via `m_savedSnapshot` byte buffer), and a TODO-HASH
-commit (boot-state baseline init in BindHostState + Edit menu
-Undo/Redo enable-state via canUndo/canRedo on engine snapshot).
+**Last updated:** 2026-05-26 (end of MT-11 Phase 3 a11y close-out
+session). Session branch `claude/objective-yalow-6ebb6f` is 24+
+commits ahead of `origin/lt-4`; FF after T16 verification gate
+passes. T1–T12 shipped the dual-mode a11y regression gate (HWND
+Win32 UIA via standalone C++ inspector + composition
+`page.accessibility.snapshot()` over CDP, ~29 surfaces × 2 modes =
+~58 committed goldens, plus the
+[`a11y-uia-composition-reachable.spec.ts`](../web/apps/editor/tests/a11y-uia-composition-reachable.spec.ts)
+backbone-reachability spec and the
+[`pnpm a11y`](../web/apps/editor/package.json) / `a11y:update` scripts).
+T13–T16 close out: Stage 3i manual checklist, Narrator-speech
+recording, ROADMAP / CHANGELOG / HANDOFF docs, verification gate.
 
-## What shipped today (2026-05-25 — undo/perform polish chain)
+## What shipped today (2026-05-26 — [MT-11] Phase 3 a11y close-out)
+
+- **HWND lane a11y regression gate.** Win32 UIA tree capture for
+  ~29 interactive surfaces (chrome / menubar × 7 menus / toolbar /
+  emitter tree / property tabs × 3 / 10 dialogs / 4 keyboard
+  scenarios / 2 focused inputs) via the new standalone C++ inspector
+  at [`src/host/spike/uia_inspector.cpp`](../src/host/spike/uia_inspector.cpp)
+  (~200 LoC, links `UIAutomationCore.lib`; output: `x64/{Debug,Release}/uia_inspector.exe`).
+  Wrapper at [`web/apps/editor/tests/helpers/uia.ts`](../web/apps/editor/tests/helpers/uia.ts)
+  spawns the exe and parses JSON; specs only see `captureUIA(hwnd, surfaceId)`.
+  Per-spec drivers at
+  [`web/apps/editor/tests/helpers/a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts)
+  set up each surface (focus, open menu, open dialog) so capture is
+  deterministic. Normalizer at
+  [`web/apps/editor/tests/helpers/a11y-normalizer.ts`](../web/apps/editor/tests/helpers/a11y-normalizer.ts)
+  + allowlist
+  ([`a11y-allowlist.json`](../web/apps/editor/tests/helpers/a11y-allowlist.json))
+  strips Chromium chrome wrappers (`Chrome_WidgetWin_1`,
+  `BrowserRootView`, `NonClientView`, `EmbeddedBrowserTabRootView`)
+  so goldens focus on the React tree's semantic content. Custom
+  [`toMatchJSONGolden`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts)
+  matcher with `UPDATE_A11Y_GOLDENS=1` regeneration; raw
+  pre-normalization JSON dumped to `tests/a11y-failures/`
+  (gitignored) on mismatch. 29 JSON goldens at
+  [`web/apps/editor/tests/a11y-goldens/*.golden.json`](../web/apps/editor/tests/a11y-goldens/).
+- **Composition lane a11y regression gate.** Same ~29 surfaces
+  re-parametrised via Playwright's
+  `page.accessibility.snapshot()` (CDP-based; works regardless of
+  WebView2 hosting mode). YAML goldens at
+  [`a11y-goldens/*.composition.golden.yaml`](../web/apps/editor/tests/a11y-goldens/).
+  4 composition spec files mirror the HWND lane's structure.
+- **Composition backbone-reachability spec.**
+  [`tests/a11y-uia-composition-reachable.spec.ts`](../web/apps/editor/tests/a11y-uia-composition-reachable.spec.ts)
+  asserts that under composition mode, Win32 UIA (via the same
+  inspector) reaches the React landmark roles (menubar, toolbar,
+  app-shell) at known depths once Blink accessibility is warmed up.
+  Catches the Blink-lazy-init regression class. *Note: Phase 0
+  initially read composition-mode UIA as zero-descendant; T9.3
+  discovered `--force-renderer-accessibility`
+  ([`src/host/HostWindow.cpp`](../src/host/HostWindow.cpp)) + a
+  one-time `GetFocusedElement` warmup
+  ([`src/host/spike/uia_inspector.cpp`](../src/host/spike/uia_inspector.cpp))
+  makes the React tree reachable at depth ~20. The dual-API design
+  was kept (DOM snapshot is faster + more stable) but T11 was
+  re-shaped from negative-contract into positive backbone-reachability.*
+- **StatusBar volatility solved at the source.**
+  [`stats/set-frozen { frozen: bool }`](../web/packages/bridge-schema/src/index.ts)
+  bridge request gates `EmitStatsTick` host-side
+  ([`src/host/BridgeDispatcher.cpp`](../src/host/BridgeDispatcher.cpp))
+  AND emits a `stats/frozen-changed` event; React StatusBar
+  ([`web/apps/editor/src/components/StatusBar.tsx`](../web/apps/editor/src/components/StatusBar.tsx))
+  listens and clears local state. The existing `placeholder = s === null`
+  render path produces deterministic `—` values for FPS / Emitters /
+  Particles / Cursor — StatusBar a11y stays captured in goldens.
+  *Anti-pattern explicitly rejected during recovery: an
+  `alwaysDropSubtrees` normalizer concept that would have dropped
+  the StatusBar entirely (cost StatusBar a11y coverage permanently;
+  every future live-data cell would need to opt in). See
+  [L-024](lessons.md#l-024).*
+- **Cross-spec contamination fix.** All 5 a11y specs (4 HWND + 1
+  composition backbone) call `stats/set-frozen { frozen: false }`
+  AND `file/new {}` in `afterAll` to leave the shared host process
+  clean for downstream specs (`app-shell.spec.ts`,
+  `emitter-mutations.spec.ts`). Mirror the pattern in any new spec
+  that mutates host state.
+- **`pnpm a11y` / `pnpm a11y:update` scripts.** Added to
+  [`web/apps/editor/package.json`](../web/apps/editor/package.json);
+  `--update` flag plumbed through
+  [`web/apps/editor/scripts/run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+  to set `UPDATE_A11Y_GOLDENS=1` for the run. Use `pnpm a11y:update --grep <id>`
+  for a single surface.
+- **Stage 3i manual checklist.**
+  [`tasks/stage-3i-a11y-manual.md`](stage-3i-a11y-manual.md) —
+  prerequisite Narrator config, Tab cycle (each mode), F2 inline
+  rename, Escape close, arrow-key tree navigation, IME compose
+  smoke, Narrator-speech pass enumerating all 29 surfaces grouped
+  by UI state.
+- **Narrator-speech recording.** [`tasks/stage-3i-narrator-recording.mp4`](stage-3i-narrator-recording.mp4)
+  (user-recorded — see T14 in [`tasks/todo.md`](todo.md)) archives
+  the one-time confidence pass, opening with the Narrator Settings
+  panel visible so the config is self-evident.
+- **L-024 lesson.** UIA non-determinism: WebView2 topology drift
+  goes in `alwaysStripWrappers` (allowlist); live React subscriptions
+  go in a source-side freeze (bridge knob + React listener). Solve
+  at the right layer.
+
+**Test counts at end of session (steady-state, post-recovery):**
+
+| Lane | Result |
+|---|---|
+| vitest | **348 / 348** (343 pre-T1 baseline + 5 normalizer unit tests) |
+| Playwright HWND mode (default dist/) | **132 passed / 0 failed / 56 skipped** twice consecutively (29 composition + T11 backbone specs auto-skip cleanly) |
+| Playwright composition mode (`VITE_VIEWPORT_TRANSPORT=canvas-jpeg` + `VITE_WEBVIEW2_HOSTING=composition` dist/ + matching `ALO_*` runtime env) | **157 passed / 0 failed / 31 skipped** twice consecutively (29 composition a11y + T11 backbone + other native specs) |
+| MSBuild Debug + Release x64 via .sln (per L-023) | clean |
+| Live-binary smoke | HWND mode boot + menu open/close + sample `.alo` load + composition mode boot + same smoke |
+
+**Residual flake:** `emitter-mutations.spec.ts:84` ("delete via
+context menu") flakes intermittently — pre-existing per prior
+commit history, mitigated by a11y `afterAll` cleanup. Re-run once
+on hit; second run almost always passes.
+
+**Local `master` lag:** still behind origin/master from prior
+sessions — run `git pull --ff-only` in
+`C:\Modding\Particle Editor` when convenient.
+
+## Known follow-ups (out of scope for this session)
+
+Carried forward + spawned during this dispatch. Per
+[L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan):
+verify each carry-forward claim against current code before scoping
+it into a dispatch.
+
+1. **Deferred a11y surfaces (T6 R3 cap).** Six dialog / chrome
+   surfaces were dropped from Phase 3 a11y coverage because their
+   setup exceeded the per-surface 30-minute cap. Catalogued at
+   [`tasks/a11y-deferred-surfaces.md`](a11y-deferred-surfaces.md)
+   with the re-introduction sketch for each: `dialog-save-changes`
+   (needs dirty-state plumbing), `dialog-link-group-settings`
+   (needs a link-group-bearing fixture or atom-poke seam),
+   `dialog-background-picker` + `dialog-ground-texture` (now Radix
+   Popovers; belong in a popover-surfaces bucket, not dialogs),
+   `dialog-primitives-gallery` (route, not overlay — needs its own
+   demo-surfaces lane), `dialog-spawner` (always-on panel, not a
+   dialog — belongs in chrome surfaces). Each is independently
+   shippable as a small dispatch.
+2. **Stage 4 sub-stage 4e — first-frame `ClearRenderTargetView`
+   guard.** Inherited from Stage 5. Not observed during smoke;
+   ship-if-surfaces.
+3. **`canvas-architecture.spec.ts` test.fixme markers.** Inherited
+   from Phase 2 (L-012 instrumentation issue). Three documented
+   fix approaches.
+4. **Test harness env-var pre-flight check.** Inherited from
+   Stage 4f. Harness should fail-fast or auto-rebuild on
+   `ALO_*` / `VITE_*` mismatch — would have prevented several of
+   this session's dist/mode-mismatch silent failures.
+5. **Coalesce-key tuning for spinner-drag undo.** Today's
+   `captureUndo` lambda uses key=0 (never coalesce), so a 100-tick
+   spinner drag produces 100 undo entries. Separate dispatch worth
+   its own design thought.
+6. **Full mock-side undo.** Today's mock `undo/perform` returns
+   `{applied:false}` (no-op). Implementing a real mock undo requires
+   snapshotting multiple Zustand stores per mutation — non-trivial,
+   not gating native behaviour.
+7. **F17 P2 verification.** Per-`post-audit-followups.md`:
+   confirm/refute that `attachedParticleSystem` isn't cleared on
+   LoadFile/RestoreFromAutosave. Pure-verification dispatch
+   (~30 min); may spawn a small fix or close as non-bug.
+8. **NT-6 visual-stability lane assignment** (ROADMAP §1.2).
+   Explicitly user-gated — only worth it if lane-bouncing has been
+   observed as a real ergonomic issue.
+
+## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
 - **undo/perform snap-restore.** Real `BridgeDispatcher::ApplyUndoSnapshot`
   + head-of-history auto-cap in the handler reconciles new-UI's
@@ -41,55 +193,19 @@ Undo/Redo enable-state via canUndo/canRedo on engine snapshot).
   the items. Mock defaults to `false`/`false` (browser-mode undo is
   a no-op).
 
-**Test counts at end of session:** vitest **343 / 343** (unchanged).
-Playwright native HWND baseline (default dist/, no env vars):
-**103 passed + 26 skipped + 0 failed** (was 102 + 27 + 0; un-fixme'd
-NT-5 atomicity moved skip → pass). MSBuild Debug + Release x64
-clean via the .sln (per L-023). tsc -b 0 errors. Live-binary smoke:
-rename + Ctrl+Z + Ctrl+Shift+Z + delete + Ctrl+Z (selection
-follows undo) + content-compare dirty-bit clears in two scenarios
-(file/new and file/save) + boot-state baseline confirms + Edit menu
-Undo disabled at boot / enabled after mutation / Redo enabled
-after Ctrl+Z.
-
-**Local `master` lag:** still 4 commits behind origin/master from
-the prior session — run `git pull --ff-only` in
-`C:\Modding\Particle Editor` when convenient.
-
-## Known follow-ups (out of scope for this session)
-
-Carried forward + spawned during this dispatch:
-
-1. **Stage 4 sub-stage 4e — first-frame `ClearRenderTargetView` guard.**
-   Inherited from Stage 5. Not observed during smoke; ship-if-surfaces.
-2. **`canvas-architecture.spec.ts` test.fixme markers.** Inherited
-   from Phase 2 (L-012 instrumentation issue). Three documented fix
-   approaches.
-3. **Test harness env-var pre-flight check.** Inherited from
-   Stage 4f. Harness should fail-fast or auto-rebuild on
-   `ALO_*` / `VITE_*` mismatch.
-4. **Phase 3 a11y close-out** — Stage 3h Playwright accessibility
-   snapshot suite + Stage 3i manual Narrator/IME smoke. Sized at
-   ~1-1.5d.
-5. **Coalesce-key tuning for spinner-drag undo.** Today's `captureUndo`
-   lambda uses key=0 (never coalesce), so a 100-tick spinner drag
-   produces 100 undo entries. Separate dispatch worth its own design
-   thought.
-6. **Full mock-side undo.** Today's mock `undo/perform` returns
-   `{applied:false}` (no-op). Implementing a real mock undo requires
-   snapshotting multiple Zustand stores per mutation — non-trivial,
-   not gating native behaviour.
-7. **F17 P2 verification.** Per-`post-audit-followups.md`:
-   confirm/refute that `attachedParticleSystem` isn't cleared on
-   LoadFile/RestoreFromAutosave. Pure-verification dispatch
-   (~30 min); may spawn a small fix or close as non-bug.
-8. **NT-6 visual-stability lane assignment** (ROADMAP §1.2).
-   Explicitly user-gated — only worth it if lane-bouncing has been
-   observed as a real ergonomic issue.
-
-Per [L-022](lessons.md#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan):
-verify each carry-forward claim against current code before scoping
-it into a dispatch.
+Three commits in the prior session:
+[`e750142`](https://github.com/DrKnickers/new-particle-editor/commit/e750142)
+(undo/perform snap-restore — Ctrl+Z / Ctrl+Shift+Z rewinds the
+ParticleSystem; un-fixme's the NT-5 atomicity Playwright test),
+[`fb57acc`](https://github.com/DrKnickers/new-particle-editor/commit/fb57acc)
+(content-compare dirty bit — Ctrl+Z back to saved content clears
+the asterisk via `m_savedSnapshot` byte buffer), and a TODO-HASH
+commit (boot-state baseline init in BindHostState + Edit menu
+Undo/Redo enable-state via canUndo/canRedo on engine snapshot).
+Test counts at end of prior session: vitest **343 / 343**,
+Playwright HWND **103 / 26 / 0** (was 102 / 27 / 0; un-fixme'd
+NT-5 atomicity moved skip → pass), MSBuild Debug + Release x64
+clean via .sln.
 
 ## Pre-undo/perform session prior state (retained for context)
 
