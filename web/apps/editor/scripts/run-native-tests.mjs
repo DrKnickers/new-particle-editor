@@ -41,6 +41,17 @@ function killAny() {
 }
 
 async function main() {
+  // [MT-11 T12] `--update` flag: forward to the Playwright run as
+  // UPDATE_A11Y_GOLDENS=1 so the a11y matcher writes goldens instead
+  // of comparing. Set here (rather than expecting the caller to
+  // prefix the env var) so `pnpm a11y:update` works on Windows
+  // without cross-env. The flag affects only the toMatchJSONGolden
+  // matcher — other native specs ignore the env var.
+  if (process.argv.includes("--update")) {
+    process.env.UPDATE_A11Y_GOLDENS = "1";
+    console.log("[run-native-tests] --update flag → UPDATE_A11Y_GOLDENS=1");
+  }
+
   await killAny();
   // Give Windows a moment to release file locks.
   await sleep(300);
