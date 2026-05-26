@@ -1747,3 +1747,106 @@ on the *writing* side: a session producing a HANDOFF note about a
 retracted claim was in `HANDOFF.md` "Known follow-ups (out of
 scope for Stage 5)" item 2; the retraction citing this lesson
 sits in HANDOFF.md's "Retractions" sub-section.
+
+---
+
+## L-023 — Invoke MSBuild against the `.sln`, not the `.vcxproj` directly, when the project uses `$(SolutionDir)` macros in include / library paths
+
+**Rule.** [`src/ParticleEditor.vcxproj`](../src/ParticleEditor.vcxproj)
+(and presumably any future project in this tree) sets
+`<AdditionalIncludeDirectories>` using the `$(SolutionDir)` MSBuild
+macro — e.g. `$(SolutionDir)\libs\expat-2.2.0\include`,
+`$(SolutionDir)src`,
+`$(SolutionDir)packages\Microsoft.Web.WebView2.1.0.3967.48\build\native\include`.
+`$(SolutionDir)` resolves to **the directory containing the target
+file MSBuild was invoked against**, not the workspace root. When
+MSBuild is run against `<project>.vcxproj` directly (rather than
+`<solution>.sln`), `$(SolutionDir)` collapses to the project's
+containing directory — `src\` in this repo — which breaks every
+path that assumed workspace-root relativity. The include-resolution
+failure is the visible symptom; the cause is upstream.
+
+**Trigger.** A previously-clean build of `ParticleEditor.vcxproj`
+fails with `C1083: Cannot open include file: <foo>` errors for
+files that exist in the repo, where `<foo>` is one of:
+
+- A project-local header like `exceptions.h` (lives at `src/exceptions.h`).
+- An `expat/expat.h`-style include into `libs/expat-2.2.0/`.
+- A `UI/UI.h`-style sibling include from `src/UI/*.cpp`.
+
+The errors appear when:
+
+1. Building a **fresh worktree** that hasn't been built via the
+   .sln in this checkout (so any cached intermediate state from a
+   prior .sln build isn't there to mask the issue).
+2. Invoking MSBuild as `MSBuild <path-to>.vcxproj` rather than
+   `MSBuild <path-to>.sln`.
+
+The same .vcxproj builds cleanly via the .sln. The symptom is purely
+a function of HOW MSBuild was invoked.
+
+**How to apply.**
+
+For any MSBuild invocation in this repo (CLI, CI, or harness):
+
+1. **Default to the .sln target.** `MSBuild .\ParticleEditor.sln
+   /p:Configuration=Debug /p:Platform=x64 /m` is the canonical
+   incantation. The `.sln` file's location anchors `$(SolutionDir)`
+   correctly.
+2. **If invoking a .vcxproj directly** (sometimes useful for
+   compile-only subsets, IDE integration, or speed), pass
+   `/p:SolutionDir=<absolute-path-to-workspace-root>\` explicitly.
+   The trailing backslash is significant — MSBuild concatenates the
+   value with relative subpaths and the docs specify it must end
+   with the platform separator.
+3. **NuGet `restore` MUST be against the .sln** even if you build
+   the .vcxproj. `MSBuild <project>.vcxproj /t:Restore` may report
+   "Nothing to do" because some package references are
+   solution-level. Always restore at the `.sln` first; build
+   second.
+4. **In documentation / handoff docs**, when referencing build
+   commands, name the .sln target. Don't write
+   `MSBuild ParticleEditor.vcxproj` even when correct, since
+   future readers will copy the snippet into a fresh worktree
+   where it'll break.
+
+**Source incident (2026-05-25, post-[MT-11] Phase 3 retro-doc + NT-5
+dispatches).** During the post-Phase 3 retro-doc dispatch's MSBuild
+verification, the first invocation
+(`MSBuild ..\src\ParticleEditor.vcxproj /p:Configuration=Debug /p:Platform=x64`)
+failed with three classes of `C1083` errors —
+`EmitterList.cpp` couldn't open `UI/UI.h`, `UI/UI.h` couldn't open
+`exceptions.h`, and `xml.h` couldn't open `expat/expat.h`. Files
+that demonstrably existed in the repo. Initial diagnosis suspected a
+fresh-worktree environment issue (the NuGet packages had just been
+restored), but the errors persisted after restore. The actual cause
+was MSBuild resolving `$(SolutionDir)` to `src\` (the .vcxproj's
+parent) instead of the workspace root, so `$(SolutionDir)src` became
+`src\src` (nonexistent) and `$(SolutionDir)\libs\expat-2.2.0\include`
+became `src\libs\expat-2.2.0\include` (nonexistent — `libs` is at the
+workspace root, not inside `src`). The fix was a one-line change to
+invoke MSBuild against `..\ParticleEditor.sln`. Same source tree,
+same MSBuild version (VS18 Community), same configuration — the only
+delta was the target argument.
+
+`BridgeDispatcher.cpp` was listed in the build output of the failing
+.vcxproj invocation, *which is what made the diagnosis slow* —
+the newly-added file compiled cleanly while the build "failed," so
+the natural first hypothesis was that the new code introduced the
+problem. It hadn't; the failures were in files the new code never
+touched. The L-022 verification pattern (read the cited code site,
+trace the actual fault) is what surfaced the upstream cause —
+applied here to a build-environment claim instead of a handoff-doc
+claim, the same shape of rule.
+
+**Cross-reference.** Invocation site documented in
+[`src/ParticleEditor.vcxproj`](../src/ParticleEditor.vcxproj) lines
+92, 110, 130, 153 (each `AdditionalIncludeDirectories` entry uses
+`$(SolutionDir)`). [L-016](#l-016--legacy-dxsdk-june-2010-shadows-win10-sdk-headers-when-dxsdk-is-first-in-additionalincludedirectories-isolate-new-tus-via-per-file-include-path-override--pimpl)
+is the related lesson on per-file include-path REPLACEMENT vs
+inheritance; this lesson is on the upstream macro resolution. Future
+build-environment claims in handoff docs (e.g. "MSBuild Debug x64
+clean") should now name the invocation form
+(`MSBuild .\ParticleEditor.sln`) so future readers don't reproduce
+the issue by reaching for `MSBuild .\src\ParticleEditor.vcxproj` as
+a "more direct" form.

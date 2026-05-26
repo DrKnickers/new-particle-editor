@@ -1,6 +1,69 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 Stage 5 SHIPPED — Phase 3 complete)
+# Session Handoff — AloParticleEditor / LT-4 ([NT-5] SHIPPED — Phase 3 complete + lessons retro-doc + [NT-5] full coverage)
 
-**Last updated:** 2026-05-25. [MT-11] Phase 3 **Stages 0–5 all shipped on `origin/lt-4` (after Stage 5 FF).** Stage 5 (scene-rect transform on engine visual) closes Phase 3: under composition mode, React-side `layout/scene-rect` dispatches now wire into both `Compositor::SetEngineVisualTransform` (DComp clip to scene-rect on screen) and `Engine::SetSceneViewport` (engine viewport + per-pixel-FoV projection scoped to scene-rect). User-observable result: chrome panels no longer bleed engine pixels, and pane / window resize "cleanly reveals more of the scene" rather than distorting existing content. Variant **B-γ** with per-pixel-FoV-vs-current-RT keeps `fovY ≤ 45°` always — engine renders at-or-LESS world than pre-Stage-5 across all window sizes. Composite rate ~70 fps at 3440×1440 (Stage 4's 79.1 mean baseline, within parity).
+**Last updated:** 2026-05-25 (post-NT-5 + L-023). `origin/lt-4` tip
+includes three commits from the post-Phase-3 session:
+[`84907d3`](https://github.com/DrKnickers/new-particle-editor/commit/84907d3)
+(lessons retro-doc L-019/L-020/L-021/L-022 + HANDOFF retraction),
+[`5d4a9ba`](https://github.com/DrKnickers/new-particle-editor/commit/5d4a9ba)
+([NT-5] engine-side single-member link-group enforcement — the
+ROADMAP §1.1 item shipped), and
+[`b2abe27`](https://github.com/DrKnickers/new-particle-editor/commit/b2abe27)
+([NT-5] follow-up: native verification, load-time fixture spec,
+`--gen-nt5-fixture` CLI tool, undo-round-trip `test.fixme`). One more
+docs commit on top with L-023 (MSBuild `$(SolutionDir)` lesson) +
+this HANDOFF refresh + the post-NT-5 next-session prompt.
+
+**Session-end state:** Phase 3 fully shipped (5 stages), Phase 3
+documentation hygiene closed via the retro-doc dispatch, [NT-5] ROADMAP
+item shipped end-to-end (data layer matches render layer for link
+group enforcement), worktree cleanup recovered ~1.2 GB (3 registered
+worktrees removed, 22 stale claude/* session branches deleted,
+20 [gone] remote-tracking refs pruned, local `lt-4` ref FF'd from
+the long-stale `339ab95` to current tip), 5 new lessons.md entries
+(L-019 through L-023). Local `master` in the main worktree at
+`C:\Modding\Particle Editor` is 4 commits behind origin/master and
+needs `git pull --ff-only` over there (out of reach from this
+session's worktree).
+
+**Test counts at handoff:** vitest **343/343** (was 338; +5 NT-5
+mock contract tests, 1 existing test updated for the path-3 contract
+change). Playwright native HWND baseline (default dist/, no env
+vars): **102 passed + 27 skipped + 0 failed** (was 99 + 26 + 0; +3
+new tests pass — 2 NT-5 mutation paths + 1 load-time fixture; +1
+NT-5 atomicity test sits in the 27 skipped as `test.fixme(...)`
+pending the `undo/perform` snap-restore implementation). MSBuild
+Debug + Release x64 clean (preexisting LIBCMTD warning unchanged).
+Per [L-023](lessons.md#l-023--invoke-msbuild-against-the-sln-not-the-vcxproj-directly-when-the-project-uses-solutiondir-macros-in-include--library-paths),
+build invocation MUST be against `.\ParticleEditor.sln`, not the
+.vcxproj.
+
+## What shipped this session
+
+- **[MT-11] Phase 3 retro-doc** — four new lessons.md entries:
+  L-019 (DXSDK linker-twin), L-020 (spike-vs-production const
+  audit), L-021 (verify rendered geometry — combined-math edition),
+  L-022 (handoff-claim verification). The HANDOFF "Known
+  follow-ups" item 2 (spurious "latent ResetParameters projection-
+  push bug") was retracted after pre-flight verification revealed
+  it as a phantom claim.
+- **[NT-5] engine-side single-member link-group enforcement** —
+  `BridgeDispatcher::EnforceSingleMemberLinkGroups()` helper + 3
+  call sites (linkGroups/set-membership, emitters/delete, file/open
+  load-time sweep); JS-mock parallel; 5 new vitest tests + 1
+  updated for path-3 contract change; 2 new Playwright tests; 1
+  fixme'd undo round-trip test; load-time `.alo` fixture +
+  `--gen-nt5-fixture` CLI tool in main.cpp for regeneration.
+- **L-023 MSBuild `$(SolutionDir)` lesson** — discovered during
+  NT-5 verification. The right invocation form is
+  `MSBuild .\ParticleEditor.sln`, not the .vcxproj.
+- **Worktree cleanup** — 3 worktrees + 10 orphan directories
+  removed; 22 `claude/*` session branches + 20 `[gone]`
+  remote-tracking branches deleted; local lt-4 FF'd to current tip;
+  remote tracking refs pruned via `git fetch --prune`.
+
+## Prior session work (pre-this-session, retained for context)
+
+[MT-11] Phase 3 **Stages 0–5 all shipped on `origin/lt-4`.** Stage 5 (scene-rect transform on engine visual) closes Phase 3: under composition mode, React-side `layout/scene-rect` dispatches now wire into both `Compositor::SetEngineVisualTransform` (DComp clip to scene-rect on screen) and `Engine::SetSceneViewport` (engine viewport + per-pixel-FoV projection scoped to scene-rect). User-observable result: chrome panels no longer bleed engine pixels, and pane / window resize "cleanly reveals more of the scene" rather than distorting existing content. Variant **B-γ** with per-pixel-FoV-vs-current-RT keeps `fovY ≤ 45°` always — engine renders at-or-LESS world than pre-Stage-5 across all window sizes. Composite rate ~70 fps at 3440×1440 (Stage 4's 79.1 mean baseline, within parity).
 
 **Test counts at handoff:** vitest **338 / 338** · Playwright native HWND baseline **99 passed + 26 skipped + 0 failed** (default dist/, no env vars; new dxgi-scene-rect + Stage 4's dxgi-* + composition-hosting specs all auto-skip cleanly) · composition mode **122 passed + 3 skipped + 0 failed** (composition-built dist/ + `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) · MSBuild Debug + Release x64 clean · tsc -b 0 errors.
 
@@ -61,14 +124,30 @@ Surfaced during Stage 5 work but not part of the Stage 5 ship:
 
 ## Resolved follow-ups (post-Stage-5)
 
-1. **Lessons retro-doc (L-019 / L-020 / L-021 / L-022).** Shipped
-   2026-05-25 in the post-Phase-3 dispatch. L-019 (DXSDK linker-twin),
-   L-020 (spike-vs-production const audit), L-021 (verify rendered
-   geometry — combined-math edition) all landed in
-   [`tasks/lessons.md`](lessons.md) using the established baseline
-   shape. L-022 (handoff-claim verification) was added as the fourth
-   lesson, surfaced by the same dispatch's pre-flight (see Retractions
-   below).
+1. **Lessons retro-doc (L-019 / L-020 / L-021 / L-022 / L-023).**
+   Shipped 2026-05-25. L-019 (DXSDK linker-twin), L-020 (spike-vs-
+   production const audit), L-021 (verify rendered geometry —
+   combined-math edition) distilled from CHANGELOG Stage 4 + Stage 5
+   prose. L-022 (handoff-claim verification) surfaced by the same
+   dispatch's pre-flight (see Retractions below). L-023 (MSBuild
+   `$(SolutionDir)` resolution) added later in the same session
+   after the NT-5 dispatch's MSBuild verification surfaced the
+   build-environment behaviour.
+
+2. **[NT-5] engine-side single-member link-group enforcement.**
+   Shipped 2026-05-25 in the post-retro-doc dispatch. ROADMAP §1.1
+   item. Mutation handlers (`linkGroups/set-membership`,
+   `emitters/delete`) and `file/open` all run through the new
+   `BridgeDispatcher::EnforceSingleMemberLinkGroups()` helper. Mock
+   parallel in `enforceSingleMemberLinkGroups()` chained into the
+   mock-state's mutation helpers. Five new vitest tests + 3 new
+   Playwright tests verifying mutation paths + load-time sweep
+   against the C++ host. Pre-NT-5 `.alo` files self-correct on load
+   without dirtying. The atomicity contract (captureUndo ⟶ sweep)
+   is encoded as a `test.fixme(...)` pending the
+   `undo/perform` snap-restore implementation. Saved-file fixture
+   at [`web/apps/editor/tests/fixtures/nt-5-singleton.alo`](../web/apps/editor/tests/fixtures/nt-5-singleton.alo)
+   regeneratable via `ParticleEditor.exe --gen-nt5-fixture <path>`.
 
 ## Retractions
 
