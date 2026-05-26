@@ -353,3 +353,52 @@ export const KEYBOARD_SURFACES: SurfaceCapture[] = [
     teardown: async (_page) => { /* no-op */ },
   },
 ];
+
+// ─── T8: custom-primitive surfaces ────────────────────────────────────
+//
+// CurveEditor canvas:
+//   The T8 plan referenced `[data-testid="curve-editor-canvas"]`, which
+//   doesn't exist. `data-testid="curve-editor-svg"` is already on the
+//   interactive SVG canvas at CurveEditor.tsx:802 and CurveEditor.tsx:1473
+//   (two render paths — single-channel and multi-channel). The SVG has no
+//   `tabIndex`, so `.click()` delivers pointer-active state rather than
+//   keyboard focus — the surface id `curve-editor-focused` captures the
+//   cursor-active UIA tree, which is what T9 goldens will pin down.
+//   Reusing the existing testid is surgical (no React change needed) per
+//   the T5 precedent of preferring existing testids over new duplicate
+//   attrs. The surface id remains unchanged — it's an internal label for
+//   the golden file, not a selector.
+//
+// Spinner:
+//   The T8 plan referenced `[data-testid="spinner-emit-rate"]` — a
+//   placeholder name that doesn't correspond to any real field. The
+//   closest semantically correct control on the Basic tab is
+//   "Particles/second:" (the `nParticlesPerSecond` FieldSpinner under the
+//   Continuous stream radiogroup at EmitterPropertyTabs.tsx:491). This is
+//   the first spinner on the Basic tab that represents a continuous
+//   emission-rate quantity (analogous to "emit rate" in plain language).
+//   Path A (surgical): added optional `testId?: string` prop to
+//   `FieldSpinner` in EmitterPropertyTabs.tsx and applied
+//   `testId="spinner-particles-per-second"` at that one callsite. The prop
+//   forwards onto FieldSpinner's outermost `.form-row` div, which already
+//   wraps the input. No change to the generic Spinner.tsx primitive.
+//   The surface selector targets `input` inside that row (the focusable
+//   element), matching the T8 plan's `.focus()` approach.
+
+export const CUSTOM_PRIMITIVE_SURFACES: SurfaceCapture[] = [
+  {
+    id: "curve-editor-focused",
+    setup: async (page) => {
+      await page.locator('[role="tab"]:has-text("Basic")').click();
+      await page.locator('[data-testid="curve-editor-svg"]').click();
+    },
+    teardown: async (_page) => { /* no-op */ },
+  },
+  {
+    id: "spinner-focused",
+    setup: async (page) => {
+      await page.locator('[data-testid="spinner-particles-per-second"] input').focus();
+    },
+    teardown: async (_page) => { /* no-op */ },
+  },
+];

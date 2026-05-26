@@ -495,6 +495,7 @@ export function BasicTab({
             step={1}
             decimals={0}
             disabled={!continuousEnabled}
+            testId="spinner-particles-per-second"
             onCommit={(v) => onCommit({ nParticlesPerSecond: Math.round(v) })}
           />
 
@@ -664,6 +665,7 @@ export function FieldSpinner({
   disabled,
   displayInvertedPercent,
   widthBoost,
+  testId,
   onCommit,
 }: {
   label: string;
@@ -684,6 +686,11 @@ export function FieldSpinner({
    *  multipliers). "mid" = +25 % (~73 px), "wide" = +50 % (~87 px),
    *  "x2" = doubled (~116 px). */
   widthBoost?: "mid" | "wide" | "x2";
+  /** Optional data-testid for a11y surface drivers (T8). Applied to the
+   *  outermost .form-row div so the surface selector targets the spinner
+   *  row as a unit. Use sparingly — only at callsites that need UIA
+   *  capture anchoring. */
+  testId?: string;
   onCommit: (value: number) => void;
 }) {
   const displayValue = displayInvertedPercent
@@ -709,7 +716,7 @@ export function FieldSpinner({
           ? "form-row form-row-mid-input"
           : "form-row";
   return (
-    <div className={rowClass}>
+    <div className={rowClass} data-testid={testId}>
       <span className="lbl" title={label}>{label}</span>
       {/* Task 2.5: the design's .form-row 3rd column carries the unit
           hint, so we suppress the Spinner's inline trailing-unit overlay
