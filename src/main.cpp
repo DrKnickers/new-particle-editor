@@ -8098,6 +8098,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		// constructs the singleton state directly via the
 		// ParticleSystem API + SaveParticleSystem.
 		std::wstring genNt5FixturePath;
+		std::wstring genA11yFixturePath;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
 			if (argv[i] == L"--new-ui")    newUi    = true;
@@ -8106,6 +8107,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			if (argv[i] == L"--gen-nt5-fixture" && i + 1 < argv.size())
 			{
 				genNt5FixturePath = argv[i + 1];
+			}
+			if (argv[i] == L"--gen-a11y-fixture" && i + 1 < argv.size())
+			{
+				genA11yFixturePath = argv[i + 1];
 			}
 		}
 		if (!genNt5FixturePath.empty())
@@ -8138,6 +8143,54 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			fwprintf(stderr, L"gen-nt5-fixture: wrote %s "
 			                 L"(emitter 0 linkGroup=0, emitter 1 linkGroup=1 — singleton)\n",
 			         genNt5FixturePath.c_str());
+			return 0;
+		}
+		// [MT-11 T9.2] --gen-a11y-fixture <path>: one-shot CLI to produce a
+		// .alo file with a 3-emitter tree (1 root + 1 lifetime child + 1
+		// death child). Used by the T9 a11y specs so every surface driver's
+		// beforeEach can open a deterministic file with enough tree depth to
+		// exercise ArrowRight expand (kbd-arrow-tree-expanded) as well as the
+		// simpler single-row surfaces. Bypasses BridgeDispatcher; uses the
+		// ParticleSystem API directly (addRootEmitter / addLifetimeEmitter /
+		// addDeathEmitter) and saves via SaveParticleSystem.
+		if (!genA11yFixturePath.empty())
+		{
+			auto sys = std::make_unique<ParticleSystem>();
+			// Root emitter
+			ParticleSystem::Emitter* root = sys->addRootEmitter();
+			if (root == nullptr)
+			{
+				fwprintf(stderr, L"gen-a11y-fixture: failed to add root emitter\n");
+				return 2;
+			}
+			// Lifetime child (spawns during root's life)
+			ParticleSystem::Emitter* lifetimeChild = sys->addLifetimeEmitter(root);
+			if (lifetimeChild == nullptr)
+			{
+				fwprintf(stderr, L"gen-a11y-fixture: failed to add lifetime child emitter\n");
+				return 2;
+			}
+			// Death child (spawns on root's death)
+			ParticleSystem::Emitter* deathChild = sys->addDeathEmitter(root);
+			if (deathChild == nullptr)
+			{
+				fwprintf(stderr, L"gen-a11y-fixture: failed to add death child emitter\n");
+				return 2;
+			}
+			std::string err;
+			const bool ok = SaveParticleSystem(sys.get(), genA11yFixturePath, &err);
+			if (!ok)
+			{
+				fwprintf(stderr, L"gen-a11y-fixture: SaveParticleSystem failed: %hs\n",
+				         err.c_str());
+				return 2;
+			}
+			const auto& emitters = sys->getEmitters();
+			fwprintf(stderr,
+			         L"gen-a11y-fixture: wrote %s "
+			         L"(%zu emitters: root[0], lifetime-child[1], death-child[2])\n",
+			         genA11yFixturePath.c_str(),
+			         emitters.size());
 			return 0;
 		}
 		if (newUi)
