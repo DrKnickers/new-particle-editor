@@ -742,13 +742,21 @@ void HostWindowImpl::RenderD3D9()
 
     // [MT-11] Phase 1: hand the just-composited frame to FramePublisher
     // for encode + base64 + emit. Lifecycle is gated on m_framePublisher
-    // being non-null (constructed in architecture-C mode — default
-    // under [MT-12], opt-out via ALO_HOSTING_MODE=legacy). See [MT-11]
-    // L-015 for why the transport is inline-in-payload rather than
-    // WebResourceRequested. FramePublisher still runs under composition
-    // mode (frames are wasted host-side work, harmless until future
-    // architecture-A deletion).
-    if (m_framePublisher) m_framePublisher->OnFrameComposited();
+    // being non-null. See [MT-11] L-015 for why the transport is
+    // inline-in-payload rather than WebResourceRequested.
+    //
+    // [MT-12 follow-up — items 13+15] Skip under composition mode: the
+    // React-side <img> consumer of viewport/frame-ready early-returns in
+    // composition (ViewportSlot.tsx isLegacyMode() check) because DXGI
+    // is the actual engine-pixel source, so the per-frame JPEG encode is
+    // pure wasted work. Previously left running ("harmless until
+    // architecture-A deletion"), but the encode cost scales with frame
+    // area — at 3440x1440 maximized the ~5 MP/frame encode visibly
+    // dropped FPS vs legacy mode. Construction stays coupled to
+    // m_archCMode for now (less surgery); the per-frame call is the
+    // hot path that mattered. Full FramePublisher removal still belongs
+    // in the architecture-A deletion dispatch.
+    if (m_framePublisher && !m_compositionMode) m_framePublisher->OnFrameComposited();
 
     // spawner/active-count: emit when GetNumInstances() differs from the
     // last emitted value. Polled per-frame, debounced to avoid WebMessage
