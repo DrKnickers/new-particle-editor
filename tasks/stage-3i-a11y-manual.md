@@ -3,6 +3,20 @@
 **One-time confidence pass, executed at ship. Re-run on demand if
 suspicion arises.**
 
+> **2026-05-26 — Narrator-speech section deferred.** The Narrator
+> is a UIA client; the 29 UIA goldens at
+> [`web/apps/editor/tests/a11y-goldens/`](../web/apps/editor/tests/a11y-goldens/)
+> already pin every surface's `Name` + `ControlType` + state, so the
+> per-surface Narrator-speech pass is largely redundant with automated
+> coverage. The bits that goldens *don't* cover are Narrator's
+> speech-shaping layer — image alt-text handling, "1 of 7" list-position
+> synthesis, punctuation/symbol announcement, group/landmark traversal
+> voiceover. That's filed as a follow-up in
+> [`tasks/HANDOFF.md`](HANDOFF.md) "Known follow-ups" and not gating
+> Phase 3 close-out. The Narrator-speech section below is kept intact
+> so it can be re-activated by ticking through it + recording the .mp4
+> at any later sit-down; just remove this notice when doing so.
+
 The automated Playwright gates (HWND lane via Win32 UIA inspector +
 composition lane via `page.accessibility.snapshot()`) cover the
 structural a11y tree for every surface listed in

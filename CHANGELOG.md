@@ -36,9 +36,15 @@ warmed up. The contract catches the lazy-init regression class
 (e.g. if a future WebView2 / Chromium change reintroduces the empty
 UIA tree we saw pre-T9.3). Stage 3i manual checklist
 ([`tasks/stage-3i-a11y-manual.md`](tasks/stage-3i-a11y-manual.md))
-+ Narrator-speech recording archive the one-time confidence pass
-(Tab cycle, F2 inline rename, Escape close, arrow-key tree
-navigation, IME compose, screen-reader announcement per surface).
+covers the interactive layer the goldens can't assert: Tab cycle,
+F2 inline rename, Escape close, arrow-key tree navigation, IME
+compose, screen-reader announcement per surface. The
+Narrator-speech recording section is deferred — Narrator is itself
+a UIA client, so the goldens are structurally equivalent to walking
+the checklist with Narrator; the *speech-shaping* layer (image
+alt-text, "1 of 7" list-position synthesis, punctuation/symbol
+announcement, group/landmark voiceover) is filed as a follow-up in
+HANDOFF rather than blocking close-out.
 Regenerate goldens via `pnpm a11y:update` (or `pnpm a11y:update --grep <id>`
 for a single surface).
 

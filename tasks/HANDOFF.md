@@ -89,11 +89,20 @@ recording, ROADMAP / CHANGELOG / HANDOFF docs, verification gate.
   prerequisite Narrator config, Tab cycle (each mode), F2 inline
   rename, Escape close, arrow-key tree navigation, IME compose
   smoke, Narrator-speech pass enumerating all 29 surfaces grouped
-  by UI state.
-- **Narrator-speech recording.** [`tasks/stage-3i-narrator-recording.mp4`](stage-3i-narrator-recording.mp4)
-  (user-recorded — see T14 in [`tasks/todo.md`](todo.md)) archives
-  the one-time confidence pass, opening with the Narrator Settings
-  panel visible so the config is self-evident.
+  by UI state. The checklist exists as an on-demand interactive
+  smoke; not gating this close-out (see next bullet).
+- **Narrator-speech recording — deferred (Option C).** The Narrator
+  is a UIA client and the 29 UIA goldens already pin every surface's
+  `Name` + `ControlType` + state, so the per-surface Narrator-speech
+  pass is structurally redundant with automated coverage. The bits
+  not covered — Narrator's *speech-shaping* layer (image alt-text,
+  "1 of 7" list-position synthesis, punctuation/symbol announcement,
+  group/landmark traversal voiceover) — are filed as a follow-up
+  below, not gating Phase 3 close-out. The
+  [`tasks/stage-3i-a11y-manual.md`](stage-3i-a11y-manual.md)
+  Narrator-speech section is kept intact so it can be re-activated
+  at any later sit-down by recording the .mp4 and ticking through
+  it; just remove the top deferral notice when doing so.
 - **L-024 lesson.** UIA non-determinism: WebView2 topology drift
   goes in `alwaysStripWrappers` (allowlist); live React subscriptions
   go in a source-side freeze (bridge knob + React listener). Solve
@@ -163,6 +172,28 @@ it into a dispatch.
 8. **NT-6 visual-stability lane assignment** (ROADMAP §1.2).
    Explicitly user-gated — only worth it if lane-bouncing has been
    observed as a real ergonomic issue.
+9. **Narrator speech-shaping verification (Stage 3i Option C
+   deferral).** The 29 UIA goldens pin structural a11y across both
+   modes, but Narrator's speech-shaping layer is not covered —
+   image alt-text handling, "1 of 7" list-position synthesis,
+   punctuation/symbol announcement, group/landmark traversal
+   voiceover. Re-activate the Narrator-speech section in
+   [`tasks/stage-3i-a11y-manual.md`](stage-3i-a11y-manual.md) by
+   removing its top deferral notice + recording the
+   `tasks/stage-3i-narrator-recording.mp4` artefact in a single
+   sit-down (~5-10 min with Narrator + Game Bar / OBS). Or
+   automate via Option A from the 2026-05-26 deferral discussion
+   (PowerShell / Playwright driver that walks the 29 surfaces
+   with timed pauses while user records). Single-session work
+   when convenient.
+10. **Stage 3i interactive smoke (non-Narrator sections).** Tab
+    cycle / F2 inline rename / Escape close / arrow-key tree
+    navigation / IME compose — covered by the checklist at
+    [`tasks/stage-3i-a11y-manual.md`](stage-3i-a11y-manual.md),
+    not covered by any automated lane. ~5-10 min interactive pass.
+    Not gating Phase 3 close-out (the automated gates already
+    catch structural regressions); run on demand when suspicion
+    arises or before a release tag.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 
