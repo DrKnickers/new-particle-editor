@@ -195,6 +195,14 @@ async function main() {
       "tests/a11y-dialogs-composition.spec.ts",
       "tests/a11y-keyboard-composition.spec.ts",
       "tests/a11y-curve-spinner-composition.spec.ts",
+      // [MT-11] Phase 3 a11y T11 — composition-mode UIA backbone
+      // reachability spec. Asserts the composition-hosted tree
+      // exposes AloHostMain → Chromium chrome → EmbeddedBrowserFrame
+      // → React menubar all the way down via Win32 UIA. Catches the
+      // case where Blink's lazy a11y regresses (would leave
+      // composition users with no screen-reader access to React).
+      // Auto-skips under default HWND mode.
+      "tests/a11y-uia-composition-reachable.spec.ts",
     ], {
       cwd: editorDir,
       stdio: "inherit",
