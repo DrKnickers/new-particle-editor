@@ -1,2610 +1,526 @@
-# Phase 3 a11y close-out — implementation plan
+# [MT-12] Flip default to architecture C + retire env-var dual-toggle
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use
-> `superpowers:subagent-driven-development` (recommended) or
-> `superpowers:executing-plans` to implement this plan task-by-task.
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+**Predecessor:** [MT-11] (`### 5.1` in ROADMAP, just shipped) wired
+the DXGI / composition pipeline end-to-end behind two env vars
+(`ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`)
+and proved it green via the dual-mode a11y regression gate (HWND Win32
+UIA + composition DOM snapshot). The pipeline is the proven default
+candidate; today's default is the legacy fallback.
 
-**Predecessor:** [docs/superpowers/specs/2026-05-25-phase-3-a11y-closeout-design.md](../docs/superpowers/specs/2026-05-25-phase-3-a11y-closeout-design.md)
 **Target branch:** `lt-4`
-**Difficulty:** ★★★★
-**Effort estimate:** ~2-3 days (re-planned after T0; was 3-4).
-
-> **2026-05-25 re-plan note (post-T0):** the spike at
-> [`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)
-> proved the original cross-mode equality contract (Win32 UIA HWND ≡
-> Win32 UIA composition) is **structurally infeasible** — composition
-> mode exposes zero descendants under the host HWND because WebView2's
-> DComp visual has no HWND for `IUIAutomation::FromHandle` to walk.
-> User picked **Option 3 (Hybrid)**: keep Win32 UIA for HWND, switch
-> composition to Playwright's `page.accessibility.snapshot()` (CDP,
-> reaches the React tree regardless of hosting). Each lane has its own
-> independent regression gate; no cross-mode equality assertion. T10
-> rewritten; T11 replaced with a small negative-contract spec; surface
-> drivers (T5-T8) and HWND specs (T9) unchanged.
-
-**Architecture (one paragraph):** Two complementary lanes. **HWND
-lane**: Playwright spec-per-category captures the Win32 UI Automation
-tree for each chrome surface via a small C++ UIA inspector
-(`uia_inspector.cpp` matching `dxgi_spike.cpp`); a normalizer drops
-volatile UIA fields and strips Chromium chrome wrappers
-(`Chrome_WidgetWin_1`, `BrowserRootView`, etc.) so the React tree is
-front-and-center; a custom `toMatchJSONGolden` matcher diffs against
-committed JSON goldens with `pnpm a11y:update` regeneration.
-**Composition lane**: the same 4 spec files re-parametrize using
-`page.accessibility.snapshot()` (CDP-based, works regardless of
-WebView2 hosting mode), producing a separate set of composition
-goldens in a different format. The two lanes are independent — no
-cross-mode equality. A small negative-contract spec documents that
-composition mode's host HWND exposes zero UIA descendants by design
-(the FD6-class hosting regression, if it ever happens, surfaces as
-this invariant flipping). Stage 3i manual checklist + Narrator-speech
-recording archive the one-time confidence pass.
-
-**Tech stack:** TypeScript (Playwright + Vitest), C++ (only if Phase 0
-rules out Node UIA lib), Windows UI Automation API, Radix UI ARIA
-primitives already in chrome.
+**Difficulty:** ★★★ (3/5) — tactical conditional flip + test-harness
+ripple + docs work; not architecturally novel.
+**Effort estimate:** ~3-5 hours. Most of the budget is spec
+mode-gate migration (T6) and verification (T9-T10).
 
 ---
 
 ## 1. Goal + scope
 
-**When this ships:** the new-UI chrome has two complementary a11y
-regression gates — Win32 UIA for HWND mode, DOM-level a11y snapshot
-for composition mode — each covering ~30 interactive surfaces. A
-small negative-contract spec documents the structural divergence
-between the two modes (composition mode's host HWND has zero UIA
-descendants by design). Stage 3i manual + Narrator-speech recording
-archive the one-time confidence pass. Phase 3 acceptance closed.
+**When this ships:** Cold launch of `ParticleEditor.exe --new-ui`
+gets architecture C (DXGI composition mode) by default — no env
+vars required. WebView2 hosts in composition mode; engine pixels
+reach the screen via the DXGI bridge + DComp engine visual; scene-
+rect transform clips engine to centre quadrant; chrome panels
+render naturally over the engine. Architecture A (the legacy
+AlphaCompositor popup with WS_EX_LAYERED + band-mask occlusion)
+remains as an opt-out safety net via a single env var
+`ALO_HOSTING_MODE=legacy`. Both the editor and the test harness
+default to composition mode after this dispatch.
 
-**In scope:** ✅ Phase 0 spike COMPLETE (Node-lib NO, cross-mode probe
-STOP-and-replan → Option 3 Hybrid). UIA inspector tool (C++); UIA
-normalizer + allowlist + custom matcher; surface drivers (~30); 4
-HWND spec files using Win32 UIA; 4 composition spec files using
-`page.accessibility.snapshot()`; 1 negative-contract spec
-(composition host-HWND has zero UIA descendants); Stage 3i manual
-checklist + Narrator recording; ROADMAP + CHANGELOG + HANDOFF
-updates.
+**In scope.**
 
-**Out of scope:** programmatic Narrator-speech automation;
-cross-mode equality assertion (proven infeasible at T0); a11y
-*improvements* (this dispatch measures; fixes are separate
-dispatches); surfaces requiring >30 min fixture setup (R3 drop list);
-per-Windows-version test matrix; CoreWebView2 internal a11y bridge
-investigation (filed as potential future ROADMAP item; not gating).
+- **Single env-var pattern.** Collapse `ALO_WEBVIEW2_HOSTING` +
+  `ALO_VIEWPORT_TRANSPORT` into `ALO_HOSTING_MODE` (runtime, C++);
+  collapse `VITE_WEBVIEW2_HOSTING` + `VITE_VIEWPORT_TRANSPORT` into
+  `VITE_HOSTING_MODE` (build-time, React/Vite). Values: unset or
+  `composition` → architecture C (default); `legacy` → architecture
+  A; any other value → log warning and fall through to default.
+- **C++ default flip.** Invert the conditional at
+  [`src/host/HostWindow.cpp:520-532`](src/host/HostWindow.cpp:520):
+  default `m_archCMode = true` + `m_compositionMode = true`; the
+  env-var read sets both to `false` only when value is `legacy`.
+- **React default flip.** Invert
+  [`isArchCEnabled()`](web/apps/editor/src/components/ViewportSlot.tsx:29)
+  + [`isCompositionMode()`](web/apps/editor/src/components/ViewportSlot.tsx:55)
+  into a single `isLegacyMode()` (returns `true` only on
+  `VITE_HOSTING_MODE=legacy`); callers reverse polarity accordingly.
+- **Desync warning removal.** Delete the warning at
+  [`src/host/HostWindow.cpp:545-553`](src/host/HostWindow.cpp:545) —
+  with a single env var there's no possible desync between hosting
+  mode and viewport transport.
+- **Vite build flip.** Default `pnpm --filter @particle-editor/editor build`
+  produces a composition-mode dist/ (no env vars required). The
+  `VITE_HOSTING_MODE=legacy` build path produces a legacy-mode dist/.
+- **Test harness flip.**
+  [`web/apps/editor/scripts/run-native-tests.mjs`](web/apps/editor/scripts/run-native-tests.mjs)
+  default sets `ALO_HOSTING_MODE=composition` (or relies on default).
+  New `--legacy` flag sets `ALO_HOSTING_MODE=legacy` and rebuilds
+  dist/ accordingly (or expects caller to rebuild). New
+  `pnpm test:native:legacy` script wraps the `--legacy` invocation.
+- **Spec mode-gate migration.** Every spec that gates on
+  `ALO_WEBVIEW2_HOSTING === "composition"` or the reverse migrates
+  to gating on `ALO_HOSTING_MODE` (or its negation). Same for any
+  `VITE_*` usage in vitest unit tests.
+- **Docs flip.** HANDOFF "How to run composition mode locally"
+  section inverts into "How to run *legacy* mode locally" (since
+  composition is now default). CHANGELOG entry per project
+  convention. Stage 3i manual checklist's mode-instructions update.
+  Archive existing `tasks/todo-mt-11-phase-3-a11y-archive.md` is
+  already in place (done at the top of this dispatch).
+- **ROADMAP.** New `### 2.1 [MT-12]` entry in Medium term (fills
+  the slot vacated by [MT-11] shipping); marked shipped + moved to
+  `### 5.1` in the same PR; `[MT-12]` tag vacated.
 
-**Explicitly not happening:** mapping Win32 UIA properties to
-`page.accessibility.snapshot()` properties to force a cross-mode
-equality comparison (the property models differ enough that the
-mapping would either lose semantic content or invite false
-positives — not worth the engineering for the catch-rate).
+**Out of scope (deliberate).**
+
+- **Deleting architecture A code paths.** This is the Phase 2
+  cleanup user explicitly deferred ("only once we confirm that
+  Architecture C is stable"). Files like `src/AlphaCompositor.cpp`,
+  the band-mask render path, the `viewport/occlude` bridge surface,
+  the smoothstep-feather pipeline, and every `useViewportOcclusion`
+  callsite stay in place behind the `legacy` env-var gate. Future
+  [MT-13] or similar.
+- **Deleting architecture-A test specs.** HWND-mode specs
+  (`*-composition.spec.ts` siblings without the suffix) continue
+  to run under `pnpm test:native:legacy`, ensuring A still has
+  coverage as long as it exists.
+- **UI toggle for legacy mode** (e.g. View menu entry). Env-var
+  only; no settings-store binding, no menu surface. If a daily
+  user needs to switch repeatedly that's a sign A is harder to
+  delete than expected — file as future work.
+- **Backwards compatibility for the old env-var names.**
+  `ALO_WEBVIEW2_HOSTING` / `ALO_VIEWPORT_TRANSPORT` /
+  `VITE_WEBVIEW2_HOSTING` / `VITE_VIEWPORT_TRANSPORT` are *deleted*
+  immediately, not deprecated. Personal-use modding tool with one
+  developer; no external scripts; muscle memory updates in one go.
+- **Performance benchmark dispatch.** Stage 4 baseline measured
+  ~79 fps mean at 3440×1440 under composition mode. The flip
+  doesn't change composition perf characteristics — same code path,
+  same workload — so no re-benchmark required. (Architecture-A
+  perf is fine and unchanged; users who notice regressions can
+  fall back via env var.)
+- **F8 fallback verification under default mode.** F8 (the
+  composition-controller async-failure fallback to A) is existing
+  infrastructure and was tested under explicit composition opt-in.
+  Smoke-testing it under the new default would require simulating
+  a composition init failure — not worth the rig effort for this
+  dispatch. Document the assumption in HANDOFF; revisit if a real
+  user hits it.
 
 ---
 
 ## 2. What the codebase already gives us
 
-| Existing | How it's relevant |
-|---|---|
-| `web/apps/editor/tests/*.spec.ts` (~32 specs) | Native test harness; pattern + `pnpm test:native` invocation. |
-| `dxgi-transport.spec.ts` + `composition-hosting.spec.ts` | Composition-mode-gated spec pattern; existing mode lane wired. |
-| `dxgi_spike.cpp` + `viewport_poc.vcxproj` | Template for `uia_inspector.cpp` if Phase 0 rules out Node libs. |
-| `@radix-ui/react-menubar` + Radix Dialog | Provide most ARIA semantics out of the box; 268 explicit `aria/role` attrs across 44 files supplement. |
-| `ALO_WEBVIEW2_HOSTING=composition` env-var pattern | Composition lane mechanism already in place. |
-| Existing bridge surface (`window.bridge.request(...)`) + `--gen-nt5-fixture` CLI tooling pattern | Surface drivers (C4) drive state via `page.evaluate(() => window.bridge.request(...))`; fixture loaded via existing `file/open` bridge call against a committed `.alo` (or a new `--gen-a11y-fixture` CLI flag mirroring NT-5's). |
-| Test harness pattern in [`dxgi-transport.spec.ts`](web/apps/editor/tests/dxgi-transport.spec.ts:45) — `chromium.connectOverCDP(CDP_ENDPOINT)` with `beforeAll` browser connect + shared `page` across tests in a file | The a11y specs follow this exact pattern. The harness orchestrates the binary launch; specs assume it's already running and connect via CDP at `http://localhost:9222`. |
-| `package.json` scripts | Add `a11y` + `a11y:update` alongside; no new tooling deps. |
+| Need | Existing artefact | Location |
+|---|---|---|
+| Runtime env-var read pattern (`_wgetenv` + `wcscmp`) | `m_archCMode` / `m_compositionMode` boot block | [`src/host/HostWindow.cpp:520-532`](src/host/HostWindow.cpp:520) |
+| Desync warning (to be deleted) | inline `fprintf(stderr, ...)` | [`src/host/HostWindow.cpp:545-553`](src/host/HostWindow.cpp:545) |
+| Build-time env-var read pattern (Vite `import.meta.env` + node `process.env` dual-check) | `isArchCEnabled()` + `isCompositionMode()` | [`web/apps/editor/src/components/ViewportSlot.tsx:29-61`](web/apps/editor/src/components/ViewportSlot.tsx:29) |
+| Test harness env-var injection point | `main()` in run-native-tests.mjs | [`web/apps/editor/scripts/run-native-tests.mjs:43+`](web/apps/editor/scripts/run-native-tests.mjs:43) |
+| Spec mode-gate pattern (`test.skip(...)` on env-var check) | ~10+ specs in `web/apps/editor/tests/` | grep for `ALO_WEBVIEW2_HOSTING`, `ALO_VIEWPORT_TRANSPORT` |
+| F8 composition-controller fallback (when composition init fails, retry HWND mode at runtime) | per HANDOFF / PR #88 | `src/host/HostWindow.cpp` composition-init failure path |
+| 29 a11y goldens × 2 modes | committed, deterministic | `web/apps/editor/tests/a11y-goldens/*.golden.{json,yaml}` |
+| Bridge surfaces (`layout/scene-rect`, `engine/set/leave-particles`, `engine/set/camera`, etc.) | composition-mode-only paths already wired | `src/host/BridgeDispatcher.cpp`, `src/host/LayoutBroker.cpp`, `src/host/Compositor.cpp` |
+
+What we have to build new:
+
+- A small migration helper or inline conditional that reads
+  `ALO_HOSTING_MODE` (default `composition`) into a single boolean
+  + drives both `m_archCMode` and `m_compositionMode` from it.
+- React-side `isLegacyMode()` replacing the two existing helpers.
+- `pnpm test:native:legacy` script in `web/apps/editor/package.json`
+  + `--legacy` flag handling in `run-native-tests.mjs`.
+- HANDOFF / CHANGELOG / Stage 3i copy updates inverting "how to opt
+  into composition" → "how to opt into legacy."
 
 ---
 
 ## 3. Architecture / implementation approach
 
-See spec §4 for full diagrams. Key points reproduced here:
+### 3.1 C++ host (HostWindow.cpp:520-553)
 
-- **Three lanes:** HWND default lane + composition lane + cross-mode
-  equality spec (pure file IO, doesn't need either mode).
-- **Test contract behind a seam:** `helpers/uia.ts#captureUIA(hwnd,
-  surfaceId)` hides whether the impl is Node lib or C++ exe.
-- **Normalization pipeline:** drop non-allowlist + drop explicit
-  volatile + drop always-strip wrappers + sort children deterministically
-  + canonical JSON.
-- **Phase 0 hard gate:** if cross-mode wrapper-visual probe reveals
-  structurally different tree shapes, STOP and re-plan.
-
----
-
-## 4. Risks + mitigations (summary; full text in spec §7)
-
-- **R1** — No Node UIA lib found. **Mitigation:** budget C++ inspector
-  (~3-4h) as expected case.
-- **R2** — Cross-mode equality not feasible. **MANIFEST 2026-05-25
-  (post-T0):** the probe at [`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)
-  proved structural infeasibility — composition mode has zero UIA
-  descendants under host HWND. **Resolution:** pivoted to Option 3
-  (hybrid) — Win32 UIA for HWND, `page.accessibility.snapshot()` for
-  composition. T10/T11 rewritten. The original "FD6-class regression
-  gate" framing is replaced with a small negative-contract spec that
-  flags if composition mode's UIA-empty invariant ever changes
-  (which would signal a substantive WebView2-side a11y plumbing
-  change worth investigating).
-- **R3** — Surface drivers (C4) 2-4× harder than they look.
-  **Mitigation:** hard 4h cap on C4; drop surfaces needing >30 min
-  setup; file as follow-up.
-- **R4** — Surface count doubles to 30-50 per mode. **Mitigation:**
-  per-surface `pnpm a11y:update --grep` bounds regen cost; stop at 50.
-- **R5** — Narrator-speech reproducibility. **Mitigation:** Stage 3i
-  checklist documents assumed Narrator config; recording archives both.
-- **R6** — Plan assumes harness shape (CDP-connect, `bridge.request("file/open", ...)`,
-  `discoverHostHwnd()` via PowerShell) that may not match reality
-  end-to-end. **Mitigation:** T9.0 pre-flight verifies each assumption
-  against the existing `dxgi-transport.spec.ts` pattern + the actual
-  bridge surface before any spec is written. Surface drivers (T5–T8)
-  also bake in assumptions about `data-testid` selectors that need
-  source-side additions; T5.1 step 2 calls this out explicitly.
-
----
-
-## 5. Testing & verification (summary; full categories in spec §8)
-
-Verification gate for "Phase 3 a11y close-out is done":
-
-1. Vitest still 343/343 + N new tests for the normalizer.
-2. Playwright HWND lane gains new specs; total stays green.
-3. Playwright composition lane gains new specs; total stays green.
-4. Cross-mode equality spec passes.
-5. MSBuild Debug + Release x64 clean (matters only if C++ inspector ships).
-6. Stage 3i checklist all checked; recording committed.
-7. ROADMAP MT-11 Phase 3 marked closed.
-8. CHANGELOG entry written per CLAUDE.md formatting.
-9. HANDOFF refreshed.
-
----
-
-## 6. Task breakdown
-
-Tasks are sequenced; **T0 is a hard gate** before T3+. T1–T2 can run in
-parallel with T0 (don't depend on Phase 0 outcome). T5–T8 (surface
-drivers) and T9 (specs) need T1–T4 done.
-
-### Task T0: Phase 0 spike — Node-lib search + cross-mode probe
-
-**Why:** spec §4.2 / R1 / R2. Answers two architectural questions
-before any helper code exists.
-
-**Files:**
-- Create: `tasks/phase-0-a11y-uia-node-lib-search.md`
-- Create: `tasks/phase-0-a11y-cross-mode-probe.md`
-
-#### T0.1 — Pre-flight + lineage check
-
-- [ ] **Step 1:** Verify lineage clean.
-
-```powershell
-git fetch origin lt-4 --quiet
-git log --oneline origin/lt-4..HEAD   # should be 0
-git log --oneline HEAD..origin/lt-4   # should be 0
-```
-
-- [ ] **Step 2:** Run pre-coding gate (vitest + lint + MSBuild).
-
-```powershell
-pnpm --filter @particle-editor/editor lint
-pnpm --filter @particle-editor/editor test
-MSBuild .\ParticleEditor.sln /p:Configuration=Debug /p:Platform=x64 /m
-MSBuild .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /m
-```
-
-Expected: lint 0 errors, vitest 343/343, both MSBuild configs clean
-(LIBCMTD warning unchanged baseline).
-
-#### T0.2 — Node-lib search
-
-- [ ] **Step 1:** Search npm registry for Win32 UIA bindings.
-
-Search terms to try:
-- `npm search "ui automation windows"`
-- `npm search "uiautomation"`
-- `npm search "win32 accessibility"`
-- Look at: `@nut-tree/nut-js` (cross-platform desktop automation),
-  `node-uiautomation`, `winax` (Windows ActiveX bridge).
-
-- [ ] **Step 2:** For each candidate, evaluate:
-  - Last published date (< 12 months = likely maintained)
-  - Weekly downloads (> 1k = some adoption)
-  - Whether README shows `IUIAutomation::ElementFromHandle` or
-    equivalent tree-walk API
-  - GitHub issues/PRs activity
-
-- [ ] **Step 3:** Write findings to `tasks/phase-0-a11y-uia-node-lib-search.md`.
-
-Template:
-```markdown
-# Phase 0 — Node-side UIA library search
-
-**Date:** 2026-05-25
-**Question:** Is there a maintained Node binding for Win32 UI
-Automation usable from Playwright tests?
-
-## Candidates evaluated
-
-| Lib | Last published | Weekly DL | UIA tree walk? | Verdict |
-|---|---|---|---|---|
-| ... | ... | ... | ... | ... |
-
-## Decision
-
-[GO with <lib name>] OR [NO usable lib; ship C++ uia_inspector.cpp]
-
-## Reasoning
-
-...
-```
-
-- [ ] **Step 4:** Commit the findings doc.
-
-```powershell
-git add tasks/phase-0-a11y-uia-node-lib-search.md
-git commit -m @'
-docs(LT-4): [MT-11 a11y] Phase 0 — Node-side UIA lib search
-
-Search results for Win32 UIA Node bindings. Decision: <GO/NO>.
-'@
-```
-
-#### T0.3 — Cross-mode wrapper-visual probe
-
-- [ ] **Step 1:** Build current dist/ in default HWND mode.
-
-```powershell
-cd web
-Remove-Item Env:VITE_VIEWPORT_TRANSPORT -ErrorAction SilentlyContinue
-Remove-Item Env:VITE_WEBVIEW2_HOSTING -ErrorAction SilentlyContinue
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
-- [ ] **Step 2:** Launch editor, capture HWND of host window.
-
-```powershell
-./x64/Debug/ParticleEditor.exe --new-ui
-# In another terminal:
-# Use the editor's known window title to find HWND via:
-$proc = Get-Process ParticleEditor | Select-Object -First 1
-$hwnd = $proc.MainWindowHandle
-"HWND: 0x{0:X}" -f $hwnd.ToInt64()
-```
-
-- [ ] **Step 3:** Run `inspect.exe` (Windows SDK tool) against the
-  HWND. Navigate to menubar, capture properties.
-
-Path to inspect.exe (likely):
-`C:\Program Files (x86)\Windows Kits\10\bin\<sdk-ver>\x64\inspect.exe`
-
-If inspect.exe not available, use PowerShell:
-```powershell
-Add-Type -AssemblyName UIAutomationClient
-$auto = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
-$auto | Format-List Name, ControlType, ClassName, IsKeyboardFocusable
-$auto.FindAll(
-  [System.Windows.Automation.TreeScope]::Children,
-  [System.Windows.Automation.Condition]::TrueCondition
-) | ForEach-Object {
-    $_ | Format-List Name, ControlType, ClassName
-}
-```
-
-Save output to `tasks/phase-0-hwnd-menubar-uia.txt`.
-
-- [ ] **Step 4:** Close editor. Rebuild dist/ in composition mode.
-
-```powershell
-cd web
-$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:VITE_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
-- [ ] **Step 5:** Launch in composition mode.
-
-```powershell
-$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:ALO_WEBVIEW2_HOSTING = "composition"
-./x64/Debug/ParticleEditor.exe --new-ui
-```
-
-- [ ] **Step 6:** Repeat T0.3 step 3 against the new HWND. Save to
-  `tasks/phase-0-composition-menubar-uia.txt`.
-
-- [ ] **Step 7:** Diff the two captures. Look for:
-  - Extra root-level wrapper visual in composition mode → normalizer
-    "always strip" entry needed; cross-mode contract holds.
-  - Structurally different tree (different child counts at multiple
-    levels, different ControlTypes) → cross-mode contract NOT feasible.
-  - Identical tree shapes → cleanest case; no special handling needed.
-
-- [ ] **Step 8:** Write findings to `tasks/phase-0-a11y-cross-mode-probe.md`.
-
-Template:
-```markdown
-# Phase 0 — Cross-mode UIA-tree wrapper-visual probe
-
-**Date:** 2026-05-25
-**Question:** Does composition mode expose a different UIA tree than
-HWND mode for the same surface?
-
-## Capture method
-
-[inspect.exe / PowerShell UIAutomationClient]
-
-## Surface tested
-
-Menubar at boot (no menus open).
-
-## HWND-mode tree (top 3 levels)
-
-[paste]
-
-## Composition-mode tree (top 3 levels)
-
-[paste]
-
-## Diff
-
-[describe]
-
-## Decision
-
-[GO with cross-mode equality contract, with these normalizer rules: ...]
-OR
-[STOP and re-plan — cross-mode contract NOT feasible because ...]
-```
-
-- [ ] **Step 9:** Commit probe doc.
-
-```powershell
-git add tasks/phase-0-*.md tasks/phase-0-*.txt
-git commit -m @'
-docs(LT-4): [MT-11 a11y] Phase 0 — cross-mode UIA probe
-
-Captured UIA trees for menubar in HWND vs composition mode.
-Decision: <GO/STOP>.
-'@
-```
-
-- [ ] **Step 10:** GATE CHECK — if probe says STOP, halt this plan
-  and notify user. Else proceed to T1.
-
-#### T0.4 — Reset to default HWND mode for subsequent work
-
-- [ ] **Step 1:** Clear composition env vars + rebuild default dist/.
-
-```powershell
-Remove-Item Env:ALO_VIEWPORT_TRANSPORT
-Remove-Item Env:ALO_WEBVIEW2_HOSTING
-Remove-Item Env:VITE_VIEWPORT_TRANSPORT
-Remove-Item Env:VITE_WEBVIEW2_HOSTING
-cd web
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
----
-
-### Task T1: Normalizer + allowlist + unit tests (TDD)
-
-**Why:** spec §5 C2/C3 + §4.4. Pure-TS, no UIA dependency, fully
-unit-testable. Foundation for T9+ specs.
-
-**Files:**
-- Create: `web/apps/editor/tests/helpers/a11y-allowlist.json`
-- Create: `web/apps/editor/tests/helpers/a11y-normalizer.ts`
-- Create: `web/apps/editor/src/lib/__tests__/a11y-normalizer.test.ts`
-
-#### T1.1 — Allowlist config
-
-- [ ] **Step 1:** Create the allowlist with initial stable / volatile
-  / always-strip sets.
-
-`web/apps/editor/tests/helpers/a11y-allowlist.json`:
-```json
-{
-  "stable": [
-    "Name",
-    "ControlType",
-    "ClassName",
-    "AutomationId",
-    "IsKeyboardFocusable",
-    "IsEnabled",
-    "IsOffscreen",
-    "HasKeyboardFocus",
-    "LocalizedControlType",
-    "LegacyAccessible.Role",
-    "LegacyAccessible.State",
-    "ExpandCollapse.ExpandCollapseState",
-    "SelectionItem.IsSelected",
-    "Toggle.ToggleState"
-  ],
-  "volatile": [
-    "BoundingRectangle",
-    "RuntimeId",
-    "ProcessId",
-    "HelpText",
-    "ItemStatus",
-    "FrameworkId"
-  ],
-  "alwaysStripWrappers": [
-    "Chrome_WidgetWin_1",
-    "Intermediate D3D Window",
-    "BrowserRootView",
-    "NonClientView"
-  ]
-}
-```
-
-Note: `alwaysStripWrappers` populated from T0 probe findings (see
-[`tasks/phase-0-a11y-cross-mode-probe.md`](phase-0-a11y-cross-mode-probe.md)).
-These Chromium/WebView2 chrome wrappers sit between the React tree
-and the host HWND in HWND mode; stripping them keeps the goldens
-focused on the React app's a11y semantics.
-
-#### T1.2 — Normalizer test scaffolding (TDD step 1)
-
-- [ ] **Step 1:** Write failing test.
-
-`web/apps/editor/src/lib/__tests__/a11y-normalizer.test.ts`:
-```typescript
-import { describe, it, expect } from "vitest";
-import { normalize } from "@/lib/a11y-normalizer";
-import allowlist from "../../../tests/helpers/a11y-allowlist.json";
-
-describe("a11y-normalizer", () => {
-  it("drops properties not in the stable set", () => {
-    const raw = {
-      Name: "File",
-      ControlType: "MenuItem",
-      BoundingRectangle: "0,0,100,20",
-      RuntimeId: "12,345",
-      children: [],
-    };
-    const out = normalize(raw, allowlist);
-    expect(out).toEqual({
-      Name: "File",
-      ControlType: "MenuItem",
-      children: [],
-    });
-  });
-});
-```
-
-- [ ] **Step 2:** Run test, verify it fails.
-
-```powershell
-pnpm --filter @particle-editor/editor test -- a11y-normalizer
-```
-
-Expected: FAIL with "Cannot find module '@/lib/a11y-normalizer'".
-
-#### T1.3 — Normalizer implementation (TDD step 2)
-
-- [ ] **Step 1:** Implement normalizer.
-
-`web/apps/editor/tests/helpers/a11y-normalizer.ts`:
-```typescript
-export type UIANode = {
-  Name?: string;
-  ControlType?: string;
-  ClassName?: string;
-  AutomationId?: string;
-  IsKeyboardFocusable?: boolean;
-  IsEnabled?: boolean;
-  IsOffscreen?: boolean;
-  HasKeyboardFocus?: boolean;
-  LocalizedControlType?: string;
-  ["LegacyAccessible.Role"]?: string;
-  ["LegacyAccessible.State"]?: string;
-  ["ExpandCollapse.ExpandCollapseState"]?: string;
-  ["SelectionItem.IsSelected"]?: boolean;
-  ["Toggle.ToggleState"]?: string;
-  children?: UIANode[];
-  [k: string]: unknown;
-};
-
-export type Allowlist = {
-  stable: string[];
-  volatile: string[];
-  alwaysStripWrappers: string[];
-};
-
-export function normalize(node: UIANode, allowlist: Allowlist): UIANode {
-  const stable = new Set(allowlist.stable);
-  const stripped: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (k === "children") continue;
-    if (stable.has(k)) stripped[k] = v;
-  }
-  let children = (node.children ?? []).map((c) => normalize(c, allowlist));
-  // Strip wrapper visuals: if a child's AutomationId, ControlType, OR
-  // ClassName matches alwaysStripWrappers, replace it with its
-  // children. ClassName match is what catches the Chromium/WebView2
-  // chrome wrappers (Chrome_WidgetWin_1 etc.) — see T0 probe findings.
-  const wrappers = new Set(allowlist.alwaysStripWrappers);
-  children = children.flatMap((c) => {
-    const isWrapper =
-      (c.AutomationId && wrappers.has(c.AutomationId)) ||
-      (c.ControlType && wrappers.has(c.ControlType)) ||
-      (c.ClassName && wrappers.has(c.ClassName));
-    return isWrapper ? (c.children ?? []) : [c];
-  });
-  // Deterministic sort: AutomationId first, then Name, then ControlType.
-  children.sort((a, b) => {
-    const ka = `${a.AutomationId ?? ""}|${a.Name ?? ""}|${a.ControlType ?? ""}`;
-    const kb = `${b.AutomationId ?? ""}|${b.Name ?? ""}|${b.ControlType ?? ""}`;
-    return ka.localeCompare(kb);
-  });
-  stripped.children = children;
-  return stripped as UIANode;
-}
-```
-
-Also re-export from `web/apps/editor/src/lib/a11y-normalizer.ts` so
-vitest can import via `@/lib/a11y-normalizer`:
-```typescript
-export {
-  normalize,
-  type UIANode,
-  type Allowlist,
-} from "../../tests/helpers/a11y-normalizer";
-```
-
-- [ ] **Step 2:** Re-run test, verify it passes.
-
-```powershell
-pnpm --filter @particle-editor/editor test -- a11y-normalizer
-```
-
-Expected: PASS.
-
-#### T1.4 — More normalizer tests (TDD: add then implement)
-
-- [ ] **Step 1:** Add test for deterministic child sorting.
-
-```typescript
-it("sorts children deterministically by AutomationId then Name", () => {
-  const raw = {
-    Name: "Root",
-    ControlType: "Pane",
-    children: [
-      { Name: "Zeta", ControlType: "Button", AutomationId: "btn-z", children: [] },
-      { Name: "Alpha", ControlType: "Button", AutomationId: "btn-a", children: [] },
-    ],
-  };
-  const out = normalize(raw, allowlist);
-  expect(out.children?.[0]?.AutomationId).toBe("btn-a");
-  expect(out.children?.[1]?.AutomationId).toBe("btn-z");
-});
-```
-
-Run, verify PASS (sorting was already in the impl).
-
-- [ ] **Step 2:** Add tests for wrapper-visual stripping (ControlType AND ClassName matches).
-
-```typescript
-it("strips wrapper visuals matched by ControlType", () => {
-  const customAllowlist = { ...allowlist, alwaysStripWrappers: ["WebView2Wrapper"] };
-  const raw = {
-    Name: "Host",
-    ControlType: "Window",
-    children: [
-      {
-        Name: "wrapper",
-        ControlType: "WebView2Wrapper",
-        children: [
-          { Name: "MenuBar", ControlType: "MenuBar", children: [] },
-        ],
-      },
-    ],
-  };
-  const out = normalize(raw, customAllowlist);
-  expect(out.children).toHaveLength(1);
-  expect(out.children?.[0]?.ControlType).toBe("MenuBar");
-});
-
-it("strips wrapper visuals matched by ClassName (real Chromium chrome pattern)", () => {
-  // Mirrors the actual HWND-mode tree from the T0 probe:
-  // AloHostMain → Chrome_WidgetWin_1 → BrowserRootView → NonClientView → ...React
-  const raw = {
-    Name: "AloParticleEditor",
-    ControlType: "Window",
-    ClassName: "AloHostMain",
-    children: [
-      {
-        Name: "AloParticleEditor",
-        ControlType: "Pane",
-        ClassName: "Chrome_WidgetWin_1",
-        children: [
-          {
-            Name: "AloParticleEditor - Web content",
-            ControlType: "Pane",
-            ClassName: "BrowserRootView",
-            children: [
-              {
-                Name: "",
-                ControlType: "Pane",
-                ClassName: "NonClientView",
-                children: [
-                  { Name: "MenuBar", ControlType: "MenuBar", AutomationId: "menubar", children: [] },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
-  const out = normalize(raw, allowlist);  // uses the production allowlist
-  // After stripping: root → menubar (chrome wrappers removed)
-  expect(out.ClassName).toBe("AloHostMain");
-  expect(out.children).toHaveLength(1);
-  expect(out.children?.[0]?.ControlType).toBe("MenuBar");
-});
-```
-
-Run, verify both PASS.
-
-- [ ] **Step 3:** Add test for recursive normalization.
-
-```typescript
-it("recursively normalizes descendants", () => {
-  const raw = {
-    Name: "Root",
-    ControlType: "Pane",
-    BoundingRectangle: "0,0,100,100",
-    children: [
-      {
-        Name: "Child",
-        ControlType: "Button",
-        BoundingRectangle: "5,5,50,50",
-        children: [],
-      },
-    ],
-  };
-  const out = normalize(raw, allowlist);
-  expect(out.BoundingRectangle).toBeUndefined();
-  expect(out.children?.[0]?.BoundingRectangle).toBeUndefined();
-});
-```
-
-Run, verify PASS.
-
-#### T1.5 — Commit
-
-- [ ] **Step 1:** Commit T1 work.
-
-```powershell
-git add web/apps/editor/tests/helpers/a11y-allowlist.json `
-        web/apps/editor/tests/helpers/a11y-normalizer.ts `
-        web/apps/editor/src/lib/a11y-normalizer.ts `
-        web/apps/editor/src/lib/__tests__/a11y-normalizer.test.ts
-git commit -m @'
-test(LT-4): [MT-11 a11y] T1 — UIA normalizer + allowlist + vitest
-
-Drop volatile UIA fields, sort children deterministically, strip
-configured wrapper visuals. 4 vitest tests; vitest count moves 343 → 347.
-'@
-```
-
----
-
-### Task T2: Custom `toMatchJSONGolden` matcher
-
-**Why:** spec §5 C11. Playwright `expect.extend()` matcher with
-`UPDATE_A11Y_GOLDENS=1` regeneration path and pre-normalization JSON
-dump on failure.
-
-**Files:**
-- Create: `web/apps/editor/tests/helpers/toMatchJSONGolden.ts`
-- Create: `web/apps/editor/tests/native/fixtures/.gitignore` (ignores
-  `a11y-failures/`)
-
-#### T2.1 — Matcher implementation
-
-- [ ] **Step 1:** Write matcher.
-
-`web/apps/editor/tests/helpers/toMatchJSONGolden.ts`:
-```typescript
-import { expect, type MatcherReturnType } from "@playwright/test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-
-const UPDATE = process.env.UPDATE_A11Y_GOLDENS === "1";
-const FAILURE_DIR = path.join(
-  __dirname,
-  "..",
-  "a11y-failures"
-);
-
-expect.extend({
-  toMatchJSONGolden(
-    received: unknown,
-    goldenPath: string,
-    options?: { rawForDebug?: unknown }
-  ): MatcherReturnType {
-    const absPath = path.resolve(__dirname, "..", goldenPath);
-    const serialized = JSON.stringify(received, null, 2) + "\n";
-
-    if (UPDATE) {
-      fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, serialized, "utf8");
-      return {
-        pass: true,
-        message: () => `wrote golden: ${goldenPath}`,
-      };
-    }
-
-    if (!fs.existsSync(absPath)) {
-      return {
-        pass: false,
-        message: () =>
-          `A11y golden missing: ${goldenPath}\n` +
-          `  Hint: run \`pnpm a11y:update\` to create it.`,
-      };
-    }
-
-    const expected = fs.readFileSync(absPath, "utf8");
-    const pass = expected === serialized;
-    if (!pass && options?.rawForDebug !== undefined) {
-      fs.mkdirSync(FAILURE_DIR, { recursive: true });
-      const base = path.basename(goldenPath, ".json");
-      fs.writeFileSync(
-        path.join(FAILURE_DIR, `${base}.raw.json`),
-        JSON.stringify(options.rawForDebug, null, 2) + "\n",
-        "utf8"
-      );
-    }
-
-    return {
-      pass,
-      message: () => {
-        if (pass) return `Matched: ${goldenPath}`;
-        return (
-          `A11y golden mismatch: ${goldenPath}\n` +
-          `  Expected (committed) vs Received (current run) differ.\n` +
-          `  Hint: if intended, run \`pnpm a11y:update --grep "<surface>"\`\n` +
-          (options?.rawForDebug
-            ? `  Raw pre-normalization JSON written to a11y-failures/${path.basename(
-                goldenPath,
-                ".json"
-              )}.raw.json\n`
-            : "")
-        );
-      },
-    };
-  },
-});
-
-declare module "@playwright/test" {
-  interface Matchers<R> {
-    toMatchJSONGolden(goldenPath: string, options?: { rawForDebug?: unknown }): R;
-  }
-}
-```
-
-#### T2.2 — Failure dir .gitignore
-
-- [ ] **Step 1:** Create gitignore.
-
-Add to `web/apps/editor/tests/.gitignore` (create if missing):
-```
-a11y-failures/
-```
-
-#### T2.3 — Commit
-
-- [ ] **Step 1:** Commit T2 work.
-
-```powershell
-git add web/apps/editor/tests/helpers/toMatchJSONGolden.ts `
-        web/apps/editor/tests/native/.gitignore
-git commit -m @'
-test(LT-4): [MT-11 a11y] T2 — toMatchJSONGolden custom matcher
-
-Diff-or-write semantics gated on UPDATE_A11Y_GOLDENS=1; raw
-pre-normalization JSON dumped to tests/a11y-failures/ on
-mismatch (gitignored).
-'@
-```
-
----
-
-### Task T3: UIA inspector (branches on T0 outcome)
-
-**Why:** spec §5 C1 + C1a. The wrapper in T4 hides this choice from
-specs; this task delivers whichever underlying impl Phase 0 selected.
-
-#### T3.A — IF Phase 0 found a Node lib
-
-**Files:**
-- Modify: `web/apps/editor/package.json` (add dep)
-- Create: minimal smoke test invoking the lib against current editor
-
-- [ ] **Step 1:** Install lib.
-  ```powershell
-  cd web/apps/editor
-  pnpm add -D <lib-name>
-  ```
-- [ ] **Step 2:** Write smoke that captures menubar UIA of a freshly
-  launched editor; assert non-empty result.
-- [ ] **Step 3:** Commit.
-
-#### T3.B — IF Phase 0 chose C++ inspector (expected case per R1)
-
-**Files:**
-- Create: `src/host/spike/uia_inspector.cpp`
-- Create: `src/host/spike/UiaInspector.vcxproj`
-- Modify: `ParticleEditor.sln` (add the new project)
-
-##### T3.B.1 — Create the inspector source
-
-- [ ] **Step 1:** Create `src/host/spike/uia_inspector.cpp`.
+Replace the two-env-var read + desync warning with a single read:
 
 ```cpp
-// UIA inspector — emits the Win32 UI Automation subtree rooted at a
-// given HWND as JSON to stdout. Used by Playwright a11y specs.
-//
-// CLI: uia_inspector.exe --hwnd 0xNNNN --capture <id> [--depth N]
-//   --hwnd     target window handle (hex)
-//   --capture  surface identifier (informational; embedded in output)
-//   --depth    max tree depth (default 8)
-//
-// Exit codes: 0 success; 1 bad args; 2 UIA init failed; 3 HWND invalid.
-
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <UIAutomation.h>
-#include <atlbase.h>
-#include <comdef.h>
-#include <cstdio>
-#include <cstring>
-#include <string>
-#include <sstream>
-
-static std::string EscapeJson(const std::wstring& s) {
-    std::string out;
-    out.reserve(s.size() + 2);
-    for (wchar_t wc : s) {
-        if (wc < 0x80) {
-            char c = static_cast<char>(wc);
-            switch (c) {
-                case '"':  out += "\\\""; break;
-                case '\\': out += "\\\\"; break;
-                case '\n': out += "\\n"; break;
-                case '\r': out += "\\r"; break;
-                case '\t': out += "\\t"; break;
-                default:
-                    if (static_cast<unsigned char>(c) < 0x20) {
-                        char buf[8]; sprintf_s(buf, "\\u%04x", c);
-                        out += buf;
-                    } else {
-                        out += c;
-                    }
-            }
-        } else {
-            // UTF-8 encode the codepoint
-            char buf[8];
-            int n = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, buf, sizeof(buf), nullptr, nullptr);
-            if (n > 0) out.append(buf, n);
-        }
+// [MT-12] Default to architecture C (composition + DXGI bridge).
+// Opt out via ALO_HOSTING_MODE=legacy → architecture A (AlphaCompositor
+// popup + HWND-hosted WebView2). Unknown values warn and fall through
+// to default. See ROADMAP §5.1 [MT-11] for the architecture-C ship.
+m_archCMode = true;
+m_compositionMode = true;
+if (const wchar_t* v = _wgetenv(L"ALO_HOSTING_MODE"))
+{
+    if (wcscmp(v, L"legacy") == 0)
+    {
+        m_archCMode = false;
+        m_compositionMode = false;
     }
-    return out;
-}
-
-static std::string BstrToUtf8(BSTR b) {
-    if (!b) return {};
-    return EscapeJson(std::wstring(b, SysStringLen(b)));
-}
-
-static const wchar_t* ControlTypeName(CONTROLTYPEID id) {
-    switch (id) {
-        case UIA_ButtonControlTypeId: return L"Button";
-        case UIA_CheckBoxControlTypeId: return L"CheckBox";
-        case UIA_ComboBoxControlTypeId: return L"ComboBox";
-        case UIA_EditControlTypeId: return L"Edit";
-        case UIA_HyperlinkControlTypeId: return L"Hyperlink";
-        case UIA_ImageControlTypeId: return L"Image";
-        case UIA_ListItemControlTypeId: return L"ListItem";
-        case UIA_ListControlTypeId: return L"List";
-        case UIA_MenuControlTypeId: return L"Menu";
-        case UIA_MenuBarControlTypeId: return L"MenuBar";
-        case UIA_MenuItemControlTypeId: return L"MenuItem";
-        case UIA_ProgressBarControlTypeId: return L"ProgressBar";
-        case UIA_RadioButtonControlTypeId: return L"RadioButton";
-        case UIA_ScrollBarControlTypeId: return L"ScrollBar";
-        case UIA_SliderControlTypeId: return L"Slider";
-        case UIA_SpinnerControlTypeId: return L"Spinner";
-        case UIA_StatusBarControlTypeId: return L"StatusBar";
-        case UIA_TabControlTypeId: return L"Tab";
-        case UIA_TabItemControlTypeId: return L"TabItem";
-        case UIA_TextControlTypeId: return L"Text";
-        case UIA_ToolBarControlTypeId: return L"ToolBar";
-        case UIA_ToolTipControlTypeId: return L"ToolTip";
-        case UIA_TreeControlTypeId: return L"Tree";
-        case UIA_TreeItemControlTypeId: return L"TreeItem";
-        case UIA_CustomControlTypeId: return L"Custom";
-        case UIA_GroupControlTypeId: return L"Group";
-        case UIA_ThumbControlTypeId: return L"Thumb";
-        case UIA_DataGridControlTypeId: return L"DataGrid";
-        case UIA_DataItemControlTypeId: return L"DataItem";
-        case UIA_DocumentControlTypeId: return L"Document";
-        case UIA_SplitButtonControlTypeId: return L"SplitButton";
-        case UIA_WindowControlTypeId: return L"Window";
-        case UIA_PaneControlTypeId: return L"Pane";
-        case UIA_HeaderControlTypeId: return L"Header";
-        case UIA_HeaderItemControlTypeId: return L"HeaderItem";
-        case UIA_TableControlTypeId: return L"Table";
-        case UIA_TitleBarControlTypeId: return L"TitleBar";
-        case UIA_SeparatorControlTypeId: return L"Separator";
-        default: return L"Unknown";
+    else if (wcscmp(v, L"composition") != 0 && v[0] != L'\0')
+    {
+        fprintf(stderr,
+            "[host] WARNING: ALO_HOSTING_MODE=\"%ls\" unrecognized; "
+            "valid values: \"composition\" (default) or \"legacy\". "
+            "Falling through to default (composition).\n", v);
+        fflush(stderr);
     }
 }
 
-static void EmitNode(IUIAutomationElement* elem, int depth, int maxDepth, std::ostringstream& out, const char* indent) {
-    if (!elem) { out << "null"; return; }
-
-    out << "{\n";
-    CComBSTR name;
-    elem->get_CurrentName(&name);
-    out << indent << "  \"Name\": \"" << BstrToUtf8(name) << "\",\n";
-
-    CONTROLTYPEID ctid = 0;
-    elem->get_CurrentControlType(&ctid);
-    out << indent << "  \"ControlType\": \"";
-    BstrToUtf8(CComBSTR(ControlTypeName(ctid)));
-    out << EscapeJson(ControlTypeName(ctid)) << "\",\n";
-
-    CComBSTR autoId;
-    elem->get_CurrentAutomationId(&autoId);
-    out << indent << "  \"AutomationId\": \"" << BstrToUtf8(autoId) << "\",\n";
-
-    CComBSTR className;
-    elem->get_CurrentClassName(&className);
-    out << indent << "  \"ClassName\": \"" << BstrToUtf8(className) << "\",\n";
-
-    BOOL focusable = FALSE;
-    elem->get_CurrentIsKeyboardFocusable(&focusable);
-    out << indent << "  \"IsKeyboardFocusable\": " << (focusable ? "true" : "false") << ",\n";
-
-    BOOL enabled = FALSE;
-    elem->get_CurrentIsEnabled(&enabled);
-    out << indent << "  \"IsEnabled\": " << (enabled ? "true" : "false") << ",\n";
-
-    BOOL offscreen = FALSE;
-    elem->get_CurrentIsOffscreen(&offscreen);
-    out << indent << "  \"IsOffscreen\": " << (offscreen ? "true" : "false") << ",\n";
-
-    out << indent << "  \"children\": [";
-
-    if (depth >= maxDepth) {
-        out << "]\n" << indent << "}";
-        return;
-    }
-
-    CComPtr<IUIAutomation> uia;
-    elem->QueryInterface(IID_PPV_ARGS(&uia));  // not exactly right; we'll use the global
-    // For simplicity, use TreeWalker via the element's children property.
-    CComPtr<IUIAutomationTreeWalker> walker;
-    CComPtr<IUIAutomation> g_uia;
-    CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_uia));
-    g_uia->get_ControlViewWalker(&walker);
-
-    CComPtr<IUIAutomationElement> child;
-    walker->GetFirstChildElement(elem, &child);
-    bool first = true;
-    while (child) {
-        if (!first) out << ",";
-        first = false;
-        out << "\n" << indent << "    ";
-        std::string deeper(indent);
-        deeper += "    ";
-        EmitNode(child, depth + 1, maxDepth, out, deeper.c_str());
-        CComPtr<IUIAutomationElement> next;
-        walker->GetNextSiblingElement(child, &next);
-        child = next;
-    }
-    if (!first) out << "\n" << indent << "  ";
-    out << "]\n" << indent << "}";
-}
-
-int wmain(int argc, wchar_t* argv[]) {
-    HWND hwnd = nullptr;
-    std::wstring capture;
-    int maxDepth = 8;
-
-    for (int i = 1; i < argc; ++i) {
-        if (wcscmp(argv[i], L"--hwnd") == 0 && i + 1 < argc) {
-            hwnd = reinterpret_cast<HWND>(static_cast<intptr_t>(wcstoull(argv[++i], nullptr, 16)));
-        } else if (wcscmp(argv[i], L"--capture") == 0 && i + 1 < argc) {
-            capture = argv[++i];
-        } else if (wcscmp(argv[i], L"--depth") == 0 && i + 1 < argc) {
-            maxDepth = static_cast<int>(wcstol(argv[++i], nullptr, 10));
-        } else if (wcscmp(argv[i], L"--help") == 0) {
-            wprintf(L"uia_inspector --hwnd 0xNNNN --capture <id> [--depth N]\n");
-            return 0;
-        }
-    }
-
-    if (!hwnd) { fprintf(stderr, "missing --hwnd\n"); return 1; }
-    if (!IsWindow(hwnd)) { fprintf(stderr, "invalid HWND\n"); return 3; }
-
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr)) { fprintf(stderr, "CoInitializeEx failed\n"); return 2; }
-
-    CComPtr<IUIAutomation> uia;
-    hr = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&uia));
-    if (FAILED(hr)) { fprintf(stderr, "CUIAutomation create failed\n"); return 2; }
-
-    CComPtr<IUIAutomationElement> root;
-    hr = uia->ElementFromHandle(hwnd, &root);
-    if (FAILED(hr) || !root) { fprintf(stderr, "ElementFromHandle failed\n"); return 3; }
-
-    fprintf(stderr, "[A11Y-CAPTURE] surface=%ls hwnd=0x%llx\n",
-            capture.c_str(), reinterpret_cast<uint64_t>(hwnd));
-
-    std::ostringstream out;
-    EmitNode(root, 0, maxDepth, out, "");
-
-    fputs(out.str().c_str(), stdout);
-    fputc('\n', stdout);
-
-    CoUninitialize();
-    return 0;
+// ALO_VIEWPORT_JPEG_Q override still applies regardless of mode (it
+// tunes the canvas-jpeg quality when architecture C is active).
+if (const wchar_t* q = _wgetenv(L"ALO_VIEWPORT_JPEG_Q"))
+{
+    int n = _wtoi(q);
+    if (n >= 1 && n <= 100) m_archCQuality = n;
 }
 ```
 
-##### T3.B.2 — Create .vcxproj
+Delete the desync warning block at `:545-553` entirely (no longer
+possible).
 
-- [ ] **Step 1:** Copy `src/host/spike/dxgi_spike.vcxproj` (if exists)
-  or `src/viewport_poc.vcxproj` as the starting template.
+### 3.2 React/Vite (ViewportSlot.tsx:29-77)
 
-- [ ] **Step 2:** Modify to:
-  - Project name: `UiaInspector`
-  - Single source file: `uia_inspector.cpp`
-  - Link against: `UIAutomationCore.lib`, `ole32.lib`, `oleaut32.lib`
-  - Configuration types: Debug + Release; Platform: x64
-  - Output: `$(SolutionDir)x64\$(Configuration)\uia_inspector.exe`
-  - Use `$(SolutionDir)` correctly per L-023
+Collapse `isArchCEnabled()` + `isCompositionMode()` into a single
+`isLegacyMode()`:
 
-##### T3.B.3 — Add to .sln
-
-- [ ] **Step 1:** Add the new project entry to `ParticleEditor.sln`
-  matching the existing project format.
-
-##### T3.B.4 — Build + smoke
-
-- [ ] **Step 1:** Build.
-
-```powershell
-MSBuild .\ParticleEditor.sln /p:Configuration=Debug /p:Platform=x64 /m
-MSBuild .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /m
-```
-
-Expected: both configs clean. New artifact: `x64/Debug/uia_inspector.exe`.
-
-- [ ] **Step 2:** Smoke against a known window (e.g. notepad).
-
-```powershell
-$proc = Start-Process notepad -PassThru
-Start-Sleep -Seconds 1
-$hwnd = $proc.MainWindowHandle
-$hex = "0x{0:X}" -f $hwnd.ToInt64()
-./x64/Debug/uia_inspector.exe --hwnd $hex --capture smoke --depth 3 | Out-File -Encoding utf8 smoke-out.json
-Get-Content smoke-out.json
-Stop-Process $proc
-Remove-Item smoke-out.json
-```
-
-Expected: valid JSON, includes notepad's edit area with `ControlType: "Edit"`.
-
-- [ ] **Step 3:** Smoke against `--hwnd 0xDEAD --capture x` (invalid).
-
-Expected: exit code 3, stderr "invalid HWND".
-
-##### T3.B.5 — Commit
-
-```powershell
-git add src/host/spike/uia_inspector.cpp `
-        src/host/spike/UiaInspector.vcxproj `
-        ParticleEditor.sln
-git commit -m @'
-feat(LT-4): [MT-11 a11y] T3 — UIA inspector C++ tool
-
-Standalone exe emitting UIA subtree JSON for a given HWND. Used by
-Playwright a11y specs via child_process.spawn. ~200 LoC.
-'@
-```
-
----
-
-### Task T4: UIA wrapper (helpers/uia.ts)
-
-**Why:** spec §5 C1. Single seam hiding whether the impl is Node lib
-or C++ exe. Specs only see `captureUIA(hwnd, surfaceId)`.
-
-**Files:**
-- Create: `web/apps/editor/tests/helpers/uia.ts`
-
-#### T4.1 — Wrapper for C++ exe path (default expected case)
-
-- [ ] **Step 1:** Implement wrapper.
-
-`web/apps/editor/tests/helpers/uia.ts`:
-```typescript
-import { spawn } from "node:child_process";
-import * as path from "node:path";
-import type { UIANode } from "./a11y-normalizer";
-
-const INSPECTOR_PATH = path.resolve(
-  __dirname,
-  "..",
-  "..",
-  "..",
-  "..",
-  "..",
-  "x64",
-  process.env.A11Y_BUILD_CONFIG ?? "Debug",
-  "uia_inspector.exe"
-);
-
-export async function captureUIA(
-  hwnd: bigint | number,
-  surfaceId: string,
-  options?: { depth?: number; timeoutMs?: number }
-): Promise<UIANode> {
-  const hex = "0x" + BigInt(hwnd).toString(16);
-  const args = [
-    "--hwnd", hex,
-    "--capture", surfaceId,
-    "--depth", String(options?.depth ?? 8),
-  ];
-  return new Promise((resolve, reject) => {
-    const child = spawn(INSPECTOR_PATH, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill();
-      reject(new Error(`uia_inspector timeout (${options?.timeoutMs ?? 5000}ms) for surface=${surfaceId}`));
-    }, options?.timeoutMs ?? 5000);
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        reject(new Error(`uia_inspector exited ${code} for surface=${surfaceId}: ${stderr}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout) as UIANode);
-      } catch (e) {
-        reject(new Error(`uia_inspector produced invalid JSON for surface=${surfaceId}: ${(e as Error).message}\nstdout: ${stdout.slice(0, 500)}`));
-      }
-    });
-  });
+```ts
+// [MT-12] Default = architecture C (composition + DXGI). Opt out
+// via VITE_HOSTING_MODE=legacy at build time. Mirrors the runtime
+// ALO_HOSTING_MODE check in HostWindow.cpp.
+function isLegacyMode(): boolean {
+  const fromImportMeta = (import.meta as { env?: Record<string, unknown> }).env?.VITE_HOSTING_MODE;
+  const fromProcess = typeof process !== "undefined" && process.env
+    ? process.env.VITE_HOSTING_MODE
+    : undefined;
+  return fromImportMeta === "legacy" || fromProcess === "legacy";
 }
 ```
 
-(If T3.A Node-lib path was taken instead, the implementation is a thin
-wrapper over the lib's tree-walk API; same exported signature.)
+Callers update:
+- `const archCEnabled = !isLegacyMode();` (was: `isArchCEnabled()`)
+- `const compositionMode = !isLegacyMode();` (was: `isCompositionMode()`)
 
-- [ ] **Step 2:** Add `discoverHostHwnd()` helper to the same file.
+The frame-ready subscription condition `if (compositionMode) return`
+already encodes the right semantics — under composition mode (the
+new default), skip JPEG decode + paint because DXGI handles it.
 
-```typescript
-export async function discoverHostHwnd(
-  options?: { processName?: string; timeoutMs?: number }
-): Promise<bigint> {
-  const procName = options?.processName ?? "ParticleEditor";
-  const cmd =
-    `(Get-Process ${procName} -ErrorAction SilentlyContinue | ` +
-    `Where-Object MainWindowHandle -ne 0 | ` +
-    `Select-Object -First 1).MainWindowHandle`;
-  return new Promise((resolve, reject) => {
-    const ps = spawn("powershell.exe", ["-NoProfile", "-Command", cmd], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    let err = "";
-    const t = setTimeout(() => {
-      ps.kill();
-      reject(new Error(`discoverHostHwnd timeout for process ${procName}`));
-    }, options?.timeoutMs ?? 5000);
-    ps.stdout.on("data", (c) => { out += c.toString("utf8"); });
-    ps.stderr.on("data", (c) => { err += c.toString("utf8"); });
-    ps.on("close", () => {
-      clearTimeout(t);
-      const v = out.trim();
-      if (!v) {
-        reject(new Error(
-          `Could not find ${procName} HWND. ` +
-          `Is the editor running? stderr: ${err}`
-        ));
-      } else {
-        resolve(BigInt(v));
-      }
-    });
-  });
+### 3.3 Vite build
+
+No Vite config changes needed if `import.meta.env.VITE_HOSTING_MODE`
+is automatically read at build time (which it is — Vite bakes any
+`VITE_*` env var by default). Default build = no `VITE_*` set =
+default behavior = composition mode. Legacy build = run with
+`$env:VITE_HOSTING_MODE = "legacy"; pnpm --filter ... build`.
+
+### 3.4 Test harness (run-native-tests.mjs)
+
+Add `--legacy` flag handling alongside the existing `--update` flag:
+
+```js
+const isLegacy = process.argv.includes("--legacy");
+if (isLegacy) {
+  process.env.ALO_HOSTING_MODE = "legacy";
+  console.log("[run-native-tests] --legacy flag → ALO_HOSTING_MODE=legacy");
 }
+// Default: no env var set → ALO_HOSTING_MODE behaves as unset → composition mode.
 ```
 
-#### T4.2 — Commit
-
-- [ ] **Step 1:**
-
-```powershell
-git add web/apps/editor/tests/helpers/uia.ts
-git commit -m @'
-test(LT-4): [MT-11 a11y] T4 — captureUIA() seam over inspector
-
-Single wrapper that specs call; spawns uia_inspector.exe with HWND +
-surface ID; parses JSON; surfaces timeouts and error messages cleanly.
-'@
-```
-
----
-
-### Task T5: Surface drivers — chrome (5 surfaces)
-
-**Why:** spec §5 C4. Chrome surfaces: MenuBar (closed), MenuBar (each
-of 6 menus opened), Toolbar, EmitterTree, EmitterPropertyTabs (each
-tab), ViewportPill. Realistic ~12 captures.
-
-**Time budget per R3:** under 1.5h. If any surface needs >30 min
-setup, drop and file as follow-up.
-
-**Files:**
-- Create: `web/apps/editor/tests/helpers/a11y-surfaces.ts`
-
-#### T5.1 — Helper skeleton + chrome drivers
-
-- [ ] **Step 1:** Create file with type + skeleton.
-
-```typescript
-import type { Page } from "@playwright/test";
-
-export type SurfaceCapture = {
-  id: string;          // matches golden filename: a11y-goldens/<id>.golden.json
-  setup: (page: Page) => Promise<void>;
-  teardown: (page: Page) => Promise<void>;
-};
-
-async function dismissModals(page: Page) {
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
-}
-
-export const CHROME_SURFACES: SurfaceCapture[] = [
-  {
-    id: "menubar-closed",
-    setup: async (page) => {
-      await page.locator('[data-testid="app-shell"]').focus();
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-file-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("File")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-edit-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("Edit")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-emitters-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("Emitters")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-mods-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("Mods")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-view-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("View")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "menubar-help-open",
-    setup: async (page) => {
-      await page.locator('button:has-text("Help")').click();
-      await page.waitForSelector('[role="menu"]');
-    },
-    teardown: async (page) => { await dismissModals(page); },
-  },
-  {
-    id: "toolbar",
-    setup: async (page) => {
-      await page.locator('[data-testid="toolbar"]').focus();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "emitter-tree",
-    setup: async (page) => {
-      // Assumes fixture has at least one root emitter loaded.
-      await page.locator('[data-testid="emitter-tree"]').focus();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "property-tabs-basic",
-    setup: async (page) => {
-      await page.locator('[role="tab"]:has-text("Basic")').click();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "property-tabs-appearance",
-    setup: async (page) => {
-      await page.locator('[role="tab"]:has-text("Appearance")').click();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "property-tabs-physics",
-    setup: async (page) => {
-      await page.locator('[role="tab"]:has-text("Physics")').click();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "viewport-pill",
-    setup: async (page) => {
-      await page.locator('[data-testid="viewport-pill"]').focus();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-];
-```
-
-- [ ] **Step 2:** Audit `data-testid` selectors against current React
-  code. Any missing — add to the relevant component file in the same
-  commit. Pattern (example for app-shell):
-
-  ```tsx
-  <div data-testid="app-shell" ...>
-  ```
-
-  Don't change other behavior; this is purely a test-affordance addition.
-
-#### T5.2 — Verification
-
-- [ ] **Step 1:** Hand-test each driver against a live editor.
-  Manually run each setup, eyeball the editor state, confirm the
-  expected UI is in the captured state.
-
-#### T5.3 — Commit
-
-- [ ] **Step 1:**
-
-```powershell
-git add web/apps/editor/tests/helpers/a11y-surfaces.ts
-# Also add any source files that gained data-testid attributes
-git add web/apps/editor/src/...
-git commit -m @'
-test(LT-4): [MT-11 a11y] T5 — surface drivers for chrome (12 captures)
-
-MenuBar (closed + each menu open), Toolbar, EmitterTree, PropertyTabs
-(each tab), ViewportPill. Added data-testid affordances to N components
-to support deterministic selection.
-'@
-```
-
----
-
-### Task T6: Surface drivers — dialogs
-
-**Why:** spec §5 C4. 13 dialog components, each captured once
-freshly-opened. Per R3, drop any requiring >30 min of fixture setup.
-
-**Files:**
-- Modify: `web/apps/editor/tests/helpers/a11y-surfaces.ts`
-
-#### T6.1 — Driver pattern + add 13 dialog surfaces
-
-- [ ] **Step 1:** Extend `a11y-surfaces.ts` with `DIALOG_SURFACES`.
-  Pattern per dialog (uses Modal + Radix Dialog roles):
-
-```typescript
-export const DIALOG_SURFACES: SurfaceCapture[] = [
-  {
-    id: "dialog-save-changes",
-    setup: async (page) => {
-      // Trigger via File > New on a dirty document
-      await page.evaluate(() => (window as any).bridge.request("editor/markDirty"));
-      await page.locator('button:has-text("File")').click();
-      await page.locator('[role="menuitem"]:has-text("New")').click();
-      await page.waitForSelector('[role="dialog"]');
-    },
-    teardown: async (page) => {
-      await page.keyboard.press("Escape");
-    },
-  },
-  {
-    id: "dialog-mod-nickname",
-    setup: async (page) => {
-      await page.locator('button:has-text("Mods")').click();
-      await page.locator('[role="menuitem"]:has-text("Set Nickname")').click();
-      await page.waitForSelector('[role="dialog"]');
-    },
-    teardown: async (page) => { await page.keyboard.press("Escape"); },
-  },
-  // ... repeat for each of:
-  //   dialog-increment-index
-  //   dialog-rescale
-  //   dialog-rescale-emitter
-  //   dialog-import-emitters    ← R3 candidate to drop if setup > 30 min
-  //   dialog-lighting
-  //   dialog-bloom
-  //   dialog-background-picker
-  //   dialog-ground-texture
-  //   dialog-primitives-gallery
-  //   dialog-spawner
-  //   dialog-modal-generic
-];
-```
-
-- [ ] **Step 2:** For each dialog, identify and implement the open
-  trigger. Document in code comments any dialog whose trigger requires
-  prior bridge state.
-
-- [ ] **Step 3:** **R3 4h cap check.** If any dialog has consumed
-  >30 min of setup work, STOP, remove it from the list, and add to
-  `tasks/a11y-deferred-surfaces.md`:
-
-```markdown
-# A11y surfaces deferred from this dispatch (R3)
-
-- **dialog-import-emitters** — requires multi-emitter sample loaded
-  with non-root selection. Skipped because setup exceeded 30 min cap.
-  Filed as follow-up.
-```
-
-#### T6.2 — Commit
-
-- [ ] **Step 1:**
-
-```powershell
-git add web/apps/editor/tests/helpers/a11y-surfaces.ts
-# Add deferred-surfaces doc if any were skipped
-git add tasks/a11y-deferred-surfaces.md
-git commit -m @'
-test(LT-4): [MT-11 a11y] T6 — surface drivers for dialogs
-
-13 dialog surfaces (or N if any deferred per R3 30-min-setup cap).
-Each captured once freshly opened. Deferred surfaces (if any) logged
-in tasks/a11y-deferred-surfaces.md.
-'@
-```
-
----
-
-### Task T7: Surface drivers — keyboard / interaction paths
-
-**Why:** spec §2 in-scope item 3. Captures the UIA tree after a
-sequence of key events: Tab cycle stopping points, F2 rename mode,
-Escape post-dialog, arrow-key tree nav.
-
-**Files:**
-- Modify: `web/apps/editor/tests/helpers/a11y-surfaces.ts`
-
-#### T7.1 — Keyboard scenario drivers
-
-- [ ] **Step 1:** Add `KEYBOARD_SURFACES`:
-
-```typescript
-export const KEYBOARD_SURFACES: SurfaceCapture[] = [
-  {
-    id: "kbd-tab-cycle-stop-1",
-    setup: async (page) => {
-      await page.locator('[data-testid="app-shell"]').focus();
-      await page.keyboard.press("Tab");
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "kbd-tab-cycle-stop-2",
-    setup: async (page) => {
-      await page.locator('[data-testid="app-shell"]').focus();
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Tab");
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "kbd-emitter-rename-mode",
-    setup: async (page) => {
-      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().click();
-      await page.keyboard.press("F2");
-    },
-    teardown: async (page) => { await page.keyboard.press("Escape"); },
-  },
-  {
-    id: "kbd-arrow-tree-expanded",
-    setup: async (page) => {
-      await page.locator('[data-testid="emitter-tree"] [role="treeitem"]').first().focus();
-      await page.keyboard.press("ArrowRight");
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-];
-```
-
-#### T7.2 — Commit
-
-```powershell
-git add web/apps/editor/tests/helpers/a11y-surfaces.ts
-git commit -m @'
-test(LT-4): [MT-11 a11y] T7 — surface drivers for keyboard paths
-
-Tab-cycle stops, F2 rename mode, arrow-key tree expand. Captures UIA
-state after each key sequence.
-'@
-```
-
----
-
-### Task T8: Surface drivers — CurveEditor + Spinner
-
-**Why:** spec §2 in-scope item 4. Custom canvas/keyboard interaction
-outside the Radix primitives.
-
-**Files:**
-- Modify: `web/apps/editor/tests/helpers/a11y-surfaces.ts`
-
-#### T8.1 — Custom-primitive drivers
-
-- [ ] **Step 1:** Add `CUSTOM_PRIMITIVE_SURFACES`:
-
-```typescript
-export const CUSTOM_PRIMITIVE_SURFACES: SurfaceCapture[] = [
-  {
-    id: "curve-editor-focused",
-    setup: async (page) => {
-      await page.locator('[role="tab"]:has-text("Basic")').click();
-      await page.locator('[data-testid="curve-editor-canvas"]').click();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-  {
-    id: "spinner-focused",
-    setup: async (page) => {
-      await page.locator('[data-testid="spinner-emit-rate"] input').focus();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
-];
-```
-
-- [ ] **Step 2:** If `data-testid` attrs are missing, add them to the
-  React components in the same commit.
-
-#### T8.2 — Commit
-
-```powershell
-git add web/apps/editor/tests/helpers/a11y-surfaces.ts
-git add web/apps/editor/src/screens/CurveEditor.tsx
-git add web/apps/editor/src/primitives/Spinner.tsx
-git commit -m @'
-test(LT-4): [MT-11 a11y] T8 — surface drivers for CurveEditor + Spinner
-
-Captures UIA state for the custom-canvas curve editor and a focused
-spinner primitive.
-'@
-```
-
----
-
-### Task T9: Spec files (4 categories) + initial HWND goldens
-
-**Why:** spec §5 C5 + C7. Each spec parametrizes over its surface
-list, generates goldens via `pnpm a11y:update` on first run.
-
-**Files:**
-- Create: `web/apps/editor/tests/a11y-chrome.spec.ts`
-- Create: `web/apps/editor/tests/a11y-dialogs.spec.ts`
-- Create: `web/apps/editor/tests/a11y-keyboard.spec.ts`
-- Create: `web/apps/editor/tests/a11y-curve-spinner.spec.ts`
-- Create (via update flag): `web/apps/editor/tests/a11y-goldens/*.golden.json` (~30 files)
-- Create: `web/apps/editor/tests/fixtures/a11y-base-state.alo` (committed binary fixture)
-
-#### T9.0 — Harness pattern verification (L-022 pre-flight)
-
-- [ ] **Step 1:** Read [`dxgi-transport.spec.ts:45-100`](web/apps/editor/tests/dxgi-transport.spec.ts:45)
-      to confirm the CDP-connect harness pattern matches what the T9.1
-      template assumes. Specifically verify:
-  - `chromium.connectOverCDP(CDP_ENDPOINT)` with `CDP_ENDPOINT` from
-    `process.env.CDP_ENDPOINT` defaulting to `http://localhost:9222`.
-  - `browser.contexts()[0].pages()[0]` or `waitForEvent("page")`
-    fallback for `page` acquisition.
-  - `page.waitForFunction(() => typeof window.bridge !== "undefined")`
-    for ready signal.
-  - The harness orchestrates binary launch — specs assume it's
-    running.
-
-- [ ] **Step 2:** Confirm `bridge.request("file/open", { path })`
-      exists and is callable from `page.evaluate(...)`. Grep
-      `src/host/BridgeDispatcher.cpp` for `"file/open"` handler;
-      confirm it takes a `{path}` payload and tolerates relative paths.
-      If path-handling is absolute-only, the T9.1 template's
-      `tests/fixtures/a11y-base-state.alo` needs to be expanded to an
-      absolute path via `path.resolve()` in the spec.
-
-- [ ] **Step 3:** Confirm `discoverHostHwnd()` (from T4.1 step 2)
-      actually returns a non-zero HWND when the editor is running.
-      Quick local check:
-
-```powershell
-(Get-Process ParticleEditor | Where-Object MainWindowHandle -ne 0 | Select-Object -First 1).MainWindowHandle
-```
-
-Expected: a positive integer. If multiple `ParticleEditor` processes
-exist (rare; only if a prior crashed instance leaks), tighten the
-PowerShell filter with `--Id <pid>` (engineer adds based on test
-runner conventions).
-
-- [ ] **Step 4:** If any of the above three checks fails, STOP T9 and
-      either: (a) fix the harness assumption in `helpers/uia.ts` or the
-      spec template; (b) file a small T4.5 sub-task to add the
-      missing bridge surface and run it before resuming T9.
-
-#### T9.1 — Spec template (per file)
-
-- [ ] **Step 1:** Create `a11y-chrome.spec.ts`:
-
-```typescript
-import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
-import { captureUIA, discoverHostHwnd } from "./helpers/uia";
-import { normalize } from "./helpers/a11y-normalizer";
-import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
-import allowlist from "./helpers/a11y-allowlist.json";
-import "./helpers/toMatchJSONGolden";
-
-const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
-
-let browser: Browser;
-let page: Page;
-let hostHwnd: bigint;
-
-test.beforeAll(async () => {
-  if (COMPOSITION_MODE) return;  // skip body; per-test skip handles individual tests
-  browser = await chromium.connectOverCDP(CDP_ENDPOINT);
-  const context = browser.contexts()[0];
-  if (!context) throw new Error("CDP: no browser contexts attached");
-  page = context.pages()[0] ?? (await context.waitForEvent("page"));
-  await page.waitForFunction(
-    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
-    null,
-    { timeout: 15_000 }
-  );
-  hostHwnd = await discoverHostHwnd();  // PowerShell-based discovery; see helpers/uia.ts
-});
-
-test.afterAll(async () => {
-  await browser?.close();
-});
-
-test.beforeEach(async ({}, testInfo) => {
-  // Post-T0 re-plan: this HWND-mode spec auto-skips under composition.
-  // Composition coverage is via T10's a11y-*-composition.spec.ts files
-  // using page.accessibility.snapshot() (Win32 UIA can't reach the React
-  // tree in composition mode — see tasks/phase-0-a11y-cross-mode-probe.md).
-  if (COMPOSITION_MODE) {
-    testInfo.annotations.push({
-      type: "skip-reason",
-      description:
-        "ALO_WEBVIEW2_HOSTING == 'composition' — HWND Win32 UIA spec " +
-        "auto-skips in composition mode. Use a11y-chrome-composition.spec.ts " +
-        "(DOM snapshot) for the composition lane."
-    });
-    test.skip();
-  }
-  // Reset to known-clean state — close any open menus / dialogs left
-  // by the previous test. Cheaper than relaunching the binary.
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
-  // Load deterministic base state from fixture. Mirror the existing
-  // `file/open` bridge call pattern used in other native specs.
-  await page.evaluate(async () => {
-    const bridge = (window as { bridge: { request: (k: string, p: unknown) => Promise<unknown> } }).bridge;
-    await bridge.request("file/open", { path: "tests/fixtures/a11y-base-state.alo" });
-  });
-});
-
-test.describe("a11y/chrome [hwnd]", () => {
-  for (const surface of CHROME_SURFACES) {
-    test(`${surface.id} [hwnd]`, async () => {
-      try {
-        await surface.setup(page);
-        const raw = await captureUIA(hostHwnd, surface.id);
-        const normalized = normalize(raw, allowlist);
-        expect(normalized).toMatchJSONGolden(
-          `a11y-goldens/${surface.id}.golden.json`,
-          { rawForDebug: raw }
-        );
-      } finally {
-        await surface.teardown(page);
-      }
-    });
-  }
-});
-```
-
-**Important harness notes for the implementer:**
-- The CDP-connect pattern requires the editor binary to be already
-  running (launched by the test harness, not by Playwright). This
-  matches every existing native spec — see [`dxgi-transport.spec.ts:45-77`](web/apps/editor/tests/dxgi-transport.spec.ts:45)
-  for the canonical example to copy.
-- `bridge.request("file/open", ...)` is the assumed fixture-loading
-  call. If the path-handling differs (relative-to-CWD vs absolute),
-  inspect what `file/open` actually expects in
-  [`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1) and
-  adjust the path resolution to match.
-- The `page.keyboard.press("Escape")` double-tap is a coarse reset;
-  if it leaves the editor in a weird state (e.g. mid-rename, mid-IME)
-  add a `bridge.request("editor/clearTransientState")` call (or
-  similar) — likely needs adding to the bridge in a small T4.5
-  sub-task discovered during T9 verification.
-
-- [ ] **Step 2:** Repeat for `a11y-dialogs.spec.ts`, importing
-  `DIALOG_SURFACES`. Same shape, different import.
-
-- [ ] **Step 3:** Repeat for `a11y-keyboard.spec.ts` and
-  `a11y-curve-spinner.spec.ts`.
-
-#### T9.2 — Fixture file
-
-- [ ] **Step 1:** Generate or copy a representative `.alo` fixture
-  with a small tree (~3 emitters: 1 root, 1 lifetime child, 1 death
-  child) to `web/apps/editor/tests/fixtures/a11y-base-state.alo`.
-
-Use the existing `--gen-nt5-fixture` pattern as a model. May add a
-new `--gen-a11y-fixture` CLI flag to `main.cpp` if needed.
-
-#### T9.3 — Generate HWND goldens
-
-- [ ] **Step 1:** Run with update flag.
-
-```powershell
-cd web
-$env:UPDATE_A11Y_GOLDENS = "1"
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
-Remove-Item Env:UPDATE_A11Y_GOLDENS
-cd ..
-```
-
-Expected: ~30 golden files written under
-`web/apps/editor/tests/a11y-goldens/`.
-
-- [ ] **Step 2:** Eyeball goldens. Each should have nested
-  `children` arrays with the expected MenuItem / TabItem / TreeItem
-  ControlTypes.
-
-#### T9.4 — Re-run for green
-
-- [ ] **Step 1:** Re-run without the update flag.
-
-```powershell
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
-```
-
-Expected: all green.
-
-- [ ] **Step 2:** Run a SECOND time to verify determinism.
-
-Expected: still all green. If any flake — investigate sorting /
-timing in the normalizer or surface drivers BEFORE committing.
-
-#### T9.5 — Commit
-
-```powershell
-git add web/apps/editor/tests/a11y-*.spec.ts `
-        web/apps/editor/tests/fixtures/a11y-base-state.alo `
-        web/apps/editor/tests/a11y-goldens/
-# If main.cpp gained --gen-a11y-fixture:
-git add src/main.cpp
-git commit -m @'
-test(LT-4): [MT-11 a11y] T9 — 4 spec files + HWND goldens
-
-a11y-chrome / a11y-dialogs / a11y-keyboard / a11y-curve-spinner specs
-parametrize over their surface lists, capture UIA via the inspector,
-normalize, diff against committed goldens. N goldens generated for
-HWND mode.
-'@
-```
-
----
-
-### Task T10: Composition specs via page.accessibility.snapshot() (DOM-level)
-
-**Why:** post-T0 re-plan. Composition-mode Win32 UIA tree is empty
-(structurally; not a bug). To still get a composition-mode a11y
-regression gate, we use Playwright's `page.accessibility.snapshot()`
-which goes through CDP and reaches the React DOM regardless of
-WebView2 hosting mode. Different API, different golden format than
-T9's HWND lane; no cross-mode equality (the two representations
-aren't structurally comparable without a property-mapper we
-explicitly chose not to build).
-
-**Files:**
-- Create: `web/apps/editor/tests/helpers/a11y-dom-snapshot.ts`
-  (small wrapper + canonical-JSON helper for `page.accessibility.snapshot()`)
-- Create: `web/apps/editor/tests/a11y-chrome-composition.spec.ts`
-- Create: `web/apps/editor/tests/a11y-dialogs-composition.spec.ts`
-- Create: `web/apps/editor/tests/a11y-keyboard-composition.spec.ts`
-- Create: `web/apps/editor/tests/a11y-curve-spinner-composition.spec.ts`
-- Create (via update flag): `web/apps/editor/tests/a11y-goldens/<surface>.composition.golden.json` (~30 files)
-
-#### T10.1 — Build composition-mode dist/
-
-```powershell
-cd web
-$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:VITE_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
-#### T10.2 — DOM-snapshot wrapper
-
-- [ ] **Step 1:** Create `web/apps/editor/tests/helpers/a11y-dom-snapshot.ts`:
-
-```typescript
-import type { Page } from "@playwright/test";
-
-// Playwright's accessibility snapshot type, normalized for golden
-// comparison. We canonicalize children order (DOM order is already
-// deterministic) and strip transient properties (e.g. `disabled`
-// values that depend on transient state covered by other specs).
-export type DomA11yNode = {
-  role?: string;
-  name?: string;
-  description?: string;
-  value?: string | number;
-  checked?: boolean | "mixed";
-  selected?: boolean;
-  expanded?: boolean;
-  level?: number;
-  children?: DomA11yNode[];
-};
-
-export async function captureDomA11y(
-  page: Page,
-  options?: { interestingOnly?: boolean }
-): Promise<DomA11yNode> {
-  const snap = await page.accessibility.snapshot({
-    interestingOnly: options?.interestingOnly ?? true,
-  });
-  if (!snap) {
-    throw new Error("page.accessibility.snapshot() returned null");
-  }
-  return normalizeDom(snap as unknown as DomA11yNode);
-}
-
-function normalizeDom(node: DomA11yNode): DomA11yNode {
-  const out: DomA11yNode = {};
-  if (node.role !== undefined) out.role = node.role;
-  if (node.name !== undefined) out.name = node.name;
-  if (node.description !== undefined) out.description = node.description;
-  if (node.value !== undefined) out.value = node.value;
-  if (node.checked !== undefined) out.checked = node.checked;
-  if (node.selected !== undefined) out.selected = node.selected;
-  if (node.expanded !== undefined) out.expanded = node.expanded;
-  if (node.level !== undefined) out.level = node.level;
-  if (node.children && node.children.length > 0) {
-    out.children = node.children.map(normalizeDom);
-  }
-  return out;
-}
-```
-
-#### T10.3 — Composition spec template (per file)
-
-- [ ] **Step 1:** Create `a11y-chrome-composition.spec.ts`. Mirrors
-      T9's HWND template but uses `captureDomA11y(page)` instead of
-      `captureUIA(hwnd, surface.id)`. The surface drivers from T5
-      (CHROME_SURFACES) are mode-agnostic — they leave the editor in
-      the captured state, which is exactly what
-      `page.accessibility.snapshot()` reads. No HWND needed.
-
-```typescript
-import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
-import { captureDomA11y } from "./helpers/a11y-dom-snapshot";
-import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
-import "./helpers/toMatchJSONGolden";
-
-const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
-
-let browser: Browser;
-let page: Page;
-
-test.beforeAll(async () => {
-  browser = await chromium.connectOverCDP(CDP_ENDPOINT);
-  const context = browser.contexts()[0];
-  if (!context) throw new Error("CDP: no browser contexts attached");
-  page = context.pages()[0] ?? (await context.waitForEvent("page"));
-  await page.waitForFunction(
-    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
-    null,
-    { timeout: 15_000 }
-  );
-});
-
-test.afterAll(async () => { await browser?.close(); });
-
-test.beforeEach(async ({}, testInfo) => {
-  if (!COMPOSITION_MODE) {
-    testInfo.annotations.push({
-      type: "skip-reason",
-      description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — composition-mode " +
-        "DOM-snapshot specs only run when the editor is in composition mode."
-    });
-    test.skip();
-  }
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Escape");
-  await page.evaluate(async () => {
-    const bridge = (window as { bridge: { request: (k: string, p: unknown) => Promise<unknown> } }).bridge;
-    await bridge.request("file/open", { path: "tests/fixtures/a11y-base-state.alo" });
-  });
-});
-
-test.describe("a11y/chrome [composition]", () => {
-  for (const surface of CHROME_SURFACES) {
-    test(`${surface.id} [composition]`, async () => {
-      try {
-        await surface.setup(page);
-        const snap = await captureDomA11y(page);
-        expect(snap).toMatchJSONGolden(
-          `a11y-goldens/${surface.id}.composition.golden.json`,
-          { rawForDebug: snap }
-        );
-      } finally {
-        await surface.teardown(page);
-      }
-    });
-  }
-});
-```
-
-- [ ] **Step 2:** Repeat for the other three: `a11y-dialogs-composition.spec.ts`,
-      `a11y-keyboard-composition.spec.ts`, `a11y-curve-spinner-composition.spec.ts`.
-      Same shape; only the `import {...} from "./helpers/a11y-surfaces"`
-      and the `test.describe` label change.
-
-#### T10.4 — Generate composition goldens
-
-```powershell
-$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:ALO_WEBVIEW2_HOSTING = "composition"
-$env:UPDATE_A11Y_GOLDENS = "1"
-cd web
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"
-Remove-Item Env:UPDATE_A11Y_GOLDENS
-cd ..
-```
-
-Expected: ~30 `*.composition.golden.json` files written.
-
-- [ ] **Eyeball check:** each composition golden should contain a tree
-      with `role`/`name`/`children` properties (Playwright snapshot
-      shape) — NOT `ControlType`/`AutomationId`/`ClassName` (Win32 UIA
-      shape). Cross-format-leakage check.
-
-#### T10.5 — Re-run for green; determinism check
-
-```powershell
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/.*\\[composition\\]"  # second run for flake check
-```
-
-Both should be all-green.
-
-#### T10.6 — Reset to default mode
-
-```powershell
-Remove-Item Env:ALO_VIEWPORT_TRANSPORT -ErrorAction SilentlyContinue
-Remove-Item Env:ALO_WEBVIEW2_HOSTING -ErrorAction SilentlyContinue
-Remove-Item Env:VITE_VIEWPORT_TRANSPORT -ErrorAction SilentlyContinue
-Remove-Item Env:VITE_WEBVIEW2_HOSTING -ErrorAction SilentlyContinue
-cd web
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
-Verify HWND specs still pass (composition specs auto-skip without env var):
-
-```powershell
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/"
-```
-
-#### T10.7 — Commit
-
-```bash
-git add web/apps/editor/tests/helpers/a11y-dom-snapshot.ts \
-        web/apps/editor/tests/a11y-chrome-composition.spec.ts \
-        web/apps/editor/tests/a11y-dialogs-composition.spec.ts \
-        web/apps/editor/tests/a11y-keyboard-composition.spec.ts \
-        web/apps/editor/tests/a11y-curve-spinner-composition.spec.ts \
-        web/apps/editor/tests/a11y-goldens/*.composition.golden.json
-git commit -m "$(cat <<'EOF'
-test(LT-4): [MT-11 a11y] T10 — composition DOM-snapshot specs + goldens
-
-Re-planned post-T0 (cross-mode Win32 UIA equality infeasible — composition
-mode has zero UIA descendants under host HWND). Composition lane uses
-page.accessibility.snapshot() via CDP (works regardless of WebView2
-hosting). 4 composition spec files mirror T9's HWND quartet; N
-composition goldens generated. HWND lane unchanged.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
-
----
-
-### Task T11: Negative-contract spec (composition host-HWND is UIA-empty)
-
-**Why:** post-T0 re-plan. The original cross-mode equality spec was
-infeasible. The closest surviving regression gate is a tiny spec
-that asserts the invariant T0 discovered: composition mode's host
-HWND has **zero** Win32 UIA descendants. If this invariant ever
-flips (e.g. WebView2 ships a new build that bridges the DComp visual
-into the host's UIA tree), the spec fails — and that's a substantive
-WebView2 a11y-plumbing change worth investigating. Plus it documents
-the boundary so a future reader doesn't waste time on the same
-discovery.
-
-**Files:**
-- Create: `web/apps/editor/tests/a11y-uia-composition-empty.spec.ts`
-
-#### T11.1 — Implementation
-
-- [ ] **Step 1:** Write spec.
-
-```typescript
-import { test, expect, chromium, type Browser, type Page } from "@playwright/test";
-import { discoverHostHwnd, captureUIA } from "./helpers/uia";
-
-const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
-const COMPOSITION_MODE = process.env.ALO_WEBVIEW2_HOSTING === "composition";
-
-let browser: Browser;
-let page: Page;
-
-test.beforeAll(async () => {
-  if (!COMPOSITION_MODE) return;
-  browser = await chromium.connectOverCDP(CDP_ENDPOINT);
-  const context = browser.contexts()[0];
-  if (!context) throw new Error("CDP: no browser contexts attached");
-  page = context.pages()[0] ?? (await context.waitForEvent("page"));
-  await page.waitForFunction(
-    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
-    null,
-    { timeout: 15_000 }
-  );
-});
-
-test.afterAll(async () => { await browser?.close(); });
-
-test.beforeEach(async ({}, testInfo) => {
-  if (!COMPOSITION_MODE) {
-    testInfo.annotations.push({
-      type: "skip-reason",
-      description:
-        "ALO_WEBVIEW2_HOSTING != 'composition' — UIA-empty invariant " +
-        "is composition-mode-specific (HWND mode exposes the full Chromium tree)."
-    });
-    test.skip();
-  }
-});
-
-test.describe("a11y/uia-composition-empty (FD6-adjacent invariant)", () => {
-  test("host HWND has zero UIA descendants in composition mode", async () => {
-    const hwnd = await discoverHostHwnd();
-    const tree = await captureUIA(hwnd, "composition-empty-check", { depth: 3 });
-
-    // Documented invariant per tasks/phase-0-a11y-cross-mode-probe.md:
-    // WebView2 composition hosting renders to an IDCompositionVisual
-    // which has no HWND, so Win32 UIA cannot reach the React tree
-    // from outside the process. Host HWND exposes the shell only.
-    //
-    // If THIS test starts failing — i.e. the composition-mode host
-    // HWND suddenly exposes descendants — that's a substantive
-    // WebView2-side a11y-plumbing change. Investigate before
-    // updating this spec. Document the discovery in lessons.md.
-
-    expect(tree.children ?? []).toHaveLength(0);
-
-    // The shell root itself should still be present and look like
-    // the AloHostMain window class (defensive check that we captured
-    // the right HWND).
-    expect(tree.ClassName).toBe("AloHostMain");
-  });
-});
-```
-
-#### T11.2 — Run (composition mode only)
-
-```powershell
-$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:ALO_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor test:native -- --grep "a11y/uia-composition-empty"
-Remove-Item Env:ALO_VIEWPORT_TRANSPORT
-Remove-Item Env:ALO_WEBVIEW2_HOSTING
-```
-
-Expected: 1 test, passes. (Skips cleanly without the env var.)
-
-#### T11.3 — Commit
-
-```bash
-git add web/apps/editor/tests/a11y-uia-composition-empty.spec.ts
-git commit -m "$(cat <<'EOF'
-test(LT-4): [MT-11 a11y] T11 — composition UIA-empty invariant spec
-
-Post-T0 re-plan: cross-mode equality (HWND ≡ composition) was infeasible.
-This spec encodes the surviving regression contract — composition mode's
-host HWND has zero UIA descendants (the structural reason cross-mode
-equality is impossible). If the invariant ever flips, that's a meaningful
-WebView2 a11y-plumbing change worth investigating. See
-tasks/phase-0-a11y-cross-mode-probe.md for the discovery.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
-
----
-
-### Task T12: Package scripts + lint hygiene
-
-**Why:** spec §5 C10. Make `pnpm a11y` and `pnpm a11y:update` work.
-
-**Files:**
-- Modify: `web/apps/editor/package.json`
-
-#### T12.1 — Add scripts
-
-- [ ] **Step 1:** Add to `scripts` block:
+Caller is responsible for rebuilding dist/ with the matching
+`VITE_HOSTING_MODE` value before invoking the harness — same
+discipline as today's two-env-var dance, just one var.
+Document in HANDOFF.
+
+### 3.5 package.json scripts
 
 ```json
 {
-  "a11y": "playwright test --grep \"a11y/\"",
-  "a11y:update": "cross-env UPDATE_A11Y_GOLDENS=1 playwright test --grep \"a11y/\""
+  "scripts": {
+    "test:native": "node ./scripts/run-native-tests.mjs",
+    "test:native:legacy": "node ./scripts/run-native-tests.mjs --legacy",
+    ...
+  }
 }
 ```
 
-If `cross-env` isn't already a dep, add it (`pnpm add -D cross-env`)
-or use the platform-specific env-var prefix that the rest of the
-package uses.
+The `a11y` / `a11y:update` scripts (T12 ship) continue to work
+unchanged — they run in default mode (composition).
 
-#### T12.2 — Verify
+### 3.6 Spec mode-gate migration
 
-```powershell
-pnpm --filter @particle-editor/editor a11y
+Every spec that today checks `process.env.ALO_WEBVIEW2_HOSTING ===
+"composition"` migrates to `process.env.ALO_HOSTING_MODE !== "legacy"`
+(double-negative but matches the new semantics — "composition is
+the default"). Specs that check the reverse migrate likewise.
+
+Specs that today check `ALO_VIEWPORT_TRANSPORT === "canvas-jpeg"`
+similarly migrate — `ALO_HOSTING_MODE` is the single source of
+truth now, and the canvas-jpeg path is one of the two things that
+turn on together under composition.
+
+Single helper in `web/apps/editor/tests/helpers/mode.ts` (new file)
+to avoid duplicating the predicate across specs:
+
+```ts
+export function isLegacyMode(): boolean {
+  return process.env.ALO_HOSTING_MODE === "legacy";
+}
+export function isCompositionMode(): boolean {
+  return !isLegacyMode();
+}
 ```
 
-Expected: matches the full a11y suite (chrome + dialogs + keyboard +
-curve-spinner + cross-mode).
+### 3.7 Docs flip
 
-#### T12.3 — Commit
-
-```powershell
-git add web/apps/editor/package.json
-git commit -m @'
-chore(LT-4): [MT-11 a11y] T12 — pnpm a11y / a11y:update scripts
-
-Wrappers around playwright --grep for the a11y suite. Update variant
-sets UPDATE_A11Y_GOLDENS=1.
-'@
-```
+- **HANDOFF "How to run composition mode locally"** (currently lines
+  ~328-352 in the lt-4 HANDOFF) inverts to "How to run legacy mode
+  locally." Composition is now the default; the env-var dance is
+  for the opt-out.
+- **CHANGELOG entry** per project convention (top-of-section,
+  italic date/hash/PR line, three-section body: what ships / how we
+  tackled it / issues encountered).
+- **Stage 3i manual checklist** (`tasks/stage-3i-a11y-manual.md`):
+  any "rebuild dist/ with matching `VITE_*` pair" instructions
+  update to single var.
+- **ROADMAP**: new `### 2.1 [MT-12]` entry; marked shipped + moved
+  to `### 5.1` in the same PR; bumps 5.1-5.25 → 5.2-5.26; tag
+  `[MT-12]` vacated.
 
 ---
 
-### Task T13: Stage 3i manual checklist
+## 4. Risks named up front + mitigations
 
-**Why:** spec §5 C8 + §8 manual section.
+1. **Composition mode has latent UX issues only exposed when used
+   for daily editing.** Test coverage proves it works; doesn't
+   prove it's pleasant. Example failure modes: a subtle perf
+   regression under sustained interaction, an animation that
+   stutters under DComp's compositing pipeline but not under the
+   legacy popup's direct GDI paint, a focus / input edge case the
+   `SendMouseInput` forwarding misses.
+   - **Mitigation:** the `ALO_HOSTING_MODE=legacy` env var IS the
+     safety net. User discovers a problem → set env var → revert
+     to A immediately, no rebuild required. Document the env var
+     prominently in HANDOFF + add a startup log line that names
+     the active mode so issue reports include it.
 
-**Files:**
-- Create: `tasks/stage-3i-a11y-manual.md`
+2. **dist/ build-mode and runtime-mode desync.** A user rebuilds
+   dist/ with `VITE_HOSTING_MODE=legacy` then forgets and launches
+   without `ALO_HOSTING_MODE=legacy` (or vice versa). The two
+   become inconsistent: composition runtime + legacy dist/ means
+   the `<img>` element decodes engine JPEG frames and paints on
+   top of the DXGI engine visual (the failure mode the existing
+   warning at HostWindow.cpp:545-553 guarded against, but for
+   different env vars).
+   - **Mitigation:** add a startup-time consistency check. The
+     React-side `isLegacyMode()` bakes its value at build; the
+     host-side `m_compositionMode` reads at runtime. Have the
+     React app post a `viewport/mode-claim` (or use the existing
+     bridge surface) on boot with its baked mode; if it doesn't
+     match the host's, log an error and surface a top-of-app
+     banner. **In-scope for this dispatch** — single var makes
+     the check trivial.
 
-#### T13.1 — Write checklist
+3. **Spec mode-gate migration miss.** Any spec we forget to
+   migrate keeps reading the old env-var name, which is now
+   always undefined → spec interprets that as "not composition"
+   → wrong skip decision. Could be silent (test that should run
+   gets skipped) or noisy (test that should skip tries to run
+   against a wrong-mode harness and fails).
+   - **Mitigation:** delete the old env-var name strings from the
+     codebase entirely; grep returns 0 hits in `web/` post-T6;
+     any spec still referencing them fails at TypeScript-compile
+     time. Use the new `helpers/mode.ts` helpers to centralize.
 
-- [ ] **Step 1:** Create checklist with all sections from spec §8.
+4. **F8 composition fallback now needs to work under the new
+   default to provide value, but was tested under explicit opt-in.**
+   If composition init fails on a new install (rare hardware /
+   driver combo, e.g. no DXGI feature level 11.0), F8 should
+   gracefully drop to A. We did not test this under "user just
+   launches the .exe" conditions.
+   - **Mitigation (accepted, not designed around):** out of scope
+     per §1; document in HANDOFF that F8 fallback is the
+     unverified-under-default safety net beneath the env-var
+     safety net. If a user hits it, file as follow-up.
 
-```markdown
-# Stage 3i — A11y manual verification checklist
+5. **Performance under sustained edit sessions.** Stage 4 baseline
+   was 79 fps at 3440×1440 for short benchmarks. Real editing
+   sessions involve mod switches, autosave, modal dialogs (which
+   trigger the snapshot capture), spawner-instance bursts, etc.
+   Each path exists under composition but the cumulative load
+   profile differs from the legacy popup path.
+   - **Mitigation (accepted):** opt-out env var. If a user reports
+     a sustained-load regression, the workaround is one env var
+     away while we investigate.
 
-**One-time confidence pass, executed at ship. Re-run on demand if
-suspicion arises.**
+6. **HANDOFF / CHANGELOG count baselines drift.** Today's HANDOFF
+   prominently quotes "132 / 0 / 56" as the HWND baseline. After
+   the flip, default Playwright runs report 157 / 0 / 31. Anyone
+   reading old session notes will assume those numbers are still
+   current.
+   - **Mitigation:** same-PR HANDOFF refresh quoting both numbers,
+     labelled by mode. CHANGELOG entry's "Test counts" table
+     explicitly says "Default test:native (composition mode):
+     157/0/31; opt-out test:native:legacy: 132/0/56."
 
-**Prerequisite Narrator config** (set before starting):
-- Verbosity level 1 (default)
-- Default voice (Microsoft David / Zira / etc.)
-- "Read by character" mode OFF
-- Capture a screenshot of Narrator Settings panel for the recording
-
-## Tab cycle (in each mode)
-
-- [ ] Launch editor in HWND mode. Press Tab from app load.
-- [ ] Tab through every interactive element: menubar items → toolbar →
-      emitter tree → property tab list → first focused input in tabs →
-      ... back to menubar. Verify:
-  - [ ] Focus indicator visible on every stop
-  - [ ] No Tab traps (focus eventually cycles back)
-  - [ ] No phantom Tab stops on non-interactive elements
-- [ ] Open each modal dialog (Save Changes, Lighting, Bloom, etc.) and
-      verify Tab cycles within the dialog only (focus trap is correct).
-- [ ] Repeat the above under `ALO_WEBVIEW2_HOSTING=composition`.
-
-## F2 inline rename
-
-- [ ] Select an emitter in the tree.
-- [ ] Press F2 → edit mode enters; cursor in field; existing name selected.
-- [ ] Type new name; press Enter → commit.
-- [ ] Press F2 again; type new name; press Escape → cancel.
-
-## Escape close
-
-- [ ] Open any menu via mouse; press Escape → menu closes; focus
-      returns to menubar button.
-- [ ] Open Save Changes dialog; press Escape → dialog closes (treated
-      as Cancel).
-- [ ] Escape on an empty app state → no-op (does not close the app).
-
-## Arrow-key tree nav
-
-- [ ] Focus tree. Up/Down arrows navigate sibling rows.
-- [ ] Right expands collapsed node; Left collapses expanded node.
-- [ ] Right on a leaf is no-op; Left on a root is no-op.
-
-## IME compose smoke
-
-- [ ] Install a Japanese IME (Windows Settings > Time & Language >
-      Language > Add a language > Japanese).
-- [ ] Open `ModNicknameDialog`.
-- [ ] Switch IME on. Type a Hiragana sequence.
-- [ ] Composition popup appears under the cursor.
-- [ ] Press Space → IME suggests Kanji conversions.
-- [ ] Press Enter → composition commits to the field.
-
-## Narrator-speech pass
-
-For each surface in `a11y-goldens/`, launch the editor, set Narrator
-config per Prerequisite above, navigate to the surface, and verify
-Narrator's announcement matches the UIA tree's `Name` + `ControlType`.
-
-- [ ] menubar-closed
-- [ ] menubar-file-open
-- [ ] menubar-edit-open
-- [ ] ... (one bullet per surface in a11y-goldens/)
-
-**Recording:** screen+audio capture of the Narrator-speech pass saved
-to `tasks/stage-3i-narrator-recording.mp4`. Include a brief opening
-showing Narrator Settings (per Prerequisite above) so future operators
-can reproduce config.
-```
-
-#### T13.2 — Commit
-
-```powershell
-git add tasks/stage-3i-a11y-manual.md
-git commit -m @'
-docs(LT-4): [MT-11 a11y] T13 — Stage 3i manual checklist
-
-Tab cycle, F2 rename, Escape close, arrow-key tree nav, IME smoke,
-Narrator-speech pass. Documents prerequisite Narrator config for
-reproducibility.
-'@
-```
+7. **Old env-var names in user shell history / batch files.**
+   Users who copy-paste from old HANDOFF snippets or have shell
+   history setting `ALO_WEBVIEW2_HOSTING=composition` will find
+   the var has no effect (since we deleted the code). Silent.
+   - **Mitigation:** the runtime check at HostWindow.cpp during
+     boot can additionally log a warning if any of the four
+     deleted env-var names is set, suggesting the migration path
+     to `ALO_HOSTING_MODE`. ~10 lines of defensive code; useful
+     for ~1 release until users update muscle memory; delete in
+     the Phase 2 cleanup.
 
 ---
 
-### Task T14: Narrator-speech recording (manual, user-driven)
+## 5. Testing & verification
 
-**Why:** spec §5 C9. One-time confidence pass.
+**Build.**
+- MSBuild Debug + Release x64 clean via `.sln` (per L-023).
 
-**This task is executed by the user, not the agent.** Agent role here
-is to prepare the environment and confirm the artifact lands.
+**Default mode (composition — the new default).**
+- vitest: **348 / 348** (vitest is mode-agnostic for unit tests
+  that don't touch the env var; verify nothing in the migration
+  broke the unit suite).
+- Playwright `pnpm test:native` (default = composition): expect
+  **157 / 0 / 31** — matches today's composition baseline. Re-run
+  on first-time flake (bloom-settings composition flake observed
+  in MT-11 T16).
+- Live-binary smoke:
+  - Cold launch `x64/Debug/ParticleEditor.exe --new-ui` with
+    **no env vars set**.
+  - Verify boot logs name the active mode as composition.
+  - Open File menu / Edit menu / View menu — verify chrome
+    renders cleanly over engine.
+  - Load a sample `.alo` (smoke + additive fire) — verify engine
+    pixels render correctly.
+  - Resize the window in both directions; verify pane resize
+    reveals more scene content (per Stage 5 behaviour).
+  - Trigger a modal dialog (View → Lighting…) — verify modal
+    backdrop captures snapshot cleanly.
+  - Right-click viewport → spawner cursor-bound instance fires.
 
-**Files:**
-- Create: `tasks/stage-3i-narrator-recording.mp4` (binary, ~5 min,
-  user records)
+**Legacy mode (opt-out).**
+- `$env:ALO_HOSTING_MODE = "legacy"` + rebuild dist/ with
+  `$env:VITE_HOSTING_MODE = "legacy"` + launch.
+- Verify boot logs name the active mode as legacy.
+- Same smoke walk as above; expect architecture A behaviour
+  (visible AlphaCompositor popup with band-mask occlusion).
+- Playwright `pnpm test:native:legacy` (rebuild dist/ first):
+  expect **132 / 0 / 56** — matches today's HWND baseline.
 
-#### T14.1 — Pre-recording prep
+**Mode-consistency check (R2 mitigation).**
+- Launch with default runtime mode but legacy-built dist/ — verify
+  startup banner / log surfaces the desync clearly.
+- Reverse: legacy runtime + default dist/ — same.
 
-- [ ] **Step 1:** Verify editor builds + launches cleanly in HWND
-  mode.
-- [ ] **Step 2:** Confirm Narrator config matches T13.1 prerequisite.
+**Spec migration audit.**
+- `grep -r "ALO_WEBVIEW2_HOSTING\|ALO_VIEWPORT_TRANSPORT\|VITE_WEBVIEW2_HOSTING\|VITE_VIEWPORT_TRANSPORT" web/ src/` returns **0 hits** post-T6 (excluding archived task docs).
+- All specs continue passing under their respective mode runs.
 
-#### T14.2 — User records
+**Old-env-var migration warning.**
+- Launch with `$env:ALO_WEBVIEW2_HOSTING = "composition"` set —
+  verify startup logs warn about the deprecated env var and
+  suggest the new `ALO_HOSTING_MODE` migration.
 
-User runs the Narrator-speech pass section of `stage-3i-a11y-manual.md`
-with a screen+audio recorder (OBS, Windows Game Bar, etc.). Saves to
-`tasks/stage-3i-narrator-recording.mp4`.
+**Docs sanity check.**
+- HANDOFF top section names composition as default; "How to opt
+  out into legacy mode" section reads naturally.
+- CHANGELOG entry follows project formatting (italic date/hash/PR,
+  three sub-sections, etc.).
+- Stage 3i checklist no longer references the dual env-var dance.
+- ROADMAP: `### 5.1 [MT-12]` entry present; `### 5.2 [MT-11]`
+  bumped from old 5.1; `[MT-12]` tag vacated.
 
-#### T14.3 — Verify + commit
-
-- [ ] **Step 1:** Confirm file is < 50 MB (git-friendly). If larger,
-  re-encode at lower bitrate.
-
-- [ ] **Step 2:** Commit.
-
-```powershell
-git add tasks/stage-3i-narrator-recording.mp4
-git commit -m @'
-docs(LT-4): [MT-11 a11y] T14 — Narrator-speech recording
-
-One-time confidence pass: screen+audio capture confirming Narrator
-announces what the UIA tree says it announces, across all
-a11y-goldens/ surfaces.
-'@
-```
-
----
-
-### Task T15: ROADMAP + CHANGELOG + HANDOFF updates
-
-**Why:** CLAUDE.md ROADMAP+CHANGELOG rules. Phase 3 a11y close-out
-completes Phase 3 hygiene.
-
-**Files:**
-- Modify: `ROADMAP.md` (MT-11 Phase 3 close-out reference)
-- Modify: `CHANGELOG.md` (top entry per formatting rules)
-- Modify: `tasks/HANDOFF.md` (refresh for next session)
-
-#### T15.1 — CHANGELOG
-
-- [ ] **Step 1:** Add entry at the TOP of the `## Changelog` section,
-  following the formatting in `CHANGELOG.md`'s header notes.
-
-```markdown
-### Phase 3 a11y close-out — dual-API regression gate (Win32 UIA + DOM snapshot) + manual smoke
-
-*2026-05-25 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
-
-Phase 3 acceptance hygiene closes: the new-UI chrome now has two
-complementary Playwright a11y regression gates. HWND mode is covered
-by a Win32 UIA capture via a small C++ standalone inspector; composition
-mode is covered by Playwright's `page.accessibility.snapshot()` over
-CDP. Each gate covers ~30 interactive surfaces with committed JSON
-goldens, regeneratable via `pnpm a11y:update`. Stage 3i manual
-checklist + Narrator-speech recording archive the one-time confidence
-pass.
-
-**How we tackled it.** Phase 0 spike at [`tasks/phase-0-a11y-cross-mode-probe.md`](tasks/phase-0-a11y-cross-mode-probe.md:1)
-discovered that composition-mode WebView2 renders to an
-`IDCompositionVisual` which has no HWND, so `IUIAutomation::FromHandle`
-cannot reach the React tree from outside the process — composition
-mode's host HWND has zero UIA descendants. The originally planned
-cross-mode equality spec (HWND UIA ≡ composition UIA) was therefore
-infeasible. The dispatch pivoted to a dual-API approach: HWND mode
-keeps Win32 UIA via a small [C++ inspector](src/host/spike/uia_inspector.cpp:1)
-matching the existing `dxgi_spike.cpp` pattern (Phase 0 ruled out
-maintained Node UIA libs — see [`tasks/phase-0-a11y-uia-node-lib-search.md`](tasks/phase-0-a11y-uia-node-lib-search.md:1));
-composition mode uses [Playwright's DOM accessibility snapshot](web/apps/editor/tests/a11y-chrome-composition.spec.ts:1).
-The structural divergence between the two modes is itself encoded as
-a [negative-contract spec](web/apps/editor/tests/a11y-uia-composition-empty.spec.ts:1):
-if composition mode's host HWND ever starts exposing UIA descendants,
-that's a substantive WebView2 a11y-plumbing change worth
-investigating. A shared [normalizer](web/apps/editor/tests/helpers/a11y-normalizer.ts:1)
-+ allowlist drives the HWND lane (strips Chromium chrome wrappers like
-`Chrome_WidgetWin_1`, `BrowserRootView` so goldens focus on the React
-tree); a smaller [DOM snapshot wrapper](web/apps/editor/tests/helpers/a11y-dom-snapshot.ts:1)
-canonicalizes the composition lane's output. Both lanes use a custom
-`toMatchJSONGolden` matcher with `UPDATE_A11Y_GOLDENS=1` regeneration.
-
-**Issues encountered and resolutions.** [fill in during build-out]
-
----
-```
-
-#### T15.2 — ROADMAP
-
-- [ ] **Step 1:** Locate MT-11 entry in ROADMAP. If MT-11 was already
-  shipped as a whole, add a sub-bullet noting a11y close-out shipped
-  separately. If MT-11 was still "in progress" tracking a11y as the
-  last item, mark it shipped (strikethrough + ✅ Shipped + move to
-  Shipped section per CLAUDE.md ROADMAP rules).
-
-#### T15.3 — HANDOFF refresh
-
-- [ ] **Step 1:** Replace the "What shipped today" section with the
-  a11y close-out summary. Keep the "Known follow-ups" list updated:
-  drop "Phase 3 a11y close-out" from the list (since it just shipped);
-  promote any surfaces deferred by T6 (R3) into a new follow-up entry.
-
-#### T15.4 — Commit (docs-only)
-
-```bash
-git add ROADMAP.md CHANGELOG.md tasks/HANDOFF.md
-git commit -m "$(cat <<'EOF'
-docs(LT-4): [MT-11 a11y] T15 — CHANGELOG + ROADMAP + HANDOFF refresh
-
-Phase 3 a11y close-out shipped: dual-API regression gate (HWND Win32
-UIA + composition DOM snapshot) + UIA-empty negative-contract spec +
-Stage 3i manual + Narrator recording. ROADMAP MT-11 marked closed;
-deferred surfaces (if any from T6) carry forward.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
+**Pre-handoff smoke run.**
+- Cold launch x64/Debug build in default mode → menus + .alo load
+  + resize. No visible regressions vs the Stage 5 smoke baseline.
+- Cold launch with `ALO_HOSTING_MODE=legacy` → same workflow under
+  architecture A. No visible regressions vs pre-MT-11 baseline.
 
 ---
 
-### Task T16: Pre-handoff test sweep + verification gate
+## 6. Task breakdown (execution order)
 
-**Why:** spec §8 verification gate, all 9 items.
+1. **T1 — Pre-flight.** Confirm clean tree on lt-4, vitest 348/348
+   green, MSBuild Debug + Release x64 clean. ~5 min.
+2. **T2 — C++ flip.** Edit `src/host/HostWindow.cpp:520-553`:
+   collapse env-var reads, flip default, delete desync warning,
+   add unknown-value warning + deprecated-env-var warning per R7.
+   Build Debug. ~30 min.
+3. **T3 — React flip.** Edit
+   `web/apps/editor/src/components/ViewportSlot.tsx:29-77`: collapse
+   helpers to `isLegacyMode()`, invert callers. Update any unit
+   tests that mocked the old env vars. ~30 min.
+4. **T4 — Mode-consistency banner.** Wire boot-time `viewport/mode-claim`
+   (or reuse an existing bridge surface) so React posts its baked
+   mode + host compares. Log error + surface React-side banner on
+   mismatch. ~30 min.
+5. **T5 — Test harness flip.** Edit
+   `web/apps/editor/scripts/run-native-tests.mjs`: add `--legacy`
+   flag. Update `package.json` scripts to add `test:native:legacy`.
+   ~30 min.
+6. **T6 — Spec mode-gate migration.** Create
+   `web/apps/editor/tests/helpers/mode.ts`. Grep for every old
+   env-var name in `web/`, `src/`; migrate each callsite. Verify
+   `grep` returns 0 hits post-migration. ~60 min (most of the
+   work).
+7. **T7 — Docs flip.** Update HANDOFF "How to run" section,
+   CHANGELOG new top entry, Stage 3i checklist instructions. ~30 min.
+8. **T8 — ROADMAP.** Add `### 2.1 [MT-12]` entry to Medium term
+   (filling the slot vacated by [MT-11] shipping). Mark shipped +
+   move to `### 5.1`; bump 5.1-5.25 → 5.2-5.26 via the same `perl -i`
+   pattern as the MT-11 close-out. ~15 min.
+9. **T9 — Build + automated verification.**
+   - MSBuild Debug + Release x64 clean.
+   - vitest 348/348.
+   - Default `pnpm test:native`: 157/0/31 expected.
+   - `pnpm test:native:legacy` (with dist/ rebuilt in legacy mode):
+     132/0/56 expected.
+   - grep audit for old env-var names: 0 hits.
+   - ~30 min runtime + investigation buffer.
+10. **T10 — Pre-handoff smoke.** Cold launch in default mode,
+    walk core editing workflow. Launch in legacy mode, same.
+    ~15 min.
+11. **T11 — Commits + FF.** Probably 2-3 thematic commits:
+    (a) C++ + React flip + harness flip (feature),
+    (b) Spec mode-gate migration (test),
+    (c) ROADMAP + CHANGELOG + HANDOFF + Stage 3i docs.
+    FF lt-4 + push (confirm with user first per CLAUDE.md
+    visible-actions rule). ~15 min.
 
-#### T16.1 — Verification gate items 1-5
-
-- [ ] **Step 1:** Vitest:
-
-```powershell
-pnpm --filter @particle-editor/editor test
-```
-
-Expected: 348 + N additional tests (348 = post-T1 baseline of 343 + 5 normalizer unit tests).
-
-- [ ] **Step 2:** Playwright HWND lane (default dist/):
-
-```powershell
-pnpm --filter @particle-editor/editor test:native
-```
-
-Expected: baseline 103 + 26 + 0 + N new HWND a11y tests passing
-(composition-only specs auto-skip cleanly under default mode).
-
-- [ ] **Step 3:** Rebuild composition-mode dist/ + Playwright composition
-  lane:
-
-```powershell
-cd web
-$env:VITE_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:VITE_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor build
-$env:ALO_VIEWPORT_TRANSPORT = "canvas-jpeg"
-$env:ALO_WEBVIEW2_HOSTING = "composition"
-pnpm --filter @particle-editor/editor test:native
-Remove-Item Env:ALO_VIEWPORT_TRANSPORT
-Remove-Item Env:ALO_WEBVIEW2_HOSTING
-Remove-Item Env:VITE_VIEWPORT_TRANSPORT
-Remove-Item Env:VITE_WEBVIEW2_HOSTING
-pnpm --filter @particle-editor/editor build
-cd ..
-```
-
-Expected: 122 + 3 + 0 baseline + N new composition DOM-snapshot a11y
-tests passing + 1 UIA-empty negative-contract spec passing
-(HWND-only specs auto-skip under composition mode).
-
-- [ ] **Step 4:** MSBuild Debug + Release x64 clean (per L-023):
-
-```powershell
-MSBuild .\ParticleEditor.sln /p:Configuration=Debug /p:Platform=x64 /m
-MSBuild .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /m
-```
-
-Expected: both clean. New artifact: `x64/{Debug,Release}/uia_inspector.exe`.
-
-#### T16.2 — Verification gate items 6-9
-
-- [ ] **Step 6:** Stage 3i checklist: every checkbox in
-  `tasks/stage-3i-a11y-manual.md` is checked.
-
-- [ ] **Step 7:** ROADMAP MT-11 Phase 3 marked closed.
-
-- [ ] **Step 8:** CHANGELOG entry written; placeholder
-  `TODO-HASH` / `TODO-PR` strings present (backfilled post-merge).
-
-- [ ] **Step 9:** HANDOFF refreshed; "Known follow-ups" updated.
-
-#### T16.3 — Pre-handoff smoke
-
-- [ ] **Step 1:** Launch editor from `x64/Debug/ParticleEditor.exe`
-  in HWND mode; open + close several menus; load a sample `.alo`; no
-  visible regressions.
-
-- [ ] **Step 2:** Launch in composition mode (same env-var dance);
-  repeat smoke.
-
-#### T16.4 — Final report
-
-- [ ] **Step 1:** Summarize for the user:
-  - All 9 verification gate items met
-  - Vitest count: 343 + N
-  - Playwright HWND: 103 + 26 + 0 + N HWND a11y tests passing
-  - Playwright composition: 122 + 3 + 0 + N composition DOM-snapshot a11y tests + 1 UIA-empty negative-contract spec passing
-  - MSBuild clean
-  - Stage 3i manual + recording in place
-  - Deferred surfaces (if any) filed in `tasks/a11y-deferred-surfaces.md`
-  - Ready for FF to `origin/lt-4`
+**Total:** ~3.5-4.5 hours assuming no surprises in T6 (spec
+migration). Buffer to ~6 hours if any spec mode-gate is non-obvious
+or if smoke surfaces a real composition-mode UX issue worth
+investigating before committing to the flip.
 
 ---
 
-## 7. Sequencing summary
+## 7. Open questions to resolve before implementation
 
-```
-T0 (Phase 0 spike) ✅ DONE — pivoted to Option 3 (hybrid)
-                                │
-T1 (normalizer) ────────────────┤
-T2 (matcher) ───────────────────┤
-T3 (C++ UIA inspector) ─────────┘
-                                │
-                                └──> T4 (UIA wrapper)
-                                        │
-                                        └──> T5/T6/T7/T8 (surface drivers)
-                                                │
-                                                └──> T9 (HWND UIA specs + goldens)
-                                                        │
-                                                        └──> T10 (composition DOM specs + goldens)
-                                                                │
-                                                                └──> T11 (UIA-empty negative-contract spec)
-                                                                        │
-                                                                        └──> T12 (pnpm scripts)
-                                                                                │
-                                                                                └──> T13 (manual md)
-                                                                                        │
-                                                                                        └──> T14 (recording)
-                                                                                                │
-                                                                                                └──> T15 (docs)
-                                                                                                        │
-                                                                                                        └──> T16 (verify)
-```
+1. **Should the boot-time log line that names the active mode be
+   only in debug builds (`#ifndef NDEBUG`) or unconditional?**
+   Unconditional is more useful for issue reports ("user pastes
+   their first log line + we know which mode they're in") but adds
+   one line of noise to every release-mode launch. Recommend
+   unconditional.
 
-T0 was the **hard gate** — DONE_WITH_CONCERNS, pivoted to Option 3.
-T1 + T2 + T3 can run in parallel. T5 + T6 + T7 + T8 can run in parallel
-after T4 (all modify `tests/helpers/a11y-surfaces.ts` so either
-coordinate merge points or land in sequence to avoid trivial conflicts).
-T10 reuses the surface drivers from T5-T8 unchanged; only the capture
-mechanism differs (DOM snapshot vs Win32 UIA).
+2. **Mode-consistency banner UI (R2 mitigation T4): top-of-app
+   banner or DevTools-console-only?** Top-of-app banner is more
+   visible but requires React UI changes; console is cheap but
+   easily missed. Recommend top-of-app banner only on detected
+   mismatch (zero overhead in the common case).
 
----
+3. **Should the new `helpers/mode.ts` also export a vitest helper
+   for unit tests that need to mock the mode?** Vitest's
+   `vi.stubEnv()` works but adds boilerplate. Recommend yes — a
+   2-line `mockMode(mode: "composition" | "legacy")` helper saves
+   ~5 lines per test.
 
-## 8. Stop-and-replan triggers
-
-Per CLAUDE.md "If something goes sideways: STOP and re-plan
-immediately":
-
-- ✅ **T0.3 step 7 — TRIGGERED 2026-05-25.** Composition mode has
-  zero UIA descendants under host HWND (structural; not normalizable).
-  Re-planned to Option 3 (hybrid: Win32 UIA for HWND, DOM snapshot
-  for composition). T10/T11 rewritten; rest of plan unchanged.
-- **R3 4h cap exceeded during T5/T6/T7/T8** → stop dropping surfaces,
-  re-plan whether to defer the whole dispatch or trim further.
-- **R4 limit (50 goldens per mode) reached during T9/T10** → stop
-  generating, re-scope.
-- **Vitest red after any task** → stop, fix root cause, don't
-  proceed.
-- **Cross-mode spec fails on a surface in T11 that can't be normalized
-  away** → that's R2 manifest; investigate whether it's a real chrome
-  bug or a normalizer gap; do not silently allow divergence.
+4. **Branch: create a new `claude/<random>` branch off `lt-4` for
+   this work, or commit directly to lt-4 since we just FF'd here?**
+   CLAUDE.md branch workflow says claude/* is the throwaway
+   container for in-flight work. Recommend creating a new branch
+   `claude/<name>` to match convention (FF back to lt-4 at end of
+   dispatch). User to advise on naming or auto-pick.
