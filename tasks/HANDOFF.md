@@ -331,29 +331,65 @@ it into a dispatch.
     resolved item 13. Daily-use composition mode no longer has the
     perf cliff that was blocking the architecture-A deletion
     (item 11) on this axis.
-16. **A11y golden drift (29 mismatches per lane, pre-existing on
-    `lt-4 @ da58968`).** Surfaced during the cursor-unproject
-    dispatch (item 14 close-out). The 29 a11y golden YAMLs
-    committed at [`a1000c8`](https://github.com/DrKnickers/new-particle-editor/commit/a1000c8)
-    no longer match the live DOM under either composition or HWND
-    mode at the tip of `lt-4`. Reproduced on a clean rebuild with
-    no working-tree changes (stashed the item-14 fix, ran
-    `pnpm test:native` and `pnpm test:native:legacy`):
-    - **Composition lane:** `128 passed / 29 failed / 31 skipped`
-      (handoff baseline claimed `157 / 0 / 31`).
-    - **HWND/legacy lane:** `103 passed / 29 failed / 56 skipped`
-      (handoff baseline claimed `132 / 0 / 56`).
-    Identical 29 surfaces fail in each lane — `a11y-chrome*`
-    (13), `a11y-dialogs*` (10), `a11y-curve-spinner*` (2),
-    `a11y-keyboard*` (4). The drift is downstream of MT-12's
-    default flip at `07ea8a7` or one of the later [MT-12]
-    cleanup / config / fix commits; bisecting between `a1000c8`
-    (golden commit) and `da58968` (current tip) will localise it.
-    **Treat as own dispatch.** Likely outcomes: (a) legitimate UI
-    drift, re-snapshot the goldens via `pnpm a11y:update`; or
-    (b) a real regression hiding in MT-12 that the golden refresh
-    would paper over — eyeball the diffs first. Don't bundle the
-    refresh with feature work.
+16. ~~**A11y golden drift (29 mismatches per lane, pre-existing on
+    `lt-4 @ da58968`).**~~ ✅ **RESOLVED** at `610d5dd` (fix
+    commit). Root cause was **not** drift in the React DOM or any
+    MT-12 commit, but two latent test-infrastructure issues that
+    were never caught because the goldens were committed on a
+    non-Windows host (or with `core.autocrlf=false`) and the
+    dispatch chain since never re-ran them on a fresh Windows
+    checkout. Diagnosis:
+    - **28 of 29 surfaces in each lane: LF/CRLF line-ending
+      mismatch.** `core.autocrlf=true` (default Windows git
+      install) smudges the LF-stored goldens to CRLF on checkout.
+      `toMatchJSONGolden` does byte-exact compare
+      (`expected === serialized`) so every mass byte-level
+      mismatch failed. `git ls-files --eol <golden>` showed
+      `i/lf w/crlf attr/` on every committed JSON/YAML golden
+      file; `git diff HEAD` showed empty content with a *"LF will
+      be replaced by CRLF the next time Git touches it"* warning.
+    - **1 of 29 surfaces (`dialog-about`) in each lane: build
+      date drift.** `vite.config.ts:12` used
+      `new Date().toISOString().slice(0, 10)` to compute
+      `BUILD_DATE`, so every rebuild on a new calendar day shifted
+      the value baked into `import.meta.env.VITE_BUILD_DATE` and
+      into the About dialog's "Build date: YYYY-MM-DD" text.
+      Captured on 2026-05-26, the golden showed `2026-05-26`;
+      rebuild today (2026-05-27) showed `2026-05-27`.
+    - **Bonus finding:** `pnpm a11y:update --grep "<id>"` silently
+      regenerated ALL goldens, not the scoped subset. The harness
+      [`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+      hard-coded the Playwright spec list and dropped unrecognised
+      args. Fixed in same dispatch.
+    Three fixes, one dispatch:
+    1. `.gitattributes` at repo root with `text eol=lf` for
+       `*.golden.json` / `*.golden.yaml` / `*.snap` (and explicit
+       `web/apps/editor/tests/a11y-goldens/` paths) — forces LF
+       on checkout regardless of autocrlf, fixes 28 of 29 surfaces
+       in both lanes.
+    2. [`vite.config.ts`](../web/apps/editor/vite.config.ts) pins
+       `BUILD_DATE` to `git show -s --format=%cs HEAD` (commit
+       date) instead of `new Date()`. Stable across rebuilds of
+       the same commit; About dialog now shows when the code was
+       committed, not when somebody happened to run `pnpm build`.
+       Fixes the 29th surface in both lanes — the new value
+       happens to be byte-identical to what's in the existing
+       golden (HEAD's commit date is still 2026-05-26).
+    3. [`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+       forwards `process.argv.slice(2)` extras (minus `--update` /
+       `--legacy`) to the Playwright spawn. `pnpm a11y:update
+       --grep "<id>"` now scopes correctly.
+    Verification: composition lane back to **157 passed / 0 failed
+    / 31 skipped** and HWND lane back to **132 passed / 0 failed
+    / 56 skipped** — both match the pre-drift baselines from the
+    MT-12 ship.
+    Three new lessons captured: [L-025](lessons.md#l-025) MSBuild
+    via PowerShell, [L-026](lessons.md#l-026) byte-exact snapshots
+    need `text eol=lf`, [L-027](lessons.md#l-027) test wrapper
+    must forward unknown CLI args. L-025 surfaced as a Phase A
+    incident (Git Bash mangling MSBuild `/switch` args) that
+    doesn't appear in the bug itself but was discovered while
+    diagnosing it.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)
 

@@ -1,457 +1,477 @@
-# [LT-4 follow-up] Cursor → spawn world-position offset (HANDOFF item 14)
+# [LT-4 follow-up] A11y golden drift triage (HANDOFF item 16)
 
 **Predecessor:** [MT-12] (default flip to architecture C, shipped at
-`dd5aa8c`) + `d3a4776` (FramePublisher guard) closed two of three
-known follow-ups. Item 14 — cursor-bound spawn lands ~tens of pixels
-offset from the click point under default mode — is the last
-default-mode regression gating the future architecture-A deletion
-(HANDOFF item 11).
+`dd5aa8c`) + the three follow-ups already closed (`d3a4776`
+FramePublisher guard, `40b53c3` cursor-unproject fix, plus their
+HANDOFF docs commits). Item 16 — 29 a11y golden mismatches per lane
+on `lt-4 @ da58968`, pre-existing — surfaced during the item-14
+close-out's reproduction sweep.
 
 **Target branch:** `lt-4`
-**Difficulty:** ★★ (2/5) — single-function fix in `src/MouseCursor.h`,
-mechanical once the root cause is named. Risk surface is small.
-**Effort estimate:** ~1-2 hours. Most of the budget is build +
-double-mode test run + docs close-out.
+**Difficulty:** ★★★ (3/5) — bounded by a small (13-commit) bisect
+window and a clear test infrastructure (`pnpm a11y:update --grep`,
+deterministic surface drivers, normalized JSON + ARIA-snapshot YAML).
+The risk is in the *judgement* (legit-drift vs hidden-regression),
+not the mechanics.
+**Effort estimate:** ~half-day to a day. ~2h to build + reproduce
+both lanes + classify a single representative surface per bucket.
+~3-4h for per-surface triage across all 29. ~1h for refresh + commit
++ docs.
 
 ---
 
 ## 1. Goal + scope
 
-**When this ships:** Under default architecture C (DXGI composition +
-DComp engine visual + WebView2 composition hosting), clicking to
-spawn a cursor-bound particle places the particle **exactly under the
-cursor**. The status-bar world coordinates also become numerically
-correct (previously they were emitted with the same transform error
-but appeared plausible because world floats are hard to eyeball).
-Architecture A (legacy popup, opt-out via `ALO_HOSTING_MODE=legacy`)
-continues to work byte-identically — its code path never engages the
-scene viewport, so the fallback branch in the patch keeps that path
-untouched.
+**When this ships:** Both Playwright lanes return `0 failed`:
+`pnpm test:native` (composition) and `pnpm test:native:legacy`
+(architecture A). Every refreshed golden has a documented rationale
+in the commit message OR the dispatch's todo.md review section. Any
+surface that turns out to be a genuine regression hiding behind the
+diff is filed as its own HANDOFF follow-up (NOT papered over by a
+golden refresh) — that is the explicit hazard HANDOFF item 16 warns
+about.
 
-**In scope.**
+**In scope:**
 
-- **Single-function patch in [`src/MouseCursor.h`](src/MouseCursor.h:54)**
-  (`GetCursorPos3D`). When the engine reports an active scene viewport
-  (via `Engine::GetSceneViewport`), build a `D3DVIEWPORT9` from that
-  rect and pass it to `D3DXVec3Unproject` instead of the device's
-  current viewport. Falls back to `engine->GetViewPort()` for the
-  no-scene-viewport case (architecture A, plus pre-scene-rect-dispatch
-  bootstrap in architecture C).
-- **Debug-only diagnostic.** `#ifndef NDEBUG` `printf` at the unproject
-  site (throttled, mirroring the 30 Hz cursor-emit cadence) logging
-  the input `(x, y)`, the viewport choice (scene vs. full-RT, with
-  the rect), and the resolved world. Tagged `[cursor-unproject]` so
-  a future regression can be diagnosed without re-walking the call
-  graph.
-- **HANDOFF item 14 close-out.** Mark resolved with commit reference,
-  matching the format used for item 15.
-- **CHANGELOG entry.** *What ships / How we tackled it / Issues
-  encountered* per project format.
-- **`tasks/todo.md` review section** appended at the end before FF.
+- Reproduce the 29-per-lane failure count at current `lt-4 @ 6b6e674`
+  (verify the carry-forward claim per [L-022](lessons.md#l-022)).
+- Diff at least one representative surface from each of the four
+  buckets (chrome / dialogs / curve-spinner / keyboard) in BOTH
+  lanes. Identify the drift signature.
+- IF signature is ambiguous: bisect between `a1000c8` (golden commit)
+  and `da58968` (observation commit) to localise the source.
+- For each of 29 surfaces: classify as
+  - **(a) legit drift** — re-snapshot allowed,
+  - **(b) suspicious regression** — file separately, leave golden RED,
+  - **(c) test-harness-induced** — fix harness/fixture, not golden.
+- Regenerate goldens for category-(a) surfaces only, via scoped
+  `pnpm a11y:update --grep '<ids>'`.
+- Eyeball `git diff` on regenerated YAML/JSON BEFORE commit — final
+  guard against blind refresh.
+- CHANGELOG entry + HANDOFF item 16 close-out with commit hashes.
 
-**Out of scope.**
+**Out of scope (explicit, with reason):**
 
-- *Unifying input pipelines between A and C.* That's the
-  architecture-A deletion (HANDOFF item 11). After this fix, A can
-  be deleted with confidence because every default-mode regression
-  surfaced by [MT-12] is closed.
-- *Playwright regression test for spawn-at-cursor.* The current
-  harness doesn't easily express "click at viewport pixel (cx, cy),
-  assert the spawned particle's world position matches the unproject
-  result". Hand-rolling would need a render-thread world-space probe
-  on a bridge surface — non-trivial. Deferred as a future follow-up
-  on the HANDOFF list.
-- *Status-bar correctness audit.* The status-bar emit uses the same
-  `GetCursorPos3D` so it auto-fixes. No further work needed; but
-  confirming the user-visible coordinates match a known-geometry
-  click (e.g. ground plane at z=0 directly under cursor) is part of
-  the test pass below.
-- *Per-pixel-FoV projection touch-ups.* The Stage 5 per-pixel-FoV
-  math (engine.cpp:1540-1600) is correct as-is; the bug is *purely*
-  in the unproject site reading the wrong viewport. No projection
-  change.
+- **Architecture-A deletion (HANDOFF item 11)** — user has confirmed
+  they're not yet on architecture C daily-use; not unblocked.
+- **Wider a11y enhancement / new surface coverage** — separate
+  dispatch (also see the 6 deferred surfaces catalogued in
+  [`a11y-deferred-surfaces.md`](a11y-deferred-surfaces.md), item 1
+  of the HANDOFF carry-forward list).
+- **Narrator-speech recording (HANDOFF item 9)** — user-driven,
+  out of band.
+- **Blind whole-lane golden refresh** — explicitly forbidden by
+  HANDOFF item 16 *"don't bundle the refresh with feature work"*.
+  The triage step is non-negotiable.
+- **Any category-(b) bug fix discovered during triage** — those are
+  filed as new HANDOFF entries and fixed in their own dispatches.
+  This dispatch produces the *classification*, not the *fix*.
 
 ---
 
 ## 2. What the codebase already gives us
 
-- **`Engine::GetSceneViewport(int&, int&, int&, int&) const`** at
-  [`src/engine.h:231`](src/engine.h:231) — returns `true` and
-  populates outs when the scene viewport is active; returns `false`
-  otherwise. This is exactly the discriminator we need.
-- **`Engine::GetViewPort(D3DVIEWPORT9*)`** at
-  [`src/engine.cpp:988`](src/engine.cpp:988) — wraps
-  `m_pDevice->GetViewport(viewport)`. This is what
-  `GetCursorPos3D` *currently* calls; after Render the device
-  viewport is restored to **full-RT**, not the scene viewport, which
-  is the root cause.
-- **`Engine::SetSceneViewport`** at
-  [`src/engine.cpp:1540`](src/engine.cpp:1540) — caches
-  `(x, y, w, h)` and recomputes `m_projection` at **scene-rect
-  aspect** via per-pixel-FoV. So `m_projection` is built to match
-  the scene viewport; the unproject needs to read the scene viewport
-  to match.
-- **`Engine::Render` scene-viewport hook** at
-  [`src/engine.cpp:687-699`](src/engine.cpp:687) — sets the scene
-  viewport for the scene pass and restores `prevViewportS5`
-  (full-RT) before returning. Confirms the device viewport between
-  frames is full-RT, not scene.
-- **`D3DXVec3Unproject` semantics.** Computes
-  `NDC.x = (pV.x - viewport.X) / viewport.Width * 2 - 1` (and Y
-  mirrored). Passing scene-viewport with popup-client `(x, y)`
-  inputs Just Works: the function subtracts `viewport.X` /
-  `viewport.Y` internally, no caller-side translate needed.
-- **`m_archCMode` mode flag** on `HostWindowImpl` — already used to
-  gate composition-only behaviour throughout `HostWindow.cpp`. Not
-  needed for this fix because `GetSceneViewport()` is the
-  authoritative discriminator (false under A, true under active C
-  with React mounted) and routing through the engine accessor
-  avoids any layering dependency on the host.
+- **Scoped golden regeneration.** `pnpm a11y:update --grep '<id>'`
+  in [`web/apps/editor/package.json`](../web/apps/editor/package.json)
+  → [`scripts/run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+  → sets `UPDATE_A11Y_GOLDENS=1`. `--grep` is the Playwright filter;
+  scope to a list of surface IDs to avoid lane-wide regeneration
+  (mitigation R7).
+- **Composition / legacy lane symmetry.** Same scripts under
+  `pnpm a11y:legacy` / `pnpm a11y:update:legacy` — `--legacy` flag
+  flips `ALO_HOSTING_MODE`.
+- **Pre-normalization raw dump.** HWND lane's
+  [`toMatchJSONGolden`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts)
+  writes raw UIA JSON to `tests/a11y-failures/<surface>-actual.json`
+  (gitignored) on mismatch — survives until the next run is cleared.
+- **Normalizer semantics are clear and small.**
+  [`a11y-normalizer.ts`](../web/apps/editor/tests/helpers/a11y-normalizer.ts)
+  has three passes: stable-property pruning, wrapper stripping,
+  ordinal sort. Modifying the allowlist
+  ([`a11y-allowlist.json`](../web/apps/editor/tests/helpers/a11y-allowlist.json))
+  is a surgical fix if drift is in a single property.
+- **L-024 (UIA non-determinism) precedent.** Right *layer* to solve
+  drift at:
+  - Tree topology drift → `alwaysStripWrappers` (allowlist).
+  - Live React subscription drift → source-side freeze
+    (bridge knob + React listener).
+  - Genuine semantic change → re-snapshot the golden.
+- **Surface drivers are centralized.**
+  [`a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts)
+  defines `CHROME_SURFACES`, `DIALOGS_SURFACES`, etc. with
+  per-surface setup functions. Any harness-fix in category (c) lands
+  in one file.
+- **Test fixture is deterministic.**
+  [`a11y-base-state.alo`](../web/apps/editor/tests/fixtures/a11y-base-state.alo)
+  → loaded in each spec's `beforeEach`, engine paused,
+  `stats/set-frozen` freezes the StatusBar live cells (L-024
+  precedent). Per-spec contamination cleanup in `afterAll`.
+- **Single likely source.** `git log -1 ViewportSlot.tsx App.tsx`
+  returns `07ea8a7` — that is the ONLY React-shell-touching commit
+  in the bisect range. Helper collapse + boot-mode `[mode] React build
+  mode:` console.log + default mode flip all landed there. The drift
+  signature should reveal whether it's the helper collapse, the log
+  emission, the mode change, or something else.
+- **L-022 rule.** Verify carry-forward claims before scoping. The
+  29-count from `da58968` may not still be 29 at `6b6e674`; Phase A
+  step 6 verifies before triage begins.
 
 ---
 
 ## 3. Architecture / implementation approach
 
-**Change site.** Single function: [`src/MouseCursor.h:54-67`](src/MouseCursor.h:54).
+Four phases, each gated on the previous one's outcome.
 
-**Before:**
-```cpp
-inline void GetCursorPos3D(Engine* engine, short x, short y, D3DXVECTOR3& position)
-{
-    D3DXVECTOR3  front, back;
-    D3DVIEWPORT9 viewport;
-    D3DXMATRIX   world;
-    D3DXMatrixIdentity(&world);
-    engine->GetViewPort(&viewport);
+### Phase A — Reproduce + characterize (no code changes)
 
-    D3DXVec3Unproject(&front, &D3DXVECTOR3(x, y, 0.0f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
-    D3DXVec3Unproject(&back,  &D3DXVECTOR3(x, y, 0.9f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
+1. **Build** host (Debug + Release per L-023).
+2. **Build composition dist/** (`pnpm --filter @particle-editor/editor build`
+   with no env vars). The repo's
+   [`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+   does NOT auto-rebuild dist/ on mode change — must rebuild manually
+   (HANDOFF carry-forward item 4 is precisely this gap).
+3. **Composition lane run.** `pnpm test:native`. Record exact counts.
+4. **Composition lane diff capture.** For ONE surface from each
+   bucket (e.g. `menubar-closed`, `dialog-about`, `spinner-focused`,
+   `kbd-tab-cycle-stop-1`):
+   - Diff stored golden YAML vs Playwright's mismatch output.
+   - Note the signature: which lines/keys differ.
+5. **Build legacy dist/** (`VITE_HOSTING_MODE=legacy pnpm --filter
+   @particle-editor/editor build`).
+6. **Legacy lane run.** `pnpm test:native:legacy`. Record counts.
+7. **HWND lane diff capture.** Same four representative surfaces;
+   inspect `tests/a11y-failures/<surface>-actual.json` vs
+   `tests/a11y-goldens/<surface>.golden.json`.
+8. **Verify HANDOFF claims** (per L-022):
+   - Failure count = 29 per lane? Or different?
+   - Same 29 surfaces in each lane? Or divergent?
+   - Same drift signature across buckets?
+9. **Snapshot Phase A findings into todo.md** before Phase B begins.
 
-    D3DXPLANE plane(0,0,1,0);
-    D3DXPlaneIntersectLine(&position, &plane, &front, &back);
-}
-```
+### Phase B — Bisect (conditional)
 
-**After (sketch — exact wording in the patch).**
-```cpp
-inline void GetCursorPos3D(Engine* engine, short x, short y, D3DXVECTOR3& position)
-{
-    D3DXVECTOR3  front, back;
-    D3DVIEWPORT9 viewport;
-    D3DXMATRIX   world;
-    D3DXMatrixIdentity(&world);
+**Skip Phase B IF Phase A surfaces a single obvious signature** (e.g.
+"every surface lost the `[mode] React build mode` log line's adjacent
+node" → `07ea8a7` clearly). Cite the commit in Phase C and proceed.
 
-    // [LT-4 / HANDOFF-14] Under architecture C, the engine renders
-    // into a SCENE sub-rect of the popup HWND and m_projection is
-    // built at scene-rect aspect (per-pixel FoV referenced to
-    // scene-H, src/engine.cpp:1540). But Render restores the D3D9
-    // device viewport to FULL-RT before returning
-    // (src/engine.cpp:687-699), so reading the device viewport here
-    // produces a viewport / projection mismatch and unprojects to
-    // the wrong NDC point. Use the active scene viewport when set;
-    // D3DXVec3Unproject subtracts viewport.X / viewport.Y
-    // internally so the input (x, y) stays in popup-client coords.
-    // Architecture A never activates the scene viewport so it
-    // continues to read the device viewport unchanged.
-    int sx, sy, sw, sh;
-    if (engine->GetSceneViewport(sx, sy, sw, sh))
-    {
-        viewport.X      = static_cast<DWORD>(sx);
-        viewport.Y      = static_cast<DWORD>(sy);
-        viewport.Width  = static_cast<DWORD>(sw);
-        viewport.Height = static_cast<DWORD>(sh);
-        viewport.MinZ   = 0.0f;
-        viewport.MaxZ   = 1.0f;
-    }
-    else
-    {
-        engine->GetViewPort(&viewport);
-    }
+**Run Phase B IF** the signature is ambiguous or affects buckets
+differently:
+- `git bisect start da58968 a1000c8`.
+- For each step: rebuild composition dist/ + run ONE failing surface
+  via `--grep`. ~13 commits = ~4 bisect steps.
+- Result: source-commit SHA + a one-line explanation.
 
-    D3DXVec3Unproject(&front, &D3DXVECTOR3(x, y, 0.0f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
-    D3DXVec3Unproject(&back,  &D3DXVECTOR3(x, y, 0.9f), &viewport, &engine->GetProjectionMatrix(), &engine->GetViewMatrix(), &world);
+### Phase C — Per-surface triage
 
-    D3DXPLANE plane(0,0,1,0);
-    D3DXPlaneIntersectLine(&position, &plane, &front, &back);
-}
-```
+For each of 29 (or actual-count) surfaces, record in a table within
+this todo.md:
 
-**Debug-only diagnostic.** A throttled `#ifndef NDEBUG` `printf` at
-the function tail (after `D3DXPlaneIntersectLine`) logging:
+| Surface | Lane | Category | Rationale (≤ 1 sentence) |
+|---|---|---|---|
 
-```
-[cursor-unproject] in=(%d,%d) mode=%s vp=(%lu,%lu,%lu,%lu) world=(%.2f,%.2f,%.2f)
-```
+Categories:
 
-`mode` = `"scene"` or `"full-rt"`. **Throttling.** Per-call printf
-in WM_MOUSEMOVE (60+ Hz) would flood the log. The existing
-`m_lastCursorEmitTick` in `HostWindow.cpp` throttles the
-`cursor/position-3d` bridge emit to ~30 Hz; we can either
-(a) mirror that gate at the call site (gate the printf in the caller,
-not inside `GetCursorPos3D`), or
-(b) keep `GetCursorPos3D` printf-free and add the diagnostic in the
-two `HostWindow.cpp` callers (WM_MOUSEMOVE and WM_KEYDOWN VK_SHIFT).
+- **(a) legit drift** — UI improved or changed deliberately
+  (e.g. a button got a clearer aria-label, a role was correctly
+  re-typed). Refresh golden.
+- **(b) suspicious regression** — UI lost a property it ought to
+  have, or got a property it ought NOT to have (e.g. lost
+  `IsKeyboardFocusable`, an aria-label disappeared, focus order
+  reordered semantically). File NEW HANDOFF item with surface ID +
+  diff; leave golden RED.
+- **(c) test-harness-induced** — drift is in normalization, fixture,
+  setup driver, or boot-state. Fix the *harness*, not the *golden*.
 
-Recommend (b) — the header is included by both `--legacy-ui` and
-`--new-ui` so keeping it printf-free avoids touching legacy logs.
-The new-UI caller already has the throttle state.
+### Phase D — Refresh + commit
 
-**Why not the alternative?** Two alternatives considered and
-rejected:
-
-- *Alt-1: cache the scene viewport in the cursor coords on emit.*
-  Mutate `(x, y)` to scene-relative before calling
-  `D3DXVec3Unproject` with a viewport of `(0, 0, sw, sh)`. Works
-  arithmetically but requires the caller to know the scene rect AND
-  duplicates the subtraction `D3DXVec3Unproject` already does
-  internally. Pure complexity tax with no benefit.
-- *Alt-2: change `Engine::GetViewPort` to return the scene viewport
-  when set.* Layer-violation — the accessor wraps the D3D9 device's
-  current viewport, which is genuinely the full-RT viewport
-  between frames. Other callers (none today, but plausibly future
-  callers e.g. picking helpers) might want the device viewport.
-  Better to keep `GetViewPort` honest and have unproject callers
-  explicitly opt into the scene viewport.
+1. **Scoped refresh.** Build list of category-(a) surface IDs;
+   construct `--grep '<id1>|<id2>|...'` regex. Run
+   `pnpm a11y:update --grep '...'` and
+   `pnpm a11y:update:legacy --grep '...'`. (Both lanes need the
+   refresh, since both have their own goldens.)
+2. **Eyeball the diffs.** `git diff -- 'web/apps/editor/tests/a11y-goldens/*'`.
+   Any surface outside the category-(a) list that shows changes is a
+   bug — investigate before proceeding.
+3. **Re-run both lanes** unfiltered. Expect: 0 failed (or `N` failed
+   where `N` matches the count of category-(b) surfaces filed
+   separately).
+4. **Commit.** Two-part: golden refresh + harness fixes (if any from
+   category (c)). Per `CLAUDE.md` "commit messages still use feat:/
+   fix:/docs:" convention:
+   ```
+   test(LT-4): [MT-12 follow-up] refresh a11y goldens for <N> surfaces
+   ```
+5. **CHANGELOG.md entry** per the format header rules: section title
+   plain prose, top of file in reverse-chrono, three bolded labels
+   (What ships / How we tackled it / Issues encountered and
+   resolutions), `---` delimiter.
+6. **HANDOFF.md item 16** updated with resolution + commit hash. If
+   category (b) surfaces were filed, add them as new HANDOFF items
+   numbered above 16.
 
 ---
 
 ## 4. Risks named up front + mitigations
 
-1. **Risk: regression in architecture A (legacy mode).** If the
-   `engine->GetSceneViewport()` call returns spurious `true` under
-   A, we'd build a `D3DVIEWPORT9` from uninitialised/stale state and
-   unproject to garbage.
-   **Mitigation.** [`src/engine.cpp:1644-1647`](src/engine.cpp:1644)
-   shows `GetSceneViewport` guards on `m_sceneViewportActive` and
-   returns `false` immediately when inactive. Architecture A never
-   calls `SetSceneViewport` (the call is wired through
-   `LayoutBroker::SetCompositor` which is composition-only — see
-   engine.h:223). So `m_sceneViewportActive` stays `false` and the
-   fallback branch runs.
-   **Verification step.** Test pass below explicitly runs the
-   spawn-at-cursor scenario under `ALO_HOSTING_MODE=legacy` and
-   confirms behaviour matches pre-fix legacy.
+1. **R1 — Blind golden refresh papers over a real bug.** HANDOFF
+   item 16 explicitly warns: *"don't bundle the refresh with feature
+   work"*. **Mitigation:** Phase C is non-negotiable; every category-
+   (a) classification has a written rationale; Phase D step 2's
+   `git diff` eyeball is the last guard. If I find myself thinking
+   *"just refresh all 29 and move on"*, stop. That's the failure mode.
 
-2. **Risk: scene viewport active but stale during the first
-   mouse move.** If a user moves the mouse over the viewport before
-   React has dispatched its first `layout/scene-rect` event, the
-   scene viewport is inactive → fallback to device viewport (which
-   is full-RT) → unproject is off, but no rendered scene to align
-   against yet, so the result is benign.
-   **Mitigation.** Accept the transient. The window of vulnerability
-   is sub-second (React mounts and dispatches scene-rect in its
-   first effect cycle — see ViewportSlot.tsx:65-117) and no spawn
-   gesture is plausible in that window because the user hasn't seen
-   the UI yet.
+2. **R2 — The 29-count is stale at `lt-4 @ 6b6e674`.** Four commits
+   landed since `da58968` (the FramePublisher guard, the cursor-
+   unproject fix, plus their docs). The FramePublisher guard COULD
+   affect captured surfaces (it changes per-frame JPEG emit under
+   composition — but only the viewport pill / status bar surfaces
+   could see it, and only if Playwright fires within a frame
+   window). **Mitigation:** Phase A step 8 is the verify gate; if
+   count shifts, re-scope before triage.
 
-3. **Risk: scene viewport coordinate space differs from the
-   coordinate space of the input `(x, y)`.** If they're in
-   different scales / DPRs, the unproject would be off by a DPR
-   factor.
-   **Mitigation.** Both are in **popup-client physical pixels**:
-   `ViewportSlot.tsx:81` dispatches `layout/scene-rect` with
-   `clientX * dpr` / `clientY * dpr`; `toPopupClientCoords` in
-   `viewport-input.ts:62-68` multiplies the mouse `clientX, clientY`
-   by the same DPR. Confirmed in code review of both call sites; no
-   transform needed.
+3. **R3 — The 29 surfaces in HWND lane may not be the same 29 in
+   composition lane.** HANDOFF asserts identical set; verify per
+   L-022. **Mitigation:** Phase A step 8 explicitly compares the
+   two lists. If they diverge, expect to run Phase C separately per
+   lane (cost ~2× the triage time, accepted).
 
-4. **Risk: `engine->GetSceneViewport` not safe to call from inside
-   `WM_MOUSEMOVE` / `WM_KEYDOWN`.** Threading or re-entrancy.
-   **Mitigation.** `Engine` is single-threaded UI-thread-owned and
-   `GetSceneViewport` just reads four `int` members under no lock
-   ([engine.cpp:1644-1652](src/engine.cpp:1644)). Same thread as
-   the WNDPROC, no hazard.
+4. **R4 — Bisect (Phase B) wastes effort if Phase A finds a clear
+   signature.** `git log -1` evidence strongly suggests the source
+   is `07ea8a7` alone; bisect is overkill for a single-suspect
+   range. **Mitigation:** Phase B is *conditional* — skip if Phase A
+   step 4/7 finds a single signature consistent with `07ea8a7`'s
+   changes.
 
-5. **Risk: per-pixel-FoV projection produces a different ray
-   direction at large scene-rect aspect changes (e.g. very narrow
-   centre quadrant).** This isn't a fix-introduced risk — it's
-   existing Stage 5 behaviour — but the *unproject must use the
-   same projection*, and we are.
-   **Mitigation.** No code change; the projection matrix is shared.
-   Just calling it out so a reader knows it was considered.
+5. **R5 — Composition (YAML) and HWND (JSON) capture pipelines
+   differ.** A single React-side change manifests differently in
+   each. **Mitigation:** triage is per (surface × lane) pair, not
+   per surface. Cost: ~2× inspection. Acceptable; that's the price
+   of dual-lane coverage.
 
-6. **Risk: the diagnostic printf logs flood `host.log` and slow
-   the message pump.** Per-WM_MOUSEMOVE is 60+ Hz.
-   **Mitigation.** Throttle in the caller, not the helper. Reuse
-   the existing `m_lastCursorEmitTick` window (~30 Hz) so the
-   diagnostic emits at the same cadence as the existing
-   `cursor/position-3d` bridge call — net cost is one printf per
-   bridge emit, negligible.
+6. **R6 — `emitter-mutations.spec.ts:84` is a known flake.** HANDOFF
+   notes intermittent failure independent of this work.
+   **Mitigation:** if Phase A's count is `29 + 1` and the +1 is that
+   spec, re-run once and treat second result as authoritative.
 
-7. **Risk: future callers of `GetCursorPos3D` outside the
-   composition flow get the new behaviour by accident.**
-   `src/main.cpp` (legacy UI) also calls
-   `GetCursorPos3D(info->engine, …)` at line 2942 and 2966.
-   **Mitigation.** Legacy never activates the scene viewport →
-   `GetSceneViewport` returns `false` → fallback runs → identical
-   behaviour to today. Already covered by Risk 1's mitigation. Test
-   pass includes a legacy spawn-at-cursor scenario.
+7. **R7 — `UPDATE_A11Y_GOLDENS=1` without `--grep` regenerates EVERY
+   captured golden in the run.** Including ones that didn't fail.
+   **Mitigation:** Phase D step 1 always passes `--grep '<exact ids>'`.
+   Never lane-wide.
+
+8. **R8 — `tests/a11y-failures/` is gitignored, so post-run cleanup
+   destroys diagnostic dumps.** **Mitigation:** if Phase B (bisect)
+   is invoked, capture each iteration's diff into a per-step memo
+   in todo.md BEFORE the next iteration's run clears the dump
+   directory.
+
+9. **R9 — `dist/` rebuild fatigue.** Phase A needs two distinct
+   dist/ builds (composition + legacy); Phase B (if invoked) needs
+   ~4 more (one per bisect step). Each `vite build` is ~30-60s but
+   cumulatively adds up. **Mitigation:** plan acknowledges the cost
+   upfront; not avoidable until carry-forward item 4 (test-harness
+   pre-flight rebuild gate) is implemented — separate dispatch.
+
+10. **R10 — Category (c) (test-harness-induced) fix scope creep.**
+    If a fixture or surface driver is the source, the "fix" could
+    grow into a refactor. **Mitigation:** any harness fix that
+    exceeds ~30 min or touches more than one file gets STOPPED and
+    re-scoped per CLAUDE.md "if something goes sideways: STOP and
+    re-plan". Default: refresh the golden in category (a) terms
+    UNLESS the harness fix is mechanically simple.
 
 ---
 
 ## 5. Testing & verification
 
-**Happy path.**
-- [ ] Cold launch `x64/Debug/ParticleEditor.exe --new-ui` (no env
-      vars). Load a `.alo` with a root emitter. Hold Shift + move
-      cursor around the viewport — cursor-bound preview tracks the
-      cursor pixel-for-pixel. Release Shift — preview dies.
-- [ ] Same scenario, hold Shift, click LMB — particle spawns
-      *exactly* at the click point. Drag with LMB held (OBJECT_Z
-      gesture) — Z changes but X/Y stay frozen at click. Release
-      LMB — system detaches and persists.
-- [ ] Repeat the test from each quadrant of the viewport (NW, NE,
-      SW, SE corners) to confirm the offset is gone at all
-      scene-rect-relative positions — not just at centre where some
-      bugs accidentally null out.
+### Pre-flight (Phase A)
 
-**Edge cases.**
-- [ ] Resize the main window so the scene rect changes aspect.
-      Re-spawn at cursor — still pixel-accurate.
-- [ ] Resize a panel (e.g. drag the right inspector wider) so the
-      scene rect shrinks. Re-spawn — pixel-accurate.
-- [ ] Maximise the window. Re-spawn — pixel-accurate. (This was
-      the FramePublisher perf scenario; cursor accuracy is
-      independent but worth confirming.)
-- [ ] Boot, then immediately Shift+click without moving the mouse
-      first (m_lastCursorX/Y == 0 path that falls back to
-      GetCursorPos + ScreenToClient — see HostWindow.cpp:2256-2267).
-      Particle should appear at the actual current cursor.
+- [ ] `git rev-parse HEAD` matches `origin/lt-4` (lineage clean).
+- [ ] MSBuild Debug x64 via `.\ParticleEditor.sln` — clean (L-023).
+- [ ] MSBuild Release x64 via `.\ParticleEditor.sln` — clean.
+- [ ] `pnpm --filter @particle-editor/editor build` (composition) — clean.
+- [ ] `pnpm test:native` runs to completion; record `N passed / M failed / K skipped`.
+- [ ] `M` equals expected 29 (R2 verification). If not 29, snapshot the actual into todo.md Phase A review section before continuing.
+- [ ] `VITE_HOSTING_MODE=legacy pnpm --filter @particle-editor/editor build` — clean.
+- [ ] `pnpm test:native:legacy` runs to completion; record counts.
+- [ ] Set of failing surface IDs in composition lane == set in HWND lane (R3 verification).
 
-**Architecture A regression.**
-- [ ] Rebuild dist/ in legacy mode:
-      `$env:VITE_HOSTING_MODE = "legacy"; pnpm --filter @particle-editor/editor build`.
-- [ ] Launch with `$env:ALO_HOSTING_MODE = "legacy"; .\x64\Debug\ParticleEditor.exe --new-ui`.
-- [ ] Spawn at cursor — accuracy matches pre-fix legacy (no
-      regression).
-- [ ] `--legacy-ui` (the original C++ shell, not the new UI in legacy
-      mode) — spawn at cursor still works (this uses
-      `GetCursorPos3D` from `src/main.cpp:2942, 2966`).
+### Phase A inspection (4 sample surfaces, both lanes each — 8 diff captures)
 
-**Status bar correctness.**
-- [ ] Hover the cursor over a known-geometry point (e.g. the
-      ground plane origin marker if visible, or a click + spawn at
-      origin and verify the world coords reported match the
-      spawned position). World coordinates should be the same as
-      the spawn world position to within float precision.
+- [ ] `menubar-closed` (chrome bucket): composition YAML diff captured + HWND JSON diff captured into todo.md.
+- [ ] `dialog-about` (dialogs bucket): both diffs captured.
+- [ ] `spinner-focused` (curve-spinner bucket): both diffs captured.
+- [ ] `kbd-tab-cycle-stop-1` (keyboard bucket): both diffs captured.
+- [ ] Single signature identified OR ambiguity confirmed → decide Phase B skip/run.
 
-**Debug instrumentation.**
-- [ ] `host.log` contains throttled `[cursor-unproject]` lines
-      with `mode=scene` under composition and `mode=full-rt` under
-      legacy.
-- [ ] No `[cursor-unproject]` lines in release builds (gated by
-      `#ifndef NDEBUG`).
+### Phase C (triage — every surface)
 
-**Test suites.**
-- [ ] `pnpm test:native` (composition default) — expected 157/0/31.
-      Cold-start flake from HANDOFF item 12 still applies; rerun
-      once if first run fails broadly.
-- [ ] `pnpm test:native:legacy` — expected 132/0/56.
-- [ ] Vitest (`pnpm --filter @particle-editor/editor test`) — no
-      coord-related units to change, should be green.
+- [ ] 29 (or actual count) surfaces classified per the (a)/(b)/(c) table in §3.
+- [ ] Each classification has a one-sentence rationale.
+- [ ] Category (b) count == count of NEW HANDOFF items filed.
 
-**Build verification.**
-- [ ] x64 Debug build clean.
-- [ ] x64 Release build clean (proves the `#ifndef NDEBUG` gate
-      compiles both sides).
+### Phase D (refresh)
+
+- [ ] `--grep` regex constructed with only category-(a) surface IDs (no wildcards, no over-broad patterns).
+- [ ] Composition lane refresh runs successfully.
+- [ ] Legacy lane refresh runs successfully.
+- [ ] `git diff -- 'web/apps/editor/tests/a11y-goldens/*'` shows ONLY category-(a) golden changes (no surprise updates).
+- [ ] `pnpm test:native` returns `(N - <count of cat-(a)>) passed / <count of cat-(b)> failed / K skipped` (or 0 failed if no category (b)).
+- [ ] `pnpm test:native:legacy` mirrors.
+- [ ] No new failures introduced in non-a11y specs.
+
+### Documentation
+
+- [ ] CHANGELOG.md: new entry at top, reverse-chrono position, format-conforming (italic date line, bolded section labels, `---` delimiter, `src/...` style path:line links if any code is cited).
+- [ ] HANDOFF.md item 16: strikethrough + ✅ RESOLVED at `<hash>` with one-paragraph resolution summary.
+- [ ] HANDOFF.md: any category (b) HANDOFF items added below 16, numbered 17+.
+- [ ] todo.md: review section appended at the end covering Phase A findings + Phase C triage table + Phase D refresh outcome.
+
+### Debug instrumentation
+
+- N/A by default. If Phase C surfaces a category (c) where harness
+  emits non-deterministic content, any new debug logging in the
+  harness fix gets prefixed `[a11y-fixture]` for greppability per
+  the repo convention.
 
 ---
 
-## 6. Implementation plan (ordered)
+## Pre-work check-in summary
 
-1. Patch `src/MouseCursor.h:54-67` per §3 sketch.
-2. Add `#ifndef NDEBUG` printf in `HostWindow.cpp` at the two
-   call sites (WM_MOUSEMOVE line 2154 and WM_KEYDOWN VK_SHIFT line
-   2270). Throttle the WM_MOUSEMOVE one through the existing
-   `m_lastCursorEmitTick` window.
-3. Build x64 Debug. Fix any compile errors.
-4. Run `pnpm test:native` (default composition).
-5. Run `pnpm test:native:legacy`.
-6. Run vitest.
-7. Update `tasks/HANDOFF.md` item 14 with ✅ RESOLVED + commit ref.
-8. Add CHANGELOG entry per project format (What ships / How we
-   tackled it / Issues encountered).
-9. Append review section to this todo.md.
-10. Commit (`fix:` for code, `docs:` for HANDOFF + CHANGELOG +
-    todo refresh — two commits, code-first).
-11. FF to `lt-4` per CLAUDE.md branch workflow.
-12. Push `origin/lt-4`.
-
----
-
-## 7. Open questions
-
-1. **Diagnostic placement: helper or caller?** §3 recommends caller
-   (`HostWindow.cpp`). Confirm with user — alternative is a
-   helper-local printf that legacy also incurs.
-   **Decided.** Caller (per user's "go with your recs"). Diagnostic
-   landed at three sites in `HostWindow.cpp` (WM_MOUSEMOVE throttled,
-   WM_KEYDOWN VK_SHIFT, WM_LBUTTONDOWN Shift-fallback). Helper stays
-   printf-free; legacy build is unaffected.
-2. **Do we also want a deeper one-time log on first scene-viewport
-   activation showing the rect?** Cheap to add. Could help future
-   diagnostics. Default: skip, keep the patch minimal.
-   **Decided.** Skip.
+- **Plan size:** ★★★ (3/5). Phases A and B are mostly inspection; the
+  load-bearing step is Phase C's triage discipline.
+- **Single likeliest source:** `07ea8a7` (MT-12 default flip +
+  ViewportSlot helper collapse + boot-mode log on App mount). Bisect
+  may be unnecessary.
+- **Failure mode to avoid:** blind regeneration of all 29 goldens.
+  Phase C is the firewall.
+- **Items NOT being touched:** architecture-A deletion (item 11),
+  the 6 deferred a11y surfaces (item 1), Narrator-speech recording
+  (item 9), the test-harness rebuild gate (item 4).
+- **Open questions for the user before coding:**
+  1. If a small number of surfaces (~1-3) classify as category (b)
+     during triage, do you want me to (i) file each as its own
+     HANDOFF item and ship the (a) refresh anyway, or (ii) hold the
+     dispatch and fix (b) inline first?
+  2. If Phase A reveals the failure count has shifted significantly
+     from 29 (say, > 35 or < 20), should I STOP and re-plan, or
+     proceed with the actual-count triage?
+  3. Anything specific you want me to grep for in the diffs? (e.g.
+     particular components you suspect MT-12 destabilized.)
 
 ---
 
-## 8. Review
+## Review (post-dispatch, 2026-05-27)
 
-**What landed.** [`src/MouseCursor.h`](../src/MouseCursor.h):
-`GetCursorPos3D` now reads the active scene viewport via
-`Engine::GetSceneViewport` when set and falls back to
-`engine->GetViewPort` (the device's current viewport) when not. The
-explanatory comment block names the root cause (Render restores the
-device viewport to full-RT before returning, but `m_projection` is
-built at scene-rect aspect) and the architectural reason the
-fallback preserves legacy (architecture A never activates the scene
-viewport).
+### What actually happened vs the plan
 
-[`src/host/HostWindow.cpp`](../src/host/HostWindow.cpp): three
-`#ifndef NDEBUG` `[cursor-unproject]` diagnostic blocks at the
-spawn-related sites — WM_MOUSEMOVE throttled emit at line 2165,
-WM_KEYDOWN VK_SHIFT at line 2287 (`SPAWN` variant), WM_LBUTTONDOWN
-SHIFT-fallback at line 2059 (`SHIFT+LMB` variant). Same grep prefix
-across all three so a future regression can be filtered with a
-single `Select-String "[cursor-unproject]"`. The WM_MOUSEMOVE block
-piggybacks on the existing `m_lastCursorEmitTick` ~30 Hz gate; the
-other two are per-gesture, so untrottled.
+**Plan size collapsed from ★★★ to ★★** mid-Phase A when the first
+diff inspection revealed the failures weren't drift at all — they
+were two unrelated test-infrastructure issues that had been latent
+since the goldens were first committed. STOP-and-re-plan'd with the
+user after presenting findings; the user picked the three fixes
+(BUILD_DATE pin / broader .gitattributes / bundle --grep fix) and I
+implemented them in ~30 min of mechanical work.
 
-**Verification.**
-- x64 Debug build clean. One pre-existing LNK4098 LIBCMTD warning,
-  unchanged from `da58968`.
-- x64 Release build clean — proves `#ifndef NDEBUG` gate compiles
-  both sides.
-- `pnpm test:native` (composition): `128 / 29 / 31`. Stash + rebuild
-  + run on clean `lt-4 @ da58968` produces identical `128 / 29 / 31`,
-  confirming the 29 a11y golden drift is pre-existing, not caused
-  by this fix.
-- `pnpm test:native:legacy`: `103 / 29 / 56`. Same drift in this
-  lane; not caused by this fix.
-- Spawn-at-cursor pixel accuracy: not directly verifiable from the
-  CLI (GUI binary, no Playwright probe for world-position). Left
-  for user-driven manual smoke per CLAUDE.md §"Pre-handoff testing"
-  rule on rendering correctness — the static walk through
-  `GetCursorPos3D` ↔ `D3DXVec3Unproject` math is in §3 of this
-  plan and matches the user-reported symptom direction (cursor
-  center-lower → particle center-upper) at the rough sizes
-  prevailing in the screenshot.
+**Phases B (bisect) and C (per-surface triage) were rendered moot**
+by Phase A. The plan's discipline still earned its keep: Phase A's
+"capture one representative diff per bucket" step is what surfaced
+the autocrlf signature in ~5 minutes. Without that structured
+inspection, the temptation would have been to skip straight to
+`pnpm a11y:update` (which would have papered over both the LF/CRLF
+fix AND the build-date bug, AND would have regenerated all 29
+goldens due to the silent --grep drop). The plan's R1 ("blind
+refresh papers over a real bug") and R7 ("--grep silently dropped")
+mitigations directly prevented both failure modes.
 
-**Out-of-scope items surfaced during the work.**
-- *29 a11y golden drift, both lanes.* Filed as HANDOFF item 16
-  with reproduction and bisect range (`a1000c8` golden commit →
-  `da58968` current tip). Treat as own dispatch.
-- *Architecture-A deletion (HANDOFF item 11).* Per the original
-  framing, this fix unblocks that deletion. No further regressions
-  known under default mode after this dispatch.
+### What shipped
 
-**Architectural decision worth remembering.** Two callers (status
-bar emit and shift-spawn) using the same helper does NOT imply they
-must produce different results when one is wrong — both feed
-through `GetCursorPos3D`, both were wrong by the same scene-rect
-offset, and only one consumer's output was eyeball-verifiable. The
-"status bar correct, spawn wrong" framing was a diagnostic
-misdirection. Lesson captured here (not lifted to
-`tasks/lessons.md` because it's specific to this bug; if a similar
-"two consumers diverge" framing shows up again, this entry plus the
-CHANGELOG entry are the searchable record).
+1. **`.gitattributes`** (new file at repo root) — `text eol=lf`
+   for `tests/a11y-goldens/*.golden.json` + `*.golden.yaml`, plus
+   forward-looking patterns (`*.snap`, `*.golden.txt`). Working-tree
+   re-smudged via `rm + git checkout HEAD --`; `git ls-files --eol`
+   confirms `w/lf`.
+2. **`web/apps/editor/vite.config.ts`** — `BUILD_DATE` pinned to
+   `git show -s --format=%cs HEAD` with fallback to `new Date()`
+   if git is unavailable. About dialog now stable across rebuilds
+   of the same commit. Verified the built bundle contains exactly
+   one occurrence of `2026-05-26` (the HEAD commit date).
+3. **`web/apps/editor/scripts/run-native-tests.mjs`** — forwards
+   `process.argv.slice(2)` extras (minus `--update` / `--legacy`)
+   to the Playwright spawn. R7 of plan eliminated.
+4. **`tasks/lessons.md`** — three new entries: L-025 (MSBuild
+   via PowerShell, not Bash), L-026 (autocrlf + byte-exact
+   snapshots), L-027 (run-native-tests.mjs --grep forwarding).
+5. **`tasks/HANDOFF.md` item 16** — strikethrough + ✅ RESOLVED
+   with full diagnosis paragraph + fix list. Hash backfill pending
+   commit.
+6. **`CHANGELOG.md`** — new entry at top of changelog section per
+   format conventions (reverse-chrono, italic date line, bolded
+   section labels, `---` delimiter). Hash backfill pending commit.
+
+### Verification gate result
+
+| Lane | Before | After |
+|---|---|---|
+| Composition (default) | `128 passed / 29 failed / 31 skipped` | **`157 / 0 / 31`** ✅ |
+| HWND / legacy | `103 passed / 29 failed / 56 skipped` | **`132 / 0 / 56`** ✅ |
+| MSBuild Debug x64 (.sln) | clean | clean |
+| MSBuild Release x64 (.sln) | clean | clean |
+| Composition `dist/` build | clean | clean (BUILD_DATE = `2026-05-26`) |
+| Legacy `dist/` build | clean | clean (BUILD_DATE = `2026-05-26`) |
+
+Both lanes back to the pre-drift baselines documented in
+[MT-12]'s ship — `157/0/31` and `132/0/56`.
+
+### Decisions that didn't make it into the original plan
+
+- **Task 11 (refresh dialog-about goldens)** was deleted as
+  unnecessary once the BUILD_DATE pin's value was computed: HEAD's
+  commit date is `2026-05-26`, which is what the existing goldens
+  already record. The new snapshot output is byte-identical to the
+  committed golden, so no refresh needed.
+- **Phase B (bisect)** was skipped — Phase A's diff inspection
+  conclusively named the cause.
+
+### What's still open / out of scope
+
+- **HANDOFF item 11 (architecture-A deletion)** — still gated on
+  user-side daily-use confidence in architecture C. User confirmed
+  they're "not really" using composition mode daily yet at dispatch
+  start. Not unblocked by this dispatch.
+- **Carry-forward item 4 (test-harness pre-flight rebuild gate)**
+  — not addressed. This dispatch's --grep forwarding is adjacent
+  but doesn't auto-rebuild dist/ on mode change. Still worth a
+  separate small dispatch.
+- **Item 9 (Narrator-speech recording)** — user-driven, untouched.
+- **Item 1 (6 deferred a11y surfaces)** — untouched.
+
+### Lessons captured
+
+Three new entries in `tasks/lessons.md` (L-025 / L-026 / L-027).
+The full text lives at the bottom of that file; one-line summaries:
+
+- **L-025:** MSBuild on Windows must be invoked via PowerShell.
+  Bash mangles `/`-prefixed switches via MSYS path translation;
+  MSBuild then prints `MSB1008` but the response-file fallback
+  gives exit code 0, so the build silently no-ops.
+- **L-026:** Byte-exact snapshot files need `text eol=lf` in
+  `.gitattributes`. Without it, `core.autocrlf=true` smudges
+  every committed LF file to CRLF on Windows checkout and every
+  snapshot test false-fails.
+- **L-027:** Test wrappers that hard-code their downstream tool's
+  arg list MUST forward unknown args. `pnpm a11y:update --grep
+  "..."` was a silent no-op for many sessions because the wrapper
+  never plumbed `--grep` through to Playwright.
+
+### Total elapsed
+
+- Plan + survey: ~30 min
+- Builds + initial test runs: ~20 min (mostly waiting on
+  vitest/Playwright/MSBuild)
+- Root-cause diagnosis + re-plan check-in: ~15 min
+- Fixes + verification: ~30 min
+- Docs (lessons + HANDOFF + CHANGELOG + this review): ~30 min
+
+Total: ~2h elapsed wall clock. Plan estimated "half-day to a day"
+for the original ★★★ shape; the discovered ★★ shape came in at
+the low end of that range thanks to the early STOP-and-re-plan.

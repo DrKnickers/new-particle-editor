@@ -16,6 +16,96 @@ Conventions:
 
 ## Changelog
 
+### [MT-12 follow-up] Restore a11y golden lanes to 0 failed (autocrlf + BUILD_DATE pinning + --grep forwarding)
+
+*2026-05-27 · [`610d5dd`](https://github.com/DrKnickers/new-particle-editor/commit/610d5dd) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Both Playwright a11y golden lanes — composition (default) and HWND
+(`--legacy`) — return to **0 failed** at the pre-drift baselines:
+`157 / 0 / 31` for composition and `132 / 0 / 56` for legacy. The
+29 mismatches per lane that HANDOFF item 16 flagged on `lt-4 @
+da58968` were never a React regression; they were two latent
+test-infrastructure issues that hadn't bitten anyone yet because
+no one had re-run the lanes on a fresh Windows checkout since the
+goldens were captured. Future contributors get a deterministic gate
+again, and the `pnpm a11y:update --grep "<id>"` foot-gun that R7
+of the dispatch plan warned about is now mechanically prevented.
+
+Closes [`tasks/HANDOFF.md`](tasks/HANDOFF.md) item 16. No
+runtime-visible behaviour change for end users *except* one — the
+About dialog's "Build date" field now reflects the commit date
+(stable across rebuilds of the same commit) rather than the day
+somebody happened to run `pnpm build`. Goldens captured on
+2026-05-26 still pass today because HEAD's commit date is also
+2026-05-26; no golden refresh shipped in this dispatch.
+
+**How we tackled it.** Three small changes, one new `.gitattributes`
+file:
+
+1. **`.gitattributes`** at repo root with `text eol=lf` rules for
+   `web/apps/editor/tests/a11y-goldens/*.golden.json` /
+   `*.golden.yaml` plus forward-looking patterns
+   (`*.golden.{json,yaml,txt}`, `*.snap`). Forces LF on checkout
+   regardless of `core.autocrlf` setting. After adding the file,
+   the existing CRLF-smudged working-tree goldens were re-checked-
+   out via `rm + git checkout HEAD --` (the `git add --renormalize`
+   path didn't force a re-smudge because git saw the content as
+   unchanged). Verified via `git ls-files --eol` showing `i/lf
+   w/lf attr/text eol=lf`.
+2. **[`web/apps/editor/vite.config.ts`](web/apps/editor/vite.config.ts)
+   pins `BUILD_DATE` to `git show -s --format=%cs HEAD`** instead
+   of `new Date().toISOString().slice(0, 10)`. Resolves the
+   dialog-about surface in both lanes — and, more importantly,
+   stops the About dialog from drifting day-to-day for users who
+   rebuild their copies. The fallback path (catches non-git
+   build environments like a release tarball) keeps the dialog
+   rendering with today's date if the git invocation fails.
+3. **[`web/apps/editor/scripts/run-native-tests.mjs`](web/apps/editor/scripts/run-native-tests.mjs)
+   forwards unknown CLI args** to the Playwright spawn. Was
+   silently dropping `--grep` and similar — the `toMatchJSONGolden`
+   mismatch hint *"run `pnpm a11y:update --grep \"<surface>\"`"*
+   used to regenerate ALL goldens because the harness never
+   plumbed the arg through. Filter explicitly recognises only
+   `--update` and `--legacy`; anything else goes to Playwright.
+
+**Issues encountered and resolutions.** Three worth recording.
+
+1. *MSBuild via Bash on Windows silently no-op'd.* First Phase A
+   build invocation went through the Bash tool with
+   `/p:Configuration=Debug /p:Platform=x64 /nologo /m`. MSYS
+   path-translation mangled the `/`-prefixed switches (`/nologo`
+   became `C:/Program Files/Git/nologo`, `/m` became `M:/`),
+   MSBuild printed `MSB1008: Only one project can be specified`,
+   but the response file fallback gave exit code 0. The build
+   "succeeded" without producing
+   [`x64\Debug\ParticleEditor.exe`](src/host/HostWindow.cpp). The
+   downstream Playwright test run blew up with
+   `spawn ParticleEditor.exe ENOENT`. Fix for this dispatch:
+   re-invoke via PowerShell (handles `/switch` args natively).
+   Captured as [L-025](tasks/lessons.md#l-025) — the rule is
+   "MSBuild on Windows requires PowerShell, full stop." Pairs
+   with the existing [L-023](tasks/lessons.md#l-023) (".sln, not
+   .vcxproj") for the complete invocation contract.
+2. *The original plan over-scoped the dispatch by 3-4×.* Plan was
+   ★★★ "13-commit bisect + 29-surface per-lane triage" anticipating
+   a hidden React regression somewhere in MT-12. Phase A's first
+   diff inspection found EMPTY `git diff` output on every failing
+   surface (only the LF-replace warning), which surfaced the
+   autocrlf root cause in ~5 minutes. The ★★★ plan structure
+   wasn't wasted — Phase A's discipline forced the EOL check that
+   surfaced the cause — but Phases B (bisect) and most of C
+   (per-surface triage) were rendered moot. STOP-and-re-plan per
+   CLAUDE.md when the assumptions shift; this dispatch did the
+   re-plan check-in mid-Phase-A.
+3. *`pnpm a11y:update --grep "menubar-closed"` regenerated 29
+   goldens, not 1.* The wrapper script wasn't forwarding
+   unrecognised args — the foot-gun was R7 in the dispatch plan
+   and the actual mechanism is documented in
+   [L-027](tasks/lessons.md#l-027). Fixed in this same dispatch
+   so the next session doesn't trip on it.
+
+---
+
 ### [MT-12 follow-up] Fix cursor → spawn world-position offset under default architecture C
 
 *2026-05-26 · [`40b53c3`](https://github.com/DrKnickers/new-particle-editor/commit/40b53c3) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

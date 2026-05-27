@@ -1980,3 +1980,232 @@ on verifying claims (the original "1 failed (emitter-mutations
 pre-existing flake)" handoff claim was wrong — the failure was
 caused by the first T9.3 dispatch's own cross-spec contamination,
 not pre-existing flake).
+
+## L-025 — Invoke MSBuild (and any Windows-native CLI with `/switch` args) via PowerShell, not Git Bash
+
+**Rule.** When invoking MSBuild — or any native Windows CLI whose
+arguments use forward-slash switches (`/p:`, `/nologo`, `/m`,
+`/verbosity:minimal`) — use **PowerShell**, not Git Bash / MSYS. Bash
+on Windows performs **MSYS path translation** on any argument that
+starts with `/`, converting it to a Windows path. So `/nologo`
+becomes `C:/Program Files/Git/nologo`, `/p:Configuration=Debug`
+becomes `p:Configuration=Debug` (leading slash stripped), and
+`/m` becomes `M:/`. MSBuild then bails with `MSB1008: Only one
+project can be specified`. The kicker: the MSBuild response file
+catches the malformed invocation and **MSBuild exits with code 0
+anyway**, so the build looks like it succeeded but produced no
+output. You don't notice until something downstream tries to
+launch the binary and hits `ENOENT`.
+
+**Anti-pattern: trusting MSBuild's exit code on Git Bash.** A 0-exit
+MSBuild that printed only its version banner and an MSB1008 message
+is a failed invocation pretending to be a successful one. The
+response-file fallback is silent on stdout — the only signal is the
+absence of "ProjectName.vcxproj -> .../ParticleEditor.exe" lines
+near the end. ALWAYS check the binary exists at the expected output
+path after a build; never assume "exit 0" means "build succeeded"
+on Windows.
+
+**Trigger.** Symptoms that indicate this lesson:
+
+- MSBuild invocation reports `exit code 0` from a Bash tool, but the
+  output is suspiciously short (~5-10 lines, mostly an MSB1008 error
+  + the response file content).
+- A subsequent test runner / Playwright spec fails with
+  `ENOENT spawn ParticleEditor.exe`.
+- Build outputs that should exist (`x64\Debug\ParticleEditor.exe`)
+  are missing from the worktree even though the build "succeeded."
+- MSBuild output contains the line
+  `'' came from 'C:\Program Files\Microsoft Visual Studio\<v>\Community\MSBuild\Current\Bin\MSBuild.rsp'`
+  — that's the response-file fallback masking the failure.
+
+**How to apply.**
+
+1. **For MSBuild + any `/switch`-style native CLI on Windows, use the
+   PowerShell tool, not Bash.** PowerShell parses `/p:...` as
+   intended without path translation.
+2. **For pnpm + node-script invocations (no `/switch` args), Bash is
+   fine.** The footgun is specific to forward-slash argument parsing.
+3. **After any build, verify the binary exists at the expected path
+   before treating the build as successful.** `ls x64/Debug/ParticleEditor.exe`
+   is the one-line floor.
+4. **If you MUST invoke MSBuild from Bash (e.g. a CI job script),
+   double the slashes (`//p:Configuration=Debug`) or use Bash's MSYS
+   no-path-conversion escape sequence (`MSYS_NO_PATHCONV=1 msbuild ...`).
+   Treat these as workarounds, not preferred form.
+
+**Source incident (2026-05-27, HANDOFF item 16 dispatch).** First
+Phase A build invocation of this dispatch used the Bash tool against
+MSBuild with `/p:Configuration=Debug /p:Platform=x64 /nologo /m` —
+exit code 0 within seconds, output looked plausible. Composition
+lane test run then failed with
+`spawn C:\Modding\...\x64\Debug\ParticleEditor.exe ENOENT`. Re-read
+of the MSBuild output revealed `MSB1008: Only one project can be
+specified` with the path-converted arguments listed in the full
+command line. Rebuild via PowerShell with identical switches
+succeeded properly. Lesson 30 minutes of confusion to discover;
+this entry exists to make it instant next time.
+
+**Cross-reference.**
+[L-023](#l-023--invoke-msbuild-against-the-sln-not-the-vcxproj-directly-when-the-project-uses-solutiondir-macros-in-include--library-paths)
+covers the `.sln`-vs-`.vcxproj` invocation rule; L-025 adds the
+shell-host rule. Together: invoke MSBuild via PowerShell against
+the `.sln`, not the `.vcxproj`. Project root `ParticleEditor.sln`
+is the entry point; PowerShell is the shell.
+
+## L-026 — Byte-exact snapshot / golden files need an explicit `text eol=lf` rule in `.gitattributes`, or `core.autocrlf=true` silently breaks every comparison on Windows
+
+**Rule.** When a test matcher does byte-exact string comparison
+against a committed snapshot/golden file
+(`expected === serialized` against the file's raw contents — see
+[`web/apps/editor/tests/helpers/toMatchJSONGolden.ts`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts)),
+the snapshot file **must** have an explicit `text eol=lf` rule in
+`.gitattributes`. Without the rule, Git's default behaviour on
+Windows installations (`core.autocrlf=true`) smudges the
+committed-LF file to CRLF on checkout, and every snapshot test
+false-fails — the working-tree bytes (`\r\n` line endings) don't
+match what the snapshot output produces (always `\n`). The mass
+mode is alarming: every snapshot test in the suite fails on the
+first Windows checkout, with no obvious code-change connection.
+
+**Anti-pattern: trying to bisect a "regression" that's actually
+autocrlf.** Symptoms of autocrlf smudging look like a wide-spread
+"drift" — N snapshots all fail with no apparent code change. The
+bisect range can be huge (the autocrlf hit is latent from the
+moment the goldens were committed on a non-Windows host or with
+`core.autocrlf=false`), and the bisect produces no smoking gun. Run
+`git ls-files --eol <path>` BEFORE bisecting any mass snapshot
+failure on Windows — if you see `i/lf w/crlf attr/`, the cause is
+autocrlf, not a code regression.
+
+**Trigger.** Symptoms that indicate this lesson:
+
+- Every (or near-every) byte-exact snapshot test in the suite fails
+  on a clean Windows checkout.
+- `git diff HEAD -- <golden>` returns no content but `git status`
+  shows the file as modified (with a `warning: in the working copy
+  of '<path>', LF will be replaced by CRLF the next time Git touches
+  it` warning).
+- The matcher's diff hint says "Hint: run `pnpm a11y:update --grep
+  ...`" but you suspect every single golden has drifted — too
+  uniform to be a real regression.
+- `git ls-files --eol <path>` shows `i/lf w/crlf` for the failing
+  files.
+
+**How to apply.**
+
+1. **Add an explicit `text eol=lf` rule** in `.gitattributes` for
+   every byte-exact snapshot file path / pattern in the repo. Use
+   forward-looking patterns (`*.golden.json`, `*.snap`,
+   `__snapshots__/**`) plus explicit current paths.
+2. **Renormalize the working tree after adding the rule.** `git add
+   --renormalize <path>` updates the index; if the working tree
+   files were checked out before the rule existed they may still be
+   CRLF. Force re-smudge by `rm <files>; git checkout HEAD -- <path>`
+   — `git checkout` alone may no-op because git sees the files as
+   "content-identical" (it normalizes EOLs when comparing).
+3. **Verify with `git ls-files --eol`.** After the renormalize +
+   re-checkout, `i/lf w/lf attr/text eol=lf` is the expected state.
+   `w/crlf` means the smudge didn't re-apply; re-do step 2.
+4. **NEVER tell a snapshot matcher to normalize line endings on
+   read.** It's tempting (`expected.replace(/\r\n/g, '\n')` in the
+   matcher) but it papers over the underlying issue and weakens
+   byte-exactness for unrelated cases. Fix the repo policy via
+   `.gitattributes`; let the matcher stay strict.
+
+**Source incident (2026-05-27, HANDOFF item 16).** The dispatch was
+scoped as a ★★★ multi-phase "a11y golden drift triage" anticipating
+~13-commit bisect + per-surface React-DOM diff inspection. Phase A's
+first diff inspection found EMPTY `git diff` output for every
+failing surface, with the autocrlf warning attached. `git ls-files
+--eol` confirmed `i/lf w/crlf` on every committed golden. The actual
+fix turned out to be 8 lines of `.gitattributes` + a renormalize.
+28 of 29 false failures vanished immediately; the remaining surface
+(`dialog-about`) had a separate genuine date-pinning issue resolved
+under the same dispatch. The original plan's bisect-and-triage
+machinery wasn't wasted — Phase A's discipline forced the EOL check
+that surfaced the actual cause — but Phase B / Phase C as written
+were rendered moot.
+
+**Cross-reference.**
+[L-024](#l-024--uia-golden-non-determinism-webview2-topology-drift--live-react-subscriptions-solve-at-the-source-not-at-the-normalizer)
+is the sibling for *content* non-determinism in goldens (live React
+subscriptions); L-026 covers *byte-level* drift from EOL smudging.
+Together: snapshot goldens need source-side determinism (L-024) AND
+byte-stable encoding (L-026) to be reliable. See `.gitattributes`
+at repo root for the current rule list.
+
+## L-027 — `run-native-tests.mjs` silently drops unrecognised CLI args; explicitly forward them so `--grep` and similar Playwright filters work
+
+**Rule.** The native-test harness
+([`web/apps/editor/scripts/run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs))
+spawns Playwright with a **hard-coded** list of spec files. Until
+HANDOFF item 16, any extra CLI args passed to the wrapper (e.g.
+`pnpm a11y:update --grep "menubar-closed"`) were silently dropped —
+they never reached Playwright. The wrapper recognises `--update`
+and `--legacy` (consumed at the top of `main()`) but discarded
+everything else. Result: scoped golden regeneration was impossible
+through `pnpm a11y:update`; every "scoped" invocation regenerated
+ALL goldens, which is exactly the foot-gun the matcher's `--grep`
+hint warns users to avoid.
+
+**Anti-pattern: trusting the `--grep` hint without verifying the
+harness forwards it.** The `toMatchJSONGolden` mismatch message
+says *"Hint: if intended, run `pnpm a11y:update --grep
+\"<surface>\"`"*. That hint is structurally honest for direct
+Playwright invocation but misleading through the wrapper. A user
+following the hint blindly will regenerate every golden in the
+captured run — and may commit dozens of "incidentally refreshed"
+files without realising the `--grep` was a no-op. The user is in a
+worse position than if no hint existed at all.
+
+**Trigger.** Symptoms that indicate this lesson:
+
+- `pnpm a11y:update --grep "<id>"` reports a high number of
+  passing tests (>>1) in update mode — `UPDATE_A11Y_GOLDENS=1`
+  makes the matcher always-pass, so the count of "passed" tests
+  is the count of regenerated goldens. If `--grep` had filtered
+  to one surface, the count should be ≤ surfaces-in-grep.
+- `git status` after a "scoped" refresh shows changes to multiple
+  goldens you didn't expect.
+- Any wrapper script that spawns a downstream tool with `process.argv`
+  filtering but doesn't pass-through unrecognised args.
+
+**How to apply.**
+
+1. **Wrapper scripts that spawn a downstream test runner MUST
+   forward unrecognised args.** Pattern:
+   ```js
+   const RECOGNISED_FLAGS = new Set(["--update", "--legacy"]);
+   const forwardedArgs = process.argv.slice(2)
+     .filter((a) => !RECOGNISED_FLAGS.has(a));
+   // ... later, in the Playwright spawn:
+   const pw = spawn(node, [playwrightCli, "test", ...specFiles, ...forwardedArgs], ...);
+   ```
+2. **If your wrapper has flags that take values (e.g. `--workers=4`),
+   handle them in the filter, not just the boolean form.**
+3. **Test the forwarding** by adding a `console.log("[wrapper]
+   forwarding args:", forwardedArgs)` line during development and
+   confirming Playwright sees them. Easy to forget to verify the
+   plumbing actually works once `--update` flowed through cleanly.
+4. **Document the recognised flags in the wrapper's top-of-file
+   comment** so future maintainers know which flags are special-cased
+   vs forwarded.
+
+**Source incident (2026-05-27, HANDOFF item 16 dispatch).** During
+Phase A's diff inspection I ran `pnpm a11y:update --grep
+"menubar-closed"` expecting one surface's golden to refresh — got
+all 29 composition YAMLs regenerated instead. Five minutes of
+"why" then a re-read of
+[`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+revealed the hardcoded arg list. Fix: 5 LOC to filter + forward
+`process.argv.slice(2)` past `--update`/`--legacy`. Bundled into
+the same commit as the autocrlf fix because both were items
+identified during the same dispatch.
+
+**Cross-reference.**
+[L-022](#l-022--handoff-notes-and-next-session-prompts-carry-claims-not-facts--verify-against-current-code-before-any-claim-enters-a-dispatchs-plan)
+on verifying tooling claims before relying on them — the hint in
+`toMatchJSONGolden`'s mismatch message was a tooling claim that
+silently no-op'd. L-027 is the operational fix; L-022 is the
+disposition that makes you check.
