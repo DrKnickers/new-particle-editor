@@ -52,6 +52,17 @@ async function main() {
     console.log("[run-native-tests] --update flag → UPDATE_A11Y_GOLDENS=1");
   }
 
+  // [HANDOFF item 16 follow-up] Forward unknown CLI args through to
+  // Playwright so scoped runs like `pnpm a11y:update --grep "dialog-about"`
+  // actually filter the suite. Previously these args were silently
+  // dropped (the Playwright spawn below had a hard-coded arg list),
+  // which made every "scoped" refresh regenerate ALL goldens —
+  // the exact footgun HANDOFF item 16 R7 warned about. Recognised
+  // flags (--update, --legacy) are consumed above; anything else
+  // gets forwarded as-is.
+  const RECOGNISED_FLAGS = new Set(["--update", "--legacy"]);
+  const forwardedArgs = process.argv.slice(2).filter((a) => !RECOGNISED_FLAGS.has(a));
+
   // [MT-12] `--legacy` flag: run the host + Playwright tests in
   // architecture A (legacy AlphaCompositor popup + HWND-hosted
   // WebView2) instead of the new default (architecture C / composition).
@@ -228,6 +239,10 @@ async function main() {
       // composition users with no screen-reader access to React).
       // Auto-skips under default HWND mode.
       "tests/a11y-uia-composition-reachable.spec.ts",
+      // [HANDOFF item 16 follow-up] Forward unknown args (e.g. --grep
+      // "dialog-about") so scoped a11y refresh actually scopes. See
+      // RECOGNISED_FLAGS above.
+      ...forwardedArgs,
     ], {
       cwd: editorDir,
       stdio: "inherit",
