@@ -60,6 +60,7 @@
 #include "../ModManager.h"
 #include "../MouseCursor.h"
 #include "../ParticleSystem.h"
+#include "../ParticleSystemIO.h"
 #include "../ParticleSystemInstance.h"
 #include "../SpawnerDriver.h"
 #include "../UndoStack.h"
@@ -487,6 +488,12 @@ struct HostWindowImpl
 
     bool        useDevUi   = false;  // --dev-ui: navigate to Vite HMR server
     bool        useTestHost = false; // --test-host: CDP :9222 + DevTools
+    // [LT-4 rendering-fidelity] --capture mode: load m_captureAlo,
+    // render m_captureFrames frames, write engine RT to m_capturePng,
+    // then quit. Both paths empty = normal interactive run.
+    std::wstring m_captureAlo;
+    std::wstring m_capturePng;
+    int          m_captureFrames = 60;
     FILE*       logFile = nullptr;
     std::mutex  logMutex;
 
@@ -496,13 +503,19 @@ struct HostWindowImpl
                    IFileManager&    fil,
                    const std::vector<std::wstring>& gameRoots_,
                    bool devUi    = false,
-                   bool testHost = false)
+                   bool testHost = false,
+                   const std::wstring& captureAlo = L"",
+                   const std::wstring& capturePng = L"",
+                   int captureFrames = 60)
         : hInstance(inst)
         , textureManager(tex)
         , shaderManager(shd)
         , fileManager(fil)
         , useDevUi(devUi)
         , useTestHost(testHost)
+        , m_captureAlo(captureAlo)
+        , m_capturePng(capturePng)
+        , m_captureFrames(captureFrames)
         , layout(nullptr)
         , accelerator()
         , modManager(std::make_unique<ModManager>(&fil, gameRoots_))
@@ -2414,6 +2427,61 @@ LRESULT CALLBACK HostViewportWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
+// [LT-4 rendering-fidelity] Composite-output capture for --capture. The
+// engine-RT capture (AlphaCompositor::CaptureSnapshotToFile) shows the
+// engine's pre-composite pixels; this captures the FINAL DWM/Direct-
+// Composition-composited window — what the user actually sees — so the
+// composition-only darkening class (d9b690f) is testable offline.
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
+
+static bool GetPngClsidHW(CLSID& out)
+{
+    UINT num = 0, bytes = 0;
+    if (Gdiplus::GetImageEncodersSize(&num, &bytes) != Gdiplus::Ok || bytes == 0) return false;
+    std::vector<BYTE> buf(bytes);
+    auto* info = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buf.data());
+    if (Gdiplus::GetImageEncoders(num, bytes, info) != Gdiplus::Ok) return false;
+    for (UINT i = 0; i < num; ++i)
+        if (wcscmp(info[i].MimeType, L"image/png") == 0) { out = info[i].Clsid; return true; }
+    return false;
+}
+
+// PrintWindow with PW_RENDERFULLCONTENT (Win8.1+) is required to capture
+// DirectComposition / WebView2 composited content; plain BitBlt or
+// PrintWindow(0) returns black for composed swapchain surfaces.
+static bool CaptureWindowToPng(HWND hwnd, const std::wstring& path)
+{
+    RECT rc = {};
+    if (!GetWindowRect(hwnd, &rc)) return false;
+    const int w = rc.right - rc.left;
+    const int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return false;
+
+    HDC     screen = GetDC(nullptr);
+    HDC     mem    = CreateCompatibleDC(screen);
+    HBITMAP bmp    = CreateCompatibleBitmap(screen, w, h);
+    HGDIOBJ oldb   = SelectObject(mem, bmp);
+    const BOOL pw  = PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+    SelectObject(mem, oldb);
+
+    bool saved = false;
+    if (pw)
+    {
+        CLSID clsid = {};
+        if (GetPngClsidHW(clsid))
+        {
+            Gdiplus::Bitmap gb(bmp, nullptr);
+            saved = (gb.Save(path.c_str(), &clsid, nullptr) == Gdiplus::Ok);
+        }
+    }
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    return saved && pw;
+}
+
 } // namespace
 
 // ---------- Run ----------
@@ -2657,6 +2725,85 @@ int HostWindowImpl::Run(int nCmdShow)
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
 
+    // [LT-4 rendering-fidelity] --capture: load the requested .alo now,
+    // using the exact swap+notify sequence file/open uses (BindHostState
+    // bound &particleSystem to the dispatcher, so this slot is what the
+    // render loop below reads via particleSystem.get()). The loop then
+    // renders m_captureFrames frames and writes the engine RT to a PNG.
+    const bool captureMode = !m_captureAlo.empty() && !m_capturePng.empty();
+    bool captureFailed = false;
+    if (captureMode)
+    {
+        if (!engine)
+        {
+            Log("[capture] no engine available — cannot capture\n");
+            captureFailed = true;
+        }
+        else
+        {
+            // Select the mod that owns this .alo BEFORE loading, so its
+            // texture overrides (EmpireAtWarExpanded etc.) resolve instead
+            // of base-game art. The editor does this on mod-select; a
+            // direct --capture load must do it explicitly or particles
+            // render with the wrong textures. Match the .alo path against
+            // discovered mods by case-insensitive path prefix; SelectMod
+            // swaps FileManager's mod path + reloads textures (engine is
+            // already bound via SetEngine in WM_CREATE).
+            if (modManager)
+            {
+                bool matched = false;
+                for (const auto& mod : modManager->GetMods())
+                {
+                    const size_t n = mod.path.size();
+                    if (n > 0 && _wcsnicmp(m_captureAlo.c_str(), mod.path.c_str(), n) == 0
+                        && (m_captureAlo.size() == n
+                            || m_captureAlo[n] == L'\\' || m_captureAlo[n] == L'/'))
+                    {
+                        modManager->SelectMod(mod.path);
+                        Log("[capture] selected mod for .alo: %ls\n", mod.path.c_str());
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched)
+                    Log("[capture] no mod matched .alo path — using base-game/restored textures\n");
+            }
+
+            std::string err;
+            std::unique_ptr<ParticleSystem> loaded = LoadParticleSystem(m_captureAlo, &err);
+            if (!loaded)
+            {
+                Log("[capture] LoadParticleSystem(%ls) failed: %s\n",
+                    m_captureAlo.c_str(), err.c_str());
+                captureFailed = true;
+            }
+            else
+            {
+                particleSystem = std::move(loaded);
+                engine->Clear();
+                engine->OnParticleSystemChanged(-1);
+                engine->ReloadTextures();
+                // Loading only populates the effect *definition*; nothing
+                // emits until a live instance is spawned (the editor does
+                // this via the SpawnerDriver, default Auto+disabled). Fire
+                // one manual burst at the origin with no lifetime cap so
+                // the system's emitters keep filling for the whole capture.
+                if (spawnerDriver)
+                {
+                    SpawnerConfig cfg;
+                    cfg.mode           = SpawnerConfig::Mode::Manual;
+                    cfg.burstSize      = 1;
+                    cfg.position       = D3DXVECTOR3(0.0f, 0.0f, 0.0f);
+                    cfg.maxLifetimeSec = 0.0f;  // no cap — emit through the capture
+                    spawnerDriver->SetConfig(cfg);
+                    spawnerDriver->Trigger(particleSystem.get(), engine.get());
+                }
+                Log("[capture] loaded %ls; spawned instance; rendering %d frames -> %ls\n",
+                    m_captureAlo.c_str(), m_captureFrames, m_capturePng.c_str());
+            }
+        }
+    }
+
     // LT-4 main loop: switched from blocking GetMessage to PeekMessage
     // idle-render. The blocking variant produces no continuous WM_PAINT
     // events, so the per-frame spawner tick + engine render had no driver.
@@ -2668,6 +2815,7 @@ int HostWindowImpl::Run(int nCmdShow)
     // own input routing and doesn't need TranslateAccelerator either).
     MSG m = {};
     bool quit = false;
+    int  capturedFrames = 0;
     while (!quit)
     {
         while (PeekMessage(&m, nullptr, 0, 0, PM_REMOVE))
@@ -2680,6 +2828,9 @@ int HostWindowImpl::Run(int nCmdShow)
             }
         }
         if (quit) break;
+        // [LT-4 rendering-fidelity] Load/capture failure → bail to cleanup
+        // without rendering (exit code set below).
+        if (captureFailed) break;
 
         // Idle: render one frame. Cheap enough to always run (Engine has
         // its own paused / IsPreviewPaused gates that skip the simulation
@@ -2687,6 +2838,35 @@ int HostWindowImpl::Run(int nCmdShow)
         if (engine)
         {
             RenderD3D9();
+
+            if (captureMode)
+            {
+                // Pace the sim with a fixed ~16 ms wall-clock step so
+                // RenderD3D9's real-time dt advances particles a useful
+                // amount per frame (the uncapped pump would otherwise run
+                // dozens of frames in a few ms, leaving particles bunched
+                // at the spawn point and never overlapping — which is
+                // exactly the additive-over-smoke case we need to see).
+                Sleep(16);
+                if (++capturedFrames >= m_captureFrames)
+                {
+                    // (1) engine RT — the engine's own pre-composite pixels.
+                    const bool ok = alphaCompositor &&
+                                    alphaCompositor->CaptureSnapshotToFile(m_capturePng);
+                    // (2) composite — the final DWM/DComp-composited window
+                    // (what the user sees). Derive "<name>-composite.<ext>".
+                    std::wstring compPath = m_capturePng;
+                    const size_t dot = compPath.find_last_of(L'.');
+                    if (dot != std::wstring::npos) compPath.insert(dot, L"-composite");
+                    else                            compPath += L"-composite.png";
+                    const bool okc = CaptureWindowToPng(hMain, compPath);
+                    Log("[capture] frame %d: engine-RT %ls -> %s; composite %ls -> %s\n",
+                        capturedFrames, m_capturePng.c_str(), ok ? "ok" : "FAILED",
+                        compPath.c_str(), okc ? "ok" : "FAILED");
+                    if (!ok) captureFailed = true;
+                    quit = true;
+                }
+            }
         }
         else
         {
@@ -2704,6 +2884,10 @@ int HostWindowImpl::Run(int nCmdShow)
     if (gdiplusToken) Gdiplus::GdiplusShutdown(gdiplusToken);
     CoUninitialize();
     CloseLog();
+    // [LT-4 rendering-fidelity] In --capture mode we break the loop via
+    // the `quit` flag (not PostQuitMessage), so m.wParam is stale; return
+    // an explicit 0/2 so a script can detect a bad load / failed write.
+    if (captureMode) return captureFailed ? 2 : 0;
     return static_cast<int>(m.wParam);
 }
 
@@ -2717,9 +2901,13 @@ HostWindow::HostWindow(HINSTANCE hInstance,
                        IFileManager&    fileManager,
                        const std::vector<std::wstring>& gameRoots,
                        bool useDevUi,
-                       bool useTestHost)
+                       bool useTestHost,
+                       const std::wstring& captureAlo,
+                       const std::wstring& capturePng,
+                       int captureFrames)
     : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager,
-                                gameRoots, useDevUi, useTestHost))
+                                gameRoots, useDevUi, useTestHost,
+                                captureAlo, capturePng, captureFrames))
 {
 }
 
@@ -2745,10 +2933,14 @@ int Run(HINSTANCE hInstance,
         IFileManager&    fileManager,
         const std::vector<std::wstring>& gameRoots,
         bool useDevUi,
-        bool useTestHost)
+        bool useTestHost,
+        const std::wstring& captureAlo,
+        const std::wstring& capturePng,
+        int captureFrames)
 {
     HostWindow host(hInstance, textureManager, shaderManager, fileManager,
-                    gameRoots, useDevUi, useTestHost);
+                    gameRoots, useDevUi, useTestHost,
+                    captureAlo, capturePng, captureFrames);
     return host.Run(nCmdShow);
 }
 

@@ -33,6 +33,12 @@ namespace host {
 // to build `fileManager`. Threaded through so the host's ModManager
 // can scan their Mods\ subdirectories on startup. Legacy mode reads
 // the same vector inside `main(APPLICATION_INFO*, argv)`.
+// captureAlo / capturePng / captureFrames — [LT-4 rendering-fidelity]
+// one-shot frame-capture mode. When captureAlo + capturePng are both
+// non-empty, the host loads captureAlo, renders captureFrames frames,
+// writes the engine's render target to capturePng, and exits. Used to
+// inspect/diff rendering fidelity offline (engine pixels are invisible
+// to Playwright under composition). Empty paths = normal interactive run.
 int Run(HINSTANCE hInstance,
         int nCmdShow,
         ITextureManager& textureManager,
@@ -40,7 +46,10 @@ int Run(HINSTANCE hInstance,
         IFileManager&    fileManager,
         const std::vector<std::wstring>& gameRoots,
         bool useDevUi   = false,
-        bool useTestHost = false);
+        bool useTestHost = false,
+        const std::wstring& captureAlo = L"",
+        const std::wstring& capturePng = L"",
+        int captureFrames = 60);
 
 } // namespace host
 

@@ -116,6 +116,16 @@ public:
     // effects above can dim + blur it uniformly with the panels.
     bool CaptureSnapshotPng(std::string& outBase64, int& outW, int& outH);
 
+    // [LT-4 rendering-fidelity] Write the most recent pre-stamp engine
+    // frame straight to a PNG file at `path`. Same readback + crop +
+    // GDI+ encode as CaptureSnapshotPng, but saves to disk instead of
+    // returning base64 — used by the `--capture` CLI mode so rendering
+    // fidelity can be inspected/diffed offline without a screen. Returns
+    // false on the same conditions as CaptureSnapshotPng (no frame, no
+    // RT, encoder unavailable, or the file write failing). GDI+ must be
+    // initialized by the host (HostWindow::Run). UI-thread only.
+    bool CaptureSnapshotToFile(const std::wstring& path);
+
     // [MT-11] Phase 0 spike — Path A (JPEG via WebResourceRequested).
     // Encode the cached pre-stamp engine pixels as JPEG bytes. Output
     // buffer is resized to fit the encoded payload. `quality` is 1-100

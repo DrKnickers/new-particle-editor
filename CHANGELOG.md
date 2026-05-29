@@ -16,6 +16,45 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 rendering-fidelity] Headless frame-capture mode (`--capture`)
+
+*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+New developer tooling for rendering-fidelity checks. `ParticleEditor.exe
+--new-ui --capture <alo> <png> [--frames N]` boots the host, auto-selects
+the mod that owns the `.alo` (so mod texture overrides resolve), spawns
+one instance of the effect, renders ~N frames (default 180 ≈ 3 s, paced
+to advance the sim), then writes two PNGs and exits: the engine's D3D9
+render target (`<png>`) and the final DirectComposition/DWM-composited
+window (`<png>-composite.png`). This makes engine-vs-composite fidelity
+inspectable and diffable offline — previously the "irreducible manual
+gate," since Playwright can't see DXGI engine pixels under composition.
+
+**How we tackled it.** Threaded optional capture params through
+[`src/host/Run.h`](src/host/Run.h) → `HostWindow` →
+[`HostWindowImpl::Run`](src/host/HostWindow.cpp:2434), which drives the
+engine directly in the existing message loop (no React dependency) and,
+on the target frame, calls the new
+[`AlphaCompositor::CaptureSnapshotToFile`](src/host/AlphaCompositor.cpp)
+(reuses the proven `GetRenderTargetData` readback) plus a local
+`CaptureWindowToPng` helper. The mod is resolved by matching the `.alo`
+path against `ModManager::GetMods()` and calling `SelectMod` before load
+— the editor does this via the Mods menu, but a direct CLI load must do
+it explicitly or particles render with base-game art.
+
+**Issues encountered and resolutions.** The composite capture needs
+`PrintWindow(PW_RENDERFULLCONTENT)` — plain `BitBlt`/`PrintWindow(0)`
+returns black for DirectComposition swapchain surfaces. Separately, this
+tool surfaced (and debunked) a false-alarm "renderer bug": additive
+sprites rendered with hard square edges / black backgrounds **only
+because the capture loaded base-game textures instead of the mod's** —
+not a D3D9Ex or DComp regression. With the mod selected, engine RT and
+composite both render correctly, matching the legacy 0.2 build. Lesson:
+confirm the right assets are loaded before suspecting the render
+pipeline.
+
+---
+
 ### [HANDOFF item 4] Native-test harness gates on dist/ build mode
 
 *2026-05-29 · [`b4765bd`](https://github.com/DrKnickers/new-particle-editor/commit/b4765bd) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

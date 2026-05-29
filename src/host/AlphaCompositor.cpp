@@ -681,6 +681,67 @@ bool AlphaCompositor::CaptureSnapshotPng(std::string& outBase64, int& outW, int&
     return true;
 }
 
+bool AlphaCompositor::CaptureSnapshotToFile(const std::wstring& path)
+{
+    // Same one-shot readback + scene-rect crop as CaptureSnapshotPng,
+    // but GDI+ saves straight to `path` instead of encoding to base64.
+    // Kept as a separate method (rather than refactoring the shared
+    // readback) so the proven modal-snapshot path stays untouched.
+    if (!m_impl->offscreenRT || !m_impl->sysMemSurface) return false;
+    if (m_impl->width <= 0 || m_impl->height <= 0)       return false;
+
+    CLSID pngClsid = {};
+    if (!GetPngEncoderClsid(pngClsid)) return false;
+
+    HRESULT hr = m_impl->device->GetRenderTargetData(
+        m_impl->offscreenRT.Get(), m_impl->sysMemSurface.Get());
+    if (FAILED(hr)) return false;
+
+    D3DLOCKED_RECT locked = {};
+    hr = m_impl->sysMemSurface->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+    if (FAILED(hr)) return false;
+
+    const int srcW   = m_impl->width;
+    const int srcH   = m_impl->height;
+    const int stride = srcW * 4;
+
+    std::vector<uint8_t> rawDib(static_cast<size_t>(stride) *
+                                static_cast<size_t>(srcH));
+    {
+        const auto* src = static_cast<const uint8_t*>(locked.pBits);
+        for (int y = 0; y < srcH; ++y)
+        {
+            memcpy(rawDib.data() + static_cast<size_t>(y) * static_cast<size_t>(stride),
+                   src + static_cast<size_t>(y) * locked.Pitch,
+                   static_cast<size_t>(stride));
+        }
+    }
+    m_impl->sysMemSurface->UnlockRect();
+
+    // Crop to scene rect if one is set; otherwise the full RT (the
+    // typical case under --capture, since no React layout/scene-rect
+    // dispatch runs — and the full engine RT is exactly what we want).
+    int cropX = 0, cropY = 0, cropW = srcW, cropH = srcH;
+    if (m_impl->sceneW > 0 && m_impl->sceneH > 0)
+    {
+        cropX = (m_impl->sceneX < 0) ? 0 : m_impl->sceneX;
+        cropY = (m_impl->sceneY < 0) ? 0 : m_impl->sceneY;
+        const int maxW = srcW - cropX;
+        const int maxH = srcH - cropY;
+        cropW = (m_impl->sceneW < maxW) ? m_impl->sceneW : maxW;
+        cropH = (m_impl->sceneH < maxH) ? m_impl->sceneH : maxH;
+        if (cropW <= 0 || cropH <= 0) return false;
+    }
+
+    BYTE* scan0 = const_cast<BYTE*>(rawDib.data()) +
+                  static_cast<size_t>(cropY) * static_cast<size_t>(stride) +
+                  static_cast<size_t>(cropX) * 4u;
+    Gdiplus::Bitmap bmp(cropW, cropH, stride, PixelFormat32bppARGB, scan0);
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
+
+    return bmp.Save(path.c_str(), &pngClsid, nullptr) == Gdiplus::Ok;
+}
+
 void AlphaCompositor::Composite(HWND layeredHwnd)
 {
     if (!layeredHwnd) return;

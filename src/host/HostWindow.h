@@ -41,7 +41,10 @@ public:
                IFileManager&    fileManager,
                const std::vector<std::wstring>& gameRoots,
                bool useDevUi   = false,
-               bool useTestHost = false);
+               bool useTestHost = false,
+               const std::wstring& captureAlo = L"",
+               const std::wstring& capturePng = L"",
+               int captureFrames = 60);
     ~HostWindow();
 
     HostWindow(const HostWindow&)            = delete;

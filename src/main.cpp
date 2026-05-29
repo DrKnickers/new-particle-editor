@@ -8099,6 +8099,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		// ParticleSystem API + SaveParticleSystem.
 		std::wstring genNt5FixturePath;
 		std::wstring genA11yFixturePath;
+		// [LT-4 rendering-fidelity] --capture <alo> <png> [--frames N]:
+		// headless render-fidelity capture. Loads <alo>, renders N frames,
+		// writes the engine's render target to <png>, exits. Implies the
+		// --new-ui host path (it owns the engine). See src/host/Run.h.
+		std::wstring captureAlo;
+		std::wstring capturePng;
+		// Default ~180 frames ≈ 3 s of sim (loop paces ~16 ms/frame) so a
+		// freshly-spawned effect has time to fill before the snapshot.
+		int          captureFrames = 180;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
 			if (argv[i] == L"--new-ui")    newUi    = true;
@@ -8112,7 +8121,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			{
 				genA11yFixturePath = argv[i + 1];
 			}
+			if (argv[i] == L"--capture" && i + 2 < argv.size())
+			{
+				captureAlo = argv[i + 1];
+				capturePng = argv[i + 2];
+			}
+			if (argv[i] == L"--frames" && i + 1 < argv.size())
+			{
+				captureFrames = _wtoi(argv[i + 1].c_str());
+			}
 		}
+		// --capture implies the new-UI host (it owns the Engine). Clamp a
+		// garbage/zero --frames back to the default.
+		if (!captureAlo.empty() && !capturePng.empty()) newUi = true;
+		if (captureFrames < 1) captureFrames = 180;
 		if (!genNt5FixturePath.empty())
 		{
 			auto sys = std::make_unique<ParticleSystem>();
@@ -8212,7 +8234,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			int hostResult = host::Run(hInstance, SW_SHOWDEFAULT,
 			                           textureManager, shaderManager, *fileManager,
 			                           gameRoots,
-			                           devUi, testHost);
+			                           devUi, testHost,
+			                           captureAlo, capturePng, captureFrames);
 			delete fileManager;
 #ifndef NDEBUG
 			FreeConsole();
