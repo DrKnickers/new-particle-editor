@@ -2327,3 +2327,46 @@ The matcher normalizer lives in
 [`toMatchJSONGolden.ts`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts);
 the `BUILD_DATE` pin in
 [`vite.config.ts`](../web/apps/editor/vite.config.ts).
+
+## L-029 — When debugging rendering/visual fidelity, verify the CORRECT assets are loaded before suspecting the render pipeline
+
+**Surfaced building the `--capture` rendering-fidelity tool.** A user
+reported additive particle sprites rendering with "black backgrounds /
+hard square edges" in the new-UI (arch-C) vs the legacy 0.2 build. I
+built a headless capture, saw the hard edges in the engine's render
+target, confirmed they weren't a capture artifact, and then spent
+several rounds narrowing the cause to the D3D9 → **D3D9Ex** device
+switch (MT-11) and the DComp compositing path — because the particle
+*draw* code (`EmitterInstance.cpp`) was byte-identical to v0.2.0, so I
+assumed the difference had to be environmental in the render pipeline.
+
+**It wasn't the renderer at all.** The user asked the right question:
+*"are you loading the proper mod textures? EmpireAtWarExpanded has the
+textures."* The capture loaded the `.alo` via `LoadParticleSystem`
+without selecting the mod, so `FileManager` resolved **base-game**
+`p_explosion_atlas` / `p_smoke_atlas` instead of the mod's overrides.
+Base-game art has different content/alpha → hard-edged quads. Selecting
+the mod (`ModManager::SelectMod`, matching the `.alo` path against
+`GetMods()`) made the correct 1024×1024 mod textures load, and engine
+RT *and* composite both rendered soft — matching 0.2. The D3D9Ex and
+DComp theories were red herrings.
+
+**Rule.** For any "looks wrong vs the reference build" rendering bug,
+**confirm the exact assets being sampled match the reference's assets
+FIRST** — texture name, resolution, format, AND source (base game vs
+mod override) — before investigating device/RT/shader/blend state. A
+`[texdiag]`-style one-shot log of loaded texture format + dimensions +
+mip levels is cheap and decisive; the resolution/format *changing* when
+the mod is selected (512² base → 1024² mod here) is the tell. The
+editor sets the active mod via the Mods menu before opening files; any
+code path that loads a file directly (CLI capture, a test harness, a
+script) must replicate that mod selection or it silently renders with
+the wrong art.
+
+**Process note.** What kept this from running much longer: checkpointing
+with the user instead of grinding rebuild-experiments on the D3D9Ex
+theory. The "verify assets first" reflex would have found it in one
+step; the user's domain knowledge supplied that reflex. When a
+fidelity hunt stalls on "the code is identical but it looks different,"
+widen the search to *inputs* (assets, config, active mod), not just
+deeper into the pipeline.
