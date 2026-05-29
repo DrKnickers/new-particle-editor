@@ -39,6 +39,35 @@ const UPDATE = process.env.UPDATE_A11Y_GOLDENS === "1";
 // __dirname is .../tests/helpers, so FAILURE_DIR resolves to .../tests/a11y-failures.
 const FAILURE_DIR = path.join(__dirname, "..", "a11y-failures");
 
+// Volatile-content normalization — applied to BOTH the live snapshot and
+// the committed golden before byte-comparison (and to the written value
+// in UPDATE mode so the placeholder is what lands on disk).
+//
+// The canonical case is the About dialog's "Build date". It's baked from
+// HEAD's commit date at build time (web/apps/editor/vite.config.ts) so
+// that the dialog shows a meaningful, per-commit-stable date instead of
+// "the day someone ran pnpm build". But that creates an unwinnable chase
+// for the golden: the golden is committed in a LATER commit than the one
+// whose date it records, so its baked date can NEVER equal the build date
+// of the commit that contains it. Whatever date we freeze into the golden,
+// the act of committing it advances HEAD to a newer date, and the next
+// rebuild's BUILD_DATE no longer matches.
+//
+// Resolution: treat the date as volatile and normalize it to a stable
+// placeholder, exactly like the JSON normalizer's `volatile` property
+// list (L-024) and the StatusBar source-side freeze. The About dialog
+// still shows the real commit date to users; the test simply doesn't
+// assert the specific value. Covers both lanes: composition (ariaSnapshot
+// YAML, inline "Build date: YYYY-MM-DD") and HWND (UIA tree JSON, where
+// the date is its own `"Name": "YYYY-MM-DD"` text node).
+//
+// See HANDOFF item 16 + lessons.md L-026 for the full diagnosis.
+function normalizeVolatile(s: string): string {
+  return s
+    .replace(/Build date: \d{4}-\d{2}-\d{2}/g, "Build date: <DATE>")
+    .replace(/"Name": "\d{4}-\d{2}-\d{2}"/g, '"Name": "<DATE>"');
+}
+
 expect.extend({
   toMatchJSONGolden(
     received: unknown,
@@ -58,7 +87,10 @@ expect.extend({
 
     if (UPDATE) {
       fs.mkdirSync(path.dirname(absPath), { recursive: true });
-      fs.writeFileSync(absPath, serialized, "utf8");
+      // Write the normalized form so the committed golden stores the
+      // `<DATE>` placeholder explicitly — self-documenting, rather than a
+      // stale literal date that's silently normalized away on read.
+      fs.writeFileSync(absPath, normalizeVolatile(serialized), "utf8");
       return {
         pass: true,
         message: () => `wrote golden: ${goldenPath}`,
@@ -75,7 +107,10 @@ expect.extend({
     }
 
     const expected = fs.readFileSync(absPath, "utf8");
-    const pass = expected === serialized;
+    // Normalize both sides so a golden that still holds a literal date
+    // (committed before this normalizer existed) matches a freshly-built
+    // snapshot with a different date.
+    const pass = normalizeVolatile(expected) === normalizeVolatile(serialized);
     if (!pass && options?.rawForDebug !== undefined) {
       fs.mkdirSync(FAILURE_DIR, { recursive: true });
       // Strip the trailing extension regardless of which lane (.json / .yaml).
