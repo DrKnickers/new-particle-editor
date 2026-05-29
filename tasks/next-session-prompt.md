@@ -1,113 +1,122 @@
-# Next-session dispatch prompt — post HANDOFF item 16 close-out
+# Next-session prompt — resume feature-parity B (frequently-used texture palette)
 
-> Copy the block below into the next session's first message.
-> `origin/lt-4` is at `4c20e32`. This file replaces the old [MT-11]
-> Phase 4 prompt (long since shipped). Keep it current: when a
-> dispatch lands, rewrite this with the new tip + the next candidates.
-
----
-
-You are picking up work on the `new-particle-editor` repository on branch `lt-4`.
-The previous session resolved HANDOFF item 16 (a11y golden drift — root cause was
-autocrlf + a runtime BUILD_DATE, NOT a React regression) across four commits, ending
-with the volatile-build-date follow-up. `origin/lt-4` is at `4c20e32`.
+You are resuming work on `new-particle-editor`, branch `lt-4`. The
+previous session (2026-05-29) shipped a lot; this picks up the next
+feature-parity item. **`origin/lt-4` is at `b80fd7b`.**
 
 ## Pre-flight (run before touching anything)
 
 ```
 git fetch origin lt-4 --quiet
-git rev-parse --abbrev-ref HEAD                              # lt-4 or a fresh claude/* off lt-4
-git log --oneline origin/lt-4..HEAD | Measure-Object -Line   # expect 0 (fresh session)
-git log --oneline HEAD..origin/lt-4 | Measure-Object -Line   # expect 0
-git status --porcelain                                       # expect empty
-git rev-parse origin/lt-4                                    # expect 4c20e32 (or newer)
+git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh claude/* off lt-4
+git log --oneline origin/lt-4..HEAD | Measure-Object -Line # expect 0 (fresh session)
+git log --oneline HEAD..origin/lt-4 | Measure-Object -Line # expect 0
+git status --porcelain                                     # expect empty
+git rev-parse origin/lt-4                                  # expect b80fd7b (or newer)
 ```
-If lineage doesn't match, STOP and reconcile per the branch-workflow section in `CLAUDE.md`.
+If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
-## CRITICAL build/test gotchas (all learned the hard way — see lessons.md L-025..L-028)
+## What shipped 2026-05-29 (all on `origin/lt-4`, `a405bf1..b80fd7b`)
 
-1. **MSBuild MUST be invoked via PowerShell, NOT Git Bash (L-025).** Bash's MSYS path
-   translation mangles `/p:` `/nologo` `/m` switches; MSBuild prints MSB1008 but the
-   response file gives exit code 0, so the build SILENTLY no-ops and produces no binary.
-   Use the PowerShell tool:
-   ```
-   $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
-   & $msbuild .\ParticleEditor.sln /p:Configuration=Debug   /p:Platform=x64 /nologo /verbosity:minimal /m
-   & $msbuild .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal /m
-   ```
-   ALWAYS verify `x64\Debug\ParticleEditor.exe` exists after — don't trust exit code 0.
-2. **A fresh worktree needs NuGet restore first** (WebView2 package isn't shared across
-   worktrees): `& $msbuild .\ParticleEditor.sln /t:Restore /p:Configuration=Debug /p:Platform=x64`
-   before the first build. Symptom if skipped: "references NuGet package(s) that are missing …
-   Microsoft.Web.WebView2.targets".
-3. **pnpm commands run from `web/` (or `web/apps/editor`), not repo root.** From repo root
-   pnpm errors `ERR_PNPM_NO_PKG_MANIFEST`. From PowerShell, `Set-Location web` first.
-4. **Two dist/ builds, two lanes.** Composition (default, no env var) → `pnpm test:native`.
-   Legacy needs a `VITE_HOSTING_MODE=legacy` dist/ rebuild → `pnpm test:native:legacy`.
-   The harness does NOT auto-rebuild dist/ on mode change (carry-forward item 4).
-   Baselines: composition **157/0/31**, legacy **132/0/56**. Both are 0-failed at `4c20e32`.
-5. **`pnpm a11y:update --grep "<id>"` now scopes correctly (L-027), BUT (L-028):**
-   - Safe for the **composition** lane (ariaSnapshot = role+name, no IDs).
-   - **UNSAFE for the HWND lane** — UIA captures Radix `useId` AutomationIds
-     (`radix-_r_1k_`) that depend on render SEQUENCE. A scoped refresh runs the surface
-     in isolation → different IDs → a huge bogus diff that only matches in isolation.
-     To change one node in an HWND golden, hand-edit it; to regenerate HWND goldens,
-     run a FULL-suite `pnpm a11y:update:legacy` (no `--grep`).
-6. **Build-environment values in goldens are normalized as volatile (L-028).** The About
-   dialog's "Build date" is stripped to `<DATE>` by `normalizeVolatile()` in
-   `tests/helpers/toMatchJSONGolden.ts`. If you add another build-stamped value to a
-   captured surface, add it to that normalizer rather than chasing the golden.
-7. **Known flake:** `a11y-uia-composition-reachable.spec.ts` ("React backbone") is
-   Blink-accessibility-warmup-timing-sensitive and flakes on a loaded/laggy machine
-   (NOT a golden — doesn't use toMatchJSONGolden). Re-run the single spec via
-   `pnpm test:native --grep "React backbone"`; it passes in <1s. Also the documented
-   `emitter-mutations.spec.ts:84` flake — same "re-run once" disposition.
+1. **[item 4] dist/ build-mode test gate** (`b4765bd`, `1d7787a`) —
+   `run-native-tests.mjs` fail-fasts (or `--rebuild`s) when the baked
+   `dist/` hosting mode doesn't match the lane. Marker:
+   `dist/build-meta.json` stamped by a Vite plugin in `vite.config.ts`.
+2. **Headless frame-capture tool** (`7af4b5c`, `e9e9bc1`) —
+   `ParticleEditor.exe --new-ui --capture <alo> <png> [--frames N]`:
+   auto-selects the `.alo`'s mod, spawns + fills the effect, writes the
+   engine RT (`<png>`) AND the final composite (`<png>-composite.png`,
+   via `PrintWindow(PW_RENDERFULLCONTENT)`). Default 180 frames ≈ 3 s.
+   **Use this for any rendering-fidelity check** — read the PNGs
+   directly; no manual screenshots. Code: `src/host/HostWindow.cpp`
+   (`HostWindowImpl::Run` capture block + `CaptureWindowToPng`),
+   `AlphaCompositor::CaptureSnapshotToFile`, `src/host/Run.h`, `src/main.cpp`.
+3. **L-029 lesson** (`ef0a898`) — verify the CORRECT (mod) assets are
+   loaded before suspecting the render pipeline.
+4. **Feature-parity A — texture Browse picker** (`e7c6318` plan,
+   `ab1d340` feature, `a3a1a6a` changelog, `3bcdd55` CSS, `b80fd7b`
+   review). DONE + user-verified. New `textures/browse` bridge request +
+   host `GetOpenFileNameW` handler (opens in active mod's
+   `Data\Art\Textures`); React `TexturePickerField` (in
+   `EmitterPropertyTabs.tsx`) = `FieldText` + a FolderOpen Browse button.
 
-## Read these in order
+**Big finding this session:** the "additive black-background / hard
+square edges" rendering bug was NOT a renderer regression — it was
+base-game textures loading because the capture/editor didn't have the
+mod selected. With the mod selected, arch-C renders **1:1 with the 0.2
+legacy build** (engine RT AND composite). Rendering fidelity (front #1
+of the daily-drive blockers) is effectively resolved.
 
-1. `CLAUDE.md` (repo root) — working principles, branch flow, plan-mode + verification +
-   handoff rules. Non-negotiable.
-2. `tasks/HANDOFF.md` "Known follow-ups" — items 11 (arch-A deletion) and 4 (test-harness
-   rebuild gate) are the main open threads. Item 16 is ✅ resolved (fix `610d5dd`,
-   completed `a315245`).
-3. `tasks/lessons.md` L-025 / L-026 / L-027 / L-028 — the build/test gotchas above.
+## Resume here: feature-parity B — frequently-used texture palette
 
-## Choose your dispatch (ASK the user before locking in — don't assume)
+The second half of texture-selection parity. Legacy had a per-mod
+pinned/recent texture palette popup (color/bump filter, thumbnails)
+that the new UI lacks. **Start a fresh brainstorm→plan→implement cycle
+for B** (it's bigger than A: ~★★★–★★★★).
 
-* Candidate A (recommended-large): **Architecture-A deletion (HANDOFF item 11).** The headline
-  MT-11/MT-12 cleanup. ★★★★, ~1-1.5 days, needs a full `tasks/todo.md` 5-section plan.
-  **GATED:** the user condition is "only delete arch A after C is confirmed stable in default
-  daily use." As of 2026-05-28 the user said they were "not really" daily-driving composition
-  mode yet. **Confirm the user is now daily-driving architecture C before scoping this.** No
-  known runtime blockers remain (items 14 + 15 + 16 all resolved).
+**What the codebase already gives us (from last session's Explore):**
+- The C++ data layer ALREADY EXISTS: `TexturePalette::Store` singleton
+  (`src/UI/TexturePalette.h:58-128`) — per-mod pinned + recent (LRU)
+  entries, `slotMask` (color/bump), persisted to
+  `%APPDATA%\AloParticleEditor\texture-palettes.ini`. Methods:
+  `TouchRecent(filename, usedAs)`, `TogglePin(filename)`,
+  `Pins(filter)`, `Recents(filter)`. **Not exposed to the new UI** —
+  no bridge request reads/mutates it.
+- `TexturePickerField` (`web/apps/editor/src/screens/EmitterPropertyTabs.tsx`)
+  was built in A **structured to receive a palette button** next to the
+  Browse button — that's the integration point.
+- Legacy wiring reference: `src/UI/Emitter.cpp:411` (IDC_BUTTON_PALETTE)
+  + `:462-468` (EN_KILLFOCUS → `TouchRecent`).
 
-* Candidate B (recommended-mid): **Test-harness dist/ rebuild pre-flight gate (carry-forward
-  item 4).** The harness should fail-fast or auto-rebuild dist/ on a mode mismatch — would have
-  prevented several past sessions' silent dist/mode-mismatch failures. Adjacent to last
-  session's `--grep` forwarding fix in the same `run-native-tests.mjs`. ★★, ~half-day.
+**Likely shape of B (confirm in brainstorm):**
+1. Bridge requests over the existing `Store`: e.g.
+   `textures/palette/list { filter } → { pins[], recents[] }`,
+   `textures/palette/touch-recent { filename, slot }`,
+   `textures/palette/toggle-pin { filename }`. Host handlers in
+   `BridgeDispatcher.cpp` call `TexturePalette::Store::Instance()`.
+2. React palette popup component (pinned + recent sections, color/bump
+   filter, pin toggle, click-to-apply) + a palette button on
+   `TexturePickerField`.
+3. Track usage: on any texture commit (Browse, palette, or manual entry)
+   call `textures/palette/touch-recent` so recents stay warm — mirrors
+   legacy's EN_KILLFOCUS tracking.
+4. Thumbnails: the host could load the texture → base64 PNG (reuse the
+   `CaptureSnapshotPng`/GDI+ pattern) OR React renders a filename list
+   first (thumbnails are the bigger lift — likely an MVP/v2 split).
 
-* Candidate C (other roadmap): NT-6 visual-stability lane assignment (user-gated), B2
-  obsolescence audit, MT-1 follow-up texture-picker buttons, the 6 deferred a11y surfaces
-  (HANDOFF item 1), or Narrator speech-shaping verification (item 9). See `ROADMAP.md` and
-  the HANDOFF "Known follow-ups" list.
+Open design questions for the user: thumbnails vs filename-list MVP;
+where the palette popup anchors (Radix Popover, like the existing
+Background/Ground pickers).
 
-## Before making changes, summarise back to the user
+## Build / test gotchas (unchanged; see lessons.md L-025..L-029)
 
-1. Which dispatch candidate you've picked and why.
-2. Your read of the relevant files (paths + ~one sentence each).
-3. Risks you've identified.
-4. Any clarifying questions.
+- **MSBuild via PowerShell**, not Git Bash (L-025):
+  `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" .\ParticleEditor.sln /p:Configuration=Debug /p:Platform=x64 /nologo /verbosity:minimal /m`
+  Always verify `x64\Debug\ParticleEditor.exe` exists; Release builds clean too.
+- **Fresh worktree:** `& $msbuild .\ParticleEditor.sln /t:Restore ...` first (WebView2 NuGet not shared); `pnpm install` in `web/` (node_modules not shared).
+- **pnpm from `web/`** (`Set-Location web`), not repo root. Vitest: `pnpm --filter @particle-editor/editor test` (was **350 passed** at session end). Type-check: `pnpm --filter @particle-editor/editor lint` (`tsc --noEmit`).
+- **dist/ mode**: the running editor loads `web/apps/editor/dist`; rebuild it (`pnpm --filter @particle-editor/editor build`) after React changes or the live launch shows stale UI. The new gate fail-fasts on a mode mismatch in the test harness.
+- **Live smoke**: launch `x64\Release\ParticleEditor.exe --new-ui` (Release = no debug console). **Select the mod via Mods menu** so textures resolve (the no-mod case is what made textures look broken). For automated visual checks, prefer the `--capture` tool.
 
-Per `CLAUDE.md`: any 3+ step task needs a `tasks/todo.md` plan with all 5 sections
-(goal+scope / what-codebase-gives-us / architecture / risks / testing) AND a check-in with
-the user before code changes.
+## Process (per CLAUDE.md — non-negotiable)
 
-## End-of-session flow (worktree note)
+- B is 3+ steps → brainstorm (superpowers:brainstorming) → write the
+  5-section plan to `tasks/todo.md` → check in with the user → implement
+  (vitest-first for React) → verify (build + vitest + live smoke) →
+  CHANGELOG + lessons → commit → FF-push to `origin/lt-4`
+  (`git push origin HEAD:lt-4`; `lt-4` is checked out in the main
+  worktree, so push to the remote directly from a session worktree).
+- The current `tasks/todo.md` holds the (DONE) feature-parity-A plan;
+  archive it (`tasks/todo-feature-parity-a-archive.md`) before writing B's.
 
-`lt-4` is checked out in the main worktree, so `git switch lt-4` fails from a session
-worktree. FF directly to the remote instead:
-```
-git push origin HEAD:lt-4   # FF-only; rejects if not a fast-forward
-```
-After this, the main-worktree local `lt-4` ref is stale — `git pull --ff-only` there when
-convenient.
+## The broader program (make arch-C daily-drivable, to retire 0.2)
+
+| Front | Status |
+|---|---|
+| Rendering fidelity | ✅ resolved (was mod textures) |
+| Feature parity | A (Browse picker) ✅ · **B (palette) ← next** · + more to discover |
+| Performance (legacy hit 200–400 fps maximized) | open |
+| UI polish | open (not migration-gating) |
+
+User still daily-drives the 0.2 legacy build; arch-C must reach parity
++ perf before they migrate. (MT-13 arch-A deletion stays gated on that.)

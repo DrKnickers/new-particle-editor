@@ -1,6 +1,41 @@
-# Session Handoff — AloParticleEditor / LT-4 ([MT-11] Phase 3 a11y close-out + [MT-12] default flipped to architecture C — both shipped 2026-05-26)
+# Session Handoff — AloParticleEditor / LT-4
 
-**Last updated:** 2026-05-26. Two ships landed on `lt-4` today:
+## 2026-05-29 session — dist-gate + capture tool + feature-parity A (resume: parity B)
+
+**`origin/lt-4` → `b80fd7b`** (was `a405bf1`). Full resume instructions
+in [`tasks/next-session-prompt.md`](next-session-prompt.md). Tree clean,
+all work pushed. Shipped this session:
+
+- **[item 4] dist/ build-mode test gate** (`b4765bd`) — `run-native-tests.mjs`
+  fail-fasts / `--rebuild`s on a `dist/` hosting-mode mismatch
+  (`dist/build-meta.json` marker from a `vite.config.ts` plugin).
+- **Headless frame-capture tool** (`7af4b5c`) —
+  `--new-ui --capture <alo> <png> [--frames N]`: mod-aware, spawns+fills
+  the effect, writes engine RT + final composite PNGs. The
+  rendering-fidelity automation; use it instead of manual screenshots.
+- **Feature-parity A — texture Browse picker** (`ab1d340` + CSS `3bcdd55`,
+  user-verified) — `textures/browse` bridge request + host dialog (opens
+  in active mod's texture folder) + React `TexturePickerField`.
+- **L-029** (`ef0a898`) — verify the CORRECT (mod) assets are loaded
+  before suspecting the render pipeline.
+
+**Headline finding:** the reported "additive black-background / hard
+square edges" was **mod textures not loaded** (base-game art), NOT an
+arch-C renderer bug. With the mod selected, arch-C renders **1:1 with
+the 0.2 legacy build** (engine RT + composite, verified). Rendering
+fidelity — the #1 daily-drive blocker — is effectively resolved.
+
+**Resume:** feature-parity **B = frequently-used texture palette** (the
+legacy per-mod pinned/recent popup). Fresh brainstorm→plan→implement
+cycle. The C++ `TexturePalette::Store` already exists
+(`src/UI/TexturePalette.h`); B exposes it via new bridge requests + a
+React popup on the `TexturePickerField` built in A. Details in the
+next-session prompt. User still daily-drives 0.2; remaining blockers
+after B: more parity items + performance (legacy hit 200–400 fps).
+
+---
+
+**Prior context — 2026-05-26.** Two ships landed on `lt-4`:
 
 1. **[MT-11] Phase 3 a11y close-out** — dual-mode Playwright a11y
    regression gate (HWND Win32 UIA via standalone C++ inspector +
