@@ -566,11 +566,14 @@
   font-size: 11px;
 }
 
-/* Texture picker row: label + text input + Browse button. The Browse
-   button opens the host-side native file dialog (textures/browse).
+/* Texture picker row: label + text input + Browse button. The input
+   column is 1fr so it stretches to fill the inspector as the left pane
+   widens (the filename is the useful content); the label is a fixed
+   width so both rows align, and the Browse button sizes to content. The
+   Browse button opens the host-side native file dialog (textures/browse).
    [LT-4 feature-parity A] */
 .form-row.form-row-texture {
-  grid-template-columns: 1fr minmax(0, 150px) auto;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
 }
 .form-row.form-row-texture .text-input {
   min-width: 0;
