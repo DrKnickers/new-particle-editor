@@ -29,6 +29,7 @@ import {
   loadLayout,
   saveLayout,
   resetPanelLayoutStorage,
+  deriveOuterLayoutOnToggle,
   PANEL_LAYOUT_KEYS,
   type Layout,
 } from "../PanelLayout";
@@ -122,6 +123,44 @@ describe("PanelLayout — Reset panel layout (T6)", () => {
       "alo:layout:outer:2col",
       "alo:layout:outer:3col",
     ]);
+  });
+});
+
+describe("PanelLayout — spawner-toggle carry-over (no snap)", () => {
+  it("closing carries left's width and lets center absorb the spawner's space", () => {
+    const out = deriveOuterLayoutOnToggle(
+      false,
+      { left: 20, center: 80 }, // cur2col (ignored on close)
+      { left: 30, center: 50, spawner: 20 }, // current 3col
+    );
+    expect(out).toEqual({ left: 30, center: 70 });
+  });
+
+  it("opening carves the spawner (its last 3-col width) out of center, left unchanged", () => {
+    const out = deriveOuterLayoutOnToggle(
+      true,
+      { left: 30, center: 70 }, // current 2col
+      { left: 30, center: 50, spawner: 20 }, // last 3col (for spawner width)
+    );
+    expect(out).toEqual({ left: 30, center: 50, spawner: 20 });
+  });
+
+  it("opening clamps so center never drops below 30%", () => {
+    const out = deriveOuterLayoutOnToggle(
+      true,
+      { left: 65, center: 35 },
+      { left: 20, center: 60, spawner: 20 },
+    );
+    // spawner = min(20, 35 - 30) = 5
+    expect(out).toEqual({ left: 65, center: 30, spawner: 5 });
+  });
+
+  it("result always sums to ~100", () => {
+    const close = deriveOuterLayoutOnToggle(false, { left: 20, center: 80 }, { left: 25, center: 55, spawner: 20 });
+    const open = deriveOuterLayoutOnToggle(true, { left: 25, center: 75 }, { left: 25, center: 55, spawner: 20 });
+    const sum = (l: Layout) => Object.values(l).reduce((a, b) => a + b, 0);
+    expect(sum(close)).toBeCloseTo(100, 5);
+    expect(sum(open)).toBeCloseTo(100, 5);
   });
 });
 

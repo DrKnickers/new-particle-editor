@@ -40,7 +40,7 @@
 // the toolbar's Spawner button — the new mount reads from the
 // appropriate key with the appropriate defaults.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { useSpawnerVisible } from "@/lib/spawner-visibility";
@@ -123,6 +123,43 @@ export function saveLayout(key: string, layout: Layout): void {
   }
 }
 
+// Derive the outer layout when the Spawner pane toggles, carrying the
+// CURRENT widths across instead of snapping to the destination mode's
+// stored preset: `left` keeps its width, and the spawner's space simply
+// transfers to/from `center`. This makes closing the Spawner "absorb"
+// its space into the viewport column (and reopening carve it back out)
+// rather than re-laying-out every pane.
+//
+//   - Closing (3-col → 2-col): center += spawner. Reads the live 3-col
+//     layout (the mode we're leaving).
+//   - Opening (2-col → 3-col): carve the spawner back out of center at
+//     its last 3-col width, clamped so center never drops below 30%
+//     (its minSize). Reads the live 2-col layout for left/center.
+//
+// Every result sums to ~100 by construction.
+const CENTER_MIN_PCT = 30;
+
+export function deriveOuterLayoutOnToggle(
+  nextSpawnerVisible: boolean,
+  cur2col: Layout,
+  cur3col: Layout,
+): Layout {
+  if (!nextSpawnerVisible) {
+    return {
+      left: cur3col.left ?? 0,
+      center: (cur3col.center ?? 0) + (cur3col.spawner ?? 0),
+    };
+  }
+  const desired = cur3col.spawner ?? OUTER_3COL_DEFAULTS.spawner;
+  const headroom = Math.max((cur2col.center ?? 0) - CENTER_MIN_PCT, 0);
+  const spawner = Math.min(desired, headroom);
+  return {
+    left: cur2col.left ?? 0,
+    center: (cur2col.center ?? 0) - spawner,
+    spawner,
+  };
+}
+
 function usePersistedLayout(key: string, defaults: Layout) {
   // useMemo with [key] so a visibility flip (key change) re-reads.
   const defaultLayout = useMemo(() => loadLayout(key, defaults), [key, defaults]);
@@ -148,7 +185,39 @@ export function PanelLayout({ bridge }: Props) {
     ? OUTER_3COL_DEFAULTS
     : OUTER_2COL_DEFAULTS;
 
-  const outer = usePersistedLayout(outerKey, outerDefaults);
+  // The outer Group is key'd on spawnerVisible, so it remounts on every
+  // Spawner toggle. Rather than letting it snap to the destination mode's
+  // independently-stored preset, carry the CURRENT widths across (left
+  // stays put; center absorbs / releases the spawner's space). Only on
+  // the toggle transition — a fresh mount uses the mode's own layout.
+  const prevSpawnerVisible = useRef<boolean | null>(null);
+  const toggled =
+    prevSpawnerVisible.current !== null &&
+    prevSpawnerVisible.current !== spawnerVisible;
+
+  const outerDefaultLayout = useMemo<Layout>(() => {
+    if (toggled) {
+      return deriveOuterLayoutOnToggle(
+        spawnerVisible,
+        loadLayout("alo:layout:outer:2col", OUTER_2COL_DEFAULTS),
+        loadLayout("alo:layout:outer:3col", OUTER_3COL_DEFAULTS),
+      );
+    }
+    return loadLayout(outerKey, outerDefaults);
+  }, [toggled, spawnerVisible, outerKey, outerDefaults]);
+
+  const onOuterLayoutChanged = useCallback(
+    (l: Layout) => saveLayout(outerKey, l),
+    [outerKey],
+  );
+
+  // Persist the carried-over layout to the destination key so the next
+  // toggle reads consistent state; advance the prev-visible marker.
+  useEffect(() => {
+    if (toggled) saveLayout(outerKey, outerDefaultLayout);
+    prevSpawnerVisible.current = spawnerVisible;
+  }, [toggled, spawnerVisible, outerKey, outerDefaultLayout]);
+
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
 
@@ -172,8 +241,8 @@ export function PanelLayout({ bridge }: Props) {
     <Group
       key={spawnerVisible ? "3col" : "2col"}
       orientation="horizontal"
-      defaultLayout={outer.defaultLayout}
-      onLayoutChanged={outer.onLayoutChanged}
+      defaultLayout={outerDefaultLayout}
+      onLayoutChanged={onOuterLayoutChanged}
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
     >
       {/* Pixel (not %) minSize: inspector `.form-row` labels live in a
@@ -187,7 +256,7 @@ export function PanelLayout({ bridge }: Props) {
           otherwise wasted.) maxSize stays a % so a wide window caps it. */}
       <Panel
         id="left"
-        defaultSize={`${outer.defaultLayout.left}%`}
+        defaultSize={`${outerDefaultLayout.left}%`}
         minSize={330}
         maxSize="40%"
       >
@@ -236,7 +305,7 @@ export function PanelLayout({ bridge }: Props) {
 
       <Panel
         id="center"
-        defaultSize={`${outer.defaultLayout.center}%`}
+        defaultSize={`${outerDefaultLayout.center}%`}
         minSize="30%"
       >
         <Group
@@ -294,7 +363,7 @@ export function PanelLayout({ bridge }: Props) {
               dragged narrow. ~260px keeps them readable. */}
           <Panel
             id="spawner"
-            defaultSize={`${outer.defaultLayout.spawner}%`}
+            defaultSize={`${outerDefaultLayout.spawner}%`}
             minSize={260}
             maxSize="40%"
           >
