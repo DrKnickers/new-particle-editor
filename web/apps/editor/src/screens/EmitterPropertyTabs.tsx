@@ -864,27 +864,21 @@ function FieldCheckbox({
   disabled?: boolean;
   onCheckedChange: (checked: boolean) => void;
   /** When true, allow the label to wrap onto multiple lines instead of
-   *  truncating with ellipsis. Layout is otherwise IDENTICAL to a
-   *  default FieldCheckbox — both variants share `.form-row`'s
-   *  `1fr 58px 40px` grid and the checkbox spans columns 2-3 with
-   *  right-justify so its right edge aligns with the unit cell's
-   *  terminus (and therefore with every spinner's unit suffix).
-   *  Use inlineLabel for labels like "Link particles to instance"
-   *  whose ellipsis-truncation would hide load-bearing text. */
+   *  truncating with ellipsis — a fallback for an extremely narrow
+   *  inspector. With the `.form-row-check` grid (below) the label gets
+   *  the full row width minus the checkbox, so truncation is rare; this
+   *  stays as a belt-and-suspenders for labels like "Link particles to
+   *  instance" at the minimum pane width. */
   inlineLabel?: boolean;
 }) {
-  // The checkbox sits in col 2 with `justify-self: end`, pinning its
-  // right edge to the right edge of col 2 — which IS the right edge
-  // of every spinner's number input (the spinner has `w-full` on the
-  // same column). Col 3 (the empty unit cell) becomes a deliberate
-  // ~40 px gutter between the checkbox and the panel edge, matching
-  // the trailing space spinner rows naturally have between their unit
-  // suffix and the panel edge minus 8 px gap. Every checkbox in the
-  // inspector lands at the same X regardless of which form-row width
-  // modifier (-mid-input / -wide-input / -x2-input / .basic-tab
-  // default) sits underneath.
+  // Checkbox rows use the `.form-row-check` grid (`1fr auto`): the label
+  // fills the row and the 18px checkbox hugs the right edge. Unlike the
+  // spinner `.form-row` (`1fr 58px 40px`), it doesn't reserve the
+  // input + unit columns — which previously left ~80px of empty space
+  // beside the checkbox and squeezed long labels into a too-narrow col 1.
+  // `justify-self-end` keeps the checkbox flush right within its column.
   return (
-    <div className={`form-row${inlineLabel ? " form-row-check-inline" : ""}`}>
+    <div className={`form-row form-row-check${inlineLabel ? " form-row-check-inline" : ""}`}>
       <span className="lbl" title={label}>{label}</span>
       <Checkbox.Root
         checked={checked}

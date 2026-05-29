@@ -176,10 +176,19 @@ export function PanelLayout({ bridge }: Props) {
       onLayoutChanged={outer.onLayoutChanged}
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
     >
+      {/* Pixel (not %) minSize: inspector `.form-row` labels live in a
+          flexible column with text-overflow:ellipsis, so they truncate
+          when this pane is dragged narrow. A % floor is window-relative
+          (fine when wide, truncates on small windows); a px floor is
+          absolute. 330px fits the longest spinner-row label
+          ("Distance from camera:") next to its 58px/40px input+unit
+          columns. (Long *checkbox* labels are handled separately by the
+          `.form-row-check` grid, which frees the column the checkbox
+          otherwise wasted.) maxSize stays a % so a wide window caps it. */}
       <Panel
         id="left"
         defaultSize={`${outer.defaultLayout.left}%`}
-        minSize="15%"
+        minSize={330}
         maxSize="40%"
       >
         <div className="panel h-full w-full">
@@ -280,10 +289,13 @@ export function PanelLayout({ bridge }: Props) {
       {spawnerVisible && (
         <>
           <Separator className="ce-splitter ce-splitter-v" />
+          {/* Pixel minSize for the same reason as `left`: the Spawner
+              panel's labels (e.g. "Initial spawn delay:") truncate when
+              dragged narrow. ~260px keeps them readable. */}
           <Panel
             id="spawner"
             defaultSize={`${outer.defaultLayout.spawner}%`}
-            minSize="12%"
+            minSize={260}
             maxSize="40%"
           >
             <aside

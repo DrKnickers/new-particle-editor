@@ -644,6 +644,18 @@
   text-overflow: clip;
 }
 
+/* Checkbox rows: tight 2-column grid (label fills, checkbox hugs the
+   right). The default `.form-row` template reserves the spinner's 58px
+   input + 40px unit columns; for an 18px checkbox that's ~80px of empty
+   space beside it, which squeezed long labels ("Object space
+   acceleration", "Random rotation direction") into column 1 and
+   truncated them. Dropping those columns gives the label the full row
+   width minus the checkbox. The checkbox right-aligns to the inspector's
+   content edge — consistent across every checkbox row. */
+.form-row.form-row-check {
+  grid-template-columns: 1fr auto;
+}
+
 /* Per-axis micro-label above each spinner in a Vec3 cluster (X / Y /
    Z labels stacked above their Spinner). Matches legacy IDD_EMITTER_PROPS3
    (.rc:352-354) which puts individual "X" / "Y" / "Z" LTEXTs above
