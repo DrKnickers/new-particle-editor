@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 rendering-fidelity] Headless frame-capture mode (`--capture`)
 
-*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-29 · [`7af4b5c`](https://github.com/DrKnickers/new-particle-editor/commit/7af4b5c) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 New developer tooling for rendering-fidelity checks. `ParticleEditor.exe
 --new-ui --capture <alo> <png> [--frames N]` boots the host, auto-selects
