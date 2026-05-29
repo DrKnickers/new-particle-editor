@@ -18,7 +18,7 @@ Conventions:
 
 ### [HANDOFF item 4] Native-test harness gates on dist/ build mode
 
-*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-29 · [`b4765bd`](https://github.com/DrKnickers/new-particle-editor/commit/b4765bd) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 The native-test harness now refuses to run when the React `dist/`
 bundle was built for a different hosting mode than the lane being
