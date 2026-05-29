@@ -187,14 +187,23 @@ no commit.
   `AppearanceTab` suite unaffected).
 - MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning only).
 - Mock/browser: Browse is a clean no-op (returns `""`).
-- **Manual native-dialog smoke: pending user** (can't automate a modal
-  Win32 dialog) — select EaWX, open an effect, Appearance tab, click
-  Browse on Color/Bump → dialog opens in mod texture folder → pick a
-  `.dds` → field fills + viewport rebinds.
+- **Manual native-dialog smoke: PASSED (user-verified).** Browse opens
+  the dialog, picking a `.dds` fills the field and rebinds the texture
+  in the viewport (Risk 3 cleared — the existing set-properties path
+  reloads the texture).
 
-**Risk 3 (texture rebind on commit):** Browse reuses the existing
-text-input commit path, so if typing a texture name updates the render
-today, Browse does too. Confirm in the smoke pass.
+**Two post-smoke fixes (user feedback):**
+1. *Dialog initial dir* — verified (runtime diagnostic) that the handler
+   resolves `…\<mod>\Data\Art\Textures` when a mod is selected; the
+   dialog opens there. The earlier "didn't default" was a no-mod-selected
+   session (empty `GetSelectedModPath` → fell back to last-used folder).
+   No code change — confirmed working once EaWX is selected. Shipped at
+   `ab1d340` (logic was already correct).
+2. *Field stretch* — the input now stretches with the inspector pane
+   (`.form-row-texture`: `96px minmax(0,1fr) auto`). Shipped at `3bcdd55`.
+
+**Shipped to `origin/lt-4`** (`ef0a898..3bcdd55`): plan `e7c6318`,
+feature `ab1d340`, CHANGELOG backfill `a3a1a6a`, stretch fix `3bcdd55`.
 
 **Next (sub-feature B):** frequently-used texture palette — bridge over
 the existing `TexturePalette::Store` + a React popup added to
