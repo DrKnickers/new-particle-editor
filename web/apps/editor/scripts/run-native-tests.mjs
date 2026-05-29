@@ -14,11 +14,134 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const editorDir = resolve(__dirname, "..");
 const repoRoot = resolve(__dirname, "../../../..");
 const exe = join(repoRoot, "x64", "Debug", "ParticleEditor.exe");
+const buildMetaPath = join(editorDir, "dist", "build-meta.json");
+
+// [HANDOFF item 4] dist/ build-mode gate.
+//
+// The editor has two hosting modes that MUST agree across a runtime
+// knob and a build knob:
+//   - ALO_HOSTING_MODE  (runtime; set below from --legacy)
+//   - VITE_HOSTING_MODE  (build-time; baked into dist/ by `pnpm build`)
+// This harness owns the runtime knob but historically trusted that
+// whoever built dist/ matched the build knob. When they disagreed the
+// editor rendered broken yet every spec still executed, producing a
+// meaningless pass/fail number — the silent failure this gate kills.
+//
+// vite.config.ts's buildMetaPlugin stamps dist/build-meta.json with the
+// baked hostingMode; we read it here and refuse to launch on mismatch
+// (or missing/unmarked dist/) unless --rebuild was passed.
+
+// Read the baked hosting mode, or null if dist/ is missing / unmarked
+// (a pre-gate build, or a Rollup failure that left no marker).
+function readDistMode() {
+  try {
+    return JSON.parse(readFileSync(buildMetaPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// PowerShell remediation command for a given lane — quoted in the
+// fail-fast message AND mirrored by the --rebuild spawn below.
+function buildCmdFor(mode) {
+  const build = "pnpm --filter @particle-editor/editor build";
+  return mode === "legacy"
+    ? `$env:VITE_HOSTING_MODE="legacy"; ${build}; Remove-Item Env:VITE_HOSTING_MODE`
+    : build;
+}
+
+// Run the editor's two-step build (`tsc -b && vite build`) shell-free,
+// matching the Playwright-CLI invocation pattern below (pnpm is a .CMD
+// shim that shell-free spawn refuses; the local node bins don't have
+// that problem). Returns the child's exit code.
+function runBuildStep(jsBin, args, env) {
+  return new Promise((resolveStep) => {
+    const p = spawn(process.execPath, [jsBin, ...args], {
+      cwd: editorDir,
+      stdio: "inherit",
+      shell: false,
+      env,
+    });
+    p.on("exit", (code) => resolveStep(code ?? 1));
+    p.on("error", () => resolveStep(1));
+  });
+}
+
+async function rebuildDist(requestedMode) {
+  // Mirror the documented manual flow: set VITE_HOSTING_MODE for the
+  // legacy lane, delete it for composition (cf. HANDOFF "How to run
+  // modes locally"). The build inherits this env.
+  const env = { ...process.env };
+  if (requestedMode === "legacy") env.VITE_HOSTING_MODE = "legacy";
+  else delete env.VITE_HOSTING_MODE;
+
+  const tsc = join(editorDir, "node_modules", "typescript", "bin", "tsc");
+  const vite = join(editorDir, "node_modules", "vite", "bin", "vite.js");
+  console.log(`[run-native-tests] --rebuild → building ${requestedMode} dist/ ...`);
+  const tscCode = await runBuildStep(tsc, ["-b"], env);
+  if (tscCode !== 0) return tscCode;
+  return runBuildStep(vite, ["build"], env);
+}
+
+// Pre-flight: ensure dist/ was built for the requested lane, else
+// fail-fast (or rebuild). Runs BEFORE the host launch so a wrong-mode
+// run never burns time. Calls process.exit(1) on an unrecoverable
+// mismatch.
+async function ensureDistMode(requestedMode, allowRebuild) {
+  let meta = readDistMode();
+  if (meta && meta.hostingMode === requestedMode) {
+    console.log(
+      `[run-native-tests] dist/ build mode OK: ${requestedMode} ` +
+        `(commit ${meta.commit ?? "?"}, built ${meta.builtAt ?? "?"})`,
+    );
+    return;
+  }
+
+  const found = meta
+    ? `${meta.hostingMode} (commit ${meta.commit ?? "?"}, built ${meta.builtAt ?? "?"})`
+    : "<no dist/build-meta.json — dist/ is missing or was built before this gate>";
+
+  if (allowRebuild) {
+    console.log(
+      `[run-native-tests] dist/ mode mismatch (requested ${requestedMode}, ` +
+        `found ${found}) — rebuilding (--rebuild).`,
+    );
+    const code = await rebuildDist(requestedMode);
+    if (code !== 0) {
+      console.error(`[run-native-tests] rebuild failed (exit ${code}).`);
+      process.exit(1);
+    }
+    // Don't trust exit 0 — re-read the marker and confirm it flipped
+    // (a build can silently no-op; cf. lessons L-025).
+    meta = readDistMode();
+    if (!meta || meta.hostingMode !== requestedMode) {
+      console.error(
+        `[run-native-tests] rebuild did not produce a ${requestedMode} dist/ ` +
+          `(marker now: ${meta ? meta.hostingMode : "<missing>"}). Aborting.`,
+      );
+      process.exit(1);
+    }
+    console.log(`[run-native-tests] rebuild OK: dist/ is now ${requestedMode}.`);
+    return;
+  }
+
+  console.error(
+    `\n[run-native-tests] dist/ build-mode mismatch — refusing to run.\n` +
+      `  Requested lane : ${requestedMode}\n` +
+      `  dist/ was built: ${found}\n\n` +
+      `  Running the suite now would test the wrong hosting mode (broken\n` +
+      `  viewport, meaningless pass/fail). Rebuild dist/ for this lane:\n\n` +
+      `    ${buildCmdFor(requestedMode)}\n\n` +
+      `  ...or re-run this command with --rebuild to do it automatically.\n`,
+  );
+  process.exit(1);
+}
 
 async function probeCdp() {
   try {
@@ -60,7 +183,7 @@ async function main() {
   // the exact footgun HANDOFF item 16 R7 warned about. Recognised
   // flags (--update, --legacy) are consumed above; anything else
   // gets forwarded as-is.
-  const RECOGNISED_FLAGS = new Set(["--update", "--legacy"]);
+  const RECOGNISED_FLAGS = new Set(["--update", "--legacy", "--rebuild"]);
   const forwardedArgs = process.argv.slice(2).filter((a) => !RECOGNISED_FLAGS.has(a));
 
   // [MT-12] `--legacy` flag: run the host + Playwright tests in
@@ -72,10 +195,15 @@ async function main() {
   // immediately. Used by `pnpm test:native:legacy` for the legacy
   // regression lane (132/0/56 baseline pre-MT-12; same lane still
   // exists, just opt-in now).
-  if (process.argv.includes("--legacy")) {
+  const requestedMode = process.argv.includes("--legacy") ? "legacy" : "composition";
+  if (requestedMode === "legacy") {
     process.env.ALO_HOSTING_MODE = "legacy";
     console.log("[run-native-tests] --legacy flag → ALO_HOSTING_MODE=legacy");
   }
+
+  // [HANDOFF item 4] Verify dist/ was built for this lane before
+  // launching the host. Fail-fast on mismatch unless --rebuild.
+  await ensureDistMode(requestedMode, process.argv.includes("--rebuild"));
 
   await killAny();
   // Give Windows a moment to release file locks.

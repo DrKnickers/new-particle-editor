@@ -16,6 +16,53 @@ Conventions:
 
 ## Changelog
 
+### [HANDOFF item 4] Native-test harness gates on dist/ build mode
+
+*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The native-test harness now refuses to run when the React `dist/`
+bundle was built for a different hosting mode than the lane being
+run — or when `dist/` is missing entirely. The editor's hosting mode
+is set by two switches that must agree: `ALO_HOSTING_MODE` (runtime,
+owned by the harness) and `VITE_HOSTING_MODE` (build-time, baked into
+`dist/`). Previously the harness owned only the runtime switch and
+blindly trusted that `dist/` matched; when they disagreed the editor
+rendered broken but all ~157 specs still executed, producing a
+meaningless pass/fail number with no error — the silent-failure class
+HANDOFF item 4 was filed against. Now `pnpm test:native` /
+`test:native:legacy` (and the `a11y*` aliases) print exactly what's
+wrong and the precise rebuild command, then exit non-zero *before*
+launching the host. Passing `--rebuild` makes the harness run the
+correct `pnpm build` itself and proceed. **First-adoption note:** any
+`dist/` built before this change has no marker, so the gate fail-fasts
+on first run — rebuild once (or pass `--rebuild`) and the marker is
+stamped from then on.
+
+**How we tackled it.** A small inline Vite plugin (`buildMetaPlugin`
+in [`web/apps/editor/vite.config.ts`](web/apps/editor/vite.config.ts))
+stamps `dist/build-meta.json` (`{ hostingMode, commit, builtAt }`) on
+`closeBundle`. An explicit marker is the only robust source of truth —
+the mode is otherwise constant-folded inline into the minified bundle
+and not greppable. The harness
+([`web/apps/editor/scripts/run-native-tests.mjs`](web/apps/editor/scripts/run-native-tests.mjs))
+reads the marker in a new `ensureDistMode()` pre-flight, compares
+`hostingMode` to the requested lane, and fail-fasts (or rebuilds). The
+`--rebuild` path runs `tsc -b` then `vite build` shell-free via
+`process.execPath` against the local node bins — matching the file's
+existing Playwright-CLI invocation pattern rather than reintroducing a
+shell (pnpm is a `.CMD` shim that shell-free `spawn` refuses), then
+re-reads the marker to confirm the rebuild actually flipped it (never
+trust exit code 0 — L-025).
+
+**Issues encountered and resolutions.** The `builtAt` field uses
+`new Date()`, which is the same volatile-value class that bit the
+About dialog's build date (item 16 / L-028) — but it needs no
+normalizer here because it's never byte-compared by a golden; it lives
+in a gitignored diagnostic file read only by the harness. Noted in a
+code comment so a future reader doesn't "fix" a non-problem.
+
+---
+
 ### [MT-12 follow-up] Complete the dialog-about a11y fix — normalize the volatile build date
 
 *2026-05-29 · [`a315245`](https://github.com/DrKnickers/new-particle-editor/commit/a315245) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

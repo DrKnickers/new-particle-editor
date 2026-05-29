@@ -227,10 +227,24 @@ it into a dispatch.
 3. **`canvas-architecture.spec.ts` test.fixme markers.** Inherited
    from Phase 2 (L-012 instrumentation issue). Three documented
    fix approaches.
-4. **Test harness env-var pre-flight check.** Inherited from
-   Stage 4f. Harness should fail-fast or auto-rebuild on
-   `ALO_*` / `VITE_*` mismatch — would have prevented several of
-   this session's dist/mode-mismatch silent failures.
+4. ~~**Test harness env-var pre-flight check.**~~ ✅ **RESOLVED**
+   (2026-05-29). The native-test harness now gates on the baked
+   `dist/` hosting mode. A Vite plugin (`buildMetaPlugin` in
+   [`vite.config.ts`](../web/apps/editor/vite.config.ts)) stamps
+   `dist/build-meta.json` with the build-time `VITE_HOSTING_MODE`;
+   [`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
+   reads it in a new `ensureDistMode()` pre-flight and **fail-fasts
+   before host launch** when the marker's `hostingMode` doesn't match
+   the requested lane (`--legacy` ⇒ legacy, else composition), or when
+   `dist/` is missing / unmarked. The fail-fast message prints the
+   exact rebuild command. Opt-in `--rebuild` runs the correct
+   `pnpm build` (shell-free `tsc -b` + `vite build`, then re-reads the
+   marker to confirm — never trusts exit 0, cf. L-025) and proceeds.
+   Verified: composition `157/0/31`, legacy `132/0/56`, both fail-fast
+   directions, missing-marker fail-fast, and `--grep`/`--update`
+   forwarding (item 16 fix) untouched. **First-adoption note:** a
+   `dist/` built before this change has no marker, so the gate
+   fail-fasts on first run — rebuild once (or `--rebuild`) to stamp it.
 5. **Coalesce-key tuning for spinner-drag undo.** Today's
    `captureUndo` lambda uses key=0 (never coalesce), so a 100-tick
    spinner drag produces 100 undo entries. Separate dispatch worth
@@ -723,6 +737,8 @@ pnpm --filter @particle-editor/editor test:native:legacy
 ```
 
 **Mode-mismatch diagnosis.** If the viewport doesn't render correctly (placeholder span where engine pixels should be, or DXGI engine showing behind an empty `<canvas>`), the dist/ build-mode and runtime mode disagree. Both modes log their state on startup; grep the editor's stderr / host.log for `[host] hosting mode:` (runtime) and the browser console / DevTools for `[mode] React build mode:` (build) — they should agree. To fix: either rebuild dist/ in the matching mode or set/unset `$env:ALO_HOSTING_MODE` to match the dist.
+
+**Test-harness mode gate (HANDOFF item 4, 2026-05-29).** `pnpm test:native` / `test:native:legacy` (and the `a11y*` aliases) now refuse to run when the baked `dist/` mode doesn't match the lane — they read `dist/build-meta.json` (stamped by `buildMetaPlugin` in `vite.config.ts`) and fail-fast with the exact rebuild command *before* launching the host. So a wrong-mode `dist/` can no longer silently produce a meaningless pass/fail. Pass `--rebuild` to have the harness build the matching `dist/` itself and proceed. A `dist/` with no marker (pre-gate build, or never built) fail-fasts the same way — rebuild once to stamp it.
 
 **Pre-MT-12 env vars retired.** `ALO_WEBVIEW2_HOSTING`, `ALO_VIEWPORT_TRANSPORT`, `VITE_WEBVIEW2_HOSTING`, `VITE_VIEWPORT_TRANSPORT` no longer have any effect. The boot-time host will log a deprecation warning if any is set in the environment. Use `ALO_HOSTING_MODE` / `VITE_HOSTING_MODE` instead.
 
