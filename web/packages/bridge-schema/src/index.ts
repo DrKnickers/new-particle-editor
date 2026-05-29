@@ -457,6 +457,11 @@ export type EmitterTreeDto = { root: EmitterTreeNode };
 // Requests: JS → host
 // ============================================================================
 
+// One entry in the frequently-used texture palette. `slotMask` is the
+// raw C++ bit-flag (SLOT_COLOR=1, SLOT_BUMP=2) recording which slots the
+// texture has been used as. [LT-4 sub-feature B]
+export type PaletteEntry = { filename: string; pinned: boolean; slotMask: number };
+
 export type Request =
   // File / recents
   | { kind: "file/new";                   params: Record<string, never> }
@@ -471,6 +476,18 @@ export type Request =
   // if cancelled). `slot` drives only the dialog title (and future
   // palette usage-tracking). [LT-4 feature-parity A]
   | { kind: "textures/browse";            params: { slot: "color" | "bump" } }
+
+  // Frequently-used texture palette — per-mod pinned + recent textures
+  // backed by the C++ TexturePalette::Store. `list` applies the
+  // slot-aware filter default (and persists it); `thumbnail` decodes a
+  // texture to a base64 PNG data URI (null = missing/broken);
+  // `toggle-pin` flips pinned state (rejects when pins are full);
+  // `touch-recent` records a texture as used in the given slot.
+  // No active mod ⇒ list is empty and mutations are no-ops. [LT-4 sub-feature B]
+  | { kind: "textures/palette/list";         params: { slot: "color" | "bump" } }
+  | { kind: "textures/palette/thumbnail";    params: { filename: string } }
+  | { kind: "textures/palette/toggle-pin";   params: { filename: string } }
+  | { kind: "textures/palette/touch-recent"; params: { filename: string; slot: "color" | "bump" } }
 
   // Engine state — full snapshot
   | { kind: "engine/state/snapshot";      params: Record<string, never> }
@@ -773,6 +790,16 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "file/save-as" }              ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/recent/list" }          ? { paths: string[] } :
   R extends { kind: "textures/browse" }           ? { filename: string } :
+
+  // Texture palette (LT-4 sub-feature B)
+  R extends { kind: "textures/palette/list" }
+    ? { hasMod: boolean; filter: "color" | "bump"; pins: PaletteEntry[]; recents: PaletteEntry[] } :
+  R extends { kind: "textures/palette/thumbnail" }
+    ? { dataUri: string | null } :
+  R extends { kind: "textures/palette/toggle-pin" }
+    ? { ok: true; pinned: boolean } | { ok: false; reason: "pins-full" } :
+  R extends { kind: "textures/palette/touch-recent" }
+    ? { ok: true } :
 
   // Mods (LT-4 D6)
   R extends { kind: "mods/list" }                 ? { mods: ModDescriptor[]; activePath: string | null } :

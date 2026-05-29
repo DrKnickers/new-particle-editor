@@ -11,6 +11,7 @@
 #include "../LinkGroup.h"
 #include "../ModManager.h"
 #include "../ParticleSystem.h"
+#include "../UI/TexturePalette.h"
 #include "../ParticleSystemIO.h"
 #include "../Rescale.h"
 #include "../SpawnerDriver.h"
@@ -1032,6 +1033,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             path = Utf8ToWide(pit->get<std::string>());
         }
         bool ok = m_modManager->SelectMod(path);
+        // Drop cached palette thumbnails so a new mod's same-named textures
+        // (e.g. p_smoke_atlas.dds) don't render the previous mod's art.
+        // SelectMod already repointed Store::SetActiveMod + the legacy popup
+        // cache; this clears the new-UI bridge cache (todo.md Risk 1).
+        TexturePalette::ClearBridgeThumbCache();
         // Whether shader-reload failed or not, the FileManager + registry
         // + palette updates have rolled forward — broadcast the new
         // active path so the menu re-ticks even if shaders complain.
@@ -1616,6 +1622,98 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         const size_t slash = full.find_last_of(L"\\/");
         const std::wstring base = (slash == std::wstring::npos) ? full : full.substr(slash + 1);
         sendOk(json{{"filename", WideToUtf8(base)}});
+        return res;
+    }
+
+    // -------- textures/palette/* --------
+    //
+    // Expose the per-mod frequently-used texture palette
+    // (TexturePalette::Store, already repointed at the active mod by
+    // ModManager::SelectMod) to the new UI. [LT-4 sub-feature B]
+    if (kind == "textures/palette/list")
+    {
+        std::string slot = "color";
+        if (auto it = params.find("slot"); it != params.end() && it->is_string())
+            slot = it->get<std::string>();
+        const TexturePalette::SlotMask mask =
+            (slot == "bump") ? TexturePalette::SLOT_BUMP : TexturePalette::SLOT_COLOR;
+
+        auto& store = TexturePalette::Store::Instance();
+        store.SetActiveFilter(mask);  // slot-aware default (persists per-mod)
+
+        auto toArray = [](const std::vector<TexturePalette::Entry>& entries) {
+            json arr = json::array();
+            for (const TexturePalette::Entry& e : entries)
+                arr.push_back(json{
+                    {"filename", WideToUtf8(e.filename)},
+                    {"pinned",   e.isPinned},
+                    {"slotMask", (int)e.slotMask},
+                });
+            return arr;
+        };
+
+        sendOk(json{
+            {"hasMod",  store.HasActiveMod()},
+            {"filter",  slot},
+            {"pins",    toArray(store.Pins(mask))},
+            {"recents", toArray(store.Recents(mask))},
+        });
+        return res;
+    }
+
+    if (kind == "textures/palette/thumbnail")
+    {
+        std::string filename;
+        if (auto it = params.find("filename"); it != params.end() && it->is_string())
+            filename = it->get<std::string>();
+
+        IDirect3DDevice9* dev = m_engine ? m_engine->GetDevice() : nullptr;
+        const std::string uri = TexturePalette::GetThumbnailDataUri(
+            Utf8ToWide(filename), m_fileManager, dev);
+        sendOk(json{{"dataUri", uri.empty() ? json(nullptr) : json(uri)}});
+        return res;
+    }
+
+    if (kind == "textures/palette/toggle-pin")
+    {
+        std::string filename;
+        if (auto it = params.find("filename"); it != params.end() && it->is_string())
+            filename = it->get<std::string>();
+
+        const std::wstring wf = Utf8ToWide(filename);
+        auto& store = TexturePalette::Store::Instance();
+        if (!store.TogglePin(wf))
+        {
+            // The only user-reachable failure (entry exists + mod active) is
+            // the pins-full cap; no-mod/malformed never happen from the UI.
+            sendOk(json{{"ok", false}, {"reason", "pins-full"}});
+            return res;
+        }
+        // Report the new pinned state (an entry can be pinned for either
+        // slot, so check both filters).
+        bool pinned = false;
+        for (const TexturePalette::Entry& e : store.Pins(TexturePalette::SLOT_COLOR))
+            if (e.filename == wf) { pinned = true; break; }
+        if (!pinned)
+            for (const TexturePalette::Entry& e : store.Pins(TexturePalette::SLOT_BUMP))
+                if (e.filename == wf) { pinned = true; break; }
+        sendOk(json{{"ok", true}, {"pinned", pinned}});
+        return res;
+    }
+
+    if (kind == "textures/palette/touch-recent")
+    {
+        std::string filename;
+        std::string slot = "color";
+        if (auto it = params.find("filename"); it != params.end() && it->is_string())
+            filename = it->get<std::string>();
+        if (auto it = params.find("slot"); it != params.end() && it->is_string())
+            slot = it->get<std::string>();
+        const TexturePalette::SlotMask mask =
+            (slot == "bump") ? TexturePalette::SLOT_BUMP : TexturePalette::SLOT_COLOR;
+
+        TexturePalette::Store::Instance().TouchRecent(Utf8ToWide(filename), mask);
+        sendOk(json{{"ok", true}});
         return res;
     }
 

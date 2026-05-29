@@ -538,6 +538,25 @@ export class MockBridge implements Bridge {
         // opens GetOpenFileNameW in the active mod's texture folder.
         return { filename: "" };
 
+      // ---------------- texture palette (sub-feature B) ----------------
+      //
+      // Browser mode has no per-mod Store and no texture decode, so the
+      // palette is inert: empty pins/recents, null thumbnails, no-op
+      // mutations. The TexturePickerField stays fully usable via Browse
+      // and manual entry. The native host backs these with
+      // TexturePalette::Store + EncodeThumbnailPng.
+      case "textures/palette/list":
+        return { hasMod: false, filter: req.params.slot, pins: [], recents: [] };
+
+      case "textures/palette/thumbnail":
+        return { dataUri: null };
+
+      case "textures/palette/toggle-pin":
+        return { ok: true, pinned: false };
+
+      case "textures/palette/touch-recent":
+        return { ok: true };
+
       // ---------------- spawner (Phase 3 Screen 8 Batch 4) ----------------
       //
       // The native host treats spawner/start as a full-config replace

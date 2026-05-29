@@ -35,7 +35,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import * as Tabs from "@radix-ui/react-tabs";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Select from "@radix-ui/react-select";
-import { Check, ChevronDown, FolderOpen } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, LayoutGrid } from "lucide-react";
+import { TexturePalettePopover } from "@/screens/TexturePalettePopover";
 import type {
   Bridge,
   EmitterPropertiesDto,
@@ -292,6 +293,7 @@ export function EmitterPropertyTabs({ bridge }: Props) {
             properties={p}
             onCommit={commit}
             onBrowseTexture={browseTexture}
+            bridge={bridge}
           />
         ))}
       </Tabs.Content>
@@ -685,46 +687,85 @@ function FieldText({
 // blur behaviour, and adds the Browse button. `onBrowse(slot)` resolves
 // to the picked basename (or "" if cancelled); a non-empty result is
 // committed via the same `onCommit` the text input uses.
-// [LT-4 feature-parity A] Structured to receive the frequently-used
-// palette button later (sub-feature B).
+// [LT-4 feature-parity B] The palette button opens the frequently-used
+// texture palette (TexturePalettePopover). Every non-empty commit — manual
+// blur, Browse, or palette apply — funnels through `commit`, which also
+// fires `textures/palette/touch-recent` so recents stay warm (legacy
+// parity with Emitter.cpp's three TouchRecent sites).
 export function TexturePickerField({
   label,
   value,
   slot,
   onCommit,
   onBrowse,
+  bridge,
 }: {
   label: string;
   value: string;
   slot: "color" | "bump";
   onCommit: (value: string) => void;
   onBrowse: (slot: "color" | "bump") => Promise<string>;
+  bridge: Bridge;
 }) {
   const [busy, setBusy] = useState(false);
+
+  // Single commit funnel: apply the value, then record it as used so it
+  // lands in the per-mod recents. Empty values (cancelled Browse) neither
+  // commit nor track.
+  const commit = useCallback(
+    (next: string) => {
+      onCommit(next);
+      if (next) {
+        void bridge
+          .request({
+            kind: "textures/palette/touch-recent",
+            params: { filename: next, slot },
+          })
+          .catch(() => {
+            /* tracking is best-effort; never block the commit */
+          });
+      }
+    },
+    [bridge, onCommit, slot],
+  );
+
   const handleBrowse = async () => {
     if (busy) return;
     setBusy(true);
     try {
       const picked = await onBrowse(slot);
-      if (picked) onCommit(picked);
+      if (picked) commit(picked);
     } finally {
       setBusy(false);
     }
   };
+
   return (
     <div className="form-row form-row-texture">
       <span className="lbl" title={label}>{label}</span>
-      <FieldText wide label={label} value={value} onCommit={onCommit} />
-      <button
-        type="button"
-        className="btn-texture-browse"
-        onClick={handleBrowse}
-        disabled={busy}
-        aria-label={`Browse for ${label}`}
-        title="Browse for a texture file"
-      >
-        <FolderOpen size={14} aria-hidden="true" />
-      </button>
+      <FieldText wide label={label} value={value} onCommit={commit} />
+      <div className="texture-btns">
+        <button
+          type="button"
+          className="btn-texture-browse"
+          onClick={handleBrowse}
+          disabled={busy}
+          aria-label={`Browse for ${label}`}
+          title="Browse for a texture file"
+        >
+          <FolderOpen size={14} aria-hidden="true" />
+        </button>
+        <TexturePalettePopover bridge={bridge} slot={slot} onApply={commit}>
+          <button
+            type="button"
+            className="btn-texture-browse"
+            aria-label={`Open texture palette for ${label}`}
+            title="Frequently-used textures"
+          >
+            <LayoutGrid size={14} aria-hidden="true" />
+          </button>
+        </TexturePalettePopover>
+      </div>
     </div>
   );
 }
@@ -966,10 +1007,20 @@ function FieldSelect({
 // `isWorldOriented = false` the moment the user picks bump-map; we
 // keep the property untouched here so toggling back restores the
 // user's prior choice, but the UI reflects the forced state).
+// No-op bridge so AppearanceTab renders in isolation (existing field-label
+// / spinner tests) without wiring a real bridge. The palette popover is
+// closed at mount, so list/occlusion requests never fire; only a texture
+// commit would hit `request`, which harmlessly resolves empty.
+const NOOP_BRIDGE = {
+  request: async () => ({}),
+  on: () => () => {},
+} as unknown as Bridge;
+
 export function AppearanceTab({
   properties,
   onCommit,
   onBrowseTexture = async () => "",
+  bridge = NOOP_BRIDGE,
 }: {
   properties: EmitterPropertiesDto;
   onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
@@ -977,6 +1028,9 @@ export function AppearanceTab({
    *  basename ("" if cancelled). Defaults to a no-op so existing tests
    *  and any caller that doesn't wire Browse still render cleanly. */
   onBrowseTexture?: (slot: "color" | "bump") => Promise<string>;
+  /** Live bridge for the texture palette popover + usage tracking.
+   *  Defaults to a no-op so isolated AppearanceTab tests render cleanly. */
+  bridge?: Bridge;
 }) {
   const forceFace = properties.blendMode === BLEND_BUMP;
   const tailEnabled = properties.hasTail;
@@ -999,17 +1053,16 @@ export function AppearanceTab({
   return (
     <div className="inspector">
       <Section title="Textures">
-        {/* [LT-4 feature-parity A] Color/bump texture fields now have a
-            Browse button (host-side native dialog via textures/browse).
-            TODO(MT-1 / sub-feature B): add the frequently-used palette
-            popup button to TexturePickerField (legacy IDC_BUTTON_PALETTE
-            at [src/UI/Emitter.cpp:411]). */}
+        {/* [LT-4 feature-parity A+B] Color/bump texture fields: Browse
+            button (host native dialog via textures/browse) + palette
+            button (frequently-used per-mod pinned/recent popup). */}
         <TexturePickerField
           label="Color texture:"
           slot="color"
           value={properties.colorTexture}
           onCommit={(v) => onCommit({ colorTexture: v })}
           onBrowse={onBrowseTexture}
+          bridge={bridge}
         />
         <TexturePickerField
           label="Bump texture:"
@@ -1017,6 +1070,7 @@ export function AppearanceTab({
           value={properties.normalTexture}
           onCommit={(v) => onCommit({ normalTexture: v })}
           onBrowse={onBrowseTexture}
+          bridge={bridge}
         />
         <FieldSpinner
           label="Texture elements:"

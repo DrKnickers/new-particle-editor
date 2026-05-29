@@ -183,6 +183,23 @@ void RefreshPopup();
 // don't leak across.
 void ClearThumbnailCache();
 
+// ============================================================================
+// New-UI bridge thumbnails (sub-feature B)
+//
+// The arch-C palette popover lives in React (WebView2), so thumbnails must
+// cross the bridge as image data rather than being blitted to a Win32
+// window. GetThumbnailDataUri decodes a texture (by basename) using the
+// same D3DX technique as the legacy popup's DecodeThumbnail, GDI+
+// PNG-encodes it, and returns a `data:image/png;base64,...` URI. Returns
+// an empty string on a missing file or decode failure (the bridge maps ""
+// → { dataUri: null } and React shows a placeholder). Results are cached
+// by filename; ClearBridgeThumbCache() drops the cache on mod switch so
+// same-named textures from different mods don't leak across.
+std::string GetThumbnailDataUri(const std::wstring& filename,
+                                IFileManager* fileManager,
+                                IDirect3DDevice9* device);
+void        ClearBridgeThumbCache();
+
 } // namespace TexturePalette
 
 #endif

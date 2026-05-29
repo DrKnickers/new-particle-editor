@@ -599,6 +599,14 @@
   opacity: 0.5;
   cursor: default;
 }
+/* Browse + palette buttons share the single trailing grid column so they
+   sit inline to the right of the input (same size), instead of the palette
+   button wrapping to its own row. */
+.form-row.form-row-texture .texture-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 /* Multi-spinner clusters (Vec3 Value/Min/Max, Acceleration X/Y/Z,
    RGBA randomColors). Standard .form-row gives the cluster only the

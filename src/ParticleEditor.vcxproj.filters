@@ -230,6 +230,9 @@
     <ClCompile Include="UI\PaletteStore.cpp">
       <Filter>Source Files\UI</Filter>
     </ClCompile>
+    <ClCompile Include="UI\PaletteThumbs.cpp">
+      <Filter>Source Files\UI</Filter>
+    </ClCompile>
     <ClCompile Include="UI\TrackEditor.cpp">
       <Filter>Source Files\UI</Filter>
     </ClCompile>
