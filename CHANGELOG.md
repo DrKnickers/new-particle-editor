@@ -16,6 +16,61 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 feature-parity] Frequently-used texture palette for emitter textures
+
+*2026-05-29 · [`59cfb27`](https://github.com/DrKnickers/new-particle-editor/commit/59cfb27) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The second half of texture-selection parity. Each emitter **Color
+texture** / **Bump texture** field now has a **palette button** (grid
+icon) beside Browse that opens a popover of this mod's **Pinned** and
+**Recent** textures as a thumbnail grid, filtered by **Color/Bump**.
+Click a thumbnail to apply it; click the star to pin/unpin (up to 12
+per section); pins and recents persist per-mod across restarts. The
+filter opens on the slot you launched from (Color field → Color), and
+any texture you set — via Browse, the palette, or by typing a name —
+is recorded as a recent, so your go-to textures stay one click away.
+With no mod selected the popover shows a "tracks textures per mod"
+hint. This restores the legacy 0.2 palette popup
+(`src/UI/Emitter.cpp` IDC_BUTTON_PALETTE) in the new UI.
+
+**How we tackled it.** The C++ data layer already existed
+([`TexturePalette::Store`](src/UI/TexturePalette.h), per-mod pinned +
+recent, persisted to `%APPDATA%\AloParticleEditor\texture-palettes.ini`)
+and is kept pointed at the active mod by `ModManager::SelectMod` — so B
+is pure *exposure*. Four bridge requests
+([`bridge-schema`](web/packages/bridge-schema/src/index.ts)):
+`textures/palette/{list,thumbnail,toggle-pin,touch-recent}`, handled in
+[`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp) against
+`Store::Instance()`. Thumbnails: new
+[`PaletteThumbs.cpp`](src/UI/PaletteThumbs.cpp) reuses the legacy
+`DecodeThumbnail` technique (`D3DXCreateTextureFromFileInMemoryEx` →
+`LockRect`) then GDI+ PNG-encodes + base64s the result, fetched lazily
+per cell and host-cached (cleared on `mods/select` so same-named
+textures from different mods don't leak). Because the decode resolves
+through `FileManager::getFile`, `.meg`-packed base-game textures
+thumbnail for free. React: new
+[`TexturePalettePopover`](web/apps/editor/src/screens/TexturePalettePopover.tsx)
+(Radix Popover, mirroring the Ground/Background dropdowns) + a palette
+button on `TexturePickerField`
+([`EmitterPropertyTabs.tsx`](web/apps/editor/src/screens/EmitterPropertyTabs.tsx))
+whose single commit funnel fires `touch-recent` on every commit path.
+
+**Issues encountered and resolutions.** (1) The palette button first
+wrapped to its own row — it was a 4th child in the 3-column
+`.form-row-texture` grid; wrapping Browse + palette in a `.texture-btns`
+flex cell keeps them inline and same-sized. (2) The `list` response
+carries an explicit `hasMod` flag so the empty-state hint can honestly
+distinguish "no mod" from "mod with an empty palette" (the Store is
+inert without an active mod). (3) Scoped to a per-mod palette (Path A):
+a base-game/unmodded palette and a `.meg` content *browser* are
+deferred as separate items. (4) Confirmed the feature is a11y-golden
+neutral — the texture fields render only with an emitter selected and no
+captured a11y surface selects one; a blanket golden refresh surfaced
+only pre-existing shared-profile drift (theme/Spawner state), which was
+reverted — see [`tasks/lessons.md`](tasks/lessons.md) L-030.
+
+---
+
 ### [LT-4 feature-parity] Browse button for emitter color/bump textures
 
 *2026-05-29 · [`ab1d340`](https://github.com/DrKnickers/new-particle-editor/commit/ab1d340) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

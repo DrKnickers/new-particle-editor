@@ -2370,3 +2370,70 @@ step; the user's domain knowledge supplied that reflex. When a
 fidelity hunt stalls on "the code is identical but it looks different,"
 widen the search to *inputs* (assets, config, active mod), not just
 deeper into the pipeline.
+
+---
+
+## L-030 — Before regenerating a11y goldens for a UI change, confirm your change actually renders in a captured surface; and never blanket-`a11y:update` on a machine whose persisted UI state has drifted
+
+**Rule.** A UI change does **not** automatically mean the a11y goldens
+need regenerating. First confirm the new element actually appears in a
+*captured* surface. If it doesn't, the goldens are unaffected — do not
+touch them. And **never** run a blanket `pnpm a11y:update` to "refresh"
+goldens on a machine whose persisted UI state differs from the
+golden-capture baseline: the native a11y harness shares the host's
+**stable** WebView2 user-data folder (`ComputeUserDataFolder` under
+`%LOCALAPPDATA%`, [src/host/HostWindow.cpp](../src/host/HostWindow.cpp)),
+so any interactive run (e.g. a live smoke) that toggles theme or panel
+visibility persists into `localStorage` and pollutes the next capture.
+A blanket update then rewrites *every* golden with your machine's
+incidental state.
+
+**Trigger.** You add/move a control and reflexively reach for
+`pnpm a11y:update`. Symptoms that you're about to corrupt goldens:
+- `git diff --stat` after the update shows **many/all** surfaces changed
+  by a **uniform** line delta (e.g. "21 files, −64 each"), not just the
+  one surface you touched.
+- The per-file diff flips unrelated state — `button "Light theme" [pressed]`
+  → `button "Dark theme" [pressed]`, or a whole `complementary:` (Spawner)
+  subtree appearing/disappearing — none of which is your feature.
+
+**How to apply.**
+1. **Check the surface first.** Read the relevant
+   `*.golden.yaml` and its driver in
+   [`tests/helpers/a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts).
+   The `property-tabs-*` surfaces click a tab but **do not select an
+   emitter**, so the inspector shows the "select an emitter" placeholder
+   — any control gated behind a selected emitter (texture fields, their
+   Browse/palette buttons, most Appearance/Physics inputs) is **not**
+   captured. Such changes are golden-neutral.
+2. **If a blanket update shows broad uniform drift, STOP and revert**
+   (`git checkout -- web/apps/editor/tests/a11y-goldens/`). The drift is
+   environmental, not yours.
+3. **When a captured surface genuinely changes**, prefer a surgical
+   hand-edit of just that golden (mirror the adjacent entry), or
+   reproduce the *canonical* persisted state (theme + panel toggles)
+   before regenerating — not whatever your last interactive session left
+   behind. Composition (`ariaSnapshot`) edits are byte-simple; HWND/UIA
+   edits follow [L-028](#l-028) (surgical or full-suite, never `--grep`).
+
+**Source incident (2026-05-29, feature-parity B — texture palette).**
+Added a palette button to each emitter texture field, then ran
+`pnpm a11y:update` to refresh goldens. `git diff --stat` showed **all 21**
+composition goldens changed (−1281/+63). Inspection showed the deltas
+were a flipped theme (`Light`→`Dark` `[pressed]`) and the entire Spawner
+`complementary:` panel removed from every surface — pollution from the
+live-smoke session (dark theme + closed Spawner) persisted in the shared
+WebView2 profile. Reading `property-tabs-appearance.composition.golden.yaml`
+revealed `tabpanel "Appearance": Select an emitter to edit its properties`
+— the texture fields (and the new palette buttons) never render in the
+capture because no emitter is selected. **The feature was golden-neutral;
+zero golden changes were needed.** Reverted the 21-file "drift" and left
+goldens canonical. The harness's shared-profile sensitivity (theme / panel
+state / OS `prefers-color-scheme`) is a pre-existing fragility filed as a
+follow-up (force a known UI state in the a11y setup).
+
+**Cross-reference.** [L-024](#l-024) (volatile content → freeze/normalize
+at the source), [L-026](#l-026) (byte-exact goldens + EOL),
+[L-028](#l-028) (build-stamp + Radix `useId` golden hazards). L-030 adds
+the upstream check: *does your change even reach a captured surface, and
+is the capturing machine in the canonical state?*
