@@ -16,6 +16,42 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 feature-parity] Browse button for emitter color/bump textures
+
+*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The emitter Appearance tab's **Color texture** and **Bump texture**
+fields now have a **Browse** button (folder icon) next to the text
+input. Clicking it opens a native file dialog in the active mod's
+texture folder (`Data\Art\Textures`, with fallbacks), filtered to
+`*.tga;*.dds`; picking a file fills the field with the texture's
+basename and applies it immediately — no more typing filenames by
+hand. This restores the legacy editor's Browse affordance
+(`src/UI/Emitter.cpp` IDC_BUTTON1/2). The frequently-used texture
+*palette* (pinned/recent thumbnails) is a separate follow-up
+(sub-feature B); this is the picker half.
+
+**How we tackled it.** New `textures/browse { slot } → { filename }`
+bridge request: the host
+([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp)) opens
+`GetOpenFileNameW` in a nested message loop (same pattern as
+`file/open`), seeded to the active mod's texture dir via
+`ModManager::GetSelectedModPath()`, and returns the basename (or `""`
+on cancel). React side: a new `TexturePickerField`
+([`EmitterPropertyTabs.tsx`](web/apps/editor/src/screens/EmitterPropertyTabs.tsx))
+wraps the existing `FieldText` (so manual entry + commit-on-blur are
+unchanged) and adds the Browse button, committing a non-empty result
+through the same `emitters/set-properties` path the text input uses.
+The browser/mock dispatcher returns `""` (no native dialog), so
+Playwright/vitest runs are a clean no-op.
+
+**Issues encountered and resolutions.** Made `AppearanceTab`'s new
+`onBrowseTexture` prop optional (no-op default) so the existing
+`AppearanceTab` test suite — which renders the tab without it —
+stays green and the Browse button degrades to a no-op when unwired.
+
+---
+
 ### [LT-4 rendering-fidelity] Headless frame-capture mode (`--capture`)
 
 *2026-05-29 · [`7af4b5c`](https://github.com/DrKnickers/new-particle-editor/commit/7af4b5c) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

@@ -531,6 +531,13 @@ export class MockBridge implements Bridge {
       case "file/recent/list":
         return { paths: useMockRecentFiles.getState().paths };
 
+      case "textures/browse":
+        // No native file dialog in browser mode — simulate a cancelled
+        // picker (empty filename). Callers branch on a non-empty string
+        // before committing, so this is a clean no-op. The native host
+        // opens GetOpenFileNameW in the active mod's texture folder.
+        return { filename: "" };
+
       // ---------------- spawner (Phase 3 Screen 8 Batch 4) ----------------
       //
       // The native host treats spawner/start as a full-config replace

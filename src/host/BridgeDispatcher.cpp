@@ -1557,6 +1557,68 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- textures/browse --------
+    //
+    // Host-side native file dialog for an emitter's color/bump texture.
+    // Opens in the active mod's texture folder (Data\Art\Textures, with
+    // fallbacks), filtered to *.tga;*.dds, and returns the chosen file's
+    // basename (or "" if cancelled). The React side commits the result
+    // through emitters/set-properties — same path the text input uses.
+    // Like file/open, GetOpenFileNameW runs a nested message loop while
+    // the JS caller awaits. Mirrors legacy LoadTexture
+    // (src/UI/Emitter.cpp:83). [LT-4 feature-parity A]
+    if (kind == "textures/browse")
+    {
+        std::string slot = "color";
+        if (auto sit = params.find("slot"); sit != params.end() && sit->is_string())
+            slot = sit->get<std::string>();
+
+        // Initial dir: active mod's texture folder → mod root → none
+        // (dialog opens at its default if all are unavailable).
+        std::wstring initialDir;
+        if (m_modManager)
+        {
+            const std::wstring& mod = m_modManager->GetSelectedModPath();
+            if (!mod.empty())
+            {
+                auto isDir = [](const std::wstring& p) -> bool {
+                    DWORD a = GetFileAttributesW(p.c_str());
+                    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                };
+                const std::wstring texDir = mod + L"\\Data\\Art\\Textures";
+                if (isDir(texDir))   initialDir = texDir;
+                else if (isDir(mod)) initialDir = mod;
+            }
+        }
+
+        wchar_t buf[MAX_PATH] = {};
+        OPENFILENAMEW ofn = {};
+        ofn.lStructSize     = sizeof(ofn);
+        ofn.hwndOwner       = m_hostHwnd;
+        ofn.lpstrFile       = buf;
+        ofn.nMaxFile        = MAX_PATH;
+        ofn.lpstrFilter     = L"Texture Files (*.tga;*.dds)\0*.tga;*.dds\0All Files (*.*)\0*.*\0\0";
+        ofn.lpstrTitle      = (slot == "bump") ? L"Select bump texture" : L"Select color texture";
+        ofn.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
+        ofn.Flags           = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+
+        if (!GetOpenFileNameW(&ofn))
+        {
+            // Cancelled / dialog failure → empty filename (no-op on the
+            // React side, which only commits a non-empty string).
+            sendOk(json{{"filename", ""}});
+            return res;
+        }
+
+        // Store only the basename — matches the colorTexture /
+        // normalTexture field convention (legacy strips path via strrchr).
+        const std::wstring full = buf;
+        const size_t slash = full.find_last_of(L"\\/");
+        const std::wstring base = (slash == std::wstring::npos) ? full : full.substr(slash + 1);
+        sendOk(json{{"filename", WideToUtf8(base)}});
+        return res;
+    }
+
     // -------- file/open --------
     //
     // Two modes:

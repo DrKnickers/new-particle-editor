@@ -35,7 +35,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import * as Tabs from "@radix-ui/react-tabs";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as Select from "@radix-ui/react-select";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, FolderOpen } from "lucide-react";
 import type {
   Bridge,
   EmitterPropertiesDto,
@@ -211,6 +211,25 @@ export function EmitterPropertyTabs({ bridge }: Props) {
     [bridge, selectedId, fetchProps],
   );
 
+  // [LT-4 feature-parity A] Browse helper — opens the host-side native
+  // texture dialog and resolves to the picked basename ("" if cancelled
+  // or in browser/mock mode). TexturePickerField commits a non-empty
+  // result through `commit`, same as the text input.
+  const browseTexture = useCallback(
+    async (slot: "color" | "bump"): Promise<string> => {
+      try {
+        const res = await bridge.request({
+          kind: "textures/browse",
+          params: { slot },
+        });
+        return res.filename ?? "";
+      } catch {
+        return "";
+      }
+    },
+    [bridge],
+  );
+
   // B1.3.1: the tab strip is always mounted so the user can see the
   // Basic/Appearance/Physics structure (and pre-click a tab) before any
   // emitter is selected. The per-Content `renderBody` helper swaps in a
@@ -268,7 +287,13 @@ export function EmitterPropertyTabs({ bridge }: Props) {
         className="flex-1 min-h-0 overflow-y-auto outline-none"
         data-testid="tab-appearance-content"
       >
-        {renderBody((p) => <AppearanceTab properties={p} onCommit={commit} />)}
+        {renderBody((p) => (
+          <AppearanceTab
+            properties={p}
+            onCommit={commit}
+            onBrowseTexture={browseTexture}
+          />
+        ))}
       </Tabs.Content>
       <Tabs.Content
         value="physics"
@@ -654,6 +679,56 @@ function FieldText({
   );
 }
 
+// TexturePickerField — a texture filename field (color or bump) with a
+// Browse button that opens the host-side native file dialog. Reuses
+// FieldText (wide mode = bare input) for the manual-entry + commit-on-
+// blur behaviour, and adds the Browse button. `onBrowse(slot)` resolves
+// to the picked basename (or "" if cancelled); a non-empty result is
+// committed via the same `onCommit` the text input uses.
+// [LT-4 feature-parity A] Structured to receive the frequently-used
+// palette button later (sub-feature B).
+export function TexturePickerField({
+  label,
+  value,
+  slot,
+  onCommit,
+  onBrowse,
+}: {
+  label: string;
+  value: string;
+  slot: "color" | "bump";
+  onCommit: (value: string) => void;
+  onBrowse: (slot: "color" | "bump") => Promise<string>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const handleBrowse = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const picked = await onBrowse(slot);
+      if (picked) onCommit(picked);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="form-row form-row-texture">
+      <span className="lbl" title={label}>{label}</span>
+      <FieldText wide label={label} value={value} onCommit={onCommit} />
+      <button
+        type="button"
+        className="btn-texture-browse"
+        onClick={handleBrowse}
+        disabled={busy}
+        aria-label={`Browse for ${label}`}
+        title="Browse for a texture file"
+      >
+        <FolderOpen size={14} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 export function FieldSpinner({
   label,
   value,
@@ -894,9 +969,14 @@ function FieldSelect({
 export function AppearanceTab({
   properties,
   onCommit,
+  onBrowseTexture = async () => "",
 }: {
   properties: EmitterPropertiesDto;
   onCommit: (patch: Partial<EmitterPropertiesDto>) => void;
+  /** Opens the host-side texture dialog; resolves to the picked
+   *  basename ("" if cancelled). Defaults to a no-op so existing tests
+   *  and any caller that doesn't wire Browse still render cleanly. */
+  onBrowseTexture?: (slot: "color" | "bump") => Promise<string>;
 }) {
   const forceFace = properties.blendMode === BLEND_BUMP;
   const tailEnabled = properties.hasTail;
@@ -919,19 +999,24 @@ export function AppearanceTab({
   return (
     <div className="inspector">
       <Section title="Textures">
-        {/* TODO(MT-1): wire the TexturePalette popup (legacy
-            IDC_BUTTON_PALETTE at [src/UI/Emitter.cpp:411]) —
-            text-input + commit-on-blur for now, deferred to a polish
-            batch. */}
-        <FieldText
+        {/* [LT-4 feature-parity A] Color/bump texture fields now have a
+            Browse button (host-side native dialog via textures/browse).
+            TODO(MT-1 / sub-feature B): add the frequently-used palette
+            popup button to TexturePickerField (legacy IDC_BUTTON_PALETTE
+            at [src/UI/Emitter.cpp:411]). */}
+        <TexturePickerField
           label="Color texture:"
+          slot="color"
           value={properties.colorTexture}
           onCommit={(v) => onCommit({ colorTexture: v })}
+          onBrowse={onBrowseTexture}
         />
-        <FieldText
+        <TexturePickerField
           label="Bump texture:"
+          slot="bump"
           value={properties.normalTexture}
           onCommit={(v) => onCommit({ normalTexture: v })}
+          onBrowse={onBrowseTexture}
         />
         <FieldSpinner
           label="Texture elements:"

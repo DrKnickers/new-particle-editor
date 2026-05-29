@@ -164,4 +164,38 @@ no commit.
       console errors; vitest suite stays green.
 
 ## Review
-_(to be filled in after the work)_
+
+**Shipped — Browse picker (sub-feature A).** Five files:
+- `bridge-schema/src/index.ts` — `textures/browse { slot } → { filename }`.
+- `BridgeDispatcher.cpp` — host handler: `GetOpenFileNameW` (nested loop,
+  like `file/open`), initial dir = active mod's `Data\Art\Textures` →
+  mod root → none, filter `*.tga;*.dds`, returns basename or `""`.
+- `bridge/mock.ts` — `textures/browse` → `{ filename: "" }` (browser no-op).
+- `EmitterPropertyTabs.tsx` — new exported `TexturePickerField` (reuses
+  `FieldText` wide + a FolderOpen Browse button); replaces the two raw
+  texture `FieldText`s in `AppearanceTab`; `onBrowseTexture` helper
+  (calls the bridge) wired from the top-level component through
+  `AppearanceTab` (prop made optional w/ no-op default so existing tests
+  pass) to `TexturePickerField`.
+- `styles/components.css` — `.form-row-texture` (label + input + button
+  grid) + `.btn-texture-browse`.
+- `__tests__/TexturePickerField.test.tsx` — 3 specs (renders label+input
+  +button; commits on non-empty pick w/ slot; no commit on cancel).
+
+**Verification:**
+- `tsc --noEmit` clean; **vitest 350 passed** (was 347; +3 new, existing
+  `AppearanceTab` suite unaffected).
+- MSBuild Debug + Release x64 clean (preexisting LIBCMTD warning only).
+- Mock/browser: Browse is a clean no-op (returns `""`).
+- **Manual native-dialog smoke: pending user** (can't automate a modal
+  Win32 dialog) — select EaWX, open an effect, Appearance tab, click
+  Browse on Color/Bump → dialog opens in mod texture folder → pick a
+  `.dds` → field fills + viewport rebinds.
+
+**Risk 3 (texture rebind on commit):** Browse reuses the existing
+text-input commit path, so if typing a texture name updates the render
+today, Browse does too. Confirm in the smoke pass.
+
+**Next (sub-feature B):** frequently-used texture palette — bridge over
+the existing `TexturePalette::Store` + a React popup added to
+`TexturePickerField` (structured to receive it).

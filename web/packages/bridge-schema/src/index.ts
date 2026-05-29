@@ -465,6 +465,13 @@ export type Request =
   | { kind: "file/save-as";               params: Record<string, never> } // always opens native picker
   | { kind: "file/recent/list";           params: Record<string, never> }
 
+  // Texture browse — host-side native file dialog for an emitter's
+  // color/bump texture. Opens in the active mod's texture folder,
+  // filtered to *.tga;*.dds; returns the chosen file's basename (or ""
+  // if cancelled). `slot` drives only the dialog title (and future
+  // palette usage-tracking). [LT-4 feature-parity A]
+  | { kind: "textures/browse";            params: { slot: "color" | "bump" } }
+
   // Engine state — full snapshot
   | { kind: "engine/state/snapshot";      params: Record<string, never> }
 
@@ -765,6 +772,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "file/save" }                 ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/save-as" }              ? { ok: true; path?: string } | { ok: false; error: string } :
   R extends { kind: "file/recent/list" }          ? { paths: string[] } :
+  R extends { kind: "textures/browse" }           ? { filename: string } :
 
   // Mods (LT-4 D6)
   R extends { kind: "mods/list" }                 ? { mods: ModDescriptor[]; activePath: string | null } :
