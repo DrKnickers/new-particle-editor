@@ -372,23 +372,44 @@ it into a dispatch.
        date) instead of `new Date()`. Stable across rebuilds of
        the same commit; About dialog now shows when the code was
        committed, not when somebody happened to run `pnpm build`.
-       Fixes the 29th surface in both lanes — the new value
-       happens to be byte-identical to what's in the existing
-       golden (HEAD's commit date is still 2026-05-26).
+       This is the user-facing half of the dialog-about fix.
     3. [`run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs)
        forwards `process.argv.slice(2)` extras (minus `--update` /
        `--legacy`) to the Playwright spawn. `pnpm a11y:update
        --grep "<id>"` now scopes correctly.
-    Verification: composition lane back to **157 passed / 0 failed
-    / 31 skipped** and HWND lane back to **132 passed / 0 failed
-    / 56 skipped** — both match the pre-drift baselines from the
-    MT-12 ship.
-    Three new lessons captured: [L-025](lessons.md#l-025) MSBuild
+    4. **(follow-up `a315245`, 2026-05-29)** [`toMatchJSONGolden.ts`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts)
+       `normalizeVolatile()` strips the build date to a `<DATE>`
+       placeholder on both the live capture AND the golden before
+       byte-comparison; both `dialog-about` goldens hold `<DATE>`.
+       **Why this was needed even after fix 2:** pinning to HEAD's
+       commit date can NEVER keep a committed golden green — the
+       commit that records the date becomes the parent of a LATER
+       commit, so the next rebuild's `BUILD_DATE` always exceeds
+       the golden's frozen date by one commit's worth. Fix 2 alone
+       passed verification only because HEAD hadn't advanced yet;
+       it silently broke the moment the fix/docs commits landed.
+       The pin (fix 2) is the right *user-facing* behaviour; the
+       normalizer (fix 4) is the *test-stability* half. See
+       [L-028](lessons.md#l-028). The HWND golden's date node was
+       hand-edited (not `--grep`-refreshed) because Radix `useId`
+       AutomationIds in the UIA tree are render-sequence-dependent
+       and a scoped refresh captures different IDs — also L-028.
+    Verification: composition lane **157 passed / 0 failed / 31
+    skipped** (one re-run of the warmup-sensitive
+    `a11y-uia-composition-reachable` backbone spec — a pre-existing
+    load-dependent flake, not a golden) and HWND lane **132 passed
+    / 0 failed / 56 skipped** — both match the pre-drift baselines
+    from the MT-12 ship. Re-verified after the fix-4 rebuild at
+    HEAD with commit date 2026-05-27, so the normalizer (not a
+    coincidental date match) is what's carrying it.
+    Four new lessons captured: [L-025](lessons.md#l-025) MSBuild
     via PowerShell, [L-026](lessons.md#l-026) byte-exact snapshots
     need `text eol=lf`, [L-027](lessons.md#l-027) test wrapper
-    must forward unknown CLI args. L-025 surfaced as a Phase A
-    incident (Git Bash mangling MSBuild `/switch` args) that
-    doesn't appear in the bug itself but was discovered while
+    must forward unknown CLI args, [L-028](lessons.md#l-028)
+    commit-date build stamps must be normalized as volatile + Radix
+    `useId` goldens can't be `--grep`-refreshed. L-025 surfaced as
+    a Phase A incident (Git Bash mangling MSBuild `/switch` args)
+    that doesn't appear in the bug itself but was discovered while
     diagnosing it.
 
 ## Prior session work (2026-05-25 — undo/perform polish chain, retained for context)

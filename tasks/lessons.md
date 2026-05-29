@@ -2209,3 +2209,121 @@ on verifying tooling claims before relying on them — the hint in
 `toMatchJSONGolden`'s mismatch message was a tooling claim that
 silently no-op'd. L-027 is the operational fix; L-022 is the
 disposition that makes you check.
+
+## L-028 — A build stamp pinned to HEAD's commit date can never match a golden that's committed (off-by-one); treat it as volatile. And Radix `useId` goldens can only be refreshed full-suite, not `--grep`-scoped
+
+**Two coupled traps, both surfaced closing the same surface
+(`dialog-about`) in the HANDOFF item 16 dispatch.**
+
+### Trap 1 — commit-date build stamp vs committed golden is an unwinnable chase
+
+**Rule.** If a value baked into the app is derived from
+`git show -s --format=%cs HEAD` (HEAD's commit date) — e.g.
+`BUILD_DATE` in
+[`web/apps/editor/vite.config.ts`](../web/apps/editor/vite.config.ts)
+— and that value is ALSO captured in a committed golden, the golden
+can NEVER stay green by refreshing it. The act of committing the
+refreshed golden creates a NEW HEAD with a LATER commit date, so the
+next rebuild's `BUILD_DATE` no longer equals the date frozen in the
+golden. Each refresh-and-commit cycle leaves the golden exactly one
+commit's date behind. **Fix: treat the stamp as volatile and
+normalize it to a placeholder before comparison**, on BOTH the live
+capture and the golden (so a golden holding a stale literal value
+still matches). This is the same disposition as L-024's source-side
+StatusBar freeze and the JSON normalizer's `volatile` property list:
+build-environment-dependent values don't belong in a byte-exact
+assertion.
+
+The pin to commit-date is still the right USER-FACING choice — the
+About dialog showing "the date this code was committed" is more
+meaningful than "the day someone happened to run pnpm build". The
+pin and the normalization are complementary: pin for the human,
+normalize for the test. Shipping the pin WITHOUT the normalization
+(as the first pass of this dispatch did) passes verification only
+while HEAD still sits on the commit whose date the golden recorded —
+and silently breaks the moment you commit anything, including the
+commit that "fixed" it.
+
+**Implementation.** `normalizeVolatile()` in
+[`web/apps/editor/tests/helpers/toMatchJSONGolden.ts`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts)
+runs two regexes over the serialized string (both lanes funnel
+through the matcher as strings — YAML for composition, JSON for
+HWND):
+- `/Build date: \d{4}-\d{2}-\d{2}/g` → `Build date: <DATE>`
+  (composition ariaSnapshot inline form)
+- `/"Name": "\d{4}-\d{2}-\d{2}"/g` → `"Name": "<DATE>"`
+  (HWND UIA standalone text-node form)
+Applied to the live value AND the golden at compare time, AND to the
+written value in UPDATE mode so the committed golden stores the
+`<DATE>` placeholder self-documentingly.
+
+### Trap 2 — Radix `useId` AutomationIds make HWND goldens render-sequence-dependent
+
+**Rule.** The HWND/UIA goldens capture Radix UI components whose
+`AutomationId` is a `useId`-generated string like `radix-_r_1k_`.
+React's `useId` is a monotonic counter keyed to render ORDER, so the
+ID a given dialog gets depends on how many components mounted before
+it in the run. In a FULL suite run, `dialog-about` always renders
+after the same prior surfaces, so its Radix IDs are stable — and the
+committed golden encodes those full-suite values. **Refreshing a
+single HWND golden via `pnpm a11y:update --grep dialog-about` (now
+that L-027 makes `--grep` actually scope) captures the dialog in
+ISOLATION**, where the `useId` counter starts fresh → completely
+different Radix IDs → a 150KB structural-looking diff that would only
+match in isolation and fail in the full suite.
+
+**Consequence.** The L-027 `--grep` forwarding fix is safe for the
+COMPOSITION lane (ariaSnapshot output is role+name, no `useId` IDs)
+but NOT for the HWND lane (UIA captures the sequence-dependent IDs).
+To change one node in an HWND golden (e.g. swap a literal date for
+`<DATE>`), edit the golden file SURGICALLY by hand rather than
+`--grep`-refreshing it — that preserves the full-suite Radix IDs.
+Full-golden HWND refresh must be done via a FULL-suite
+`pnpm a11y:update` (no `--grep`) so the render sequence matches.
+
+**Trigger.** Symptoms:
+- A scoped `--grep` golden refresh produces a huge structural diff
+  (AutomationIds changing from `radix-_r_<X>_` to different values,
+  ControlType/ClassName shifts) — not the small targeted change you
+  expected.
+- An HWND golden passes in a full lane run but fails when its spec
+  is run alone, or vice-versa.
+
+**How to apply.**
+1. **Build stamps / timestamps / any build-environment value in a
+   golden → normalize as volatile in the matcher.** Don't try to
+   keep the literal value fresh; you'll lose the race against your
+   own commits.
+2. **HWND/UIA golden edits → surgical hand-edit or full-suite
+   refresh, never `--grep`-scoped.** Composition/ariaSnapshot golden
+   edits → `--grep` is fine.
+3. **When you pin a value for user-facing reasons (commit date),
+   immediately ask "is this value also in a golden?" If yes, the pin
+   alone is insufficient — add the volatile normalization in the
+   same change.**
+
+**Source incident (2026-05-29, HANDOFF item 16 follow-up).** The
+item-16 dispatch pinned `BUILD_DATE` to the commit date and declared
+`dialog-about` fixed "no golden refresh needed — HEAD's commit date
+is still 2026-05-26, byte-identical to the golden." True at
+verification time (HEAD `6b6e674`), but the two fix/docs commits
+advanced HEAD to a 2026-05-27 commit date. A rebuild two days later
+(prompted by a session date-rollover) showed `dialog-about` failing
+again in both lanes — BUILD_DATE `2026-05-27` vs golden `2026-05-26`.
+Fix completed by adding `normalizeVolatile()` to the matcher and
+swapping both goldens to `<DATE>`. The HWND golden's first refresh
+attempt used `--grep dialog-about` and produced a 150KB Radix-ID
+diff (Trap 2); reverted and hand-edited the single date node
+instead.
+
+**Cross-reference.**
+[L-024](#l-024--uia-golden-non-determinism-webview2-topology-drift--live-react-subscriptions-solve-at-the-source-not-at-the-normalizer)
+(volatile content → normalize/freeze, don't assert it),
+[L-026](#l-026--byte-exact-snapshot--golden-files-need-an-explicit-text-eollf-rule-in-gitattributes-or-coreautocrlftrue-silently-breaks-every-comparison-on-windows)
+(byte-exact goldens + EOL), and
+[L-027](#l-027--run-native-testsmjs-silently-drops-unrecognised-cli-args-explicitly-forward-them-so---grep-and-similar-playwright-filters-work)
+(the `--grep` forwarding whose scoping created Trap 2's footgun).
+The matcher normalizer lives in
+[`toMatchJSONGolden.ts`](../web/apps/editor/tests/helpers/toMatchJSONGolden.ts);
+the `BUILD_DATE` pin in
+[`vite.config.ts`](../web/apps/editor/vite.config.ts).

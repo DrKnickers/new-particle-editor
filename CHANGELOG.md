@@ -16,6 +16,63 @@ Conventions:
 
 ## Changelog
 
+### [MT-12 follow-up] Complete the dialog-about a11y fix — normalize the volatile build date
+
+*2026-05-29 · [`a315245`](https://github.com/DrKnickers/new-particle-editor/commit/a315245) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Completes the `dialog-about` half of the item-16 fix below. The prior
+entry pinned `BUILD_DATE` to HEAD's commit date and declared the
+surface fixed — but a commit-date stamp can never keep a *committed*
+golden green: committing the golden advances HEAD to a later date, so
+the next rebuild's build date is one commit ahead of what the golden
+records. The pin passed verification only because HEAD hadn't moved
+yet; a rebuild two days later (after the fix/docs commits landed)
+showed `dialog-about` failing again in both lanes —
+`Build date: 2026-05-27` (rebuilt) vs `2026-05-26` (golden).
+
+The real fix treats the build date as **volatile content** — the same
+disposition as the StatusBar live-cell freeze (L-024) and the JSON
+normalizer's `volatile` property list. The About dialog still shows
+the real commit date to users (the pin stays); the test simply stops
+asserting the specific value. Both lanes verified back at the
+baselines (`157 / 0 / 31` composition, `132 / 0 / 56` legacy) on a
+rebuild at a HEAD whose commit date is `2026-05-27` — so it's the
+normalizer carrying it, not a coincidental date match.
+
+**How we tackled it.** `normalizeVolatile()` added to
+[`web/apps/editor/tests/helpers/toMatchJSONGolden.ts`](web/apps/editor/tests/helpers/toMatchJSONGolden.ts),
+applied to both the live snapshot and the committed golden before the
+byte-exact compare (and to the value written in UPDATE mode, so the
+golden stores the `<DATE>` placeholder self-documentingly). Two
+regexes cover both lanes — `Build date: YYYY-MM-DD` for the
+composition ariaSnapshot's inline form, and `"Name": "YYYY-MM-DD"`
+for the HWND UIA tree's standalone text node. Both `dialog-about`
+goldens now hold `<DATE>`.
+
+**Issues encountered and resolutions.** Two worth recording.
+
+1. *Scoped `--grep` refresh of the HWND golden produced a 150KB
+   structural diff.* The first attempt to swap the HWND golden's date
+   node used `pnpm a11y:update:legacy --grep dialog-about` (now that
+   the prior entry's fix makes `--grep` actually scope). The UIA tree
+   captures Radix `useId` AutomationIds (`radix-_r_1k_`), which are
+   keyed to React's render-order counter — running `dialog-about` in
+   isolation gives it different IDs than its position in the full
+   suite. So a scoped refresh of an HWND golden bakes IDs that only
+   match in isolation. Reverted and hand-edited the single date node
+   instead, preserving the full-suite Radix IDs. Composition
+   (ariaSnapshot) goldens are immune — they're role+name, no `useId`.
+   Captured as [L-028](tasks/lessons.md#l-028).
+2. *The `a11y-uia-composition-reachable` backbone spec flaked once.*
+   The composition lane reported `156 / 1 / 31` on a laggy machine;
+   the one failure was the Blink-accessibility-warmup reachability
+   spec (not a golden — it doesn't use `toMatchJSONGolden`, so it's
+   untouched by this change). Passed on a targeted re-run in <1s.
+   Pre-existing load-dependent flake; effective baseline is
+   `157 / 0 / 31`.
+
+---
+
 ### [MT-12 follow-up] Restore a11y golden lanes to 0 failed (autocrlf + BUILD_DATE pinning + --grep forwarding)
 
 *2026-05-27 · [`610d5dd`](https://github.com/DrKnickers/new-particle-editor/commit/610d5dd) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
@@ -35,9 +92,16 @@ Closes [`tasks/HANDOFF.md`](tasks/HANDOFF.md) item 16. No
 runtime-visible behaviour change for end users *except* one — the
 About dialog's "Build date" field now reflects the commit date
 (stable across rebuilds of the same commit) rather than the day
-somebody happened to run `pnpm build`. Goldens captured on
-2026-05-26 still pass today because HEAD's commit date is also
-2026-05-26; no golden refresh shipped in this dispatch.
+somebody happened to run `pnpm build`.
+
+> **Correction (see the follow-up entry above, 2026-05-29).** This
+> entry originally claimed "no golden refresh shipped … HEAD's commit
+> date is also 2026-05-26." That was true only while HEAD sat on the
+> golden's capture commit. Pinning `BUILD_DATE` to HEAD's commit date
+> can't keep a *committed* golden green — committing advances HEAD to
+> a later date, so the next rebuild's build date exceeds the golden's
+> by one commit. The follow-up entry adds the missing volatile-date
+> normalizer that actually makes `dialog-about` stable.
 
 **How we tackled it.** Three small changes, one new `.gitattributes`
 file:
