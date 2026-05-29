@@ -1,222 +1,113 @@
-# Next-session dispatch prompt — [MT-11] Phase 4 (DXGI composition wiring)
+# Next-session dispatch prompt — post HANDOFF item 16 close-out
 
 > Copy the block below into the next session's first message.
-> Default recommendation is Stage 4 (engine visual into DComp tree
-> — the headline perf payoff of the whole MT-11 plan). Two
-> alternative options are at the bottom of this file if you'd
-> rather close out Stage 3 (3h a11y + 3i final smoke) first or
-> pursue something else.
+> `origin/lt-4` is at `4c20e32`. This file replaces the old [MT-11]
+> Phase 4 prompt (long since shipped). Keep it current: when a
+> dispatch lands, rewrite this with the new tip + the next candidates.
 
 ---
 
-## Prompt: Stage 4 — DXGI composition wiring (recommended)
+You are picking up work on the `new-particle-editor` repository on branch `lt-4`.
+The previous session resolved HANDOFF item 16 (a11y golden drift — root cause was
+autocrlf + a runtime BUILD_DATE, NOT a React regression) across four commits, ending
+with the volatile-build-date follow-up. `origin/lt-4` is at `4c20e32`.
 
-Pick up **[MT-11] Phase 3 Stage 4 — DXGI composition wiring**.
+## Pre-flight (run before touching anything)
 
-This is the **load-bearing perf gate** of the entire Phase 3 plan.
-Stage 3 (just shipped) put WebView2 into a DComp tree and proved
-the FD6 failure mode does not reproduce on this hardware; Stage 4
-adds the engine's D3D11 swapchain as a sibling visual so engine
-pixels become *visible* through the composition surface. After
-Stage 4 ships, the spike's measured 0.30 ms total frame-transport
-cost at 3440×1440 should hold in production (vs ~19 ms for the
-current arch-A / FD9b readback path that the perf investigation
-captured during Stage 2 — see HANDOFF "Perf investigation
-findings").
+```
+git fetch origin lt-4 --quiet
+git rev-parse --abbrev-ref HEAD                              # lt-4 or a fresh claude/* off lt-4
+git log --oneline origin/lt-4..HEAD | Measure-Object -Line   # expect 0 (fresh session)
+git log --oneline HEAD..origin/lt-4 | Measure-Object -Line   # expect 0
+git status --porcelain                                       # expect empty
+git rev-parse origin/lt-4                                    # expect 4c20e32 (or newer)
+```
+If lineage doesn't match, STOP and reconcile per the branch-workflow section in `CLAUDE.md`.
 
-Pre-flight (in order):
+## CRITICAL build/test gotchas (all learned the hard way — see lessons.md L-025..L-028)
 
-1. **CLAUDE.md** — working principles, branch workflow, plan
-   structure, ★★★★ rule (this is a ★★★★ stage — not ★★★★★
-   because the spike already proved the GPU pipeline; the
-   production-integration risk surface is smaller than Stage 3's
-   was).
+1. **MSBuild MUST be invoked via PowerShell, NOT Git Bash (L-025).** Bash's MSYS path
+   translation mangles `/p:` `/nologo` `/m` switches; MSBuild prints MSB1008 but the
+   response file gives exit code 0, so the build SILENTLY no-ops and produces no binary.
+   Use the PowerShell tool:
+   ```
+   $msbuild = "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+   & $msbuild .\ParticleEditor.sln /p:Configuration=Debug   /p:Platform=x64 /nologo /verbosity:minimal /m
+   & $msbuild .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal /m
+   ```
+   ALWAYS verify `x64\Debug\ParticleEditor.exe` exists after — don't trust exit code 0.
+2. **A fresh worktree needs NuGet restore first** (WebView2 package isn't shared across
+   worktrees): `& $msbuild .\ParticleEditor.sln /t:Restore /p:Configuration=Debug /p:Platform=x64`
+   before the first build. Symptom if skipped: "references NuGet package(s) that are missing …
+   Microsoft.Web.WebView2.targets".
+3. **pnpm commands run from `web/` (or `web/apps/editor`), not repo root.** From repo root
+   pnpm errors `ERR_PNPM_NO_PKG_MANIFEST`. From PowerShell, `Set-Location web` first.
+4. **Two dist/ builds, two lanes.** Composition (default, no env var) → `pnpm test:native`.
+   Legacy needs a `VITE_HOSTING_MODE=legacy` dist/ rebuild → `pnpm test:native:legacy`.
+   The harness does NOT auto-rebuild dist/ on mode change (carry-forward item 4).
+   Baselines: composition **157/0/31**, legacy **132/0/56**. Both are 0-failed at `4c20e32`.
+5. **`pnpm a11y:update --grep "<id>"` now scopes correctly (L-027), BUT (L-028):**
+   - Safe for the **composition** lane (ariaSnapshot = role+name, no IDs).
+   - **UNSAFE for the HWND lane** — UIA captures Radix `useId` AutomationIds
+     (`radix-_r_1k_`) that depend on render SEQUENCE. A scoped refresh runs the surface
+     in isolation → different IDs → a huge bogus diff that only matches in isolation.
+     To change one node in an HWND golden, hand-edit it; to regenerate HWND goldens,
+     run a FULL-suite `pnpm a11y:update:legacy` (no `--grep`).
+6. **Build-environment values in goldens are normalized as volatile (L-028).** The About
+   dialog's "Build date" is stripped to `<DATE>` by `normalizeVolatile()` in
+   `tests/helpers/toMatchJSONGolden.ts`. If you add another build-stamped value to a
+   captured surface, add it to that normalizer rather than chasing the golden.
+7. **Known flake:** `a11y-uia-composition-reachable.spec.ts` ("React backbone") is
+   Blink-accessibility-warmup-timing-sensitive and flakes on a loaded/laggy machine
+   (NOT a golden — doesn't use toMatchJSONGolden). Re-run the single spec via
+   `pnpm test:native --grep "React backbone"`; it passes in <1s. Also the documented
+   `emitter-mutations.spec.ts:84` flake — same "re-run once" disposition.
 
-2. **tasks/HANDOFF.md** — current state. Phase 3 Stages 0/1/2/3
-   shipped. Stage 4 is the next dispatch.
+## Read these in order
 
-3. **tasks/todo.md §4 Stage 4 + §6 Stage 4 acceptance** —
-   umbrella plan headers. You write your own CLAUDE.md-shaped
-   sub-plan before any production code.
+1. `CLAUDE.md` (repo root) — working principles, branch flow, plan-mode + verification +
+   handoff rules. Non-negotiable.
+2. `tasks/HANDOFF.md` "Known follow-ups" — items 11 (arch-A deletion) and 4 (test-harness
+   rebuild gate) are the main open threads. Item 16 is ✅ resolved (fix `610d5dd`,
+   completed `a315245`).
+3. `tasks/lessons.md` L-025 / L-026 / L-027 / L-028 — the build/test gotchas above.
 
-4. **tasks/dxgi-stage-3-composition-hosting.md** — Stage 3's
-   sub-plan. §1 "In scope" line 5 reserves
-   `m_compositor->AttachEngineVisual(swapchain)` as the Stage 4
-   seam. The Compositor class at src/host/Compositor.h is pImpl —
-   Stage 4 adds a public method that takes an
-   `IDXGISwapChain1*` and inserts it as a sibling of the WebView2
-   visual.
+## Choose your dispatch (ASK the user before locking in — don't assume)
 
-5. **tasks/stage-3b-smoke-result.md + tasks/stage-3c-smoke-result.md**
-   — Stage 3's smoke evidence. The 3b screenshot shows what
-   composition-mode chrome looks like with NO engine visual;
-   Stage 4's success criterion is the same screenshot with engine
-   pixels visible in the viewport quadrant area (currently dark
-   purple / "D3D9 viewport" placeholder text).
+* Candidate A (recommended-large): **Architecture-A deletion (HANDOFF item 11).** The headline
+  MT-11/MT-12 cleanup. ★★★★, ~1-1.5 days, needs a full `tasks/todo.md` 5-section plan.
+  **GATED:** the user condition is "only delete arch A after C is confirmed stable in default
+  daily use." As of 2026-05-28 the user said they were "not really" daily-driving composition
+  mode yet. **Confirm the user is now daily-driving architecture C before scoping this.** No
+  known runtime blockers remain (items 14 + 15 + 16 all resolved).
 
-6. **src/host/spike/dxgi_spike.cpp** — working reference for the
-   engine-visual side of the DComp tree. Specifically:
-   - InitD3D11AndSwapchain (lines 305-405): D3D11 device +
-     OpenSharedResource on the engine's shared-handle texture +
-     CreateSwapChainForComposition + GetBuffer for the back
-     buffer.
-   - RenderD3D9Frame + CompositeD3D11Frame (lines 660-708): the
-     per-frame engine-render → D3D9-sync-query → D3D11-copy →
-     swapchain-Present sequence.
-   - BuildVisualTree's engine-visual block (lines 459-477): the
-     engine visual is added BEFORE the WebView2 visual so DComp
-     list-order puts it behind. Production Stage 4 reproduces
-     this ordering via the Compositor class.
+* Candidate B (recommended-mid): **Test-harness dist/ rebuild pre-flight gate (carry-forward
+  item 4).** The harness should fail-fast or auto-rebuild dist/ on a mode mismatch — would have
+  prevented several past sessions' silent dist/mode-mismatch failures. Adjacent to last
+  session's `--grep` forwarding fix in the same `run-native-tests.mjs`. ★★, ~half-day.
 
-7. **tasks/lessons.md L-007** (load-bearing) + **L-009** (float
-   identity keys across JS/C++ boundary). L-007 specifically: any
-   D3DPOOL_DEFAULT lifecycle change needs OnLost/OnReset wiring.
-   Stage 4's D3D11 device + swapchain are independent of D3D9's
-   pool, but the engine-side shared-handle texture (already
-   shipped Stage 2 — `Engine::GetSharedTextureHandle`) goes
-   through Engine::Reset; verify the handle remains valid across
-   resize.
+* Candidate C (other roadmap): NT-6 visual-stability lane assignment (user-gated), B2
+  obsolescence audit, MT-1 follow-up texture-picker buttons, the 6 deferred a11y surfaces
+  (HANDOFF item 1), or Narrator speech-shaping verification (item 9). See `ROADMAP.md` and
+  the HANDOFF "Known follow-ups" list.
 
-8. **tasks/lessons.md L-016** (Compositor.cpp's per-file
-   <AdditionalIncludeDirectories> pattern). Any new src/host/
-   .cpp that needs modern Windows headers follows the same
-   isolation. If Stage 4 needs a separate
-   `host::EngineCompositor.cpp` for the D3D11 + DXGI plumbing,
-   it'll need the same vcxproj override.
+## Before making changes, summarise back to the user
 
-9. **Run `git log --oneline lt-4..HEAD` and `git log --oneline
-   HEAD..lt-4`** — both should be 0 if the session branched
-   cleanly from origin/lt-4 at `35c19c8`. (Local `lt-4` ref in
-   this worktree may be stale per the sister-worktree note in
-   HANDOFF — what matters is `origin/lt-4`.)
+1. Which dispatch candidate you've picked and why.
+2. Your read of the relevant files (paths + ~one sentence each).
+3. Risks you've identified.
+4. Any clarifying questions.
 
-10. **Run the pre-flight test gate**:
-    - vitest **335 / 335**
-    - tsc -b **0 errors**
-    - MSBuild Debug + Release x64 clean (both work this session
-      after the C4996 fix at `ba3fbc4`)
-    - Playwright native baseline 99/99 (HWND mode, no env vars
-      set; the 8 composition-only specs in
-      `composition-hosting.spec.ts` skip cleanly)
-    - Optional: under composition mode env vars,
-      `ALO_WEBVIEW2_HOSTING=composition` +
-      `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`, native 106/107 (1
-      self-skip on curve-editor-wheel when no emitter selected)
-    - `shared_texture_test.exe` PASS (Stage 2's bit-exact test
-      should still pass on user's RTX 3080)
-    - `dxgi_spike.exe` runs + shows live FPS (smoke; not strictly
-      pre-flight but worth confirming the spike still works as
-      the reference)
+Per `CLAUDE.md`: any 3+ step task needs a `tasks/todo.md` plan with all 5 sections
+(goal+scope / what-codebase-gives-us / architecture / risks / testing) AND a check-in with
+the user before code changes.
 
-Stage 4 scope (per parent plan §4):
+## End-of-session flow (worktree note)
 
-- New `Compositor::AttachEngineVisual(IDXGISwapChain1* swapchain)`
-  method that inserts the engine visual as a sibling of the
-  WebView2 visual. **Z-order critical**: engine visual must be
-  added FIRST (before WebView2) so DComp's list-order puts it
-  BEHIND the chrome — chrome with transparent backgrounds shows
-  engine pixels through, opaque chrome occludes them.
-- New host class (or extension to existing Compositor) that owns:
-  - D3D11 device (D3D_DRIVER_TYPE_HARDWARE, BGRA support flag)
-  - DXGI factory (IDXGIFactory2 for CreateSwapChainForComposition)
-  - Composition swapchain (FLIP_SEQUENTIAL, BGRA8 premultiplied)
-  - D3D11 texture wrapping the engine's shared-handle (via
-    OpenSharedResource on Engine::GetSharedTextureHandle())
-  - Per-frame CopyResource(swapchain back, sharedTex) + Present1
-- Per-frame trigger: HostWindow's RenderD3D9 path adds a "if
-  composition mode AND engine visual attached, do the D3D11
-  composite" call AFTER engine->Render(). The existing
-  AlphaCompositor path stays alive but produces output that
-  nothing consumes (FramePublisher still wired but its JPEG bytes
-  no longer needed; Stage 7 deletes both).
-- Cross-device sync. The spike uses a D3D9 event query
-  (`D3DISSUE_END` + spin on `GetData`) to wait for GPU completion
-  before the D3D11 copy. Production may need the same — or, per
-  spike line 689-694's spin-loop, swap to `ID3D11Fence` if the
-  spin shows up in profiles.
-- Env-var gating still required: `ALO_WEBVIEW2_HOSTING=composition`
-  is the master switch. With composition mode ON, the engine
-  visual auto-attaches. Without it, the legacy arch-A path is
-  byte-identical to today.
-- `LayoutBroker::SetSceneRect` integration: under composition,
-  scene-rect should drive a transform on the engine visual (so
-  the engine renders to its native rect within the host client)
-  rather than the existing alpha-stamp path. Decision: do this
-  in Stage 4 or defer? Sub-plan recommendation: defer to Stage 5
-  (input routing rework) so Stage 4 focuses purely on getting
-  engine pixels onto the screen.
-
-Stage 4 acceptance (per parent §6):
-
-- New Playwright spec `tests/native/dxgi-transport.spec.ts`: boot
-  with `ALO_WEBVIEW2_HOSTING=composition`, assert log contains
-  `[COMP-attach] engine visual attached`, take a Playwright
-  screenshot of the canvas region, assert non-uniform pixel
-  histogram (proves engine pixels arrived; not just a clear color).
-- New Playwright spec `tests/native/dxgi-vs-jpeg.spec.ts`: set
-  engine to a known state, capture under canvas-jpeg mode and
-  under composition mode, assert SSIM > 0.95 (allows compositing
-  differences, flags structural breaks).
-- New Playwright spec `tests/native/dxgi-perf.spec.ts`: drive FPS
-  counter for 10s under composition mode at 1080p AND 3440×1440;
-  assert mean FPS > 80 at 1080p AND > 60 at 3440×1440. The spike
-  measured 0.30 ms total at 3440×1440 — that's 3000+ FPS
-  theoretical; the gate is generous because production overhead
-  (Engine::Update, render loop, OS scheduling) adds substantial
-  per-frame cost.
-- Resize stress: 50 programmatic resizes; assert no crash, no
-  log errors, FPS recovers to baseline after settling.
-- Manual visual confirmation: launch composition build, verify
-  the viewport quadrant area now shows engine pixels (animated
-  particle systems if any exist, or at minimum the dark-purple
-  engine clear color filling the area — distinguishable from
-  Stage 3's "D3D9 viewport" placeholder text by absence of the
-  placeholder).
-
-Per CLAUDE.md, treat this as a ★★★★ plan (one star less than
-Stage 3 was, because the spike already validated the GPU
-pipeline end-to-end). Iterate the risks list with me before
-writing production code if you find new risks specific to the
-production integration — Stage 3 surfaced the DXSDK shadowing
-issue (L-016) and the SDK-bump phantom (L-017) that the spike
-didn't surface; Stage 4 may have its own production-only
-surprises.
-
-Sub-plan first. Check in with me before any production-code change.
-
----
-
-## Alternative dispatch options
-
-### Alt 1: Stage 3 close-out (3h a11y + 3i final smoke)
-
-User-mandated per the original sub-plan §1: "Rigorous a11y
-testing (per user direction)" — that's still owed. 3i final
-smoke is user-driven and short. 3h a11y suite is the bigger
-piece — sub-plan recommends Playwright's
-`page.accessibility.snapshot()` for the cheap variant (~1d) or
-Node's UI Automation bindings for the comprehensive Narrator-
-driving variant (~2d).
-
-Effort: 1.5 days cheap variant; 2.5 days comprehensive.
-
-Trade-off vs Stage 4: Stage 4 is more user-visible (engine
-pixels appear); Stage 3 close-out is more thoroughness-driven
-(closes the a11y commitment from sub-plan §1).
-
-### Alt 2: Spawned-task chip cleanup
-
-The "Defer lastRawDib cache copy" chip was already done by the
-sibling session (commits `fd41dfa` + `b5fd14f` on lt-4). HANDOFF
-notes this as DONE. No action needed. Listed here so it doesn't
-get re-spawned.
-
-### Alt 3: Something else entirely
-
-If you want to break the MT-11 cadence and pick up a different
-ROADMAP item, the HANDOFF historical section (below the "Pre-
-Stage-3 — what was active before this session" delimiter) has
-the old "Next dispatch options" table from before MT-11 started.
-B2 obsolescence audit, MT-1 follow-up texture-picker buttons,
-NT-5 (engine-side single-member link-group enforcement), NT-6
-(visual-stability lane assignment) all still applicable.
+`lt-4` is checked out in the main worktree, so `git switch lt-4` fails from a session
+worktree. FF directly to the remote instead:
+```
+git push origin HEAD:lt-4   # FF-only; rejects if not a fast-forward
+```
+After this, the main-worktree local `lt-4` ref is stale — `git pull --ff-only` there when
+convenient.
