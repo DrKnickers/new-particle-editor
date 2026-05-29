@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 feature-parity] Browse button for emitter color/bump textures
 
-*2026-05-29 · [`TODO-HASH`](https://github.com/DrKnickers/new-particle-editor/commit/TODO-HASH) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-29 · [`ab1d340`](https://github.com/DrKnickers/new-particle-editor/commit/ab1d340) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 The emitter Appearance tab's **Color texture** and **Bump texture**
 fields now have a **Browse** button (folder icon) next to the text
