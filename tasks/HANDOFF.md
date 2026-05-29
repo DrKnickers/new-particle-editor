@@ -1,5 +1,75 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-05-29 session 2 — feature-parity B shipped + 2 resize/label fixes (resume: toolbar consolidation, PLAN READY)
+
+**`origin/lt-4` → `ae22c64`** (was `f2f84ba`). Tree clean except the
+queued plan; local `lt-4` ref in the main worktree was fast-forwarded to
+`ae22c64` too (main worktree is checked out on `master`, untouched).
+
+### Shipped this session (all on `origin/lt-4`)
+
+1. **Feature-parity B — frequently-used texture palette** (`59cfb27` feat,
+   `2196181` docs). The legacy per-mod pinned/recent texture palette, now in
+   the new UI: a Radix Popover on each emitter texture field (beside Browse)
+   with Color/Bump filter, Pinned + Recent thumbnail grids (12-cap),
+   click-to-apply, star pin/unpin, slot-aware filter default, honest no-mod
+   hint. Four bridge requests (`textures/palette/{list,thumbnail,toggle-pin,
+   touch-recent}`) over the existing `TexturePalette::Store`; new
+   [`src/UI/PaletteThumbs.cpp`](../src/UI/PaletteThumbs.cpp)
+   (`GetThumbnailDataUri` + `ClearBridgeThumbCache`) decodes textures →
+   base64 PNG (reuses legacy `DecodeThumbnail` technique + GDI+; resolves
+   `.meg`-packed textures for free); React
+   [`TexturePalettePopover.tsx`](../web/apps/editor/src/screens/TexturePalettePopover.tsx)
+   + palette button / touch-recent funnel on `TexturePickerField`.
+   **User-verified live** (real thumbnails, slot-aware, pin/recent). Path A:
+   base-game palette + `.meg` content browser deferred.
+2. **Inspector label readability on resize** (`1fa0254`). Pixel min-size
+   floors on the left (330px) + Spawner (260px) panes; checkbox rows use a
+   tight `1fr auto` grid (`.form-row-check`) so the 18px checkbox no longer
+   reserves the spinner's 58px+40px columns and squeezes long labels.
+3. **Spawner-toggle pane carry-over** (`ae22c64`). Toggling the Spawner no
+   longer snaps panes to a preset — `deriveOuterLayoutOnToggle` carries the
+   current widths across (left fixed, center absorbs/releases the spawner
+   space). Pure helper, TDD'd.
+4. **L-030 lesson** (in `2196181`) — don't blanket-regenerate a11y goldens
+   for a UI change that doesn't render in a captured surface; beware the
+   shared-WebView2-profile state pollution (theme/spawner) at capture time.
+
+**Test state:** vitest **366/366**; `pnpm build` (tsc) clean; MSBuild
+Debug+Release clean (no C++ changes since the palette); a11y goldens are
+**canonical / untouched** (the palette was golden-neutral).
+
+### RESUME HERE: toolbar consolidation + lucide icon refresh — PLAN APPROVED, NOT STARTED
+
+The full 5-section plan is written + user-approved in
+[`tasks/todo.md`](todo.md). **Do not redesign — implement it.** Summary:
+
+- **Remove the floating viewport pill**; move its 3 toggles into the toolbar
+  as lucide icon buttons; change the Spawner toggle from text to an icon.
+  **Icon set is decided** (all lucide-react, themeable via `currentColor`):
+  Show ground = `Grid2x2`, Bloom = `Sun`, Leave particles = `Sparkles`,
+  Spawner = `CirclePlus`. Delete the old hardcoded-blue
+  `web/apps/editor/public/icons/icon-{ground,bloom,particles}.svg`.
+- **Toolbar grouping (approved):** the 3 viewport toggles go in their own
+  group between playback and the Spawner button.
+- **The bulk + the risk is the a11y side, not the UI move.** The toolbar is
+  captured in ~every a11y golden, so this is gated on fixing the **L-030
+  harness pollution**: force a known state (light theme + Spawner-visible —
+  the canonical capture state) in the a11y setup, then regenerate BOTH lanes
+  and use `git diff --stat` as the gate (only the toolbar region + the
+  removed `viewport-pill.*` files may change). Remove the dedicated
+  `viewport-pill` a11y surface (driver + 2 goldens). Full plan §3b/§3c/§4.
+
+Key files: [`Toolbar.tsx`](../web/apps/editor/src/components/Toolbar.tsx),
+[`ViewportPill.tsx`](../web/apps/editor/src/components/ViewportPill.tsx)
+(delete), [`PanelLayout.tsx`](../web/apps/editor/src/components/PanelLayout.tsx)
+(remove pill render), [`a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts:126)
+(viewport-pill surface), [`ThemeToggle.tsx`](../web/apps/editor/src/components/ThemeToggle.tsx:13)
++ [`spawner-visibility.ts`](../web/apps/editor/src/lib/spawner-visibility.ts:12)
++ [`HostWindow.cpp`](../src/host/HostWindow.cpp:205) (the L-030 state sources).
+
+---
+
 ## 2026-05-29 session — dist-gate + capture tool + feature-parity A (resume: parity B)
 
 **`origin/lt-4` → `b80fd7b`** (was `a405bf1`). Full resume instructions
