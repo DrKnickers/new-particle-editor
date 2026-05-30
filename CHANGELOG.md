@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 rendering-fidelity] Fix particle blowout / alpha breakage over a background skydome
 
-*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-30 · [`e1f12a4`](https://github.com/DrKnickers/new-particle-editor/commit/e1f12a4) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 Applying a background skydome (Background → any slot 1–11) no longer wrecks
 particle rendering. Previously, with a skydome active, additive particles
