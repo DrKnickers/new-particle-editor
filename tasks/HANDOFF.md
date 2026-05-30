@@ -1,5 +1,118 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-05-30 session — toolbar consolidation SHIPPED + 4 UI polish fixes (resume: next LT-4 item / parity-gap audit)
+
+**`origin/lt-4` → `6ec99ff`** (was `1df999b` at session start). Branch is
+linear; FF-pushed throughout. Working tree clean (the only untracked item is
+`.claude/scheduled_tasks.lock`, a harness artifact — ignore it).
+
+### What shipped this session (7 commits, all on `origin/lt-4`)
+
+The queued-and-approved **toolbar consolidation** plan (was in `tasks/todo.md`,
+now archived to `tasks/todo-toolbar-consolidation-archive.md`) plus four polish
+fixes the user found during live smoke-testing:
+
+1. **`42dd06f` feat — viewport pill → toolbar + lucide icons (the main task).**
+   Deleted the floating `ViewportPill`; its 3 engine toggles now live in
+   [`Toolbar.tsx`](../web/apps/editor/src/components/Toolbar.tsx) as lucide
+   icon buttons in their own `tb-group` between playback and Spawner:
+   **Show ground = `Grid2x2`**, **Toggle bloom = `Sun`**, **Leave particles
+   after instance death = `Sparkles`**. Spawner toggle changed from "Spawner"
+   text to **`CirclePlus`** icon. `aria-label` + `aria-pressed` ported verbatim
+   (each reads `state.ground/bloom/leaveParticles`, dispatches the existing
+   `engine/set/{ground,bloom,leave-particles}` with `{enabled: !cur}`). Removed
+   pill render+import from
+   [`PanelLayout.tsx`](../web/apps/editor/src/components/PanelLayout.tsx);
+   deleted `ViewportPill.tsx`, `ViewportPill.test.tsx`, the `.vp-tools` CSS
+   block, and `public/icons/icon-{ground,bloom,particles}.svg`.
+   **L-030 harness fix landed:** new `seedCanonicalUiState(page)` in
+   [`tests/helpers/a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts)
+   forces light theme + Spawner-visible + reload in every a11y spec's
+   `beforeAll` (8 specs), so a blanket golden regen is deterministic. Removed
+   the dedicated `viewport-pill` a11y surface (driver + 2 goldens). Both lanes
+   regenerated — diff was toolbar-region-only across all 40 goldens, zero
+   theme/spawner drift.
+2. **`ab2a0d7` fix — hover tooltips (`title`) on icon-only toolbar buttons.**
+   `aria-label` gives the accessible name but no visual tooltip; `title` does.
+   Added `title` to all 11 icon buttons in `Toolbar.tsx` + 2 in
+   [`ThemeToggle.tsx`](../web/apps/editor/src/components/ThemeToggle.tsx). The
+   Ground/Background dropdowns already show visible text, so they were skipped.
+   Golden-neutral (verified 0 drift).
+3. **`3aa6858`+`2dccbd5` docs — skydome alpha bug filed.** See "Known issues"
+   below. Two near-identical commits (a trailing-newline hiccup on the first);
+   harmless, offered to squash, user hasn't requested it.
+4. **`0fe8797` fix — persistent pressed state on toggle buttons.** The toggles
+   set `aria-pressed` but no CSS styled it (the old pill used a `.tool.active`
+   class). Added `.tb-btn[aria-pressed="true"]` alongside the existing
+   `.tb-btn.active` in
+   [`components.css`](../web/apps/editor/src/styles/components.css) (accent-soft
+   bg + accent fg). Driving the visual off `aria-pressed` keeps one source of
+   truth. Also lights up Play|Pause while running. Golden-neutral (verified 0
+   drift — attribute selector, no DOM/className change).
+5. **`6ec99ff` style — 1px vertical toolbar padding.** `.toolbar` `padding:
+   0 8px` → `1px 8px`. Pure geometry; goldens are semantic-tree only, unaffected.
+
+### Test / build state (end of session)
+
+- **vitest 367/367** (43 files). Baseline was 366; net +1 (Toolbar gained 5
+  toggle tests, ViewportPill's 3 deleted, +others = 367).
+- **`pnpm --filter @particle-editor/editor build`** clean; `dist/` is
+  **composition** (`dist/build-meta.json` confirmed). Both binaries built this
+  session: `x64\Debug\ParticleEditor.exe` (a11y harness) + `x64\Release\…`
+  (live smoke) — this is a fresh worktree that had neither at start.
+- **a11y goldens canonical** — both lanes regenerated; all 40 toolbar-region
+  diffs are intentional and committed. Read-only composition lane verified.
+- **User-confirmed live (screenshots):** light AND dark theme look correct;
+  all 4 new icons render; tooltips present; pressed state visible; padding good.
+
+### Known issues / not-mine (carried forward — verify per L-022 before scoping)
+
+- **Skydome breaks particle alpha blending** (user-reported, filed in
+  `CHANGELOG.md` Open Issues). Applying a background skydome (Background slots
+  1–11, anything but slot 0 "Solid colour") makes particle alpha render wrong;
+  solid-colour background is fine. **Engine-level, out of scope for this UI
+  work — NOT fixed.** Likely a D3D9 render-state (alpha-blend enable / blend
+  factors) the skydome pass leaves changed and the particle pass depends on.
+  Suspects: `Engine::RenderSkydome` in [`src/engine.cpp`](../src/engine.cpp) +
+  [`src/Resources/Engine/Skydome.fx`](../src/Resources/Engine/Skydome.fx).
+  First step: RenderDoc/PIX (or the `--capture` headless tool) frame-diff at the
+  particle draw call, with vs without a skydome. Plausibly a small save/restore
+  fix mirroring the pass's existing scoped state-restore.
+- **`splitters.spec.ts` flake (L-014)** — 4 tests fail on full-suite native
+  runs but pass 6/6 in isolation; pre-existing `react-resizable-panels`
+  measurement flake, unrelated to this work (`splitters.spec.ts` unmodified).
+  Makes the a11y regen run exit 1 even though **0 a11y golden mismatches** —
+  don't misread the exit code (see L-031).
+- **Intermittent a11y read-only flake** — the curve/spinner composition
+  surfaces occasionally capture a stray `cursor/position-3d` value in the
+  StatusBar `contentinfo` Cursor cell (different surface each run, never the
+  toolbar). Pre-existing L-024-class source non-determinism; committed goldens
+  are correct (0 drift). A clean tiny follow-up would freeze/normalize the
+  Cursor cell like the FPS cells already are.
+
+### Lessons added this session
+
+- **L-030 resolution** appended (the "force a known UI state" follow-up is now
+  implemented via `seedCanonicalUiState`).
+- **L-031 (new)** — native golden/Playwright runs are single-instance +
+  fixed-port (CDP 9222); **never run them in parallel**, they collide and
+  report spurious exit 1. Run every native invocation serially.
+
+### Process notes for next session (environment quirks hit this session)
+
+- **Tool-output channel stalled intermittently** all session — commands
+  succeeded but their output sometimes didn't render, and a few parallel
+  batches got cancelled. Mitigation that worked: run native/build steps **one
+  at a time**, write results to a temp file, and confirm against `git`
+  (authoritative) rather than trusting a possibly-dropped echo. The Read tool
+  also briefly returned *fabricated* content for non-existent paths early on —
+  cross-check file existence with `ls`/`git` before trusting a Read.
+- **Fresh worktree builds.** This worktree started with no `x64\` binaries;
+  the a11y harness needs Debug, live smoke needs Release. Build both up front
+  (MSBuild via PowerShell against `.sln`, L-025/L-023) before any native run.
+
+---
+
 ## 2026-05-29 session 2 — feature-parity B shipped + 2 resize/label fixes (resume: toolbar consolidation, PLAN READY)
 
 **`origin/lt-4` → `ae22c64`** (was `f2f84ba`). Tree clean except the
