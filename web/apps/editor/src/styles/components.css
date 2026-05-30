@@ -1119,7 +1119,12 @@
    exposed). 4 px hit area matches the existing border affordance;
    --accent-soft hover preview is a tactile but quiet signal. */
 [data-separator].ce-splitter {
-  background: transparent;
+  /* Opaque app-shell colour, NOT transparent. In arch-C the engine DComp
+     visual is clipped to the scene rect and shows through any transparent
+     DOM; a transparent splitter gutter sitting next to the viewport (outside
+     the scene rect) revealed the black engine backing — stark in light theme.
+     Painting the gutter --bg matches the panel gaps and hides the seam. */
+  background: var(--bg);
   position: relative;
   transition: background 120ms ease;
 }

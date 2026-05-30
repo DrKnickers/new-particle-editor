@@ -16,6 +16,23 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Opaque splitter gutters — fix black seams next to the viewport
+
+*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The resize-handle gutters between panels were `background: transparent`. In
+arch-C the engine DComp visual is clipped to the scene rect and shows through any
+transparent DOM, so a transparent gutter sitting next to the viewport (outside
+the scene rect) revealed the **black engine backing** — a stark black seam around
+the curve editor and the viewport-facing panel edges, especially in light theme
+(black on near-white). Painting the gutter `var(--bg)` (the app-shell colour)
+matches the panel gaps and hides the seam. Single rule in
+[`components.css`](src/styles/components.css) (`.ce-splitter`). Verified by
+screen-capture: the seams went from black to the app-shell grey, zero near-black
+pixels remaining in the gutters.
+
+---
+
 ### [LT-4 UI polish] Desaturate the theme neutral ramp (no more navy/purple panels)
 
 *2026-05-30 · [`63d402e`](https://github.com/DrKnickers/new-particle-editor/commit/63d402e) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
