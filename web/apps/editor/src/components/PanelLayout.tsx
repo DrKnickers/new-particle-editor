@@ -259,7 +259,7 @@ export function PanelLayout({ bridge }: Props) {
         minSize={330}
         maxSize="40%"
       >
-        <div className="panel h-full w-full">
+        <div className="panel panel-flush-right h-full w-full">
           <div className="panel-header">
             <span>Particle System</span>
           </div>

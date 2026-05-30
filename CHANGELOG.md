@@ -31,6 +31,15 @@ matches the panel gaps and hides the seam. Single rule in
 screen-capture: the seams went from black to the app-shell grey, zero near-black
 pixels remaining in the gutters.
 
+Follow-up: also squared the **left pane's viewport-facing corners**
+(`.panel-flush-right` in [`PanelLayout.tsx`](src/components/PanelLayout.tsx) +
+`components.css`). The left pane is the only rounded `.panel` adjacent to the
+rectangular engine layer; its 8px rounded right corners left a small dark wedge
+of clipped engine backing. Squaring the right corners (outer/left corners stay
+rounded) makes the panel tile flush with the viewport. Screen-capture confirmed
+the wedge gone (4 stray AA pixels of ~11k in the corner region, down from a
+visible navy wedge).
+
 ---
 
 ### [LT-4 UI polish] Desaturate the theme neutral ramp (no more navy/purple panels)

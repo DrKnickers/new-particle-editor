@@ -279,6 +279,15 @@
   overflow: hidden;
 }
 
+/* Square the corners that face the engine viewport so the rounded corner
+   doesn't leave a wedge of (clipped) engine backing showing. The outer
+   corners stay rounded. Applied to the left pane (the only rounded .panel
+   adjacent to the rectangular viewport). */
+.panel-flush-right {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
 .panel-header {
   display: flex;
   align-items: center;
