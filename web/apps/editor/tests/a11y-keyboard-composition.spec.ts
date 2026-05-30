@@ -2,7 +2,7 @@ import { test, expect, chromium, type Page, type Browser } from "@playwright/tes
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { captureDomA11y } from "./helpers/a11y-dom-snapshot";
-import { KEYBOARD_SURFACES } from "./helpers/a11y-surfaces";
+import { KEYBOARD_SURFACES, seedCanonicalUiState } from "./helpers/a11y-surfaces";
 import "./helpers/toMatchJSONGolden";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
@@ -25,6 +25,7 @@ test.beforeAll(async () => {
     null,
     { timeout: 15_000 }
   );
+  await seedCanonicalUiState(page); // L-030: pin canonical UI state (light theme + Spawner visible)
 });
 
 test.afterAll(async () => {

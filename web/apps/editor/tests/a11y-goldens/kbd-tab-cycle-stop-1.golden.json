@@ -1258,6 +1258,16 @@
                                               "children": []
                                             },
                                             {
+                                              "Name": "D3D9 viewport",
+                                              "ControlType": "Text",
+                                              "AutomationId": "",
+                                              "ClassName": "",
+                                              "IsKeyboardFocusable": false,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
                                               "Name": "Dark theme",
                                               "ControlType": "Button",
                                               "AutomationId": "",
@@ -1363,6 +1373,16 @@
                                               "ControlType": "Button",
                                               "AutomationId": "",
                                               "ClassName": "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
+                                              "Name": "Leave particles after instance death",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
                                               "IsKeyboardFocusable": true,
                                               "IsEnabled": true,
                                               "IsOffscreen": false,
@@ -1489,6 +1509,16 @@
                                               "children": []
                                             },
                                             {
+                                              "Name": "Show ground",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
                                               "Name": "Step 10",
                                               "ControlType": "Button",
                                               "AutomationId": "",
@@ -1520,6 +1550,16 @@
                                             },
                                             {
                                               "Name": "Toggle Spawner panel",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
+                                              "Name": "Toggle bloom",
                                               "ControlType": "Button",
                                               "AutomationId": "",
                                               "ClassName": "tb-btn",
@@ -1865,68 +1905,6 @@
                                                           "children": []
                                                         }
                                                       ]
-                                                    }
-                                                  ]
-                                                }
-                                              ]
-                                            },
-                                            {
-                                              "Name": "",
-                                              "ControlType": "Group",
-                                              "AutomationId": "",
-                                              "ClassName": "relative h-full w-full min-h-0",
-                                              "IsKeyboardFocusable": false,
-                                              "IsEnabled": true,
-                                              "IsOffscreen": false,
-                                              "children": [
-                                                {
-                                                  "Name": "D3D9 viewport",
-                                                  "ControlType": "Text",
-                                                  "AutomationId": "",
-                                                  "ClassName": "",
-                                                  "IsKeyboardFocusable": false,
-                                                  "IsEnabled": true,
-                                                  "IsOffscreen": false,
-                                                  "children": []
-                                                },
-                                                {
-                                                  "Name": "Viewport toggles",
-                                                  "ControlType": "Group",
-                                                  "AutomationId": "",
-                                                  "ClassName": "vp-tools",
-                                                  "IsKeyboardFocusable": false,
-                                                  "IsEnabled": true,
-                                                  "IsOffscreen": false,
-                                                  "children": [
-                                                    {
-                                                      "Name": "Leave particles after instance death",
-                                                      "ControlType": "Button",
-                                                      "AutomationId": "",
-                                                      "ClassName": "tool active",
-                                                      "IsKeyboardFocusable": true,
-                                                      "IsEnabled": true,
-                                                      "IsOffscreen": false,
-                                                      "children": []
-                                                    },
-                                                    {
-                                                      "Name": "Show ground",
-                                                      "ControlType": "Button",
-                                                      "AutomationId": "",
-                                                      "ClassName": "tool active",
-                                                      "IsKeyboardFocusable": true,
-                                                      "IsEnabled": true,
-                                                      "IsOffscreen": false,
-                                                      "children": []
-                                                    },
-                                                    {
-                                                      "Name": "Toggle bloom",
-                                                      "ControlType": "Button",
-                                                      "AutomationId": "",
-                                                      "ClassName": "tool ",
-                                                      "IsKeyboardFocusable": true,
-                                                      "IsEnabled": true,
-                                                      "IsOffscreen": false,
-                                                      "children": []
                                                     }
                                                   ]
                                                 }

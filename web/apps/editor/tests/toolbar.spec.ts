@@ -1,9 +1,8 @@
-// Particle Editor 2026 toolbar contract tests. The toolbar has been
-// reorganized into 4 groups (file actions · playback · Spawner toggle
-// · environment+theme). Undo/Redo, Bloom, Reload Shaders/Textures
-// moved out — Undo/Redo and Reload-* live in the menubar (see
-// menu-bar.spec.ts) and Bloom moves to the ViewportPill in Task 2.7.
-// CDP-attach harness matches sibling app-shell.spec.ts.
+// Particle Editor 2026 toolbar contract tests. The toolbar groups are
+// file actions · playback · viewport toggles · Spawner · environment+theme.
+// The three viewport toggles (ground / bloom / leave-particles) moved here
+// from the deleted ViewportPill; Undo/Redo and Reload-* live in the menubar
+// (see menu-bar.spec.ts). CDP-attach harness matches sibling app-shell.spec.ts.
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
@@ -41,6 +40,12 @@ test("Toolbar renders the 2026 button set", async () => {
     "Step",
     "Step 10",
     "Toggle Spawner panel",
+  ]));
+  // Viewport engine toggles (moved from the old ViewportPill).
+  expect(labels).toEqual(expect.arrayContaining([
+    "Show ground",
+    "Toggle bloom",
+    "Leave particles after instance death",
   ]));
   // Theme toggle remains rightmost.
   expect(labels).toEqual(expect.arrayContaining([
@@ -120,6 +125,25 @@ test("Spawner toggle button is present with default aria-pressed=true", async ()
     };
   });
   expect(info.present).toBe(true);
-  expect(info.text).toBe("Spawner");
+  // Spawner is now an icon button (CirclePlus), not the old "Spawner" text.
+  expect(info.text).toBe("");
   expect(info.ariaPressed).toMatch(/^(true|false)$/);
+});
+
+test("viewport toggles flip engine state via aria-pressed", async () => {
+  // The three engine toggles that used to live in the floating
+  // ViewportPill now live in the toolbar. Each reflects engine state via
+  // aria-pressed and flips it on click; toggle back to leave state clean.
+  for (const label of [
+    "Show ground",
+    "Toggle bloom",
+    "Leave particles after instance death",
+  ]) {
+    const btn = page.locator(`.toolbar button[aria-label="${label}"]`);
+    await expect(btn).toHaveAttribute("aria-pressed", /true|false/);
+    const before = await btn.getAttribute("aria-pressed");
+    await btn.click();
+    await expect(btn).not.toHaveAttribute("aria-pressed", before ?? "");
+    await btn.click(); // restore
+  }
 });

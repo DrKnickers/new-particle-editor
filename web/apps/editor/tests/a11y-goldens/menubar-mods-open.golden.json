@@ -722,6 +722,16 @@
                                               "children": []
                                             },
                                             {
+                                              "Name": "Leave particles after instance death",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
                                               "Name": "Light theme",
                                               "ControlType": "Button",
                                               "AutomationId": "",
@@ -842,6 +852,16 @@
                                               "children": []
                                             },
                                             {
+                                              "Name": "Show ground",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
                                               "Name": "Step 10",
                                               "ControlType": "Button",
                                               "AutomationId": "",
@@ -882,6 +902,16 @@
                                               "children": []
                                             },
                                             {
+                                              "Name": "Toggle bloom",
+                                              "ControlType": "Button",
+                                              "AutomationId": "",
+                                              "ClassName": "tb-btn",
+                                              "IsKeyboardFocusable": true,
+                                              "IsEnabled": true,
+                                              "IsOffscreen": false,
+                                              "children": []
+                                            },
+                                            {
                                               "Name": "Value: ",
                                               "ControlType": "Text",
                                               "AutomationId": "",
@@ -890,47 +920,6 @@
                                               "IsEnabled": true,
                                               "IsOffscreen": false,
                                               "children": []
-                                            },
-                                            {
-                                              "Name": "Viewport toggles",
-                                              "ControlType": "Group",
-                                              "AutomationId": "",
-                                              "ClassName": "vp-tools",
-                                              "IsKeyboardFocusable": false,
-                                              "IsEnabled": true,
-                                              "IsOffscreen": false,
-                                              "children": [
-                                                {
-                                                  "Name": "Leave particles after instance death",
-                                                  "ControlType": "Button",
-                                                  "AutomationId": "",
-                                                  "ClassName": "tool active",
-                                                  "IsKeyboardFocusable": true,
-                                                  "IsEnabled": true,
-                                                  "IsOffscreen": false,
-                                                  "children": []
-                                                },
-                                                {
-                                                  "Name": "Show ground",
-                                                  "ControlType": "Button",
-                                                  "AutomationId": "",
-                                                  "ClassName": "tool active",
-                                                  "IsKeyboardFocusable": true,
-                                                  "IsEnabled": true,
-                                                  "IsOffscreen": false,
-                                                  "children": []
-                                                },
-                                                {
-                                                  "Name": "Toggle bloom",
-                                                  "ControlType": "Button",
-                                                  "AutomationId": "",
-                                                  "ClassName": "tool ",
-                                                  "IsKeyboardFocusable": true,
-                                                  "IsEnabled": true,
-                                                  "IsOffscreen": false,
-                                                  "children": []
-                                                }
-                                              ]
                                             },
                                             {
                                               "Name": "",

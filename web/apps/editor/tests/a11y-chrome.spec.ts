@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { captureUIA, discoverHostHwnd } from "./helpers/uia";
 import { normalize } from "./helpers/a11y-normalizer";
-import { CHROME_SURFACES } from "./helpers/a11y-surfaces";
+import { CHROME_SURFACES, seedCanonicalUiState } from "./helpers/a11y-surfaces";
 import allowlist from "./helpers/a11y-allowlist.json" with { type: "json" };
 import "./helpers/toMatchJSONGolden";
 
@@ -31,6 +31,7 @@ test.beforeAll(async () => {
     null,
     { timeout: 15_000 }
   );
+  await seedCanonicalUiState(page); // L-030: pin canonical UI state (light theme + Spawner visible)
   hostHwnd = await discoverHostHwnd();
 });
 

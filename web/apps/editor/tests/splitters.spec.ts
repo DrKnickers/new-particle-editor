@@ -258,8 +258,11 @@ test("corrupted localStorage falls back to defaults without crashing", async () 
 test("Spawner toggle remounts outer Group with the 2-col key, then restores 3-col on re-toggle", async () => {
   // Toggle Spawner OFF via the toolbar button.
   await page.evaluate(() => {
-    const btn = Array.from(document.querySelectorAll("button"))
-      .find((b) => b.textContent?.trim() === "Spawner");
+    // The Spawner toggle is an icon button (CirclePlus); find it by its
+    // stable aria-label rather than the old "Spawner" text content.
+    const btn = document.querySelector<HTMLButtonElement>(
+      '.toolbar button[aria-label="Toggle Spawner panel"]',
+    );
     if (!btn) throw new Error("Spawner toolbar button not found");
     btn.click();
   });
@@ -276,8 +279,11 @@ test("Spawner toggle remounts outer Group with the 2-col key, then restores 3-co
 
   // Toggle back ON.
   await page.evaluate(() => {
-    const btn = Array.from(document.querySelectorAll("button"))
-      .find((b) => b.textContent?.trim() === "Spawner");
+    // The Spawner toggle is an icon button (CirclePlus); find it by its
+    // stable aria-label rather than the old "Spawner" text content.
+    const btn = document.querySelector<HTMLButtonElement>(
+      '.toolbar button[aria-label="Toggle Spawner panel"]',
+    );
     if (!btn) throw new Error("Spawner toolbar button not found");
     btn.click();
   });

@@ -14,7 +14,10 @@
 - button "Play"
 - button "Step"
 - button "Step 10"
-- button "Toggle Spawner panel" [pressed]: Spawner
+- button "Show ground" [pressed]
+- button "Toggle bloom"
+- button "Leave particles after instance death" [pressed]
+- button "Toggle Spawner panel" [pressed]
 - button "Ground": "Ground:"
 - button "Background": "Background:"
 - button "Light theme" [pressed]
@@ -49,10 +52,6 @@
   - tab "Physics"
 - tabpanel "Basic": Select an emitter to edit its properties
 - separator
-- group "Viewport toggles":
-  - button "Show ground" [pressed]
-  - button "Toggle bloom"
-  - button "Leave particles after instance death" [pressed]
 - separator
 - text: Curve editor
 - button "Select tool" [pressed]

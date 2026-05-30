@@ -46,7 +46,6 @@ import type { Bridge } from "@particle-editor/bridge-schema";
 import { useSpawnerVisible } from "@/lib/spawner-visibility";
 import { useOpenToolPanel, setOpenToolPanel } from "@/lib/tool-panel";
 import { ViewportSlot } from "./ViewportSlot";
-import { ViewportPill } from "./ViewportPill";
 import { CurveEditorPanel } from "./CurveEditorPanel";
 import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
@@ -324,7 +323,6 @@ export function PanelLayout({ bridge }: Props) {
               className="relative h-full w-full min-h-0"
             >
               <ViewportSlot bridge={bridge} />
-              <ViewportPill bridge={bridge} />
               {openPanel === "lighting" && (
                 <LightingPanel
                   bridge={bridge}

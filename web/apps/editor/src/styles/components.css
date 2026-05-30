@@ -950,54 +950,6 @@
   height: 26px;
 }
 
-.vp-tools {
-  /* Task 2.7: viewport-overlay positioning. The parent viewport
-     quadrant has `position: relative`, so absolute lifts the pill out
-     of flow and pins it to the top-left without participating in the
-     ViewportSlot layout.
-   *
-   * B1.3.1 polish: opaque background instead of `rgba(...,0.85)` +
-   * `backdrop-filter: blur(8px)`. The pill sits over the FD9b layered
-   * engine viewport popup, and HTML's `backdrop-filter` can only
-   * sample WebView2's local content — NOT the engine's rendered
-   * pixels (different compositing layer). With nothing in WebView2
-   * behind the viewport quadrant, the blur produced a near-solid
-   * dark smudge that didn't match the design's translucent-glass
-   * intent. Switched to `var(--panel)` for a clean opaque-chrome
-   * look that's consistent regardless of what's behind the pill.
-   * Same trade-off as Modal's `shadow-md` swap. */
-  position: absolute;
-  z-index: 10;
-  top: 10px; left: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-}
-.vp-tools .tool {
-  width: 30px; height: 30px;
-  display: grid; place-items: center;
-  border-radius: 6px;
-  color: #6b88a8;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.vp-tools .tool img { filter: none; }
-.vp-tools .tool:hover {
-  background: rgba(255,255,255,0.06);
-  color: #9ec5ff;
-}
-.vp-tools .tool.active {
-  background: rgba(78, 163, 255, 0.12);
-  color: #4ec5ff;
-}
-.vp-tools .tool img {
-  /* svg uses currentColor — tint via color cascade */
-}
-
 .vp-stats {
   top: 10px; right: 12px;
   text-align: right;

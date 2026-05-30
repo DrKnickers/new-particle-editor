@@ -1,15 +1,17 @@
-// Toolbar — Particle Editor 2026 layout. 4 grouped sections with
+// Toolbar — Particle Editor 2026 layout. Grouped sections with
 // dividers, spacer to the right, theme toggle at the rightmost edge.
 //
 // Group 1 (file actions):       New · Open · Save · Save As
 // Group 2 (playback):           Play|Pause · Step · Step 10
-// Group 3 (panels):             Spawner toggle
+// Group 3 (viewport toggles):   Show ground · Toggle bloom · Leave particles
+// Group 4 (panels):             Spawner toggle
 //   spacer
-// Group 4 (environment):        Ground dropdown · Background dropdown · ThemeToggle
+// Group 5 (environment):        Ground dropdown · Background dropdown · ThemeToggle
 //
-// Stop and Restart removed per design chat. Bloom toggle moves to the
-// viewport pill in Task 2.7. Undo/Redo and Reload Shaders/Textures live
-// in the menubar only.
+// Stop and Restart removed per design chat. The three viewport toggles
+// (ground / bloom / leave-particles) live here as lucide icon buttons —
+// they replaced the floating ViewportPill. Undo/Redo and Reload
+// Shaders/Textures live in the menubar only.
 //
 // Uses the design's semantic CSS classes from components.css:
 //   .toolbar, .tb-group, .tb-btn, .tb-divider, .tb-spacer
@@ -18,6 +20,7 @@ import { useEffect, useState } from "react";
 import {
   FilePlus, FolderOpen, Save, SaveAll,
   Play, Pause, ChevronRight, ChevronsRight,
+  Grid2x2, Sun, Sparkles, CirclePlus,
 } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -43,6 +46,11 @@ export function Toolbar({ bridge }: Props) {
   }, [bridge]);
 
   const paused = state?.paused ?? false;
+  // Viewport engine toggles (formerly the floating ViewportPill). Defaults
+  // match the pill: ground/bloom off, leave-particles on.
+  const ground = state?.ground ?? false;
+  const bloom = state?.bloom ?? false;
+  const leaveParticles = state?.leaveParticles ?? true;
   const { visible: spawnerVisible, toggle: toggleSpawner } = useSpawnerVisibility();
 
   return (
@@ -127,7 +135,43 @@ export function Toolbar({ bridge }: Props) {
 
       <span className="tb-divider" />
 
-      {/* Group 3: Spawner toggle */}
+      {/* Group 3: viewport engine toggles. aria-pressed + aria-labels are
+          ported verbatim from the old ViewportPill so a11y semantics are
+          preserved. Each reads the live engine snapshot and dispatches the
+          matching engine/set/* with the inverted value. */}
+      <div className="tb-group">
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Show ground"
+          aria-pressed={ground}
+          onClick={() => { void bridge.request({ kind: "engine/set/ground", params: { enabled: !ground } }); }}
+        >
+          <Grid2x2 {...ICON} />
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Toggle bloom"
+          aria-pressed={bloom}
+          onClick={() => { void bridge.request({ kind: "engine/set/bloom", params: { enabled: !bloom } }); }}
+        >
+          <Sun {...ICON} />
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Leave particles after instance death"
+          aria-pressed={leaveParticles}
+          onClick={() => { void bridge.request({ kind: "engine/set/leave-particles", params: { enabled: !leaveParticles } }); }}
+        >
+          <Sparkles {...ICON} />
+        </button>
+      </div>
+
+      <span className="tb-divider" />
+
+      {/* Group 4: Spawner toggle */}
       <div className="tb-group">
         <button
           type="button"
@@ -136,13 +180,13 @@ export function Toolbar({ bridge }: Props) {
           aria-pressed={spawnerVisible}
           onClick={toggleSpawner}
         >
-          Spawner
+          <CirclePlus {...ICON} />
         </button>
       </div>
 
       <span className="tb-spacer" />
 
-      {/* Group 4: environment + theme */}
+      {/* Group 5: environment + theme */}
       <GroundDropdown bridge={bridge} />
       <BackgroundDropdown bridge={bridge} />
       <ThemeToggle />

@@ -19,6 +19,35 @@ async function dismissModals(page: Page) {
   await page.keyboard.press("Escape");
 }
 
+/**
+ * L-030: force the canonical captured UI state before a golden run.
+ *
+ * The native a11y harness reuses the host's STABLE WebView2 user-data
+ * folder (`ComputeUserDataFolder`, src/host/HostWindow.cpp), so whatever
+ * theme / panel state a prior interactive session (e.g. a live smoke) left
+ * in `localStorage` leaks into the next capture. Every golden is pinned to
+ * **light theme + Spawner visible** — seed those keys and reload so the
+ * module-init reads (ThemeToggle's `alo:theme`, the spawner-visibility
+ * store's `alo:spawner-visible`) pick them up regardless of persisted
+ * state. Without this, a blanket `a11y:update` rewrites every golden with
+ * the machine's incidental theme/panel state.
+ *
+ * Call once per a11y spec's `beforeAll`, after the bridge is ready and
+ * before any capture (HWND lane: before `discoverHostHwnd`).
+ */
+export async function seedCanonicalUiState(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    localStorage.setItem("alo:theme", "light");
+    localStorage.setItem("alo:spawner-visible", "true");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => typeof (window as { bridge?: unknown }).bridge !== "undefined",
+    null,
+    { timeout: 15_000 },
+  );
+}
+
 // Note (T5): EmitterPropertyTabs.tsx already exposes
 // `data-testid="emitter-property-tabs"` on its Tabs.Root (used by
 // existing vitest + Playwright property-tabs specs). The T5 plan
@@ -122,13 +151,9 @@ export const CHROME_SURFACES: SurfaceCapture[] = [
     },
     teardown: async (_page) => { /* no-op */ },
   },
-  {
-    id: "viewport-pill",
-    setup: async (page) => {
-      await page.locator('[data-testid="viewport-pill"]').focus();
-    },
-    teardown: async (_page) => { /* no-op */ },
-  },
+  // viewport-pill surface removed: the ViewportPill was deleted and its
+  // three toggles moved into the toolbar (captured by the `toolbar`
+  // surface + every full-page golden's toolbar region).
 ];
 
 // ─── T6: dialog surfaces ──────────────────────────────────────────────

@@ -2437,3 +2437,123 @@ at the source), [L-026](#l-026) (byte-exact goldens + EOL),
 [L-028](#l-028) (build-stamp + Radix `useId` golden hazards). L-030 adds
 the upstream check: *does your change even reach a captured surface, and
 is the capturing machine in the canonical state?*
+
+**Resolution (2026-05-30, toolbar consolidation).** The "force a known UI
+state in the a11y setup" follow-up is now DONE. A `seedCanonicalUiState(page)`
+helper in
+[`tests/helpers/a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts)
+writes `localStorage["alo:theme"]="light"` + `["alo:spawner-visible"]="true"`,
+**reloads** (the spawner-visibility Zustand store reads localStorage at
+module-init, so a reload is mandatory for the seed to take — a write without
+reload silently no-ops), then waits for `window.bridge`. Every a11y spec's
+`beforeAll` calls it (HWND lane: before `discoverHostHwnd`; composition lane:
+at the end of `beforeAll`). With the seed in place, a blanket
+`a11y:update` across both lanes for a genuine toolbar change produced a
+diff limited to the toolbar region (verified: `Dark theme [pressed]` count =
+0, `Light theme [pressed]` = 20 across all composition goldens), and two
+read-only re-runs were byte-identical. The seed makes blanket regen safe for
+changes that DO reach a captured surface — the complement to L-030's
+"don't regen if your change doesn't render."
+
+---
+
+## L-031 — Native golden / Playwright runs are single-instance + fixed-port; never run them in parallel
+
+**Rule.** `ParticleEditor.exe` is a single-instance binary and the native
+test harness ([`scripts/run-native-tests.mjs`](../web/apps/editor/scripts/run-native-tests.mjs))
+always launches it on the **fixed** CDP endpoint `http://localhost:9222`.
+Two harness invocations at once (e.g. an a11y regen + an isolated
+spec run, or a composition regen + a legacy regen) **collide**: the second
+launch's `taskkill /F /IM ParticleEditor.exe` kills the first run's host
+mid-flight, both fight over port 9222, and one or both report a spurious
+exit 1. Run every native invocation **serially** — wait for one to finish
+(and for its host to be torn down) before starting the next.
+
+**Trigger.** Any time you're tempted to background-launch more than one
+`run-native-tests.mjs` (or `pnpm a11y* / test:native*`) at once to save
+wall-clock — e.g. "regen the legacy lane while the read-only check runs."
+The symptom is a confusing exit 1 with errors like "Target page closed",
+"host process exited before CDP came up", or a spec failing that passes
+when run alone. The collision can also leave `dist/` in the wrong hosting
+mode (one run's `--rebuild` flips it under the other's feet).
+
+**How to apply.**
+- One native run at a time. If you must check progress, poll the single
+  run's output file; don't start a second host.
+- After a run that flips `dist/` (`--legacy --rebuild`), rebuild composition
+  (`pnpm build`) before the next composition run — and verify
+  `dist/build-meta.json` reads the mode you expect (the harness fail-fasts
+  on mismatch, but checking first saves a wasted launch).
+- UPDATE-mode golden writes are independent of other specs' pass/fail in
+  the same run: the a11y matcher writes regardless, so an unrelated flake
+  (e.g. `splitters.spec.ts`, L-014) failing in the same suite does NOT
+  corrupt or skip the golden regen — but it DOES make the run exit 1, which
+  is easy to misread as "the regen failed."
+
+**Source incident (2026-05-30, toolbar consolidation).** Launched the
+isolated `splitters` classification, the legacy a11y regen, and the
+read-only a11y determinism check as three parallel background tasks. All
+three raced for the single host + port 9222; two reported exit 1 with no
+real defect. Re-running each serially: splitters passed 6/6 in isolation,
+the legacy regen wrote all 29 HWND goldens cleanly (0 a11y failures), and
+the two read-only runs were identical (28 passed each). The parallel
+"failures" were pure harness collision. Cost: ~15 min of confused triage
+that a serial sequence would have avoided.
+
+**Resolution landed (2026-05-30, toolbar-consolidation).** The
+"force a known UI state in the a11y setup" follow-up is now implemented:
+`seedCanonicalUiState(page)` in
+[`tests/helpers/a11y-surfaces.ts`](../web/apps/editor/tests/helpers/a11y-surfaces.ts)
+writes `alo:theme=light` + `alo:spawner-visible=true` to `localStorage`,
+**reloads**, and re-waits for `window.bridge`. Every a11y spec
+(`a11y-{chrome,dialogs,keyboard,curve-spinner}[-composition].spec.ts`)
+calls it once in `beforeAll` — HWND lane before `discoverHostHwnd`,
+composition lane after the bridge-ready wait. With this in place, a
+genuine toolbar change (the pill→toolbar move) could blanket-regenerate
+both lanes and `git diff` showed **only** the intended toolbar-region
+delta across all 40 goldens — zero theme/panel drift. See L-031 for the
+one non-obvious gotcha (the reload is load-bearing).
+
+---
+
+## L-031 — Seeding `localStorage` for a deterministic capture is useless without a reload; module-init reads don't see late writes
+
+**Rule.** When you force UI state by writing `localStorage` keys before a
+capture (the L-030 fix), you **must reload the page afterward**. State that
+a module computes **once at import time** — e.g. the spawner-visibility
+Zustand store's `readInitial()` in
+[`src/lib/spawner-visibility.ts`](../web/apps/editor/src/lib/spawner-visibility.ts),
+or any `useState(() => readInitial())` — is already latched by the time your
+`page.evaluate(() => localStorage.setItem(...))` runs. Writing the key does
+nothing visible until React re-mounts. The seed helper therefore does
+`setItem(...)` → `page.reload(...)` → re-wait for `window.bridge`, in that
+order. Theme (`alo:theme`, read in a `useState` initializer in
+[`ThemeToggle.tsx`](../web/apps/editor/src/components/ThemeToggle.tsx)) has the
+same property.
+
+**Trigger.** Any "seed state then capture/assert" helper against a
+WebView2/React app where the state source reads `localStorage` at
+module-init or in a `useState` initializer (not on every render). Symptom if
+you forget the reload: the seed appears to do nothing — the capture still
+reflects whatever state the app booted with, and a blanket golden regen
+still drifts exactly as L-030 warns.
+
+**How to apply.**
+1. `await page.evaluate(() => { localStorage.setItem(k, v); ... })`.
+2. `await page.reload({ waitUntil: "domcontentloaded" })`.
+3. Re-wait for the app to be ready (`window.bridge` defined) — the reload
+   tore down the previous context.
+4. Verify by the L-030 gate: regen and confirm `git diff` is limited to your
+   intended change. Zero unrelated drift = the seed took.
+
+**Source incident (2026-05-30, toolbar consolidation).** First draft of
+`seedCanonicalUiState` wrote the two keys but the initial version under
+consideration omitted the reload; reasoning through the spawner store's
+module-level `readInitial()` (and ThemeToggle's `useState(() => …)`) showed
+the write would be invisible until remount. Added the reload + bridge re-wait
+up front; the subsequent both-lane regen produced a clean, drift-free 40-file
+diff on the first try.
+
+**Cross-reference.** [L-030](#l-030) (the broader "don't blanket-regen on a
+polluted machine" rule this implements the fix for); [L-006](#l-006) (a
+different React-state-timing trap — optimistic overrides cleared too eagerly).
