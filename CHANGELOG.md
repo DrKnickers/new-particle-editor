@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 UI polish] Desaturate the theme neutral ramp (no more navy/purple panels)
 
-*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-30 · [`63d402e`](https://github.com/DrKnickers/new-particle-editor/commit/63d402e) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 The dark theme's panel/background ramp was a cool navy-slate (`--panel #161b25`
 etc., blue channel highest) that read as dark purple. Both themes' neutral ramps
