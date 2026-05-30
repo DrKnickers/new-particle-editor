@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 UI polish] Opaque splitter gutters — fix black seams next to the viewport
 
-*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-30 · [`a41d869`](https://github.com/DrKnickers/new-particle-editor/commit/a41d869) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 The resize-handle gutters between panels were `background: transparent`. In
 arch-C the engine DComp visual is clipped to the scene rect and shows through any
