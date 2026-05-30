@@ -64,6 +64,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="New"
+          title="New"
           onClick={() => {
             promptSaveChanges(async () => {
               await bridge.request({ kind: "file/new", params: {} });
@@ -76,6 +77,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Open"
+          title="Open"
           onClick={() => {
             promptSaveChanges(async () => {
               await bridge.request({ kind: "file/open", params: {} });
@@ -88,6 +90,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Save"
+          title="Save"
           onClick={() => { void bridge.request({ kind: "file/save", params: {} }); }}
         >
           <Save {...ICON} />
@@ -96,6 +99,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Save As"
+          title="Save As"
           onClick={() => { void bridge.request({ kind: "file/save-as", params: {} }); }}
         >
           <SaveAll {...ICON} />
@@ -110,6 +114,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label={paused ? "Play" : "Pause"}
+          title={paused ? "Play" : "Pause"}
           aria-pressed={!paused}
           onClick={() => { void bridge.request({ kind: "engine/set/paused", params: { paused: !paused } }); }}
         >
@@ -119,6 +124,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Step"
+          title="Step one frame"
           onClick={() => { void bridge.request({ kind: "engine/action/step-frames", params: { frames: 1 } }); }}
         >
           <ChevronRight {...ICON} />
@@ -127,6 +133,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Step 10"
+          title="Step 10 frames"
           onClick={() => { void bridge.request({ kind: "engine/action/step-frames", params: { frames: 10 } }); }}
         >
           <ChevronsRight {...ICON} />
@@ -144,6 +151,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Show ground"
+          title="Show ground"
           aria-pressed={ground}
           onClick={() => { void bridge.request({ kind: "engine/set/ground", params: { enabled: !ground } }); }}
         >
@@ -153,6 +161,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Toggle bloom"
+          title="Toggle bloom"
           aria-pressed={bloom}
           onClick={() => { void bridge.request({ kind: "engine/set/bloom", params: { enabled: !bloom } }); }}
         >
@@ -162,6 +171,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Leave particles after instance death"
+          title="Leave particles after instance death"
           aria-pressed={leaveParticles}
           onClick={() => { void bridge.request({ kind: "engine/set/leave-particles", params: { enabled: !leaveParticles } }); }}
         >
@@ -177,6 +187,7 @@ export function Toolbar({ bridge }: Props) {
           type="button"
           className="tb-btn"
           aria-label="Toggle Spawner panel"
+          title="Toggle Spawner panel"
           aria-pressed={spawnerVisible}
           onClick={toggleSpawner}
         >

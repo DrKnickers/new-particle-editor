@@ -33,6 +33,7 @@ export function ThemeToggle() {
       <button
         type="button"
         aria-label="Light theme"
+        title="Light theme"
         aria-pressed={theme === "light"}
         onClick={() => apply("light")}
         className={`grid place-items-center w-6 h-5 rounded ${theme === "light" ? "bg-accent-soft text-accent" : "text-text-3"}`}
@@ -42,6 +43,7 @@ export function ThemeToggle() {
       <button
         type="button"
         aria-label="Dark theme"
+        title="Dark theme"
         aria-pressed={theme === "dark"}
         onClick={() => apply("dark")}
         className={`grid place-items-center w-6 h-5 rounded ${theme === "dark" ? "bg-accent-soft text-accent" : "text-text-3"}`}
