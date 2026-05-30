@@ -148,7 +148,14 @@
   font-family: inherit;
 }
 .tb-btn:hover { background: var(--hover); color: var(--text); }
-.tb-btn.active {
+/* Pressed/active toggle state. Driven by `aria-pressed="true"` (the
+   single source of truth the toolbar toggles set) as well as the legacy
+   `.active` class. Attribute-selector form is golden-neutral: it changes
+   no className, and aria-pressed is already captured in the a11y goldens.
+   Used by Show ground / Toggle bloom / Leave particles / Spawner, plus
+   Play|Pause (highlights while playback is running). */
+.tb-btn.active,
+.tb-btn[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
