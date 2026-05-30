@@ -16,6 +16,22 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Desaturate the theme neutral ramp (no more navy/purple panels)
+
+*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The dark theme's panel/background ramp was a cool navy-slate (`--panel #161b25`
+etc., blue channel highest) that read as dark purple. Both themes' neutral ramps
+(`--bg*`, `--panel*`, `--border*`, `--hover`, `--text*`) are now **desaturated to
+pure grey**, with lightness preserved from the prior values so contrast and panel
+hierarchy are unchanged. The blue **accent** and **selection** highlights, plus
+all semantic colours (danger/success/warning, axis R/G/B, curve grid) are
+deliberately kept. Single-file change in
+[`tokens.css`](src/styles/tokens.css); no component references the literal hex
+values, so nothing else moved.
+
+---
+
 ### [LT-4 rendering-fidelity] Fix particle blowout / alpha breakage over a background skydome
 
 *2026-05-30 · [`e1f12a4`](https://github.com/DrKnickers/new-particle-editor/commit/e1f12a4) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

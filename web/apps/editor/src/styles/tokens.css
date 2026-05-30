@@ -9,20 +9,25 @@
      correctly at runtime. */
 
 :root {
-  --bg: #0e1116;
-  --bg-2: #141821;
-  --bg-3: #1a1f2b;
-  --panel: #161b25;
-  --panel-2: #1c2230;
-  --panel-3: #232a3a;
-  --border: #252b38;
-  --border-2: #2e3547;
-  --hover: #1f2532;
+  /* Neutral grey ramp — intentionally desaturated (no blue/purple tint).
+     Lightness is preserved from the prior navy-slate ramp, so contrast and
+     panel hierarchy are unchanged; only the hue is removed. Accent and
+     selection deliberately stay blue (below). Don't "fix" these back to
+     tinted values. */
+  --bg: #111111;
+  --bg-2: #181818;
+  --bg-3: #1f1f1f;
+  --panel: #1b1b1b;
+  --panel-2: #222222;
+  --panel-3: #2a2a2a;
+  --border: #2b2b2b;
+  --border-2: #353535;
+  --hover: #252525;
   --selected: #213149;
   --selected-border: #355385;
-  --text: #d8dee9;
-  --text-2: #a3acbd;
-  --text-3: #6b7488;
+  --text: #dddddd;
+  --text-2: #ababab;
+  --text-3: #747474;
   --accent: #4ea3ff;
   --accent-2: #2f7fd4;
   --accent-soft: rgba(78, 163, 255, 0.16);
@@ -47,20 +52,22 @@
 }
 
 [data-theme="light"] {
-  --bg: #e9ecf2;
-  --bg-2: #f0f2f6;
+  /* Neutral grey ramp — desaturated to match the dark theme (no cool tint).
+     Lightness preserved from the prior values. Accent + selection stay blue. */
+  --bg: #ececec;
+  --bg-2: #f2f2f2;
   --bg-3: #ffffff;
-  --panel: #f6f7fa;
+  --panel: #f7f7f7;
   --panel-2: #ffffff;
-  --panel-3: #eef0f5;
-  --border: #d8dce4;
-  --border-2: #c4c9d4;
-  --hover: #e6e9ef;
+  --panel-3: #f0f0f0;
+  --border: #dcdcdc;
+  --border-2: #c9c9c9;
+  --hover: #e9e9e9;
   --selected: #d5e4f8;
   --selected-border: #79a8e6;
-  --text: #1a1f29;
-  --text-2: #4a5366;
-  --text-3: #7c8497;
+  --text: #1f1f1f;
+  --text-2: #525252;
+  --text-3: #848484;
   --accent: #2f7fd4;
   --accent-2: #1f63b0;
   --accent-soft: rgba(47, 127, 212, 0.14);
