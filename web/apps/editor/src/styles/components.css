@@ -121,7 +121,7 @@
 .toolbar {
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 1px 8px;
   gap: 4px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
