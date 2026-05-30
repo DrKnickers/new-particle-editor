@@ -494,6 +494,9 @@ struct HostWindowImpl
     std::wstring m_captureAlo;
     std::wstring m_capturePng;
     int          m_captureFrames = 60;
+    // --skydome <slot>: apply this skydome slot in --capture mode before
+    // rendering (0 = Off / solid colour, the default).
+    int          m_captureSkydomeSlot = 0;
     FILE*       logFile = nullptr;
     std::mutex  logMutex;
 
@@ -506,7 +509,8 @@ struct HostWindowImpl
                    bool testHost = false,
                    const std::wstring& captureAlo = L"",
                    const std::wstring& capturePng = L"",
-                   int captureFrames = 60)
+                   int captureFrames = 60,
+                   int captureSkydome = 0)
         : hInstance(inst)
         , textureManager(tex)
         , shaderManager(shd)
@@ -516,6 +520,7 @@ struct HostWindowImpl
         , m_captureAlo(captureAlo)
         , m_capturePng(capturePng)
         , m_captureFrames(captureFrames)
+        , m_captureSkydomeSlot(captureSkydome)
         , layout(nullptr)
         , accelerator()
         , modManager(std::make_unique<ModManager>(&fil, gameRoots_))
@@ -2798,6 +2803,15 @@ int HostWindowImpl::Run(int nCmdShow)
                     spawnerDriver->SetConfig(cfg);
                     spawnerDriver->Trigger(particleSystem.get(), engine.get());
                 }
+                // Apply the requested skydome slot so a --capture run can render
+                // (and verify) particles over a background skydome. Slot 0
+                // (default) leaves the solid-colour background untouched.
+                if (m_captureSkydomeSlot > 0)
+                {
+                    const bool sok = engine->SetSkydomeSlot(m_captureSkydomeSlot);
+                    Log("[capture] skydome slot %d -> %s\n",
+                        m_captureSkydomeSlot, sok ? "ok" : "FAILED");
+                }
                 Log("[capture] loaded %ls; spawned instance; rendering %d frames -> %ls\n",
                     m_captureAlo.c_str(), m_captureFrames, m_capturePng.c_str());
             }
@@ -2904,10 +2918,11 @@ HostWindow::HostWindow(HINSTANCE hInstance,
                        bool useTestHost,
                        const std::wstring& captureAlo,
                        const std::wstring& capturePng,
-                       int captureFrames)
+                       int captureFrames,
+                       int captureSkydome)
     : m_impl(new HostWindowImpl(hInstance, textureManager, shaderManager, fileManager,
                                 gameRoots, useDevUi, useTestHost,
-                                captureAlo, capturePng, captureFrames))
+                                captureAlo, capturePng, captureFrames, captureSkydome))
 {
 }
 
@@ -2936,11 +2951,12 @@ int Run(HINSTANCE hInstance,
         bool useTestHost,
         const std::wstring& captureAlo,
         const std::wstring& capturePng,
-        int captureFrames)
+        int captureFrames,
+        int captureSkydome)
 {
     HostWindow host(hInstance, textureManager, shaderManager, fileManager,
                     gameRoots, useDevUi, useTestHost,
-                    captureAlo, capturePng, captureFrames);
+                    captureAlo, capturePng, captureFrames, captureSkydome);
     return host.Run(nCmdShow);
 }
 

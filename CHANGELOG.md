@@ -16,6 +16,49 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 rendering-fidelity] Fix particle blowout / alpha breakage over a background skydome
+
+*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Applying a background skydome (Background → any slot 1–11) no longer wrecks
+particle rendering. Previously, with a skydome active, additive particles
+(explosion fire/glow) blew out to a solid white dome and alpha-blended
+particles (smoke) rendered white-tinted — while a plain solid-colour
+background looked correct. Now particles render identically with or without a
+skydome; the skydome is purely a backdrop again. The fix is engine-level and
+applies to both the new UI (arch-C) and the legacy editor, since they share
+`Engine::Render`.
+
+**How we tackled it.** Root cause was an input-assembler state leak, not a
+blend bug: [`Engine::RenderSkydome`](src/engine.cpp:2002) bound its own vertex
+declaration (`m_pSkydomeDecl` — a `SkydomeVertex` layout with **no diffuse-colour
+element**) and never restored it. The vertex declaration is **not** part of the
+`ID3DXEffect` save/restore state block, and the engine's real declaration
+(`m_pDeclaration`) is set only at device-reset
+([engine.cpp:1706](src/engine.cpp:1706)), not per frame — so the ground and
+particle draws that follow the skydome inherited its declaration. With no colour
+stream, the fixed-function pipeline defaulted every vertex's diffuse to white
+(`0xFFFFFFFF`), blowing out additive particles and de-colouring alpha ones. The
+ground was spared because its vertices are already white, which is exactly why
+the bug masqueraded as a skydome-only *blend* issue. The fix is a 4-line
+`GetVertexDeclaration` / `SetVertexDeclaration` save-restore around the skydome
+pass, mirroring its existing Z-write / Z-enable / cull save-restore.
+
+**Issues encountered and resolutions.** The bug was filed (and initially
+theorised) as "the skydome pass leaves a D3D9 blend state dirty — add a
+save/restore." Static analysis and direct measurement refuted that and three
+follow-on theories (destination-alpha, bloom, frame-timing) in turn: every D3D9
+render state, the live particle count, and the per-frame `dt` were all
+**byte-identical** slot-0 vs slot-5. The diagnosis came from extending the
+headless [`--capture`](src/host/HostWindow.cpp) tool with a `--skydome <slot>`
+flag (kept as a regression tool) plus a temporary per-draw device-state probe
+and a no-particles background capture; the background-only frame proved the white
+dome was the *particles* over the (identical) ground, not the skydome backdrop,
+which pointed at vertex state — the one thing the render-state probe couldn't
+see. Full write-up in `tasks/lessons.md` L-032.
+
+---
+
 ### [LT-4 feature-parity] Frequently-used texture palette for emitter textures
 
 *2026-05-29 · [`59cfb27`](https://github.com/DrKnickers/new-particle-editor/commit/59cfb27) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
@@ -2763,5 +2806,4 @@ The Ghidra project at `tasks/ghidra_project/` is gitignored (~888 MB) — it's a
 
 - **Mod-bundled megafiles** (`Mods\<name>\Data\MegaFiles.xml`) are not loaded. Most particle-overriding mods ship loose files, which the loose-file path covers. Total conversions like Thrawn's Revenge or Awakening of the Rebellion that package assets in their own `.meg` would need a follow-up: extend `FileManager` with a `m_modMegafiles` vector that's searched before `m_megafiles`, populated/cleared on `SetModPath`.
 - **`d3dx9_43.dll` redistribution.** D3DX9 is a DLL-only library — there is no static-link variant. The DLL must be findable at load time (alongside the exe, in `System32`, or via PATH). Per the DXSDK redist license we can ship it next to the exe in releases. Replacing D3DX9 with DirectXMath / DirectXTK / Effects11 would let us produce a single self-contained exe but is a large refactor woven through `engine.cpp` and `EmitterInstance.cpp`; deferred indefinitely.
-- **Particle alpha blending breaks when a background skydome is active.** *(Reported 2026-05-30, user smoke-test.)* Applying a background skydome (Background button → any slot 1–11, i.e. anything other than slot 0 "Solid colour") makes particle **alpha blending render incorrectly**; with a plain solid-colour background the same effect blends correctly. Reproduce: load a mod + an effect with translucent particles (e.g. explosion smoke), confirm correct blending on a solid background, then switch Background to a skydome slot and watch the particles' alpha go wrong. **Likely area (unverified — needs a RenderDoc/PIX capture):** the skydome pass (`Engine::RenderSkydome`, [`src/engine.cpp`](src/engine.cpp); shader [`src/Resources/Engine/Skydome.fx`](src/Resources/Engine/Skydome.fx)) added in MT-3 leaves a D3D9 render state changed that the particle pass depends on — prime suspect is alpha-blend enable / src-dst blend factors (`D3DRS_ALPHABLENDENABLE`, separate-alpha-blend, or a texture-stage alpha arg) not being restored, since the skydome pass already scopes depth/cull but the particle path may rely on a blend default it no longer gets. **First step:** capture one frame with vs without a skydome (RenderDoc/PIX, or the `--capture` headless tool at two background settings) and diff the blend state at the particle draw call; likely a small save/restore fix in the skydome pass mirroring its existing scoped state-restore.
 

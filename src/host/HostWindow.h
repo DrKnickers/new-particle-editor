@@ -44,7 +44,8 @@ public:
                bool useTestHost = false,
                const std::wstring& captureAlo = L"",
                const std::wstring& capturePng = L"",
-               int captureFrames = 60);
+               int captureFrames = 60,
+               int captureSkydome = 0);
     ~HostWindow();
 
     HostWindow(const HostWindow&)            = delete;

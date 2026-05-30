@@ -8108,6 +8108,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		// Default ~180 frames ≈ 3 s of sim (loop paces ~16 ms/frame) so a
 		// freshly-spawned effect has time to fill before the snapshot.
 		int          captureFrames = 180;
+		// --skydome <slot>: render the capture with a background skydome
+		// (0 = Off / solid colour — the default; 1-8 bundled scenes).
+		int          captureSkydome = 0;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
 			if (argv[i] == L"--new-ui")    newUi    = true;
@@ -8129,6 +8132,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			if (argv[i] == L"--frames" && i + 1 < argv.size())
 			{
 				captureFrames = _wtoi(argv[i + 1].c_str());
+			}
+			// --skydome <slot>: apply a background skydome in --capture mode
+			// (0 = Off / solid colour, 1-8 bundled).
+			if (argv[i] == L"--skydome" && i + 1 < argv.size())
+			{
+				captureSkydome = _wtoi(argv[i + 1].c_str());
 			}
 		}
 		// --capture implies the new-UI host (it owns the Engine). Clamp a
@@ -8235,7 +8244,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			                           textureManager, shaderManager, *fileManager,
 			                           gameRoots,
 			                           devUi, testHost,
-			                           captureAlo, capturePng, captureFrames);
+			                           captureAlo, capturePng, captureFrames,
+			                           captureSkydome);
 			delete fileManager;
 #ifndef NDEBUG
 			FreeConsole();

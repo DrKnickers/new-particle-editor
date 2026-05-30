@@ -1987,6 +1987,17 @@ void Engine::RenderSkydome()
     m_pDevice->GetRenderState(D3DRS_ZWRITEENABLE, &oldZWrite);
     m_pDevice->GetRenderState(D3DRS_ZENABLE,      &oldZEnable);
     m_pDevice->GetRenderState(D3DRS_CULLMODE,     &oldCull);
+    // Save the vertex declaration too. It is NOT part of the ID3DXEffect
+    // state block (Begin/End won't restore it), so the skydome's declaration
+    // (SkydomeVertex — position/normal/texcoord, NO diffuse-colour element)
+    // would otherwise leak into the ground + particle draws that follow. With
+    // no colour stream, the fixed-function pipeline defaults every vertex's
+    // diffuse to white (0xFFFFFFFF) — which blows out additive particles to
+    // white and breaks the alpha-blended ones. The ground is unaffected (its
+    // vertices are already white), which is exactly why the bug looked like a
+    // skydome-only blend issue. See tasks/lessons.md L-032.
+    IDirect3DVertexDeclaration9* oldDecl = NULL;
+    m_pDevice->GetVertexDeclaration(&oldDecl);
     m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
     m_pDevice->SetRenderState(D3DRS_ZENABLE,      D3DZB_FALSE);
     m_pDevice->SetRenderState(D3DRS_CULLMODE,     D3DCULL_CCW); // we're inside the sphere; Y↔Z swap in InitSkydomeMesh reversed handedness so the inside-facing triangles are now CCW
@@ -2010,6 +2021,12 @@ void Engine::RenderSkydome()
         m_pSkydomeEffect->EndPass();
     }
     m_pSkydomeEffect->End();
+
+    // Restore the vertex declaration the skydome bound, so the ground +
+    // particle draws use the engine's diffuse-colour-carrying declaration
+    // again (see the save above). GetVertexDeclaration AddRef'd it.
+    m_pDevice->SetVertexDeclaration(oldDecl);
+    if (oldDecl) oldDecl->Release();
 
     m_pDevice->SetRenderState(D3DRS_ZWRITEENABLE, oldZWrite);
     m_pDevice->SetRenderState(D3DRS_ZENABLE,      oldZEnable);

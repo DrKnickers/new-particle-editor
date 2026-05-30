@@ -1,262 +1,184 @@
-# [LT-4 UI polish] Consolidate viewport pill into the toolbar + lucide icon refresh
+# [LT-4 engine] Skydome → particle alpha-blending bug
 
-**Context:** Post-parity-B UI cleanup. The viewport-pill (floating top-left
-overlay with Show-ground / Bloom / Leave-particles toggles) is being
-removed and its toggles moved into the toolbar; the Spawner toggle becomes
-an icon button; and the three toggle icons + Spawner icon are refreshed to
-lucide. Because the toolbar is captured in ~every a11y golden, this also
-requires fixing the a11y harness's shared-profile state pollution (L-030)
-so the goldens can be regenerated deterministically.
+**Status:** ROOT-CAUSED + FIXED (pending cleanup + docs + push). The fix is a
+4-line vertex-declaration save/restore in `Engine::RenderSkydome`.
 
-**Target branch:** `lt-4`  **Difficulty:** ★★–★★★ (the React/CSS move is
-small; the L-030 harness fix + clean golden regen across both lanes is the
-bulk and the risk).
-**Effort:** ~half day. UI move + icons (~1.5h), L-030 harness fix (~1.5h),
-golden regen both lanes + verify deterministic (~1h), tests + docs (~1h).
+## ROOT CAUSE (confirmed by instrumented `--capture` + fix-verify)
+
+`Engine::RenderSkydome` ([engine.cpp:2002](../src/engine.cpp:2002)) bound
+`m_pSkydomeDecl` (a `SkydomeVertex` declaration: position/normal/texcoord, **no
+diffuse-colour element**) and never restored it. The vertex declaration is NOT
+part of the `ID3DXEffect` state block, so `Begin/End` didn't restore it; the
+engine's real declaration `m_pDeclaration` is set only at device-reset
+([engine.cpp:1706](../src/engine.cpp:1706)), not per frame. So every draw after
+the skydome inherited `m_pSkydomeDecl` → the fixed-function pipeline had no
+colour stream → defaulted every vertex's diffuse to **white (0xFFFFFFFF)**.
+
+- Additive Fire/Glow particles: white + ground → white blowout dome.
+- Alpha Smoke particle: lost its colour too (the "alpha blending issue").
+- Ground: unaffected — its vertices are already white, so the default white
+  changed nothing. THIS is why it looked like a skydome-only blend bug.
+
+Every measurement agreed: device render-state, particle count, and `dt` were all
+identical slot 0 vs slot 5 — because the leaked state was the vertex
+declaration, which none of those captured.
+
+## FIX
+
+Save `GetVertexDeclaration` before the skydome pass, `SetVertexDeclaration` +
+`Release` after `End()` — mirroring the existing Z/cull save-restore. Verified:
+slot 5 blob went `230,228,223` (white) → `94,73,51` (orange, = control); %white
+6.2% → 0.0%; slot 0 vs slot 5 means now identical within 0.1.
+
+## Remaining
+- [ ] Remove diagnostic scaffolding (blend probe, `--bloom`/`--noparticles`/
+      `CAPTURE_FIXEDDT`, particle-count log). KEEP `--skydome <slot>` (regression
+      value).
+- [ ] Build Release + Debug clean; vitest 367; a11y goldens zero drift (engine-only).
+- [ ] Lesson L-032; CHANGELOG entry + remove from Open Issues.
+- [ ] FF-push to origin/lt-4.
+
+---
+(Original plan below for reference.)
+
+**Status (original):** PLAN — root cause NOT yet confirmed; Phase 1 is a real-mod
+frame capture.
+
+**Difficulty:** ★★★ (engine D3D9; root cause uncertain and partly in external
+game-asset shaders; the *fix* is likely small once the capture localizes it).
 
 ---
 
 ## 1. Goal + scope
 
-**When this ships:** The floating viewport pill is gone; its three engine
-toggles (**Show ground**, **Toggle bloom**, **Leave particles after instance
-death**) live in the toolbar as icon buttons. The **Spawner** toggle is an
-icon button instead of text. All four use lucide icons that follow the
-dark/light theme:
+**Goal.** A background skydome (Background → any slot 1–11) no longer corrupts
+particle alpha blending. Translucent particles (e.g. explosion smoke) blend the
+same way over a skydome as they do over a solid-colour background. Solid-colour
+background behaviour is unchanged.
 
-| Action | Icon (lucide) | Bridge |
-|---|---|---|
-| Show ground | `Grid2x2` | `engine/set/ground` |
-| Toggle bloom | `Sun` | `engine/set/bloom` |
-| Leave particles | `Sparkles` | `engine/set/leave-particles` |
-| Toggle Spawner panel | `CirclePlus` | `useSpawnerVisibility().toggle` |
+**In:**
+- Reproduce the bug deterministically against the real mod (L-029: mod MUST be
+  selected or base-game textures load and the repro is invalid).
+- Frame-capture the particle draw with vs without a skydome; identify the exact
+  divergent state/content at root cause.
+- The minimal root-cause fix the capture points to.
+- Regression coverage appropriate to the fix (engine smoke via `--capture`,
+  and/or a host/unit check where one is meaningful).
+- CHANGELOG entry + remove from Open Issues; lessons.md rule if a correction
+  lands.
 
-**In scope:**
-- Delete `ViewportPill.tsx` + its `.vp-tools` CSS + the `viewport-pill`
-  occlusion call; remove its render in `PanelLayout`.
-- Add the three toggles to `Toolbar.tsx` (it already subscribes to the
-  engine snapshot, so they read `state.ground/bloom/leaveParticles` and
-  dispatch the existing setters). Keep `aria-pressed` + the exact
-  `aria-label`s the pill used (so behaviour/a11y semantics are preserved).
-- Swap the Spawner button's text for `CirclePlus`; keep
-  `aria-label="Toggle Spawner panel"` + `aria-pressed`.
-- Delete the now-unused `public/icons/icon-{ground,bloom,particles}.svg`.
-- **L-030 fix:** force a known UI state (light theme + Spawner visible)
-  in the a11y capture setup so goldens are deterministic regardless of the
-  shared WebView2 profile's persisted state.
-- Regenerate a11y goldens (both lanes); remove the dedicated `viewport-pill`
-  a11y surface (driver + 2 goldens + spec references).
-- Update vitest (`Toolbar` toggles; delete `ViewportPill.test.tsx`) and the
-  Playwright `toolbar.spec.ts` (drop pill references, cover the new toggles).
+**Out (with reasons):**
+- Speculative "add a save/restore to `RenderSkydome`" change — **the filed
+  hypothesis is refuted by static analysis (see §2/§3); this is explicitly NOT
+  the planned fix** unless the capture contradicts the static finding.
+- Any skydome *feature* work (new slots, HDR, mip control) — unrelated.
+- Bloom/distort post-process redesign — only touched if the capture proves the
+  corruption is there, and then only minimally.
+- arch-A (legacy) path — bug filed against new-UI/arch-C; verify there only if
+  trivially free.
 
-**Out of scope (deliberate):**
-- The accent-glow-on-hover nod to the original spawner art — not requested;
-  skip unless asked.
-- Re-theming any OTHER hardcoded-colour assets — only the three pill icons
-  are in play here.
-- The broader a11y deferred-surfaces backlog (HANDOFF follow-up #1) — the
-  L-030 fix here is just state-forcing, not new surface coverage.
-- Base-game palette / `.meg` browser (separate items).
+## 2. What the codebase already gives us (verified this session)
 
-**Toolbar grouping (design decision, confirm in review):** place the three
-viewport toggles as a new group between playback (Group 2) and the Spawner
-button, then spacer, then the Ground/Background dropdowns + ThemeToggle.
-Rationale: ground/bloom/leave are *viewport state* toggles, grouped together
-and distinct from the right-aligned environment *pickers*.
+- **Render order** ([engine.cpp:669–745](../src/engine.cpp:669)): Clear (XRGB →
+  dest **alpha = 255**) → `RenderSkydome()` (gated only by `m_skydomeIndex`,
+  [710](../src/engine.cpp:710)) → ground (if shown, sets `ALPHABLENDENABLE
+  FALSE`, [733](../src/engine.cpp:733)) → `ZWRITEENABLE FALSE` → particle loop
+  `instance->RenderNormal` → post-process.
+- **`RenderSkydome`** ([engine.cpp:1978](../src/engine.cpp:1978)): saves/restores
+  **only** `ZWRITEENABLE`/`ZENABLE`/`CULLMODE`. Touches no blend/alpha/tex-stage
+  state. Drives geometry via `ID3DXEffect::Begin(&passes, 0)` (flag 0 ⇒ the
+  effect framework saves/restores the device states the technique sets).
+- **`Skydome.fx`** ([src/Resources/Engine/Skydome.fx](../src/Resources/Engine/Skydome.fx)):
+  technique sets **only** `VertexShader`/`PixelShader` (+ a sampler). It sets
+  **no** blend/render states. PS returns `tex2D(skydome, uv)` — i.e. it writes
+  the skydome texture's **RGBA (including its alpha)** into the scene RT.
+- **Particle draw** (`ParticleSystemInstance::RenderNormal`
+  [ParticleSystemInstance.cpp:78](../src/ParticleSystemInstance.cpp:78) →
+  `EmitterInstance::Render` [EmitterInstance.cpp:811](../src/EmitterInstance.cpp:811)):
+  non-heat particles draw via a **per-blend-mode `ID3DXEffect`**
+  (`GetShader(blendMode)`, `Begin(0)`) that sets+restores its own state; heat
+  particles set `ALPHABLENDENABLE/SRCBLEND/DESTBLEND` manually.
+- **The real per-blend-mode shaders are EXTERNAL game/mod assets** — only the
+  fixed-function fallback `DefaultShader.fx` is in-repo. So the actual blend
+  modes can't be enumerated from source ⇒ frame capture is mandatory.
+- **Compositor swapchain = `DXGI_ALPHA_MODE_IGNORE`**
+  ([Compositor.cpp:651](../src/host/Compositor.cpp:651)); team already moved off
+  `PREMULTIPLIED` because it misinterpreted RT alpha (628–638). ⇒ the scene-RT
+  alpha channel does **not** reach the screen through DComp.
+- **Repro tooling:** `--capture <alo> <png> [--frames N]`
+  ([main.cpp:8102](../src/main.cpp:8102)) headless render. Does not currently set
+  a background skydome or select a mod → would need a small extension to drive
+  the two-background diff headlessly.
 
----
+## 3. Key finding that reframes the task
 
-## 2. What the codebase already gives us
+The render state **entering the particle pass is provably identical** with vs
+without a skydome (RenderSkydome restores Z/cull and changes no blend state;
+ground sets `ALPHABLENDENABLE FALSE` either way; RT/viewport setup is gated only
+on the skydome *call*, not changed). **Therefore the bug is not a leaked render
+state** — the only thing the skydome changes is the **scene-RT pixel content**
+(RGB and alpha) the particles blend against.
 
-- **`ViewportPill`** ([web/apps/editor/src/components/ViewportPill.tsx](web/apps/editor/src/components/ViewportPill.tsx))
-  — the three toggles, each `engine/set/*` + `aria-pressed`, synced via
-  `engine/state/changed`. Source of the exact labels/behaviour to port.
-- **`Toolbar`** ([web/apps/editor/src/components/Toolbar.tsx](web/apps/editor/src/components/Toolbar.tsx))
-  — already subscribes to the snapshot (`state`) + `engine/state/changed`;
-  the toggles drop in reading `state.ground/bloom/leaveParticles`. The
-  Spawner button is at lines 130-141 (`useSpawnerVisibility`).
-- **lucide-react** is a dependency; `Grid2x2`, `Sun`, `Sparkles`,
-  `CirclePlus` are standard exports. Toolbar icons already use the
-  `const ICON = { className: "size-3.5" }` convention.
-- **`PanelLayout`** renders `<ViewportPill>` inside the viewport quadrant
-  ([PanelLayout.tsx](web/apps/editor/src/components/PanelLayout.tsx)) — one
-  render site + the import to remove.
-- **a11y harness:** the `viewport-pill` surface driver is at
-  [tests/helpers/a11y-surfaces.ts:126](web/apps/editor/tests/helpers/a11y-surfaces.ts:126);
-  goldens at `tests/a11y-goldens/viewport-pill.{golden.json,composition.golden.yaml}`.
-  The harness is `run-native-tests.mjs` (`--update` regenerates;
-  `--legacy` + `--rebuild` for the HWND/legacy dist).
-- **The L-030 root cause (already diagnosed):** theme falls back to OS
-  `prefers-color-scheme` when `alo:theme` is unset
-  ([ThemeToggle.tsx:13-16](web/apps/editor/src/components/ThemeToggle.tsx:13)),
-  spawner visibility persists to `alo:spawner-visible`
-  ([spawner-visibility.ts:12](web/apps/editor/src/lib/spawner-visibility.ts:12)),
-  and the host uses a STABLE WebView2 profile shared with interactive runs
-  ([HostWindow.cpp:205](src/host/HostWindow.cpp:205)). So a capture inherits
-  whatever the last live session left. Goldens were captured at
-  **light theme + Spawner visible** — that's the canonical state to force.
-
----
-
-## 3. Architecture / implementation approach
-
-### 3a. React — move toggles + icons
-- **Toolbar.tsx:** add a `tb-group` with three `tb-btn`s (Grid2x2/Sun/
-  Sparkles), each `aria-label` = the pill's label, `aria-pressed` bound to
-  `state?.X`, `onClick` dispatching the matching `engine/set/*`. Swap the
-  Spawner button's `Spawner` text child for `<CirclePlus {...ICON} />`
-  (label/pressed unchanged). Update the file's header comment (it currently
-  says "Bloom toggle moves to the viewport pill" — now the reverse).
-- **PanelLayout.tsx:** remove `<ViewportPill bridge={bridge} />` + its import.
-- **Delete:** `ViewportPill.tsx`, `.vp-tools` block in `components.css`,
-  `public/icons/icon-{ground,bloom,particles}.svg`.
-
-### 3b. a11y harness determinism (L-030)
-Force the canonical UI state before each surface capture so the shared
-profile can't pollute it. Approach (verify the cleanest of these in T-impl):
-- In the composition lane (Playwright `page.evaluate` over CDP): in the
-  a11y spec's setup, set `localStorage.setItem("alo:theme","light")` +
-  `localStorage.setItem("alo:spawner-visible","true")` then reload, before
-  the surface loop. The capture then always reflects light + Spawner-open.
-- The HWND/UIA lane drives the same host; the localStorage write applies
-  process-wide, so a single seed before the inspector runs covers it.
-- Document the forced state in `a11y-surfaces.ts` (or the harness) so future
-  readers know the goldens are pinned to light + Spawner-visible.
-
-Cross-ref **L-030**: this is the "force a known state at capture" fix that
-makes blanket regen safe.
-
-### 3c. a11y goldens
-- Remove the `viewport-pill` surface from `a11y-surfaces.ts` + delete its two
-  golden files + any spec reference.
-- After 3a + 3b, regenerate **both lanes**: composition (`pnpm a11y:update`,
-  dist already composition) and HWND/legacy
-  (`node scripts/run-native-tests.mjs --legacy --update --rebuild`, which
-  flips dist to legacy). **Then rebuild dist back to composition**
-  (`pnpm build`) so the shipped state is correct.
-- `git diff --stat` the goldens — the ONLY expected changes are the toolbar
-  region (in every surface) + the removed viewport-pill files. If unrelated
-  surfaces drift, the L-030 fix is incomplete — STOP and fix it.
-
----
+Leading hypotheses to discriminate in the capture (ranked):
+1. **A blend mode reads destination alpha.** Flat clear → dest alpha = 255
+   everywhere; skydome → dest alpha = skydome-texture alpha (≠ 255, possibly 0).
+   A blend mode using `DESTALPHA`/`INVDESTALPHA` (or dest-alpha-dependent
+   tex-stage alpha) would then blend differently → "alpha wrong". Cleanest fix:
+   make the skydome pass not write dest alpha (e.g. `COLORWRITEENABLE` excluding
+   alpha, or force PS alpha = 1) so dest alpha stays 255 as the flat path leaves
+   it. **This is the prime suspect.**
+2. **Post-process (bloom/distort) samples the scene** now containing a bright/
+   busy sky → thresholding/extraction differs. Fix scoped to that pass.
+3. **A game blend-mode shader inherits a state it doesn't set**, and that state
+   differs because the skydome ran. (Static analysis says blend state is
+   identical, so this would have to be a non-blend state — lower probability.)
+4. **Correct-but-surprising additive blending** over a bright sky (not a bug).
+   Must be ruled out before changing engine code.
 
 ## 4. Risks named up front + mitigations
 
-1. **L-030 fix doesn't fully pin state → blanket regen still drifts.**
-   *Mitigation:* after the fix, regenerate and `git diff --stat`; the diff
-   must be limited to the toolbar region + removed pill files. If theme/
-   Spawner subtrees still flip in unrelated surfaces, the seed isn't taking
-   (wrong timing / not reloaded) — iterate the seed mechanism before
-   committing any goldens. Verify by running the read-only a11y lane twice
-   and confirming identical results.
+1. **Chasing the filed (wrong) hypothesis.** The Open-Issues note says "add a
+   save/restore in the skydome pass." Static evidence (§3) says that's a no-op
+   for blend state. *Mitigation:* Phase 1 is capture-first; do not touch
+   `RenderSkydome` until a capture shows a state it actually leaves divergent.
+2. **Invalid repro (wrong assets).** Per L-029, loading an `.alo` without
+   selecting the mod renders base-game textures and a different result.
+   *Mitigation:* repro only with the mod selected (interactive Mods menu, or the
+   capture tool extended to call `ModManager::SelectMod`); verify loaded texture
+   dims/format match the mod (1024² mod vs 512² base tell).
+3. **RenderDoc/PIX may not be installed**, and `--capture` doesn't currently set
+   a skydome. *Mitigation:* this is the open decision (check-in). Either use a
+   GPU debugger on the live `--new-ui` build, or extend `--capture` with
+   `--mod`/`--skydome` to dump the two frames headlessly + a state log at the
+   particle draw.
+4. **Fix that suppresses the symptom but not the cause** (e.g. forcing all
+   particles opaque). *Mitigation:* the fix must be justified by the captured
+   divergent state and leave solid-colour behaviour byte-identical; verify both
+   backgrounds after.
+5. **Golden/test fallout.** Engine-only change shouldn't touch a11y goldens
+   (not a captured DOM surface). *Mitigation:* `git diff --stat` goldens as the
+   gate (L-030); expect zero. Native runs SERIAL only (L-031).
 
-2. **HWND/UIA golden churn + Radix `useId` (L-028).** Regenerating the HWND
-   lane full-suite (not `--grep`) keeps render-sequence-dependent Radix IDs
-   stable. Do NOT `--grep`-refresh individual HWND goldens.
-   *Mitigation:* full-suite `--update` only; the toolbar buttons are plain
-   (no Radix `useId`), so the delta should be limited to button nodes.
+## 5. Testing & verification (filled in once root cause is known)
 
-3. **dist left in legacy mode after the legacy regen.** The `--legacy
-   --rebuild` flips dist to legacy; forgetting to rebuild composition would
-   ship a legacy-mode dist to the live editor.
-   *Mitigation:* always finish with `pnpm build` (composition) and confirm
-   `dist/build-meta.json` reads composition before the live smoke.
-
-4. **Occlusion removal regressions.** The pill registered a
-   `viewport-pill` occlusion rect; removing it must not leave a dangling
-   occlusion. *Mitigation:* the occlusion is scoped to the unmounted
-   component (cleared on unmount via `useViewportOcclusion`'s cleanup), so
-   deleting the component removes it cleanly — verify no `viewport-pill`
-   occlusion id remains referenced.
-
-5. **Spawner button loses its text label for screen readers.** Changing
-   text→icon: the `aria-label="Toggle Spawner panel"` already carries the
-   accessible name, so SR users are unaffected. *Mitigation:* keep the
-   `aria-label` + `title` (tooltip for sighted users).
-
----
-
-## 5. Testing & verification
-
-**vitest:**
-- [ ] New `Toolbar` toggle tests: each of the 3 toggles renders with its
-  `aria-label`, reflects `aria-pressed` from a mocked snapshot, and
-  dispatches the right `engine/set/*` on click.
-- [ ] Spawner button: renders `CirclePlus` (icon present, no "Spawner"
-  text), `aria-label`/`aria-pressed` intact, toggles visibility.
-- [ ] Delete `ViewportPill.test.tsx`.
-- [ ] Full suite green (`pnpm test`).
-
-**Build:** `pnpm build` (tsc + dist) clean. MSBuild not needed (no C++).
-
-**Playwright native:**
-- [ ] `toolbar.spec.ts` updated: pill references removed; the 3 toolbar
-  toggles dispatch + reflect state.
-- [ ] Composition lane passes post-regen (`pnpm a11y` read-only) — run
-  twice, identical (determinism check, Risk 1).
-
-**a11y goldens:**
-- [ ] `git diff --stat` after regen shows only toolbar-region changes +
-  removed `viewport-pill.*` files (Risk 1 gate).
-- [ ] Both lanes regenerated; dist restored to composition (Risk 3).
-
-**Live smoke (`x64\Release\ParticleEditor.exe --new-ui`):**
-- [ ] No floating pill; the 3 toggles + Spawner icon are in the toolbar.
-- [ ] Each toggle flips engine state (ground/bloom/leave) + shows pressed.
-- [ ] Spawner icon toggles the panel; carry-over resize still smooth.
-- [ ] Icons correct in BOTH dark and light theme.
+- **Repro (pre-fix):** real mod + translucent-particle effect; confirm correct
+  blend on solid background, wrong blend on a skydome slot. Capture both.
+- **Root-cause evidence:** the specific divergent state/content at the particle
+  draw call named explicitly (not "looks better").
+- **Post-fix happy path:** same effect blends correctly over skydome slots 1–11.
+- **Regression — solid background:** byte-identical to pre-fix (the path that
+  already worked must not change).
+- **Edge:** skydome toggled live mid-playback; multiple emitters w/ mixed blend
+  modes (additive + alpha); heat/distort emitter present.
+- **Build:** MSBuild Release + Debug clean (L-025/L-023).
+- **Engine smoke:** `--capture` of the repro effect on a skydome renders the
+  expected frame (extend the tool if that's the chosen repro path).
+- **a11y goldens:** `git diff --stat` shows zero change (engine-only).
+- **vitest:** still 367 (unaffected, but confirm).
 
 ---
 
-## Review
-
-**Shipped (2026-05-30).** Implemented as planned. The viewport pill is
-removed; its three engine toggles (`Grid2x2` Show ground, `Sun` Toggle bloom,
-`Sparkles` Leave particles) live in the toolbar in their own group between
-playback and the Spawner button, which is now a `CirclePlus` icon. Old
-hardcoded-blue `public/icons/icon-{ground,bloom,particles}.svg`, `ViewportPill.tsx`,
-`ViewportPill.test.tsx`, and the `.vp-tools` CSS are deleted. The L-030 harness
-fix (`seedCanonicalUiState` — light theme + Spawner-visible + reload) landed in
-all 8 a11y specs; the dedicated `viewport-pill` a11y surface + its 2 goldens are
-removed.
-
-**Verification (what passed).**
-- `pnpm build` clean (tsc + composition dist); `dist/build-meta.json` =
-  composition.
-- vitest **367 / 367** (was 366 baseline; +5 Toolbar toggle tests, −3 deleted
-  ViewportPill tests, +1 net from the suite). New Toolbar tests assert each
-  toggle renders with its aria-label, reflects `aria-pressed` from the
-  snapshot, dispatches the right `engine/set/*`, and that Spawner is an icon
-  (no "Spawner" text).
-- a11y goldens regenerated **both lanes**. `git diff` gate (Risk 1): the only
-  changed nodes across all 40 goldens are the 3 toggles moving into the toolbar
-  region + the Spawner button shedding its "Spawner" text + the removed
-  "Viewport toggles" group. **Zero theme/panel drift** (verified: 0 diff lines
-  touching Light/Dark theme, complementary/Spawner-panel, or Particle System).
-  Composition −5/+4 per file × 20; HWND −24/+14 per file × 20.
-- Determinism (Risk 1): regen run + a follow-up read-only run both show **all
-  a11y composition surfaces green** against the new goldens.
-- Native `toolbar.spec.ts` "viewport toggles flip engine state via aria-pressed"
-  **passed** against the real host — the live functional smoke for the toggles.
-- Release binary cold-launch: boots clean (composition mode, engine attach OK,
-  0 fail/fatal lines in host.log).
-- dist restored to composition after the legacy `--rebuild` (Risk 3).
-
-**Deviations / notes.**
-- `splitters.spec.ts`: updated the Spawner-button selector from
-  `textContent === "Spawner"` to the `aria-label` (text→icon swap, L-010).
-- **Pre-existing failures (NOT this change):** 4 `splitters.spec.ts`
-  layout-ratio tests fail in this worktree's test window — verified
-  **identical on the pre-change baseline** (`git stash` + rerun). Root cause is
-  the `left` pane's 330 px pixel `minSize` rendering as ~26 % of the narrower
-  test-host window, over the spec's 21 % ceiling (L-014). Environmental, filed
-  as a separate concern; out of scope here.
-- New lesson **L-031** (reload is load-bearing after seeding localStorage) +
-  L-030 marked resolved.
-
-**Residual for human eyes.** The automated gates confirm the toolbar's
-*structure, labels, a11y semantics, and toggle behaviour*. The one thing not
-machine-verifiable is the *pure-visual* icon rendering — that the
-Grid2x2/Sun/Sparkles/CirclePlus glyphs look right and theme correctly in dark
-**and** light. Icons use `currentColor` (themeable by construction; each button
-has an `<svg>` per vitest), but a quick eyeball in both themes is worth doing.
+## Pre-flight done this session
+- Lineage: HEAD = origin/lt-4 = `ce366ae`, 0/0, clean tree.
+- vitest **367/367**. x64 binaries + `dist/` absent (fresh worktree — build when
+  Phase 1 starts).

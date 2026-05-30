@@ -49,7 +49,12 @@ int Run(HINSTANCE hInstance,
         bool useTestHost = false,
         const std::wstring& captureAlo = L"",
         const std::wstring& capturePng = L"",
-        int captureFrames = 60);
+        int captureFrames = 60,
+        // --skydome <slot>: apply this skydome slot in --capture mode before
+        // rendering (0 = Off / solid colour). Lets a capture verify particles
+        // render correctly over a background skydome (regression for the
+        // RenderSkydome vertex-declaration leak — see lessons L-032).
+        int captureSkydome = 0);
 
 } // namespace host
 

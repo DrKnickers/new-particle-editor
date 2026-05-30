@@ -2557,3 +2557,66 @@ diff on the first try.
 **Cross-reference.** [L-030](#l-030) (the broader "don't blanket-regen on a
 polluted machine" rule this implements the fix for); [L-006](#l-006) (a
 different React-state-timing trap — optimistic overrides cleared too eagerly).
+
+---
+
+## L-032 — The vertex declaration (and stream sources, FVF, index buffer) is NOT in the `ID3DXEffect` state block; a render pass that binds its own must restore it, or following fixed-function draws inherit it and lose per-vertex diffuse → default white
+
+**Rule.** `ID3DXEffect::Begin(&passes, 0)` saves/restores **device render
+states, texture-stage states, sampler states, textures, and shaders** — the
+states the effect's technique sets. It does **NOT** save the **input-assembler**
+state: vertex declaration, FVF, stream sources, or index buffer. Those are
+app-managed. So any render pass that calls `SetVertexDeclaration` /
+`SetStreamSource` / `SetIndices` (even one driven by an `ID3DXEffect`) **must
+restore them itself**, or they leak into every subsequent draw in the frame. The
+trap is worst with **fixed-function** consumers: if the leaked declaration lacks
+a `D3DDECLUSAGE_COLOR` element, the FF pipeline has no diffuse stream and
+defaults every vertex's colour to **white (0xFFFFFFFF)**.
+
+**Why this is sneaky.** The symptom looks like a *blend* bug, not a vertex-format
+bug: additive particles blow out to white (white + dst), alpha particles render
+white-tinted. Every render-state probe you reach for (ALPHABLENDENABLE, SRC/DEST
+blend, tex-stage ops, fog, lighting, TEXTUREFACTOR, shaders) comes back
+**byte-identical** with vs without the offending pass — because the leaked state
+is the *vertex declaration*, which those probes don't cover and which the effect
+state-block silently doesn't protect. Geometry that already uses white vertices
+(e.g. a fully-lit ground quad with `D3DCOLOR_RGBA(255,255,255,255)`) is
+unaffected, so the bug appears scoped to "some draws" and misdirects toward a
+per-object blend/material theory.
+
+**How to apply.**
+- When adding a render pass that binds a non-default vertex declaration / stream
+  / indices, save+restore them, the same way you save+restore render states.
+  Pair every `SetVertexDeclaration(custom)` with a restore of the prior one
+  (`GetVertexDeclaration` AddRefs — `Release` after restoring).
+- When debugging a "looks like a blend/colour bug only in some draws," and the
+  render-state probe shows **identical** state, suspect the **input-assembler**
+  state (vertex declaration / FVF / streams) — it is invisible to render-state
+  introspection and to `ID3DXEffect` save/restore.
+- Diagnostic tell: the affected geometry is exactly the geometry that relies on a
+  **per-vertex diffuse colour**; geometry with white vertices is spared.
+
+**Source incident (2026-05-30, skydome → particle alpha bug).** A background
+skydome (MT-3) made additive explosion particles blow out to a white dome over
+the ground; solid-colour background was fine. Filed (and initially theorised) as
+"`RenderSkydome` leaves a D3D9 **blend** state dirty — add a save/restore." An
+instrumented headless `--capture` (new `--skydome <slot>` flag) plus a widened
+per-draw device-state probe proved every render state, the particle count, and
+`dt` were **identical** slot-0 vs slot-5 — refuting the blend-leak, dest-alpha,
+bloom, and timing theories in turn. The leak was
+[`Engine::RenderSkydome`](../src/engine.cpp:2002) binding `m_pSkydomeDecl`
+(`SkydomeVertex`: position/normal/texcoord, **no colour**) and never restoring
+it; the engine's real `m_pDeclaration` is set only at device-reset
+([engine.cpp:1706](../src/engine.cpp:1706)), not per frame, so the ground +
+particle draws inherited the skydome declaration → FF default-white diffuse →
+additive blowout (and white-tinted alpha particles). The ground was spared
+because its vertices are already white — which is *why* it masqueraded as a
+skydome-only blend issue. Fix: 4-line `GetVertexDeclaration`/`SetVertexDeclaration`
+save-restore around the skydome pass, mirroring its existing Z/cull save-restore.
+Verified via the same `--capture --skydome 5`: blob `230,228,223` (white) →
+`94,73,51` (orange = control); %white 6.2 → 0.0.
+
+**Cross-reference.** [L-007](#l-007--dont-paper-over-an-engine-bug-by-changing-what-a-test-asserts)
+(the D3D9 canary/probe + verify-in-situ pattern that cracked this — and the same
+"identical render-state, narrow your assumptions" discipline). The `--skydome`
+capture flag added for this diagnosis is kept as a regression tool.
