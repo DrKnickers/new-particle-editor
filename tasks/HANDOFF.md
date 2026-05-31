@@ -31,6 +31,17 @@ FF-pushed (`git push origin HEAD:lt-4`). Working tree clean. **Not on `master`.*
    corners stay rounded (the wedge fills with `--bg`). **User-confirmed live:
    "looks great"** in both themes.
 2. **`77a3309` docs(CHANGELOG)** — hash backfill for the entry.
+3. **`aba25f6` fix(ui) — collapse the spawner's redundant nested panel.** The
+   spawner column was wrapped in panel chrome twice (`<aside bg-panel border-l>`
+   at [PanelLayout.tsx:368](../web/apps/editor/src/components/PanelLayout.tsx:368)
+   wrapping a full `.panel` from
+   [SpawnerPanel.tsx:167](../web/apps/editor/src/screens/SpawnerPanel.tsx:167)),
+   giving it a redundant inset border ring. Stripped the panel styling from the
+   aside (now a plain layout container); the single `.panel` is the card,
+   matching the curve editor. **CSS-only ⇒ a11y goldens unaffected** (ARIA
+   snapshots are CSS-independent; corrects the earlier "will change the golden"
+   note). Verified the single-card look in browser/MockBridge mode via Playwright
+   (engine-independent). The earlier spawned follow-up chip is now redundant.
 
 ### Test / build state
 
@@ -64,11 +75,8 @@ compositing.
 
 ### Carried forward
 
-- **Spawned follow-up task:** remove the spawner's redundant nested `.panel`
-  ([PanelLayout.tsx:368](../web/apps/editor/src/components/PanelLayout.tsx:368)
-  `<aside bg-panel>` wraps an inner `.panel` from
-  [SpawnerPanel.tsx:167](../web/apps/editor/src/screens/SpawnerPanel.tsx:167)) —
-  cosmetic structural cleanup; WILL change the spawner a11y golden (regenerate).
+- **Spawner double-panel cleanup — DONE this session** (`aba25f6`, above). The
+  spawned follow-up chip is redundant.
 - **Open Issues** (CHANGELOG): mod-bundled megafiles; `d3dx9_43.dll` redist.
 - **arch-C performance** never profiled on a healthy machine (legacy hit 200–400
   fps maximized) — a next-step candidate.

@@ -16,6 +16,39 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Collapse the spawner's redundant nested panel
+
+*2026-05-31 · [`aba25f6`](https://github.com/DrKnickers/new-particle-editor/commit/aba25f6) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The Spawner pane was wrapped in panel chrome twice — so it read as a subtly
+"framed" box with an inset border ring, unlike the flush left pane and curve
+editor. The layout's `<aside>` for the spawner column carried `bg-panel` plus a
+left border, and the `SpawnerPanel` inside it renders a full `.panel`
+(background + border + 8px rounded corners). Two same-coloured cards nested:
+the inner panel's border traced a rounded rectangle just inside the outer
+container, with a doubled-up left edge. Now the spawner is a single clean panel
+card matching its neighbours.
+
+**How we tackled it.** Stripped the redundant panel styling (`bg-panel`,
+`border-l border-border`) from the spawner `<aside>` in
+[`PanelLayout.tsx`](web/apps/editor/src/components/PanelLayout.tsx:368), leaving it
+a plain `h-full w-full overflow-hidden` layout container. The single `.panel` that
+[`SpawnerPanel`](web/apps/editor/src/screens/SpawnerPanel.tsx:167) renders becomes
+the card — the same shape as the curve editor (a plain wrapper around the screen's
+`.panel`) and consistent with the left pane (which *is* the `.panel`). One-line
+className change.
+
+**Issues encountered and resolutions.** None of note. Worth recording: this is a
+**CSS-only** change — the `<aside>` keeps its `data-testid="quadrant-spawner"`,
+its `complementary` role, and its children, so the UIA/ARIA a11y goldens (which
+capture roles/names/structure, not CSS) are byte-identical and need no
+regeneration. Because the spawner styling is engine-independent, the single-card
+result was verified visually in browser/MockBridge mode via Playwright (the native
+arch-C compositing isn't involved, so it's eyeballable locally — unlike the
+backing fix above; see L-033).
+
+---
+
 ### [LT-4 UI polish] Theme-coloured composition backing — kill the dark corner wedges
 
 *2026-05-30 · [`a545559`](https://github.com/DrKnickers/new-particle-editor/commit/a545559) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

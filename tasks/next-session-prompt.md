@@ -5,12 +5,13 @@ You are resuming `new-particle-editor`, branch `lt-4`. The previous session
 rearmost solid-colour DComp visual recoloured to the theme `--bg`, which kills the
 dark triangular wedges at rounded-panel corners that meet the engine (curve-editor
 top corners, left-pane outer corners, spawner). **User-confirmed live ("looks
-great") in both themes.** All of it is on `origin/lt-4`; there is **no
-half-finished work**, tree is clean. This session you pick the next LT-4 item
-(see "What's next").
+great") in both themes.** It also collapsed the **spawner's redundant nested
+panel** to a single card (CSS-only, golden-neutral). All of it is on `origin/lt-4`;
+there is **no half-finished work**, tree is clean. This session you pick the next
+LT-4 item (see "What's next").
 
-**`origin/lt-4` is at `77a3309`.** (Not on `master` — user wants it left on
-`lt-4`.)
+**`origin/lt-4` is at `aba25f6` or newer.** (Not on `master` — user wants it left
+on `lt-4`.)
 
 ## Pre-flight (run before touching anything)
 
@@ -20,7 +21,7 @@ git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh cla
 git log --oneline origin/lt-4..HEAD | Measure-Object -Line # expect 0
 git log --oneline HEAD..origin/lt-4 | Measure-Object -Line # expect 0
 git status --porcelain                                     # empty
-git rev-parse origin/lt-4                                  # expect 77a3309 (or newer)
+git rev-parse origin/lt-4                                  # expect aba25f6 (or newer)
 ```
 If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
