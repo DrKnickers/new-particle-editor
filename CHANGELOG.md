@@ -18,7 +18,7 @@ Conventions:
 
 ### [LT-4 UI polish] Theme-coloured composition backing — kill the dark corner wedges
 
-*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+*2026-05-30 · [`a545559`](https://github.com/DrKnickers/new-particle-editor/commit/a545559) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
 Rounded panels that meet the engine viewport (or sit over any transparent gap)
 no longer show a dark triangular wedge in their corners. Previously, in arch-C
