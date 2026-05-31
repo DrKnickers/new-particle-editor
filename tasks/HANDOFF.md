@@ -58,6 +58,36 @@ FF-pushed (`git push origin HEAD:lt-4`). Working tree clean. **Not on `master`.*
    Brainstormed the design with the user first — the edge=boolean insight reframed
    the request into a single relabel/re-widget change.
 
+### OPEN (next session): 1px light-grey viewport edge seam — investigation plan in `todo.md`
+
+User reported a "white border" framing the arch-C viewport (jarring in dark mode).
+**Not yet fixed** — a first fix attempt (1px engine-clip inset) was implemented and
+**reverted** (it rested on an unverified assumption). The full systematic-debugging
+plan is in [`tasks/todo.md`](todo.md); execute it next session. Key state:
+- **Measured:** exactly `RGB(192,192,192)` (`#C0C0C0`), 1px, all four edges, at the
+  scene-rect boundary (viewport DOM rect `(335,71,929,494)`, dpr=1). Perfectly
+  neutral, lighter than both neighbours → *not* AA between them. Independent of
+  engine Background colour (red test), bloom, and theme.
+- **Ruled out / debunked:** it's NOT a CSS/DOM border (CDP `elementFromPoint`:
+  transparent, no border/outline) and NOT the WebView2's own paint (it composites
+  from *behind* WebView2). The earlier "it's a WebView2 fringe" and "clip-inset
+  proved it's not the engine" conclusions were **wrong** — the inset was never
+  verified to apply, and the magenta-backing test was inconclusive (ran on the
+  non-inset build where the engine covers the pixel). See todo.md §2.
+- **Live hypotheses:** HA engine-render edge, HB DComp-composition edge, HC
+  sub-pixel seam. **Keystone experiment:** host-side pixel readback of the engine
+  backbuffer at the scene-rect edge column (todo.md §4 step 1) — splits "engine
+  produced it" from "compositor/seam created it." Needs Debug build + env-gated
+  `[EDGE-DBG]` scaffolding (spec in todo.md §5).
+- **Reusable techniques discovered (in todo.md §5 + L-033):** faithful screenshot
+  via `HWND_TOPMOST` + `CopyFromScreen` (target the new-UI PID explicitly; never
+  `MoveWindow`/maximize); CDP recipes (set dark, push backing colour via
+  `window.bridge`, read `--bg`, `getComputedStyle`); the `[data-testid="..."]`
+  quoted-selector gotcha.
+- **Local binary caveat:** the local `x64\Release\ParticleEditor.exe` was built
+  *with* the reverted 1px inset — rebuild from clean `lt-4` HEAD before trusting a
+  local capture. Source + branch are clean (the inset was reverted, never committed).
+
 ### Test / build state
 
 - **vitest 370/370** (44 files) — +3 `backing-color-sync` tests.
