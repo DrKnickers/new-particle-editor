@@ -16,6 +16,65 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Theme-coloured composition backing — kill the dark corner wedges
+
+*2026-05-30 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Rounded panels that meet the engine viewport (or sit over any transparent gap)
+no longer show a dark triangular wedge in their corners. Previously, in arch-C
+the engine visual is clipped to the scene rect, so every transparent DOM region
+*outside* that rect — panel gaps, splitter seams, and the rounded-corner wedges
+of the curve-editor (top corners), the left pane (outer corners), and the
+spawner — composited over the black host backing and read as black/odd
+triangles. Now the host paints a backing layer in the current theme background
+colour (`--bg`: `#111111` dark / `#ececec` light), so those regions blend into
+the app shell. Corners stay rounded (the wedge just fills with the shell
+colour), and the backing follows the theme live — toggle the Sun/Moon and the
+backing recolours with the panels. This is a root-cause fix: one backing layer
+covers every transparent-region seam at once, present and future, rather than
+squaring or per-panel patching.
+
+**How we tackled it.** The arch-C DComp tree is `root → [engine, webview]`, with
+the engine visual clipped to the scene rect; the rearmost thing showing through a
+transparent WebView2 pixel outside that rect is the host window backing (black).
+The fix inserts a **third, rearmost visual** — a 1×1 composition swapchain on its
+own D3D11 device, scaled to the full client via the visual transform — behind the
+engine visual, and recolours it on demand. New
+[`Compositor::SetBackingColor`](src/host/Compositor.cpp:435) owns the visual
+(created lazily, kept rearmost via `InsertBackingRearmost` after each engine
+attach, rescaled in `SetSize`); a new `host/backing-color` bridge request
+([bridge-schema](web/packages/bridge-schema/src/index.ts:721) →
+[`BridgeDispatcher`](src/host/BridgeDispatcher.cpp) →
+[`LayoutBroker::SetBackingColor`](src/host/LayoutBroker.cpp) → compositor) carries
+the colour; and a web hook
+[`useBackingColorSync`](web/apps/editor/src/lib/backing-color-sync.ts) reads the
+resolved `--bg` and pushes it on first paint and on every `data-theme` change.
+The backing uses its **own** D3D11 device (not the engine's) specifically so the
+engine's LUID guard and shared-texture path stay byte-for-byte unchanged — zero
+risk to the working viewport. A 1×1 solid means the scale transform is
+colour-uniform (no sampling artifacts) and resize never reallocates buffers, just
+updates the scale (smooth during resize storms).
+
+**Issues encountered and resolutions.** The obvious shortcut — putting an opaque
+`var(--bg)` on a shared ancestor of the viewport — is impossible by design: the
+viewport's whole ancestor chain (`body`/`html`/`#root` and every wrapper down to
+the `quadrant-viewport` div) must stay transparent for the engine to show
+through, so an opaque ancestor would paint over the engine. That ruled out a
+CSS-only root fix and pointed at the host backing. MockBridge's exhaustive
+request-kind switch forced a no-op arm for the new kind (caught by `tsc`).
+Verification of the visual result was done host-side via `host.log`
+(`[COMP-backing]` lines proving the backing was created rearmost-behind-engine
+and recoloured `#ECECEC`/`#111111`) plus a CDP read confirming the web pushed the
+exact `--bg` token — because the engine ran at ~4 FPS on the dev machine (a
+degraded GPU-compositing environment), so the final on-screen look was confirmed
+by the user, not a local screenshot. The same degraded environment produced
+pre-existing native-lane flakes (the documented `splitters.spec` ×4, plus
+`dxgi-*` perf/timing failures from the 4 FPS); none are attributable to this
+change, which adds zero DOM and whose engine-path edit was a no-op for the single
+engine attach in the run.
+
+---
+
 ### [LT-4 UI polish] Opaque splitter gutters — fix black seams next to the viewport
 
 *2026-05-30 · [`a41d869`](https://github.com/DrKnickers/new-particle-editor/commit/a41d869) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

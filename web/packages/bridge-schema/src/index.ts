@@ -719,6 +719,18 @@ export type Request =
   // Coords in MAIN-HWND-CLIENT space (DPR-multiplied), same as
   // layout/viewport-rect.
   | { kind: "layout/scene-rect";          params: { x: number; y: number; w: number; h: number } }
+  // Push the current theme background colour to the host's composition
+  // backing. In arch-C the DComp tree is [backing, engine, webview]; the
+  // engine visual is clipped to the scene rect, so every transparent DOM
+  // region OUTSIDE that rect (panel gaps, splitter seams, rounded-corner
+  // wedges) composites over the rearmost backing visual. Painting that
+  // backing the app-shell `--bg` makes those regions blend into the shell
+  // instead of showing the black host backing. `color` is a CSS colour
+  // string as resolved by getComputedStyle — `#rrggbb` or `rgb(r,g,b)`;
+  // the host parses both and ignores anything it can't parse. Sent on
+  // first paint and on every theme change. No-op in legacy (arch-A) and
+  // browser (MockBridge) modes.
+  | { kind: "host/backing-color";         params: { color: string } }
   // Tell the host that a chrome region overlaps the viewport rect (a
   // menu, tool panel, dialog…). FD9b: the host's AlphaCompositor stamps
   // alpha into the popup's DIB in this rect, with a `feather` px
@@ -918,6 +930,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
   R extends { kind: "layout/viewport-rect" }      ? Record<string, never> :
   R extends { kind: "layout/scene-rect" }         ? Record<string, never> :
+  R extends { kind: "host/backing-color" }        ? Record<string, never> :
   R extends { kind: "viewport/occlude" }          ? Record<string, never> :
   R extends { kind: "viewport/capture-snapshot" } ? { pngBase64: string; w: number; h: number } :
   R extends { kind: "viewport/input" }            ? Record<string, never> :

@@ -242,6 +242,32 @@ public:
     // through.
     HRESULT SetEngineVisualTransform(int x, int y, int w, int h, bool immediate = false) noexcept;
 
+    // LT-4 (session 3) — theme-coloured composition backing. Recolour
+    // the rearmost backing visual so every transparent DOM region
+    // outside the scene rect (panel gaps, splitter seams, rounded-corner
+    // wedges) composites over the app-shell `--bg` instead of the black
+    // host backing.
+    //
+    // The backing is a 1x1 composition swapchain scaled to the full
+    // client via the visual transform — minimal VRAM, no ResizeBuffers
+    // churn during resize storms. It is inserted as the REARMOST child
+    // of the root visual (behind the engine visual), created lazily on
+    // the first call. `color` is a COLORREF (0x00BBGGRR per the Win32
+    // RGB macro); alpha is forced opaque. Idempotent on an unchanged
+    // colour.
+    //
+    // Safe to call before or after AttachWebView2 / AttachEngineVisual:
+    //   - Before the tree is built (no root visual): the colour is
+    //     cached and applied when AttachWebView2 commits the tree.
+    //   - The child order is re-asserted after each engine attach so the
+    //     backing always stays behind the engine visual.
+    //
+    // Returns S_OK on success (or cached-for-later), or a failure
+    // HRESULT (logged as [COMP-backing-fail]); on failure the tree is
+    // left intact and the backing falls back to today's black — no worse
+    // than the prior behaviour.
+    HRESULT SetBackingColor(COLORREF color) noexcept;
+
     // ---------------------------------------------------------------
 
     // Diagnostic accessors. IsReady() returns true after

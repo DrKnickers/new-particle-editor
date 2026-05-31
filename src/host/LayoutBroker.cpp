@@ -30,6 +30,14 @@ void LayoutBroker::SetCompositor(Compositor* compositor)
     if (m_dcompCompositor) ReemitOcclusions();
 }
 
+void LayoutBroker::SetBackingColor(COLORREF color)
+{
+    // Composition mode only — the DComp compositor owns the backing
+    // visual. Legacy arch-A has no equivalent (the layered popup's DIB
+    // is the surface), so this is a no-op there.
+    if (m_dcompCompositor) m_dcompCompositor->SetBackingColor(color);
+}
+
 bool LayoutBroker::GetSceneRect(int& x, int& y, int& w, int& h) const
 {
     if (m_sceneW <= 0 || m_sceneH <= 0) return false;

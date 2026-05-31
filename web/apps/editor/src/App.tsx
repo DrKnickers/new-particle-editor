@@ -19,6 +19,7 @@ import { setOpenToolPanel } from "@/lib/tool-panel";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
 import { BridgeContext } from "@/lib/bridge-context";
+import { useBackingColorSync } from "@/lib/backing-color-sync";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -37,6 +38,12 @@ function AppShell() {
     exposeBridgeForTests(b);
     return b;
   }, []);
+
+  // LT-4 (session 3): keep the host's DComp composition backing painted
+  // the current theme `--bg` so transparent panel gaps / splitter seams /
+  // rounded-corner wedges blend into the app shell instead of showing the
+  // black host backing. Pushes on mount + on every theme change.
+  useBackingColorSync(bridge);
 
   // B1.4 [NT-8]: tool-panel visibility + spawner visibility now live
   // inside `PanelLayout`, which mounts the relevant child components

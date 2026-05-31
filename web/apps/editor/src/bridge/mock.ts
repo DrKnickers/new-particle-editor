@@ -13,6 +13,7 @@
 //   - register-accelerators                  accepted as a no-op
 //   - layout/viewport-rect                   accepted as a no-op
 //   - layout/scene-rect                      accepted as a no-op
+//   - host/backing-color                     accepted as a no-op
 // Everything else (emitters/*, file/*, undo/*, spawner/*) rejects with
 // a "not implemented" error — those land in Phase 3+.
 
@@ -443,6 +444,10 @@ export class MockBridge implements Bridge {
 
       case "layout/scene-rect":
         // Mock: no native AlphaCompositor to mask.
+        return {};
+
+      case "host/backing-color":
+        // Mock: no native DComp backing visual to recolour.
         return {};
 
       case "viewport/occlude":

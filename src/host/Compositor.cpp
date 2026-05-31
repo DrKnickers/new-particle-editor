@@ -165,6 +165,33 @@ struct Compositor::Impl
     DWORD    engineLastFrameLogTick = 0;
     uint64_t engineFrameCount       = 0;
 
+    // LT-4 (session 3) — theme-coloured composition backing. A 1x1
+    // composition swapchain on its OWN D3D11 device (kept independent of
+    // the engine's device so the engine's LUID guard + shared-texture
+    // path stay byte-for-byte unchanged), scaled to the full client via
+    // the visual transform and inserted as the REARMOST child of the root
+    // visual (behind the engine visual). Recoloured by SetBackingColor on
+    // each theme change so transparent DOM gaps / splitter seams /
+    // rounded-corner wedges composite over the app-shell `--bg` instead of
+    // the black host backing. A solid 1x1 means the transform's scaling is
+    // colour-uniform (no sampling artifacts) and resize never reallocates
+    // buffers (just updates the scale) — smooth during resize storms.
+    Microsoft::WRL::ComPtr<ID3D11Device>        backingDevice;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> backingContext;
+    Microsoft::WRL::ComPtr<IDXGIFactory2>       backingFactory;
+    Microsoft::WRL::ComPtr<IDXGISwapChain1>     backingSwapChain;
+    Microsoft::WRL::ComPtr<IDCompositionVisual> backingVisual;
+    COLORREF backingColor      = 0;
+    bool     backingColorValid = false;   // a colour has been pushed at least once
+    bool     backingInTree     = false;   // backingVisual added to rootVisual
+
+    // Backing helpers (defined after the struct, like ApplyTransform).
+    HRESULT EnsureBackingDevice();   // own D3D11 device + DXGI factory
+    HRESULT EnsureBackingVisual();   // 1x1 swapchain + DComp visual, inserted rearmost
+    HRESULT PaintBacking(COLORREF color);  // clear the 1x1 backbuffer + Present
+    void    InsertBackingRearmost();       // (re)prepend the backing as child 0
+    void    ApplyBackingTransform();       // scale 1x1 → full client (no Commit)
+
     void LogLine(const std::string& s) const
     {
         if (log) log(s);
@@ -234,6 +261,194 @@ HRESULT Compositor::Impl::ApplyTransform(int x, int y, int w, int h)
              "[COMP-engine-transform] clip=(%d,%d,%d,%d) (absolute host-client)",
              x, y, x + w, y + h);
     LogLine(buf);
+    return S_OK;
+}
+
+// ---------- LT-4 (session 3) — theme-coloured backing helpers ----------
+
+HRESULT Compositor::Impl::EnsureBackingDevice()
+{
+    if (backingDevice && backingFactory) return S_OK;
+
+    HRESULT hr;
+    if (!backingDevice)
+    {
+        // Own HARDWARE device with BGRA support (the composition
+        // swapchain format is B8G8R8A8). Debug-layer fallback mirrors
+        // AttachEngineVisual: retry without DEBUG when the SDK layers
+        // aren't installed. NO LUID guard — the backing renders its own
+        // solid colour and never OpenSharedResource's the engine texture,
+        // so adapter choice is irrelevant here.
+        UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+#ifndef NDEBUG
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+        const D3D_FEATURE_LEVEL wanted[] = {
+            D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+            D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
+        };
+        D3D_FEATURE_LEVEL got = D3D_FEATURE_LEVEL_11_0;
+        hr = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+            wanted, _countof(wanted), D3D11_SDK_VERSION,
+            backingDevice.GetAddressOf(), &got, backingContext.GetAddressOf());
+#ifndef NDEBUG
+        if (FAILED(hr))
+        {
+            flags &= ~D3D11_CREATE_DEVICE_DEBUG;
+            hr = D3D11CreateDevice(
+                nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+                wanted, _countof(wanted), D3D11_SDK_VERSION,
+                backingDevice.GetAddressOf(), &got, backingContext.GetAddressOf());
+        }
+#endif
+        if (FAILED(hr) || !backingDevice)
+        {
+            LogLine("[COMP-backing-fail] D3D11CreateDevice hr=" + FormatHresult(hr));
+            backingContext.Reset();
+            backingDevice.Reset();
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+    }
+    if (!backingFactory)
+    {
+        // CreateDXGIFactory1 + QI to IDXGIFactory2 — same DXSDK-shadowing
+        // workaround as AttachEngineVisual (L-016).
+        Microsoft::WRL::ComPtr<IDXGIFactory1> f1;
+        hr = CreateDXGIFactory1(IID_PPV_ARGS(f1.GetAddressOf()));
+        if (FAILED(hr))
+        {
+            LogLine("[COMP-backing-fail] CreateDXGIFactory1 hr=" + FormatHresult(hr));
+            return hr;
+        }
+        hr = f1.As(&backingFactory);
+        if (FAILED(hr) || !backingFactory)
+        {
+            LogLine("[COMP-backing-fail] QI IDXGIFactory1->IDXGIFactory2 hr=" + FormatHresult(hr));
+            return hr;
+        }
+    }
+    return S_OK;
+}
+
+void Compositor::Impl::InsertBackingRearmost()
+{
+    if (!backingVisual || !rootVisual) return;
+    // (TRUE, nullptr) prepends to the children list = rendered FIRST =
+    // BEHIND all siblings (the spike-bisected MSDN-naming inversion; see
+    // AttachWebView2's webview-add comment). Remove first if already in
+    // the tree so a re-prepend after a later engine attach keeps the
+    // order [backing, engine, webview].
+    if (backingInTree) rootVisual->RemoveVisual(backingVisual.Get());
+    rootVisual->AddVisual(backingVisual.Get(), TRUE, nullptr);
+    backingInTree = true;
+}
+
+void Compositor::Impl::ApplyBackingTransform()
+{
+    if (!backingVisual) return;
+    // Scale the 1x1 swapchain content to the full client. Column-major
+    // D2D_MATRIX_3X2_F {_11,_12,_21,_22,_31,_32}: pure scale (sx, sy).
+    // Clamp to >=1 so a pre-SetSize call doesn't collapse to a zero matrix.
+    const float sx = static_cast<float>(lastW > 0 ? lastW : 1);
+    const float sy = static_cast<float>(lastH > 0 ? lastH : 1);
+    D2D_MATRIX_3X2_F m = { sx, 0.0f, 0.0f, sy, 0.0f, 0.0f };
+    backingVisual->SetTransform(m);
+}
+
+HRESULT Compositor::Impl::EnsureBackingVisual()
+{
+    if (backingVisual && backingSwapChain)
+    {
+        // Already created — make sure it's still rearmost (cheap, covers
+        // the case where an engine (re)attach reordered the children).
+        InsertBackingRearmost();
+        return S_OK;
+    }
+    HRESULT hr = EnsureBackingDevice();
+    if (FAILED(hr)) return hr;
+
+    // 1x1 composition swapchain. Opaque (ALPHA_MODE_IGNORE) — this is the
+    // bottom layer; the theme bg is a solid colour. Format/effect match
+    // the engine swapchain so the DComp path is identical.
+    DXGI_SWAP_CHAIN_DESC1 sc = {};
+    sc.Width  = 1;
+    sc.Height = 1;
+    sc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sc.BufferCount = 2;
+    sc.SampleDesc.Count = 1;
+    sc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    sc.AlphaMode  = DXGI_ALPHA_MODE_IGNORE;
+    sc.Scaling    = DXGI_SCALING_STRETCH;
+
+    hr = backingFactory->CreateSwapChainForComposition(
+        backingDevice.Get(), &sc, nullptr, backingSwapChain.GetAddressOf());
+    if (FAILED(hr) || !backingSwapChain)
+    {
+        LogLine("[COMP-backing-fail] CreateSwapChainForComposition hr=" + FormatHresult(hr));
+        backingSwapChain.Reset();
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    hr = device->CreateVisual(backingVisual.GetAddressOf());
+    if (FAILED(hr) || !backingVisual)
+    {
+        LogLine("[COMP-backing-fail] CreateVisual(backing) hr=" + FormatHresult(hr));
+        backingVisual.Reset();
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+    hr = backingVisual->SetContent(backingSwapChain.Get());
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-backing-fail] backingVisual->SetContent hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    ApplyBackingTransform();   // scale to current client
+    InsertBackingRearmost();   // child 0 (behind engine + webview)
+    LogLine("[COMP-backing] backing visual created + inserted rearmost (behind engine)");
+    return S_OK;
+}
+
+HRESULT Compositor::Impl::PaintBacking(COLORREF color)
+{
+    if (!backingSwapChain || !backingDevice || !backingContext)
+    {
+        return E_NOT_VALID_STATE;
+    }
+    // FLIP swapchains rotate the backbuffer on Present, so re-get buffer 0
+    // + recreate the RTV each paint rather than caching a stale view.
+    // Recolour only happens on theme change, so this is not hot.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> bb;
+    HRESULT hr = backingSwapChain->GetBuffer(0, IID_PPV_ARGS(bb.GetAddressOf()));
+    if (FAILED(hr) || !bb)
+    {
+        LogLine("[COMP-backing-fail] backing GetBuffer(0) hr=" + FormatHresult(hr));
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+    hr = backingDevice->CreateRenderTargetView(bb.Get(), nullptr, rtv.GetAddressOf());
+    if (FAILED(hr) || !rtv)
+    {
+        LogLine("[COMP-backing-fail] CreateRenderTargetView hr=" + FormatHresult(hr));
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+    const float rgba[4] = {
+        GetRValue(color) / 255.0f,
+        GetGValue(color) / 255.0f,
+        GetBValue(color) / 255.0f,
+        1.0f,   // opaque backing
+    };
+    backingContext->ClearRenderTargetView(rtv.Get(), rgba);
+
+    DXGI_PRESENT_PARAMETERS pp = {};
+    hr = backingSwapChain->Present1(0, 0, &pp);
+    if (FAILED(hr))
+    {
+        LogLine("[COMP-backing-fail] backing Present1 hr=" + FormatHresult(hr));
+        return hr;
+    }
     return S_OK;
 }
 
@@ -379,6 +594,15 @@ HRESULT Compositor::AttachWebView2(ICoreWebView2CompositionController* ctl)
 
     m_impl->treeBuilt = true;
     m_impl->LogLine("[COMP-tree] tree committed (Stage 3: webview-only)");
+
+    // LT-4 (session 3): if React pushed a backing colour before the tree
+    // was built (host/backing-color racing AttachWebView2), apply it now.
+    // SetBackingColor caches + no-ops the visual work until the tree is
+    // ready; this is the deferred-apply hook.
+    if (m_impl->backingColorValid)
+    {
+        SetBackingColor(m_impl->backingColor);
+    }
     return S_OK;
 }
 
@@ -394,6 +618,11 @@ HRESULT Compositor::SetSize(int width, int height)
     }
     m_impl->lastW = width;
     m_impl->lastH = height;
+
+    // LT-4 (session 3): rescale the backing visual's 1x1 content to fill
+    // the new client. No-op until the backing visual exists; published by
+    // the Commit at the end of this function.
+    m_impl->ApplyBackingTransform();
 
     // Root visual offset + clip. Stage 3 anchors the WebView2
     // visual at (0,0) covering the full host client; SetOffsetX/Y
@@ -439,6 +668,46 @@ HRESULT Compositor::Commit()
         return E_NOT_VALID_STATE;
     }
     return m_impl->device->Commit();
+}
+
+HRESULT Compositor::SetBackingColor(COLORREF color) noexcept
+{
+    // Always cache so a call that races ahead of AttachWebView2 (the tree
+    // isn't built yet) is applied later via the deferred-apply hook at the
+    // end of AttachWebView2.
+    const bool unchanged = (m_impl->backingColorValid && m_impl->backingColor == color);
+    m_impl->backingColor      = color;
+    m_impl->backingColorValid = true;
+
+    if (!m_impl->device || !m_impl->rootVisual)
+    {
+        m_impl->LogLine("[COMP-backing] color cached (tree not built yet)");
+        return S_OK;
+    }
+    if (unchanged && m_impl->backingInTree)
+    {
+        return S_OK;   // idempotent — same colour, already showing
+    }
+
+    HRESULT hr = m_impl->EnsureBackingVisual();
+    if (FAILED(hr)) return hr;   // already logged [COMP-backing-fail]
+
+    hr = m_impl->PaintBacking(color);
+    if (FAILED(hr)) return hr;
+
+    hr = m_impl->device->Commit();
+    if (FAILED(hr))
+    {
+        m_impl->LogLine("[COMP-backing-fail] SetBackingColor Commit hr=" + FormatHresult(hr));
+        return hr;
+    }
+
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "[COMP-backing] recolor #%02X%02X%02X applied (rearmost visual)",
+             GetRValue(color), GetGValue(color), GetBValue(color));
+    m_impl->LogLine(buf);
+    return S_OK;
 }
 
 // ---------- [MT-11] Phase 3 Stage 4 — engine visual ----------
@@ -711,6 +980,13 @@ HRESULT Compositor::AttachEngineVisual(HANDLE sharedTexture,
         m_impl->LogLine("[COMP-engine-fail] root->AddVisual(engine, behind) hr=" + FormatHresult(hr));
         return hr;
     }
+
+    // LT-4 (session 3): the engine was just prepended to the children
+    // list; if the theme-coloured backing was already present it is now
+    // IN FRONT of the engine. Re-prepend the backing so the order stays
+    // [backing, engine, webview]. No-op when the backing hasn't been
+    // created yet.
+    m_impl->InsertBackingRearmost();
 
     // 7. Commit.
     hr = m_impl->device->Commit();

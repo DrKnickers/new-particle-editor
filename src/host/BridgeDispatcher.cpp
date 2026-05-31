@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <utility>
@@ -27,6 +28,52 @@
 #include <commdlg.h>
 
 using nlohmann::json;
+
+// LT-4 (session 3): parse a CSS colour string from getComputedStyle
+// ("#rrggbb", "#rgb", or "rgb(r, g, b)" / "rgba(r, g, b, a)") into a
+// COLORREF for the host/backing-color handler. Returns true on success.
+// Defensive — unknown formats return false so the handler answers
+// ok:false rather than guessing a colour.
+static bool ParseCssColorToColorRef(const std::string& in, COLORREF& out)
+{
+    // Trim ASCII whitespace (no locale, no <cctype> surprises).
+    size_t a = 0, b = in.size();
+    while (a < b && static_cast<unsigned char>(in[a]) <= ' ') ++a;
+    while (b > a && static_cast<unsigned char>(in[b - 1]) <= ' ') --b;
+    const std::string s = in.substr(a, b - a);
+    if (s.empty()) return false;
+
+    int r = -1, g = -1, bl = -1;
+    if (s[0] == '#')
+    {
+        std::string hex = s.substr(1);
+        if (hex.size() == 3)  // short form #rgb → #rrggbb
+            hex = std::string{ hex[0], hex[0], hex[1], hex[1], hex[2], hex[2] };
+        if (hex.size() != 6 ||
+            hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+            return false;
+        r  = static_cast<int>(strtol(hex.substr(0, 2).c_str(), nullptr, 16));
+        g  = static_cast<int>(strtol(hex.substr(2, 2).c_str(), nullptr, 16));
+        bl = static_cast<int>(strtol(hex.substr(4, 2).c_str(), nullptr, 16));
+    }
+    else if (s.rfind("rgb", 0) == 0)
+    {
+        const size_t lp = s.find('(');
+        if (lp == std::string::npos) return false;
+        // " %d , %d , %d" tolerates "r,g,b" and "r , g , b"; a trailing
+        // alpha (rgba) is simply ignored.
+        if (sscanf(s.c_str() + lp + 1, " %d , %d , %d", &r, &g, &bl) != 3)
+            return false;
+    }
+    else
+    {
+        return false;
+    }
+
+    auto clamp = [](int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); };
+    out = RGB(clamp(r), clamp(g), clamp(bl));
+    return true;
+}
 
 // Defined in src/UI/EmitterList.cpp; reused by the new-UI Phase 3
 // Screen 4 Batch B1 emitter-mutation handlers. Stays non-static so the
@@ -836,6 +883,33 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         int w = params.value("w", 0);
         int h = params.value("h", 0);
         m_layout.SetSceneRect(x, y, w, h);
+        sendOk(json::object());
+        return res;
+    }
+
+    // -------- host/backing-color --------
+    // LT-4 (session 3): recolour the DComp composition backing to the
+    // app-shell --bg so every transparent DOM region outside the scene
+    // rect (panel gaps, splitter seams, rounded-corner wedges) blends
+    // into the shell instead of showing the black host backing. `color`
+    // is a CSS string from getComputedStyle ("#rrggbb" / "rgb(r,g,b)").
+    // Unparseable strings answer ok:false and leave the backing as-is —
+    // never throw into the dispatch path. No-op in legacy (arch-A) mode
+    // where LayoutBroker has no DComp compositor attached.
+    if (kind == "host/backing-color")
+    {
+        const std::string colorStr = params.value("color", std::string{});
+        COLORREF c = 0;
+        if (!ParseCssColorToColorRef(colorStr, c))
+        {
+            sendErr("host/backing-color: unparseable color '" + colorStr + "'");
+            return res;
+        }
+        m_layout.SetBackingColor(c);
+        printf("[backing] color '%s' -> RGB(%u,%u,%u)\n",
+               colorStr.c_str(),
+               GetRValue(c), GetGValue(c), GetBValue(c));
+        fflush(stdout);
         sendOk(json::object());
         return res;
     }

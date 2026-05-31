@@ -142,6 +142,13 @@ public:
     // (sub-plan §3.5 — avoids a 1-3 frame full-client glitch).
     bool GetSceneRect(int& x, int& y, int& w, int& h) const;
 
+    // LT-4 (session 3): forward the theme background colour to the DComp
+    // compositor's rearmost backing visual (composition mode only).
+    // No-op when no Compositor is attached (legacy arch-A path). `color`
+    // is a COLORREF (0x00BBGGRR). Mirrors the SetSceneRect → Compositor
+    // forwarding pattern.
+    void SetBackingColor(COLORREF color);
+
     // B1.3.1.1: forward a viewport snapshot request to the compositor.
     // Returns `false` (and leaves outputs untouched) when no
     // compositor is attached or the compositor has no cached frame
