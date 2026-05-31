@@ -1506,45 +1506,61 @@ function GroupBody({
       {group.type === GT_SPHERE && (
         <>
           <FieldSpinner
-            label="Sphere radius:"
+            label="Radius:"
             value={group.sphereRadius}
             min={0}
             step={0.1}
             onCommit={(v) => onChange({ sphereRadius: v })}
           />
-          <FieldSpinner
-            label="Sphere edge:"
-            value={group.sphereEdge}
-            min={0}
-            step={1}
-            decimals={0}
-            onCommit={(v) => onChange({ sphereEdge: Math.max(0, Math.round(v)) })}
+          {/* `sphereEdge` is an engine boolean (EmitterInstance.cpp:205):
+              nonzero → spawn at the full radius (on the surface), zero →
+              random radius (throughout the volume). Legacy surfaces it as
+              a "Constrain to surface" checkbox; mirror that here. */}
+          <FieldCheckbox
+            label="Constrain to surface"
+            checked={group.sphereEdge !== 0}
+            onCheckedChange={(c) => onChange({ sphereEdge: c ? 1 : 0 })}
           />
         </>
       )}
       {group.type === GT_CYLINDER && (
         <>
-          <FieldSpinner
-            label="Cylinder radius:"
-            value={group.cylinderRadius}
-            min={0}
-            step={0.1}
-            onCommit={(v) => onChange({ cylinderRadius: v })}
-          />
-          <FieldSpinner
-            label="Cylinder edge:"
-            value={group.cylinderEdge}
-            min={0}
-            step={1}
-            decimals={0}
-            onCommit={(v) => onChange({ cylinderEdge: Math.max(0, Math.round(v)) })}
-          />
-          <FieldSpinner
-            label="Cylinder height:"
-            value={group.cylinderHeight}
-            min={0}
-            step={0.1}
-            onCommit={(v) => onChange({ cylinderHeight: v })}
+          {/* Radius + Height on one row for density / legacy parity, using
+              the same umbrella-label + axis-cell cluster idiom as Vec3Row
+              (the empty umbrella keeps the spinners aligned with the other
+              field rows). */}
+          <div className="form-row form-row-cluster items-start">
+            <span className="lbl pt-1" />
+            <div className="grid grid-cols-2 gap-1">
+              <div className="axis-cell">
+                <span className="axis-lbl">Radius</span>
+                <Spinner
+                  value={group.cylinderRadius}
+                  min={0}
+                  step={0.1}
+                  onChange={(v) => onChange({ cylinderRadius: v })}
+                  aria-label="Cylinder radius"
+                />
+              </div>
+              <div className="axis-cell">
+                <span className="axis-lbl">Height</span>
+                <Spinner
+                  value={group.cylinderHeight}
+                  min={0}
+                  step={0.1}
+                  onChange={(v) => onChange({ cylinderHeight: v })}
+                  aria-label="Cylinder height"
+                />
+              </div>
+            </div>
+          </div>
+          {/* `cylinderEdge` is an engine boolean (EmitterInstance.cpp:215),
+              same surface-constraint semantics as `sphereEdge` — surface it
+              as legacy's "Constrain to surface" checkbox. */}
+          <FieldCheckbox
+            label="Constrain to surface"
+            checked={group.cylinderEdge !== 0}
+            onCheckedChange={(c) => onChange({ cylinderEdge: c ? 1 : 0 })}
           />
         </>
       )}

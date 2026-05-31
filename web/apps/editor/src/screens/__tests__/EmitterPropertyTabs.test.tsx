@@ -416,22 +416,41 @@ describe("EmitterPropertyTabs", () => {
     expect(screen.getByText("Initial speed")).toBeInTheDocument();
   });
 
-  it("PhysicsTab: group with type === GT_SPHERE renders sphere radius + sphere edge fields (no cylinder fields)", () => {
+  it("PhysicsTab: GT_SPHERE renders Radius + Constrain-to-surface (no edge spinner, no cylinder fields)", () => {
     const base = makeFixtureProperties(0);
     const groups = base.groups.map((g, i) =>
+      // sphereEdge nonzero → the Constrain-to-surface checkbox is checked
+      // (the engine treats sphereEdge as a surface-constraint boolean).
       i === 0
         ? { ...g, type: 3, sphereRadius: 1.5, sphereEdge: 8 }
         : g,
     );
     render(<PhysicsTab properties={{ ...base, groups }} onCommit={() => {}} />);
-    // Sphere fields present (renamed to sentence-case + trailing colon).
-    expect(screen.getByLabelText("Sphere radius:")).toBeInTheDocument();
-    expect(screen.getByLabelText("Sphere edge:")).toBeInTheDocument();
-    // Cylinder fields absent (no other rendered group is GT_CYLINDER;
-    // groups[1] isn't rendered, and groups[2] keeps the default type).
-    expect(screen.queryByLabelText("Cylinder radius:")).toBeNull();
+    expect(screen.getByLabelText("Radius:")).toBeInTheDocument();
+    const constrain = screen.getByLabelText("Constrain to surface");
+    expect(constrain).toBeInTheDocument();
+    expect(constrain).toBeChecked();
+    // The old numeric "edge" spinner is gone, and no cylinder fields render.
+    expect(screen.queryByLabelText("Sphere edge:")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder radius")).toBeNull();
+    expect(screen.queryByLabelText("Cylinder height")).toBeNull();
+  });
+
+  it("PhysicsTab: GT_CYLINDER renders Radius + Height (one row) + Constrain-to-surface; cylinderEdge=0 → unchecked", () => {
+    const base = makeFixtureProperties(0);
+    const groups = base.groups.map((g, i) =>
+      i === 0
+        ? { ...g, type: 4, cylinderRadius: 2, cylinderHeight: 3, cylinderEdge: 0 }
+        : g,
+    );
+    render(<PhysicsTab properties={{ ...base, groups }} onCommit={() => {}} />);
+    expect(screen.getByLabelText("Cylinder radius")).toBeInTheDocument();
+    expect(screen.getByLabelText("Cylinder height")).toBeInTheDocument();
+    const constrain = screen.getByLabelText("Constrain to surface");
+    expect(constrain).toBeInTheDocument();
+    expect(constrain).not.toBeChecked();
+    // No numeric "edge" spinner anymore.
     expect(screen.queryByLabelText("Cylinder edge:")).toBeNull();
-    expect(screen.queryByLabelText("Cylinder height:")).toBeNull();
   });
 
   it("Tabs.Content outer elements carry overflow-y-auto for panel scroll", async () => {
