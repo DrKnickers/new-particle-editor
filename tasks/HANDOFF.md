@@ -1,5 +1,80 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-05-31 (session 3) — theme-coloured composition backing SHIPPED (kills the dark corner wedges) (resume: feature-parity gap audit, the recommended next LT-4 item)
+
+**`origin/lt-4` → `77a3309`** (was `2431d6f` at session start). Branch is linear;
+FF-pushed (`git push origin HEAD:lt-4`). Working tree clean. **Not on `master`.**
+
+### What shipped (2 commits)
+
+1. **`a545559` feat(ui) — theme-coloured composition backing.** The user was
+   still seeing dark triangular wedges at rounded-panel corners that meet the
+   engine (curve-editor **top** corners, left-pane **outer** corners, the
+   spawner). Root cause: in arch-C the DComp engine visual is clipped to the
+   scene rect, so any transparent DOM pixel *outside* it (gaps, splitter seams,
+   rounded-corner wedges) falls through to the **black host window backing**.
+   There is no shared opaque ancestor to fix in CSS — the viewport's whole
+   ancestor chain must stay transparent for the engine to show — so the fix is
+   host-side: insert a **rearmost solid-colour DComp visual** (a 1×1 composition
+   swapchain on its OWN D3D11 device — engine device/LUID path untouched —
+   scaled to the full client) behind the engine visual, recoloured to the theme
+   `--bg`. New [`Compositor::SetBackingColor`](../src/host/Compositor.cpp:435) +
+   `InsertBackingRearmost` (re-prepends after each engine attach) +
+   `ApplyBackingTransform` (rescale in `SetSize`) + deferred-apply at the tail of
+   `AttachWebView2`. New **`host/backing-color`** bridge request
+   ([schema](../web/packages/bridge-schema/src/index.ts:721) → MockBridge no-op →
+   [`BridgeDispatcher`](../src/host/BridgeDispatcher.cpp) parser →
+   [`LayoutBroker::SetBackingColor`](../src/host/LayoutBroker.cpp) → compositor).
+   Web hook [`useBackingColorSync`](../web/apps/editor/src/lib/backing-color-sync.ts)
+   reads the resolved `--bg` and pushes on mount + every `data-theme` change.
+   User chose this **root-cause** approach over the web-only per-panel CSS option;
+   corners stay rounded (the wedge fills with `--bg`). **User-confirmed live:
+   "looks great"** in both themes.
+2. **`77a3309` docs(CHANGELOG)** — hash backfill for the entry.
+
+### Test / build state
+
+- **vitest 370/370** (44 files) — +3 `backing-color-sync` tests.
+- **Release + Debug** x64 both built clean (fresh worktree needed a NuGet restore
+  per-config first — `MSBuild .sln /t:Restore /p:RestorePackagesConfig=true`; the
+  Debug `LNK4098 LIBCMTD` warning is pre-existing/benign).
+- **dist** rebuilt (composition); WebView2 cache cleared so the running editor
+  loads it.
+- **a11y goldens NOT regenerated** (correct). arch-C lane: 148 pass / 30 skip /
+  9 fail, all env/known-flake (4× splitters L-014; 3× `dxgi-*` from this machine's
+  ~4 FPS GPU env — `dxgi-perf` read 4.3 FPS vs 30 floor; 2× nondeterministic UIA
+  goldens, L-024). Change adds zero DOM and the engine-path edit was a no-op for
+  the single engine attach in the run → none attributable to it. See **L-033**.
+
+### Verification method (see new L-033 — important for the next arch-C visual change)
+
+This machine **misrenders arch-C compositing under agent-driven launches** (~4
+FPS, engine fills the window, panels transparent) — the user's normal launch
+composites correctly. So the backing fix was verified host-side via `host.log`
+(`[COMP-backing]` created rearmost-behind-engine; recolor `#ECECEC` light /
+`#111111` dark on a live CDP theme toggle) + a CDP `--bg` read, with the on-screen
+look handed to the user. Don't trust agent screenshots of the running editor for
+compositing.
+
+### Lessons added
+
+- **L-033 (new)** — agent-driven native launches misrender arch-C compositing;
+  verify the DComp path via host.log + CDP + the user, not agent screenshots; the
+  native a11y/dxgi lanes are noisy on this machine.
+
+### Carried forward
+
+- **Spawned follow-up task:** remove the spawner's redundant nested `.panel`
+  ([PanelLayout.tsx:368](../web/apps/editor/src/components/PanelLayout.tsx:368)
+  `<aside bg-panel>` wraps an inner `.panel` from
+  [SpawnerPanel.tsx:167](../web/apps/editor/src/screens/SpawnerPanel.tsx:167)) —
+  cosmetic structural cleanup; WILL change the spawner a11y golden (regenerate).
+- **Open Issues** (CHANGELOG): mod-bundled megafiles; `d3dx9_43.dll` redist.
+- **arch-C performance** never profiled on a healthy machine (legacy hit 200–400
+  fps maximized) — a next-step candidate.
+
+---
+
 ## 2026-05-30 (session 2) — skydome→particle alpha bug FIXED (engine) + theme/viewport UI polish (resume: feature-parity gap audit, the recommended next LT-4 item)
 
 **`origin/lt-4` → `4e05b00`** (was `ce366ae` at session start). Branch is linear;

@@ -2620,3 +2620,47 @@ Verified via the same `--capture --skydome 5`: blob `230,228,223` (white) →
 (the D3D9 canary/probe + verify-in-situ pattern that cracked this — and the same
 "identical render-state, narrow your assumptions" discipline). The `--skydome`
 capture flag added for this diagnosis is kept as a regression tool.
+
+---
+
+## L-033 — Agent-driven native launches misrender arch-C compositing (~4 FPS, engine fills the window); verify the DComp path via host.log + the user, not your own screenshots
+
+**Rule.** When the host is launched from the agent's shell (`Start-Process`,
+the native a11y harness, etc.) in this environment, arch-C DComp compositing is
+unreliable: the engine visual renders at a few FPS and is NOT clipped to the
+scene rect (it fills the whole window; the WebView2 chrome reads as
+transparent). `dxgi-perf` measured **4.3 FPS** (floor 30) under the a11y harness;
+manual `Start-Process` launches showed the engine covering the full window with
+ghosted panels. The SAME binary launched normally by the user composites
+correctly (panels opaque, scene clipped to the viewport). So an agent screenshot
+of the running editor is NOT a faithful picture of what the user sees — treat it
+as broken, not as evidence.
+
+**How to apply.**
+- For any arch-C **visual** change (compositing, layering, transparency,
+  backing, scene-rect, occlusion), verify the *mechanism* host-side via
+  `host.log` instrumentation (`%LOCALAPPDATA%\AloParticleEditor\host.log` —
+  e.g. `[COMP-backing]`, `[COMP-engine-transform]`, `[COMP-engine-frame]`
+  lines), plus a CDP `Runtime.evaluate` read of the web-side value, plus
+  unit/golden coverage — then ask the **user** to confirm the on-screen result.
+  Say so explicitly in the handoff; don't claim a visual is verified from an
+  agent screenshot.
+- Do NOT regenerate a11y goldens or trust `dxgi-perf` / `dxgi-transport` /
+  `dxgi-scene-rect` pass/fail on this machine — the degraded FPS + compositing
+  make the native lane noisy (compounds the documented L-014 splitters flake and
+  the L-024 UIA non-determinism). CI / the user's machine is the authority.
+- Distinguish "my change broke X" from "the env is broken" by structural
+  argument: a zero-DOM change can't move UIA goldens; an engine-path edit that
+  was a no-op in the run (check the `[COMP-engine-attach]` count == 1, no
+  re-attach) can't have caused engine-frame failures.
+
+**Source incident (2026-05-30/31, theme-coloured composition backing).** Building
+the rear backing visual (commit `a545559`), I repeatedly tried to screenshot
+the editor to confirm the corner wedges turned `--bg`; every agent-driven launch
+showed the engine filling the window at ~4 FPS with transparent panels — nothing
+like the user's correctly-composited screenshot from the same session. Wasted
+~two launch/capture cycles before pivoting to host.log + CDP verification (which
+cleanly proved the backing was created rearmost-behind-engine and recoloured
+`#ECECEC`/`#111111`) and handing the on-screen check to the user, who confirmed it
+looked right. The native a11y lane's 9 failures were all env/known-flake, zero
+attributable to the change.

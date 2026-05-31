@@ -1,13 +1,15 @@
-# Next-session prompt — LT-4, after the skydome-alpha fix + theme/viewport polish
+# Next-session prompt — LT-4, after the theme-coloured composition backing
 
 You are resuming `new-particle-editor`, branch `lt-4`. The previous session
-(2026-05-30 session 2) **fixed the skydome→particle alpha blowout** (engine
-vertex-declaration leak) and shipped three UI-polish changes (neutral-grey theme
-ramp, opaque splitter gutters, squared viewport-facing panel corners). All of it
-is on `origin/lt-4`; there is **no half-finished work**, tree is clean. This
-session you pick the next LT-4 item (see "What's next").
+(2026-05-31 session 3) shipped the **theme-coloured composition backing** — a
+rearmost solid-colour DComp visual recoloured to the theme `--bg`, which kills the
+dark triangular wedges at rounded-panel corners that meet the engine (curve-editor
+top corners, left-pane outer corners, spawner). **User-confirmed live ("looks
+great") in both themes.** All of it is on `origin/lt-4`; there is **no
+half-finished work**, tree is clean. This session you pick the next LT-4 item
+(see "What's next").
 
-**`origin/lt-4` is at `4e05b00`.** (Not on `master` — user wants it left on
+**`origin/lt-4` is at `77a3309`.** (Not on `master` — user wants it left on
 `lt-4`.)
 
 ## Pre-flight (run before touching anything)
@@ -18,16 +20,15 @@ git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh cla
 git log --oneline origin/lt-4..HEAD | Measure-Object -Line # expect 0
 git log --oneline HEAD..origin/lt-4 | Measure-Object -Line # expect 0
 git status --porcelain                                     # empty
-git rev-parse origin/lt-4                                  # expect 4e05b00 (or newer)
+git rev-parse origin/lt-4                                  # expect 77a3309 (or newer)
 ```
 If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
 Then baseline (a **fresh worktree has no `x64\` binaries** — build both up front,
 MSBuild via PowerShell against the `.sln`, per L-025/L-023):
-- `Set-Location web; pnpm --filter @particle-editor/editor test` → expect **367 passed**.
+- `Set-Location web; pnpm --filter @particle-editor/editor test` → expect **370 passed**.
 - `pnpm --filter @particle-editor/editor build` → tsc + dist clean, `dist/` composition
-  (this also refreshes `dist/build-meta.json` to HEAD; it currently reads `6c32be5`,
-  one commit behind — content is fine, just a stale stamp).
+  (this also refreshes `dist/build-meta.json` to HEAD).
 - Release: `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal /m`
   (Debug too if you'll run the a11y harness). If the build fails on a missing
   `Microsoft.Web.WebView2` NuGet target, restore first:
@@ -37,21 +38,24 @@ MSBuild via PowerShell against the `.sln`, per L-025/L-023):
 
 ## Primary context (read first, then VERIFY against code — file:line drifts, L-022)
 
-- **[`tasks/HANDOFF.md`](HANDOFF.md)** — the "2026-05-30 (session 2)" section at the
-  top is the full snapshot: the skydome root cause (vertex-declaration leak), the
-  three UI-polish fixes, and the reusable verification tricks (native-window
-  screenshot via .NET, live CSS read over CDP, WebView2 cache-clear, the theme/
-  prefers-color-scheme gotcha).
-- **[`CHANGELOG.md`](../CHANGELOG.md)** — top 4 entries are this session; **Open
-  Issues** now lists only megafiles + d3dx9-redist (skydome-alpha removed).
-- **[`tasks/lessons.md`](lessons.md)** — read **L-032** (vertex declaration / FVF
-  is NOT in the `ID3DXEffect` state block; identical render-state ⇒ suspect
-  input-assembler state). Also standing L-022..L-031.
+- **[`tasks/HANDOFF.md`](HANDOFF.md)** — the "2026-05-31 (session 3)" section at the
+  top is the latest snapshot (theme-coloured composition backing: the DComp
+  rear-visual fix, the `host/backing-color` bridge path, and the
+  verify-via-host.log method). The "session 2" section below it covers the
+  skydome fix + theme/viewport polish + reusable verification tricks.
+- **[`CHANGELOG.md`](../CHANGELOG.md)** — top entry is the backing fix; **Open
+  Issues** lists megafiles + d3dx9-redist.
+- **[`tasks/lessons.md`](lessons.md)** — read **L-033** (agent-driven native
+  launches misrender arch-C compositing at ~4 FPS — verify the DComp path via
+  host.log + CDP + the user, NOT agent screenshots; native a11y/dxgi lanes are
+  noisy on this machine) and **L-032** (vertex declaration / FVF is NOT in the
+  `ID3DXEffect` state block). Also standing L-022..L-031.
 - `CLAUDE.md` — working principles, plan-mode rules, LT-4 branch flow (FF into
   `lt-4`, never `master` without explicit OK).
-- The completed skydome plan is archived at
-  [`tasks/todo-skydome-alpha-archive.md`](todo-skydome-alpha-archive.md); `todo.md`
-  is clear for the next plan.
+- [`tasks/todo.md`](todo.md) currently holds the **completed** backing-color plan
+  + its Review section. **Archive it** (e.g. `tasks/todo-backing-color-archive.md`)
+  before writing the next plan. The skydome plan is at
+  [`tasks/todo-skydome-alpha-archive.md`](todo-skydome-alpha-archive.md).
 
 ## What's next (pick one with the user; nothing is pre-decided)
 
@@ -63,7 +67,7 @@ daily-drivable so the user can retire the 0.2 legacy build.
 | Rendering fidelity | ✅ skydome-alpha fixed this session; mod-texture issue fixed earlier |
 | Feature parity | A (Browse) ✅ · B (palette) ✅ · **gap audit still to do** |
 | Performance (legacy hit 200–400 fps maximized) | open, never profiled |
-| UI polish | toolbar consolidation ✅ · theme grey ✅ · viewport seams ✅ · then open |
+| UI polish | toolbar consolidation ✅ · theme grey ✅ · viewport seams ✅ · corner-wedge backing ✅ · then open |
 
 Highest-leverage candidates (discuss → brainstorm → plan → implement):
 
