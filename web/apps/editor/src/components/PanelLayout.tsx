@@ -365,9 +365,15 @@ export function PanelLayout({ bridge }: Props) {
             minSize={260}
             maxSize="40%"
           >
+            {/* Plain layout container — the panel chrome (bg, border,
+                rounded corners) lives on the single `.panel` that
+                SpawnerPanel renders, matching the curve editor's
+                wrapper. Previously this aside ALSO carried `bg-panel` +
+                `border-l`, nesting a card inside a card (a redundant
+                inset border ring on the spawner). */}
             <aside
               data-testid="quadrant-spawner"
-              className="h-full w-full overflow-hidden border-l border-border bg-panel"
+              className="h-full w-full overflow-hidden"
             >
               <SpawnerPanel bridge={bridge} />
             </aside>
