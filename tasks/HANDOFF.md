@@ -1,5 +1,132 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-05-30 (session 2) — skydome→particle alpha bug FIXED (engine) + theme/viewport UI polish (resume: feature-parity gap audit, the recommended next LT-4 item)
+
+**`origin/lt-4` → `4e05b00`** (was `ce366ae` at session start). Branch is linear;
+FF-pushed throughout (`git push origin HEAD:lt-4`). Working tree clean. **Not on
+`master`** — user explicitly said leave it on `lt-4`, no PR.
+
+### What shipped this session (7 commits — 4 changes + 3 CHANGELOG hash-backfills)
+
+1. **`e1f12a4` fix(engine) — skydome→particle alpha blowout. THE big one.**
+   The Open-Issues bug: a background skydome (Background → any slot 1–11) made
+   additive particles (explosion fire/glow) blow out to a **white dome** and
+   alpha particles (smoke) render white-tinted; solid-colour bg was fine.
+   **Root cause (NOT what the issue was filed as):**
+   [`Engine::RenderSkydome`](../src/engine.cpp:2002) bound its own vertex
+   declaration `m_pSkydomeDecl` (a `SkydomeVertex` layout — position/normal/
+   texcoord, **no diffuse-colour element**) and never restored it. The vertex
+   declaration is **not** part of the `ID3DXEffect` state block, and the
+   engine's real `m_pDeclaration` is set only at device-reset
+   ([engine.cpp:1706](../src/engine.cpp:1706)), not per frame — so the ground +
+   particle draws after the skydome inherited the skydome declaration. With no
+   colour stream the fixed-function pipeline defaulted every vertex's diffuse to
+   **white (0xFFFFFFFF)** → additive particles blew out, alpha particles lost
+   colour. **The ground was spared because its vertices are already white** —
+   which is exactly why it masqueraded as a skydome-only *blend* bug.
+   **Fix:** 4-line `GetVertexDeclaration`/`SetVertexDeclaration` save-restore
+   around the skydome pass, mirroring its existing Z/cull save-restore. Shared
+   `Engine::Render` → fixes arch-C **and** legacy. Lesson **L-032** records the
+   trap (input-assembler state is invisible to render-state probes + the effect
+   state block). Also added a **`--skydome <slot>`** flag to the headless
+   `--capture` tool (kept as a regression tool; all other diagnostic scaffolding
+   removed — net-zero on `engine.h`/`EmitterInstance.cpp`).
+2. **`63d402e` style(theme) — desaturate neutral ramp to grey.** Dark theme
+   panels read as "dark purple" (cool navy-slate `--panel #161b25`, blue channel
+   highest). Both themes' neutral ramps (`--bg*`/`--panel*`/`--border*`/`--hover`/
+   `--text*`) in [`tokens.css`](../web/apps/editor/src/styles/tokens.css)
+   desaturated to **pure grey**, lightness preserved (contrast/hierarchy
+   unchanged). Accent + selection stay blue; semantic colours unchanged.
+3. **`a41d869` fix(ui) — opaque splitter gutters.** The `.ce-splitter` resize
+   gutters were `background: transparent`; in arch-C the engine DComp visual is
+   clipped to the scene rect and shows through transparent DOM, so a transparent
+   gutter next to the viewport revealed the **black engine backing** (stark in
+   light theme = the "black border around the curve editor"). Painted them
+   `var(--bg)` in [`components.css`](../web/apps/editor/src/styles/components.css).
+4. **`4e05b00` fix(ui) — square left pane's viewport-facing corners.** The left
+   pane is the only rounded `.panel` adjacent to the rectangular engine; its 8px
+   rounded right corners left a small dark wedge of clipped engine backing. Added
+   `.panel-flush-right` ([PanelLayout.tsx](../web/apps/editor/src/components/PanelLayout.tsx)
+   + components.css) to square the viewport-facing (right) corners; outer corners
+   stay rounded.
+
+### How the skydome bug was cracked (so the next session trusts the method)
+
+Filed hypothesis was "skydome leaves a D3D9 **blend** state dirty — add a
+save/restore." Refuted it + 3 follow-ons by **direct measurement** via an
+instrumented `--capture`: a per-draw device-state probe proved every render
+state, the live particle count, AND the per-frame `dt` were **byte-identical**
+slot-0 vs slot-5; a no-particles background capture proved the white dome was the
+*particles* over the (identical) ground, not the skydome backdrop → pointed at
+**vertex state**, the one thing the render-state probe couldn't see. Pixel-diffs
+of engine-RT PNGs (`%white` 6.2→0.0 after fix) verified. This `--capture --skydome`
++ Python/PIL pixel-analysis loop is the reusable tool for the next D3D9 fidelity bug.
+
+### Test / build state (end of session)
+
+- **vitest 367/367** (43 files) — unchanged; ran it after every web change.
+- **Release + Debug** both built clean this session (MSBuild via PowerShell
+  against `.sln`; the `LNK4098 LIBCMTD` Debug warning is pre-existing/benign).
+  `x64\Release\ParticleEditor.exe` + `x64\Debug\ParticleEditor.exe` present.
+- **dist** is **composition** mode and current with HEAD's source (token +
+  splitter + corner changes). NOTE: `dist/build-meta.json` `commit` reads
+  `6c32be5` (built one commit before the `4e05b00` corner fix) — *content* is
+  correct; a `pnpm --filter @particle-editor/editor build` refreshes the stamp.
+- **a11y goldens:** untouched. The engine fix is C++ + a CLI flag (no DOM); the
+  theme/splitter/corner changes are CSS tokens + a className. None render into a
+  captured a11y surface, so **zero golden drift** — did not regen (correct).
+- **User-confirmed live:** skydome fix looks correct in the editor (user tested);
+  grey theme + viewport-seam fixes verified by **screen-capture + pixel analysis**
+  (the native window can't be driven by computer-use this session — MCP was down —
+  so I screenshotted via a .NET `CopyFromScreen` PowerShell one-liner; see below).
+
+### Build/UI verification tricks discovered this session (reusable)
+
+- **Screenshot the native editor window** without computer-use: PowerShell
+  `Add-Type` a `GetWindowRect`/`SetForegroundWindow` P/Invoke, then
+  `System.Drawing.Graphics.CopyFromScreen` over the window rect → PNG. Crop/zoom
+  + measure with Python/PIL+numpy (installed this session via `pip`). This is how
+  the seam/wedge fixes were verified pixel-exactly.
+- **Read the LIVE computed CSS/theme from the running WebView2** over CDP:
+  launch with `--test-host` (CDP on `http://localhost:9222`), `Invoke-RestMethod`
+  `/json/list` for the page's `webSocketDebuggerUrl`, then a `ClientWebSocket`
+  `Runtime.evaluate` (`returnByValue:true`). Used to confirm `--panel` resolved to
+  the new grey live, and that the splitter went opaque. (Reading `getComputedStyle`
+  is fine under CDP; the L-003 bridge-drop only affects page→host postMessage.)
+- **WebView2 caches the bundled dist across relaunches** (shared user-data folder,
+  L-030). After a `dist` rebuild, a fresh process alone shows STALE UI. Clear
+  `%LOCALAPPDATA%\AloParticleEditor\WebView2\EBWebView\Default\{Cache,Code Cache,
+  GPUCache}` then relaunch — the harness blocks `Remove-Item` on that path unless
+  you pass `dangerouslyDisableSandbox`. (localStorage is NOT in those folders, so
+  theme/panel prefs survive.)
+- **Theme gotcha that ate ~20 min:** the app follows OS `prefers-color-scheme`
+  when `localStorage['alo:theme']` is unset (`ThemeToggle.readInitialTheme`). The
+  user's OS is light, so relaunches kept landing in LIGHT theme — where the
+  navy→grey change is near-invisible (light panels were already near-white). The
+  user's "dark purple" complaint is the DARK theme. Setting `alo:theme` via CDP
+  then force-killing the process does NOT persist (localStorage isn't flushed on
+  `Stop-Process`). Easiest: have the user click the Moon icon, or just verify the
+  dark value via CDP token read.
+
+### Known issues / not-mine (carried forward — verify per L-022 before scoping)
+
+- **CHANGELOG Open Issues** (still open): mod-bundled megafiles not loaded;
+  `d3dx9_43.dll` redistribution. The skydome-alpha entry was **removed** (fixed).
+- **`splitters.spec.ts` flake (L-014)** + **intermittent a11y read-only Cursor-cell
+  flake** — both pre-existing, unrelated; see prior session sections below.
+- **arch-C performance** never profiled (legacy hit 200–400 fps maximized) — one
+  of the next-step candidates.
+
+### Lessons added this session
+
+- **L-032 (new)** — the vertex declaration / FVF / stream sources are NOT in the
+  `ID3DXEffect` state block; a pass that binds its own must restore it or
+  following fixed-function draws lose per-vertex diffuse → default white. Includes
+  the full skydome diagnosis + the "identical render-state ⇒ suspect
+  input-assembler state" disposition.
+
+---
+
 ## 2026-05-30 session — toolbar consolidation SHIPPED + 4 UI polish fixes (resume: next LT-4 item / parity-gap audit)
 
 **`origin/lt-4` → `6ec99ff`** (was `1df999b` at session start). Branch is
