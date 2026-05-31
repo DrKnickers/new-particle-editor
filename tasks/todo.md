@@ -89,7 +89,32 @@ relocates the seam (already shown not to work).
 
 ## 4. Investigation steps (ordered; one variable each; read x=343 between each)
 
+> **Session 4 execution log (2026-05-31).** Keystone variant CHOSEN (user):
+> **headless `--capture`** instead of the live DComp readback below. Rationale:
+> the engine renders into `AlphaCompositor::offscreenRT`, which **IS** the
+> `sharedTex` level-0 that arch-C `CopyResource`s + composites
+> (AlphaCompositor.cpp:144–146; HostWindow.cpp:758) — so the engine-RT PNG from
+> `--capture` is byte-identical to what arch-C feeds DComp. `--capture` is the
+> reliable headless path (it sidesteps the L-033 live-compositing degradation —
+> proven by the skydome L-032 diagnosis). But `--capture` runs no React layout,
+> so `m_sceneViewportActive` stays false → no scene-rect edge. **Scaffolding:**
+> `[EDGE-DBG]` block in the capture setup (`HostWindow.cpp`, `#ifndef NDEBUG`,
+> env-gated) reads `ALO_DEBUG_EDGE_INSET=<px>` → forces `SetSceneViewport`
+> (inset all four sides) exactly as LayoutBroker would, and sets a distinctive
+> full-RT background (magenta default, `ALO_DEBUG_EDGE_BG=0xRRGGBB`) so the
+> outside-scene region is unmistakable. Read the engine-RT PNG at the scene-rect
+> edge columns with PIL. **Decision:** 192 at the boundary (ignoring the magenta
+> bg) → **HA** proven (and M3-consistent). Clean magenta|scene hard edge, no
+> 192 → engine innocent → fall to the live DComp readback (original Step 1) for
+> HB/HC. Zero-cost evidence already gathered this session: the user's host.log
+> shows `[COMP-engine-transform] clip=(335,71,1264,603)` — clip L/T match the
+> measured viewport rect origin (335,71) and animate during resize, so
+> `ApplyTransform`/`SetClip` **does** apply under the real launch (pre-refutes
+> Step-2 outcome (c) for the live path).
+
 ### Step 1 — Instrument the engine output (KEYSTONE: HA vs HB/HC)
+> **Implemented as the headless `--capture` variant above (session 4).** The
+> live-DComp readback below remains the fallback if `--capture` shows no 192.
 Host-side, in `CompositeEngineFrame` **after** the `CopyResource`, gated
 `#ifndef NDEBUG` **and** behind an env var (`ALO_DEBUG_EDGE`), throttled to ~1 Hz:
 - Create a `D3D11_USAGE_STAGING` (CPU_READ) texture (small — a few px tall strip,
@@ -204,4 +229,101 @@ any commit (grep tag: `// [EDGE-DBG]`). Needs a **Debug x64** build.
 
 ## Review
 
-_(to be appended after the investigation + fix land)_
+### Session 4 (2026-05-31) — evidence gathered; HA refuted; blocked on live composite
+
+**Method.** Built Debug x64 with env-gated `#ifndef NDEBUG` `[EDGE-DBG]`
+scaffolding in `HostWindow.cpp`'s `--capture` setup (`ALO_DEBUG_EDGE_INSET=<px>`
+→ forces `Engine::SetSceneViewport` inset on all four sides exactly as
+LayoutBroker does live; `ALO_DEBUG_EDGE_BG=0xRRGGBB` → distinctive full-RT clear,
+magenta default). Ran `--capture P_EXPLOSION_BIG00.ALO --frames 120` with
+inset=40 → engine RT PNG `tasks/edge-keystone.png` (1264×761). Analysed with
+`tasks/edge_analyze.py` (PIL).
+
+**KEYSTONE RESULT — HA is REFUTED.** The engine RT — *the exact texture arch-C
+`CopyResource`s and DComp composites* (`offscreenRT` == `sharedTex` L0,
+AlphaCompositor.cpp:144–146; consumed at HostWindow.cpp:758) — has **zero**
+`(192,192,192)` and **zero** neutral-grey (R=G=B, 150..230) pixels on any of the
+four forced scene-rect boundary lines (full-height left-band scan: 0/761 at every
+column x∈[36..44]). Clean TOP edge reads pure magenta (255,0,255) up to the
+boundary; L/R/B edges read brown (the final distort quad smears scene content
+past the rect near the explosion — a real engine effect, not a seam). **The
+engine does not draw the 192 at its scene-viewport edge → the 192 is injected
+DOWNSTREAM of the engine RT (HB or HC).**
+
+**Further ruled out this session:**
+- **GDI window-class brushes** — `hMain` class brush = `RGB(0x14,0x08,0x34)`
+  (HostWindow.cpp:2600), `hViewport` class brush = `nullptr` (:2609). Neither is
+  192; `0xC0C0C0` is NOT a class background brush.
+- **HC-via-theme-backing — refuted by M3.** Z-order rear→front is `[backing
+  (theme --bg) → engine(clipped) → webview(transparent front)]`. The backing is
+  recoloured per theme (`#ECECEC`/`#111111`). A seam exposing it would be
+  theme-DEPENDENT; M3 says the 192 is theme-INDEPENDENT. So the seam (if any) is
+  not the theme backing.
+- **Fractional-clip AA weakened** — the live clip is all-integer
+  (`clip=(335,71,1264,603)`, dpr=1 expected) → clip lands on integer device
+  pixels; no sub-pixel boundary for DComp to AA (weakens pure-HB clip-AA; not
+  fully eliminated — DComp may AA a pixel-aligned premultiplied edge regardless).
+
+**BLOCKER (why I stopped before a fix).** The remaining split — **HB** (DComp
+clip/premul edge artifact on the engine swapchain) vs **HC** (1px seam exposing a
+*theme-independent* layer: webview default bg, or the engine swapchain's
+premultiplied-alpha edge column) — needs the **live composited pixels** at the
+clip edge. CDP can't see them (DOM only; the 192 sits behind the transparent
+webview per M5). Agent-launched capture is unreliable here per **L-033** (this
+machine misrenders arch-C compositing under agent launch; CDP returned NO CDP
+PAGE this session too). Decisive next step needs a correctly-compositing launch
+(user's machine).
+
+**Discriminator chosen (user): backing-color toggle.** `tasks/edge_discriminator.ps1`
+pushes `host/backing-color #FF00FF` (magenta) + `engine/set/background rgb=65280`
+(bright green, COLORREF 0x0000FF00) over CDP, then the user reads the 1px line's
+colour: **magenta ⇒ seam exposing backing (HC-backing)** [expected NOT, per M3];
+**green ⇒ engine clear/background edge**; **still 192 ⇒ DComp clip/premul edge or
+webview default bg (HB / HC-webview)** — the leading theory. User to run:
+`x64\Release\ParticleEditor.exe --new-ui --test-host`, load a mod so the scene
+renders, then I drive the script.
+
+**Scaffolding status (to remove before any commit — `git grep EDGE-DBG`):**
+`[EDGE-DBG]` block in `HostWindow.cpp` (Debug-only, env-gated, default-off ⇒
+release/normal builds byte-identical); artifacts `tasks/edge_analyze.py`,
+`tasks/cdp_dpr.ps1`, `tasks/edge_discriminator.ps1`, `tasks/edge-keystone*.png`,
+`tasks/cdp_dpr_out.txt`.
+
+### RESOLVED (session 4) — root cause proven + fixed
+
+**Root cause.** The 1px `#C0C0C0` frame is the **vestigial empty
+`<img data-testid="viewport-img">` overlay's own antialiased element edge**, not
+the engine, DComp, the backing, or the page background. The `<img>` is the
+legacy arch-A JPEG surface; under the arch-C default its `viewport/frame-ready`
+consumer early-returns ([ViewportSlot.tsx:166](../web/apps/editor/src/components/ViewportSlot.tsx))
+so it is never painted. Its box sits at the fractional sub-pixel scene-rect
+origin (`x=335.047`, dpr=1); Chromium antialiases that transparent edge against
+its white compositor base → neutral ~50%-coverage grey at the viewport's first
+row/column, all four sides, theme-independent.
+
+**Proof (elimination sweep, all measured, not eyeballed):**
+1. **Engine RT clean** — env-gated `--capture` forced the scene-rect render and a
+   host-side engine-RT PNG read **0** `(192,192,192)` / neutral-grey on all four
+   scene-rect boundary lines (alpha uniformly 255 too). Engine innocent → HA refuted.
+2. **Layer recolours all failed** — CDP pushed backing=magenta, engine bg=green,
+   webview page bg=blue; the line stayed exactly `192` each time → not any of
+   those layers (also refutes HC-via-backing, consistent with M3).
+3. **DComp `SetBorderMode(HARD)`** on the engine visual changed the edge pixel by
+   **zero** (faithful `HWND_TOPMOST` grab, PIL: still `(192,192,192)` at x=343 &
+   y=102) → not clip-edge AA. Reverted.
+4. **Hiding the `<img>`** (`display:none`) removed the line on all edges with the
+   viewport interior **pixel-identical**; insetting the *canvas* 30px left the
+   line at the seam → the `<img>`, not the canvas, is the source.
+
+**Fix (chosen: option A).** Gate the `<img>` render on `!compositionMode` in
+`ViewportSlot.tsx` (one file, +31/−9). Removes the dead element + the seam from
+the default arch-C tree; preserves it for the canvas-jpeg transport.
+
+**Verification.** Rebuilt dist + cleared WebView2 cache; faithful 274-FPS window
+grab measured with PIL: **0** neutral-light pixels on the former seam lines, both
+edges, interior unchanged. CDP confirms `imgPresent:false, canvasPresent:true`
+(engine input path intact). vitest **371 passed**. All `[EDGE-DBG]` scaffolding
+removed (`Compositor.cpp`/`HostWindow.cpp` reverted to baseline;
+`git grep EDGE-DBG` clean). a11y goldens untouched (the `<img alt="">` is
+decorative, not in the a11y tree; canvas-jpeg-mode goldens unaffected — that
+path still renders it). Lesson **L-034** added.

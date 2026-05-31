@@ -316,15 +316,37 @@ export function ViewportSlot({ bridge }: Props) {
               the image to the slot's CSS box (the source data already
               matches the scene rect dimensions emitted by the host).
               `draggable={false}` to suppress the default HTML5 drag-
-              image behaviour on mousedown. */}
-          <img
-            ref={imgRef}
-            data-testid="viewport-img"
-            alt=""
-            draggable={false}
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ imageRendering: "pixelated", objectFit: "fill" }}
-          />
+              image behaviour on mousedown.
+
+              Rendered ONLY in the canvas-jpeg path (`!compositionMode`).
+              Under composition mode (the [MT-12] default) engine pixels
+              reach the screen via the DComp engine visual UNDER the
+              transparent WebView2 — the frame-ready → img.src consumer
+              early-returns (above), so the <img> would never be painted.
+              Worse, leaving it in the tree painted a 1px light-grey
+              (#C0C0C0) hairline framing the viewport: the empty element's
+              box edge sits at the fractional sub-pixel scene-rect origin
+              (e.g. x=335.05 at dpr=1) and Chromium antialiased that edge
+              against its white compositor base, producing a neutral,
+              theme-independent ~50%-coverage grey at the viewport's first
+              row/column on all four sides. Gating render on
+              `!compositionMode` removes the dead element (and the seam)
+              from the default path while preserving it for the
+              canvas-jpeg transport. Proven by host-side engine-RT readback
+              (engine clean at the edge) + a live elimination sweep
+              (recolouring backing/engine-bg/page-bg left it unchanged;
+              hiding this <img> removed it with the viewport interior
+              pixel-identical). */}
+          {!compositionMode && (
+            <img
+              ref={imgRef}
+              data-testid="viewport-img"
+              alt=""
+              draggable={false}
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              style={{ imageRendering: "pixelated", objectFit: "fill" }}
+            />
+          )}
           {/* [MT-11] Phase 2: input layer. Transparent canvas overlay
               on top of the <img>. Receives all pointer / wheel events
               for the viewport — its drawing buffer is intentionally

@@ -16,6 +16,48 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] 1px light-grey hairline framing the viewport — removed
+
+*2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The arch-C viewport was framed on all four edges by a 1px light-grey
+(`#C0C0C0`) hairline — neutral, theme-independent, and jarring against the
+dark theme. It's gone; the panels and splitters now meet the rendered scene
+directly with no seam, in both themes.
+
+**How we tackled it.** Root cause was a *vestigial* empty
+`<img data-testid="viewport-img">` overlay in
+[`ViewportSlot.tsx`](web/apps/editor/src/components/ViewportSlot.tsx:320).
+That element is the legacy architecture-A engine-pixel surface (JPEG via
+`.src`); under the architecture-C default, engine pixels reach the screen
+through the DComp engine visual *behind* the transparent WebView2, and the
+`viewport/frame-ready` → `img.src` consumer early-returns in composition mode
+— so the `<img>` is never painted in any current build. Its only effect was
+the seam: the empty element's box sits at the fractional sub-pixel scene-rect
+origin (e.g. `x=335.05` at dpr=1), and Chromium antialiased that transparent
+edge against its white compositor base, producing a ~50%-coverage neutral
+grey at the viewport's first row/column on every side. The fix gates the
+`<img>` render on `!compositionMode` — removed from the default arch-C DOM
+tree (seam gone) but preserved for the canvas-jpeg transport. One-file React
+change; no host/DComp/engine code touched.
+
+**Issues encountered and resolutions.** A first attempt in a prior session (a
+1px engine-clip inset) was reverted because it rested on an unverified
+assumption. This time the cause was *proven by elimination* before any fix: a
+host-side readback of the engine backbuffer (env-gated `--capture` scaffold)
+showed the engine RT is **clean** at the scene-rect edge; a live CDP sweep
+recoloured the rear backing (magenta), engine background (green), and WebView2
+page background (blue) with the line staying exactly `192` each time; a
+`DComp SetBorderMode(HARD)` test on the engine visual changed nothing by
+faithful pixel measurement; and finally hiding the `<img>` removed the line
+with the viewport interior pixel-identical. Because this machine misrenders
+arch-C compositing under agent-driven launches (L-033), verification used
+host.log + CDP + faithful `HWND_TOPMOST` window grabs measured with PIL,
+cross-checked with the user on screen. See **L-034** for the reusable
+layer-isolation method.
+
+---
+
 ### [LT-4 feature-parity] Sphere/Cylinder emitter distribution fields match legacy
 
 *2026-05-31 · [`e89c1cc`](https://github.com/DrKnickers/new-particle-editor/commit/e89c1cc) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

@@ -2664,3 +2664,59 @@ cleanly proved the backing was created rearmost-behind-engine and recoloured
 `#ECECEC`/`#111111`) and handing the on-screen check to the user, who confirmed it
 looked right. The native a11y lane's 9 failures were all env/known-flake, zero
 attributable to the change.
+
+---
+
+## L-034 — A "compositor seam" can be a transparent DOM element's own antialiased edge; isolate the LAYER by recolouring each candidate, then confirm by hiding the element
+
+**Rule.** When a thin uniform line appears at a boundary in a layered
+compositor (DComp engine visual + WebView2 + backing), do **not** assume the
+compositor drew it. Isolate the contributing *layer* before theorising a
+mechanism: recolour each candidate source in turn and watch the line. If the
+line ignores every layer recolour, the source is *in front of* all of them —
+i.e. the WebView2/DOM raster itself. A transparent DOM element whose box lands
+on a **fractional sub-pixel** boundary gets its edge antialiased by Chromium
+against the browser's (white) compositor base, yielding a neutral, opaque,
+theme-independent ~50%-coverage grey (≈`#C0C0C0`) exactly 1px wide at the
+element's first row/column. That looks identical to a "compositor clip seam"
+but is pure DOM-layer AA.
+
+**How to apply (the elimination sweep that worked).**
+- **Engine vs downstream:** read back the engine's own RT at the boundary
+  (host-side staging copy / the headless `--capture` engine-RT PNG). Clean RT
+  ⇒ engine innocent; the pixel is injected downstream.
+- **Which layer:** over CDP, recolour each layer to a vivid distinct colour and
+  re-measure the line — rear backing (`host/backing-color`), engine clear
+  (`engine/set/background`), WebView2 page bg (`html/body/#root background`).
+  Line unchanged by all ⇒ it's the DOM raster in front.
+- **DComp clip-edge AA:** test `IDCompositionVisual2::SetBorderMode(HARD)` on
+  the clipped visual. No change (by *measured* pixels, not by eye) ⇒ not clip AA.
+- **Which element:** inset / hide each transparent overlay (`display:none`) and
+  measure. The one whose removal kills the line with the interior
+  **pixel-identical** is the source.
+- **Fix at the source:** if the element is vestigial in the active mode, stop
+  rendering it (gate the JSX) rather than masking the line — masking is the
+  reverted-first-attempt trap.
+
+**Measure, don't eyeball.** A `SetBorderMode(HARD)` A/B "looked fainter" but a
+faithful `HWND_TOPMOST` + `CopyFromScreen` grab measured with PIL showed the
+edge pixel was *byte-identical* `(192,192,192)` — the perceived change was an
+illusion. Every go/no-go in this hunt came from a measured grab, never a glance.
+The whole investigation was screenshot-driven because L-033 makes agent-launched
+arch-C compositing unreliable; the faithful-grab recipe (target the new-UI PID,
+force topmost, CopyFromScreen over GetWindowRect, drop topmost; never
+MoveWindow/maximize) is the workhorse.
+
+**Source incident (2026-05-31, session 4, the 1px viewport edge seam).** The
+`#C0C0C0` viewport frame was theorised across two sessions as a WebView2 fringe,
+an engine clip artifact, and a DComp seam. The elimination sweep above refuted
+all three and pinned it to the empty `<img data-testid="viewport-img">` overlay
+in [`ViewportSlot.tsx`](../web/apps/editor/src/components/ViewportSlot.tsx) — a
+vestigial arch-A JPEG surface, never painted under the arch-C default (its
+`viewport/frame-ready` consumer early-returns in composition mode), whose only
+effect was AA on its fractional-origin (`x=335.05`) edge. Fix: render it only in
+`!compositionMode`. A prior session's "1px engine-clip inset" fix had been
+reverted for resting on an unverified assumption — this time the cause was proven
+before the fix. Cross-reference [L-033](#l-033) (verify arch-C visuals via
+host.log + CDP + user, not agent screenshots) and the systematic-debugging
+"isolate the failing component before proposing fixes" discipline.
