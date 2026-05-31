@@ -1,5 +1,123 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-05-31 (session 4) — 1px viewport-edge hairline ROOT-CAUSED + FIXED (resume: feature-parity gap audit, the recommended next LT-4 item)
+
+**`origin/lt-4` → `3728967`** (was `5a84ace` at session start). Branch is linear;
+FF-pushed (`git push origin HEAD:lt-4`). Working tree clean. **Not on `master`**
+(user wants it left on `lt-4`).
+
+### What shipped (1 commit)
+
+**`3728967` fix(ui) — remove the 1px viewport-edge hairline (vestigial `<img>`
+overlay).** The arch-C viewport was framed on all four edges by a 1px light-grey
+(`#C0C0C0`) hairline, jarring in dark mode. **Root cause: a vestigial empty
+`<img data-testid="viewport-img">`** in
+[`ViewportSlot.tsx`](../web/apps/editor/src/components/ViewportSlot.tsx:340). It's
+the legacy arch-A engine-pixel surface (JPEG via `.src`); under the arch-C default
+its `viewport/frame-ready` → `img.src` consumer **early-returns in composition
+mode** ([ViewportSlot.tsx:166](../web/apps/editor/src/components/ViewportSlot.tsx:166)),
+so the `<img>` is **never painted in any current build**. Its only effect was the
+seam: the empty element's box sits at the **fractional sub-pixel scene-rect
+origin** (measured `x=335.047`, dpr=1), and Chromium antialiased that transparent
+edge against its **white compositor base** → a neutral, theme-independent
+~50%-coverage grey at the viewport's first row/column on all four sides. **Fix:**
+gate the `<img>` render on `!compositionMode` (one file, +31/−9) — removed from the
+default arch-C DOM tree (seam gone), preserved for the canvas-jpeg transport.
+Doc updates rode along in the same commit (`CHANGELOG.md`, `tasks/lessons.md`
+**L-034**, `tasks/todo.md` Review).
+
+### How it was proven (evidence-first; the prior session's fix was reverted for guessing)
+
+This was a systematic-debugging task. A **prior session's fix attempt (a 1px
+engine-clip inset) was reverted** for resting on an unverified assumption, so this
+session proved the cause by **elimination, all measured (never eyeballed):**
+1. **Engine RT clean** — env-gated `[EDGE-DBG]` `--capture` scaffold forced the
+   scene-rect render; a host-side engine-RT PNG read **0** `(192,192,192)` /
+   neutral-grey on all four scene-rect boundary lines (alpha uniformly 255). The
+   engine RT *is* the texture arch-C composites (`offscreenRT`==`sharedTex` L0),
+   so this refutes "engine drew it" (hypothesis HA).
+2. **Layer recolours all failed** — over CDP, pushed rear backing=magenta
+   (`host/backing-color`), engine bg=green (`engine/set/background rgb=65280`),
+   WebView2 page bg=blue (html/body/#root). The line stayed **exactly 192** each
+   time → not any of those layers (also kills HC-via-backing; consistent with the
+   theme-independence).
+3. **DComp `SetBorderMode(HARD)`** on the engine visual changed the edge pixel by
+   **zero** (faithful `HWND_TOPMOST` grab + PIL: still `(192,192,192)` at x=343 &
+   y=102) → not clip-edge AA. Reverted that test edit.
+4. **Element isolation** — insetting the `<canvas>` 30px left the line at the seam
+   (canvas innocent); `display:none` on the **`<img>`** removed the line on all
+   edges with the viewport interior **pixel-identical** → the `<img>` is the source.
+
+### Verification (this fix)
+
+- **vitest 371 passed** (44 files) — unchanged count; no test references
+  `data-testid="viewport-img"` (grep clean), so nothing broke.
+- **`pnpm --filter @particle-editor/editor build`** clean; **dist rebuilt**
+  (composition) + WebView2 cache cleared so the running editor loads it.
+- **Release + Debug x64** both built clean (`.sln`, not the `.vcxproj` — L-023).
+- **Faithful pixel verification** (the app composites correctly at 274 FPS under a
+  *normal* user launch, so a window grab is faithful — but L-033 still applies to
+  agent-driven launches): `HWND_TOPMOST` + `CopyFromScreen` grab measured with PIL
+  → **0** neutral-light pixels on the former seam lines (x=343, y=102), interior
+  unchanged. CDP confirmed `imgPresent:false, canvasPresent:true` (engine input
+  path intact). Before/after grabs were sent to the user; user drove the live
+  setup (mod loaded, dark theme).
+- **a11y goldens untouched** — the `<img alt="">` is decorative (not in the a11y
+  tree); the canvas-jpeg-mode goldens still render it, so no drift.
+- **All `[EDGE-DBG]` scaffolding removed** — `Compositor.cpp` and `HostWindow.cpp`
+  reverted to baseline (`git diff` empty on both); `git grep EDGE-DBG -- src/`
+  clean; scratch `tasks/*.ps1`/`*.py`/`*.png` artifacts deleted.
+
+### Code review (done this session)
+
+Reviewed the diff (medium effort). **No correctness bugs.** One low-severity
+**altitude** note: because `archCEnabled` and `compositionMode` are *both*
+`!legacyMode` (always equal, [ViewportSlot.tsx:61–63](../web/apps/editor/src/components/ViewportSlot.tsx:61)),
+the `<img>`'s effective render condition `archCEnabled && !compositionMode` is
+**always false** today → the `<img>`, `imgRef` (line 50), and the
+`viewport/frame-ready` effect body (lines ~176–197) are **dead code in every
+current build**. This is the deliberately-chosen option A (gate, don't delete) to
+preserve the canvas-jpeg affordance for the future MT-13 arch-A deletion — not a
+bug. If a future session wants the cleaner end-state, option B = delete the
+`<img>` + `imgRef` + the frame-ready effect outright (belongs with MT-13).
+
+### Lessons added
+
+- **L-034 (new)** — a "compositor seam" can be a transparent DOM element's own
+  antialiased edge (fractional sub-pixel origin → Chromium AA against white base →
+  neutral ~`#C0C0C0`). Isolate the LAYER by recolouring each candidate over CDP,
+  then confirm by hiding the element; **measure grabs with PIL, don't eyeball**
+  (the `SetBorderMode(HARD)` A/B "looked fainter" but was byte-identical). Full
+  elimination recipe + the faithful-grab method in the lesson.
+
+### Reusable tooling discovered (deleted from disk, but recreate from the lesson)
+
+- **Headless engine-RT keystone:** an env-gated `--capture` scaffold that forces
+  `Engine::SetSceneViewport` so the engine renders the scene-rect-narrowed path
+  *headless*, then reads the engine-RT PNG — splits "engine vs downstream" with
+  **zero L-033 exposure** (the engine renders correctly even when DComp
+  compositing is degraded). Better than the live DComp readback the todo.md plan
+  originally specified.
+- **CDP `127.0.0.1:9222` recipe** (NOT `localhost` — resolves slowly here, causes
+  spurious "NO CDP PAGE"): `Invoke-RestMethod /json/list` → page
+  `webSocketDebuggerUrl` → `System.Net.WebSockets.ClientWebSocket` →
+  `Runtime.evaluate {returnByValue:true, awaitPromise:true}`. Push colours via
+  `window.bridge.request(...)`; paint/hide DOM via element styles.
+- **Faithful window grab:** `grab_window.ps1` pattern (HWND_TOPMOST + GetWindowRect
+  + CopyFromScreen + drop topmost), measured with PIL/numpy.
+
+### Carried forward (unchanged from session 3)
+
+- **arch-C performance** never profiled on a healthy machine (legacy hit 200–400
+  fps maximized; this session saw the *user's* launch hit 274 FPS — healthy!) —
+  a next-step candidate. NB: agent-driven launches still misrender at ~4 FPS (L-033).
+- **Open Issues** (CHANGELOG): mod-bundled megafiles not loaded; `d3dx9_43.dll`
+  redistribution.
+- **Recommended next LT-4 item:** feature-parity gap audit (mostly
+  discovery/read — enumerate what legacy 0.2 still has that the new UI lacks).
+
+---
+
 ## 2026-05-31 (session 3) — theme-coloured composition backing SHIPPED (kills the dark corner wedges) (resume: feature-parity gap audit, the recommended next LT-4 item)
 
 **`origin/lt-4` → `77a3309`** (was `2431d6f` at session start). Branch is linear;
