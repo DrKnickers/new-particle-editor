@@ -42,6 +42,21 @@ FF-pushed (`git push origin HEAD:lt-4`). Working tree clean. **Not on `master`.*
    snapshots are CSS-independent; corrects the earlier "will change the golden"
    note). Verified the single-card look in browser/MockBridge mode via Playwright
    (engine-independent). The earlier spawned follow-up chip is now redundant.
+4. **`e89c1cc` fix(ui) — sphere/cylinder distribution fields match legacy.**
+   User found the Physics tab's Initial position / Initial speed didn't match
+   legacy for Sphere/Cylinder types. The numeric "edge" spinner exposed
+   `sphereEdge`/`cylinderEdge`, which the engine uses as a **boolean**
+   ([EmitterInstance.cpp:205,215](../src/EmitterInstance.cpp:205): nonzero ⇒ full
+   radius / surface, zero ⇒ random radius / volume) — legacy renders it as a
+   **"Constrain to surface" checkbox**. So "add the checkbox" and "remove the edge
+   param" were the same field. Replaced the spinner with `FieldCheckbox` (writes
+   1/0), put cylinder Radius+Height on one row, shortened labels. All in
+   `GroupBody` ([EmitterPropertyTabs.tsx:1506](../web/apps/editor/src/screens/EmitterPropertyTabs.tsx:1506)).
+   **a11y-golden-neutral** (goldens use the default "Exact" group type; no
+   sphere/cylinder branch is captured). Verified the layout in browser/MockBridge
+   via Playwright. vitest 371 (sphere test updated + cylinder test added).
+   Brainstormed the design with the user first — the edge=boolean insight reframed
+   the request into a single relabel/re-widget change.
 
 ### Test / build state
 

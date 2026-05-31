@@ -16,6 +16,46 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 feature-parity] Sphere/Cylinder emitter distribution fields match legacy
+
+*2026-05-31 · [`e89c1cc`](https://github.com/DrKnickers/new-particle-editor/commit/e89c1cc) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The Physics tab's **Initial position** and **Initial speed** sections now match
+the legacy 0.2 editor for the **Sphere** and **Cylinder** distribution types.
+The numeric "Sphere edge" / "Cylinder edge" spinner — which exposed an engine
+field that has no numeric meaning — is replaced by a **"Constrain to surface"**
+checkbox (legacy's wording). For Cylinder, **Radius** and **Height** now sit on
+one row instead of two, and the labels are shortened to "Radius:" / "Height:"
+since the Type selector already says Cylinder/Sphere. Checking "Constrain to
+surface" makes particles spawn on the shape's surface; unchecked, they fill the
+volume.
+
+**How we tackled it.** Root cause was a mis-presented field, not a missing one:
+`sphereEdge`/`cylinderEdge` (`ParticleSystem::Emitter::Group`, `unsigned int`) is
+used by the engine as a **boolean** —
+[`EmitterInstance.cpp:205,215`](src/EmitterInstance.cpp:205) computes
+`radius = (group.cylinderEdge ? 1.0f : GetRandom(0,1)) * cylinderRadius`, i.e.
+nonzero ⇒ full radius (surface), zero ⇒ random radius (volume). Legacy renders it
+as a checkbox; the new UI rendered it as a numeric spinner. So "add a
+constrain-to-surface checkbox" and "remove the edge param" were the **same
+change**. Swapped the `FieldSpinner` for the existing `FieldCheckbox` (writes
+1/0 — the engine only tests truthiness, so collapsing any prior nonzero value to
+1 is lossless), and moved Radius/Height into a single `Vec3Row`-style `axis-cell`
+cluster. All in `GroupBody`
+([`EmitterPropertyTabs.tsx`](web/apps/editor/src/screens/EmitterPropertyTabs.tsx:1506)).
+
+**Issues encountered and resolutions.** Confirmed against the engine before
+touching anything — removing a "field" that turned out to be load-bearing would
+have lost the surface/volume control. The change is **a11y-golden-neutral**: the
+captured surfaces use the default "Exact" group type, so the Sphere/Cylinder
+branches render in none of them (no regen). Because the Physics tab is
+engine-independent, the new layout was verified visually in browser/MockBridge
+mode via Playwright (drove an emitter → Physics → set Initial position Type to
+Cylinder), unlike the arch-C compositing fixes which can't be eyeballed locally
+(L-033).
+
+---
+
 ### [LT-4 UI polish] Collapse the spawner's redundant nested panel
 
 *2026-05-31 · [`aba25f6`](https://github.com/DrKnickers/new-particle-editor/commit/aba25f6) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
