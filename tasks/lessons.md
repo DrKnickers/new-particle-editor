@@ -3021,3 +3021,44 @@ input) and porting the missing height `Spinner` to the existing `engine/set/grou
 vitest 386 + build clean + browser-verified (picker fires from the tile, height
 round-trips and disables with the ground toggle). Native OS-dialog-over-viewport paint
 left to the user (L-033). Cross-reference [L-033](#l-033), [L-040](#l-040).
+
+## L-042 — A `D3DPOOL_DEFAULT` texture cannot be `LockRect`'d unless it is ALSO `D3DUSAGE_DYNAMIC`; the MT-11 `MANAGED → DEFAULT` migration silently broke any manual lock-and-fill texture
+
+**Trigger.** A procedurally-built texture (lock the surface, write pixels) stops
+working **only under D3D9Ex / arch-C**, while textures loaded via D3DX in the same
+code path keep working. Symptom 2026-06-01: the solid-colour ground slot never applied
+in `--new-ui` (engine fills `CreateSolidColorTexture`'s 1×1 texture by hand), but
+Dirt/Grass/Sand/Snow (D3DX-loaded) did.
+
+**Root cause — two D3D9 rules collide.** (1) **D3D9Ex rejects `D3DPOOL_MANAGED`**, so
+the arch-C migration ([MT-11]) moved hand-built textures to `D3DPOOL_DEFAULT`. (2) But
+a **`D3DPOOL_DEFAULT` texture is not lockable** unless created with `D3DUSAGE_DYNAMIC`
+— `LockRect` returns `D3DERR_INVALIDCALL` otherwise. The migration satisfied (1) and
+silently violated (2): `LockRect` failed → the create-helper returned false → the
+texture was never built → the feature silently no-op'd. It had worked under the old
+MANAGED pool *because MANAGED textures are lockable*. The fix is `D3DUSAGE_DYNAMIC`
+(+ `D3DLOCK_DISCARD` for the full rewrite) on the `CreateTexture` call
+([engine.cpp:1130](../src/engine.cpp:1130)).
+
+**Why D3DX loads were unaffected.** `D3DXCreateTextureFrom*` manages pool/usage and
+the upload internally (staging + `UpdateTexture`), so it never does a manual
+`LockRect` on a non-dynamic DEFAULT texture. Only *hand-filled* textures hit the rule.
+This is the discriminator that localised it: bundled (D3DX) worked, procedural didn't.
+
+**How to apply.** When porting a lock-and-fill texture to D3D9Ex, you cannot just swap
+`MANAGED → DEFAULT` — you must EITHER add `D3DUSAGE_DYNAMIC` (lockable DEFAULT;
+recreate on device-Reset, which D3D9Ex needs anyway) OR keep a `D3DPOOL_SYSTEMMEM`
+staging surface and `UpdateTexture` into a DEFAULT one. Grep for `LockRect` write-locks
+(non-`D3DLOCK_READONLY`) on `D3DPOOL_DEFAULT` textures whenever a `MANAGED → DEFAULT`
+change lands. (Render targets — `D3DUSAGE_RENDERTARGET` — are read back via
+`GetRenderTargetData` to SYSTEMMEM, not `LockRect`, so they're a different path.)
+
+**Scope.** `[lt-4]`-only — master still uses the lockable MANAGED pool, so its solid
+ground colour works; this regressed only on the arch-C branch. Same root-cause family
+as audit **F6** (D3DPOOL_MANAGED under D3D9Ex). Cross-reference [L-033](#l-033) (the
+visual confirm was user-driven — agent can't see arch-C render).
+
+**Source incident (2026-06-01, session 8).** Diagnosed by localising with the user
+("bundled textures apply, solid never switches") → the divergence pointed at the
+solid-specific `CreateSolidColorTexture` lock path, not the React handler (the React
+dispatch was browser-confirmed). One-line fix; user-confirmed working in `--new-ui`.

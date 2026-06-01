@@ -16,20 +16,22 @@ Conventions:
 
 ## Changelog
 
-### New-UI ground controls — solid-colour picker now opens, and the ground-height field is back
+### New-UI ground controls — solid-colour ground works end-to-end, and the ground-height field is back
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
-Two user-reported bugs in the `--new-ui` Ground toolbar dropdown are fixed. First,
-clicking the prominent **"Solid colour" tile now opens a colour picker** — previously
-the tile only *selected* the solid-colour slot and the actual picker was an
-easily-missed secondary swatch beneath it, so the option looked broken. Second, the
-**ground-plane height control is restored**: a "Height" field (legacy NT-2, #45) that
-raises/lowers the ground plane, enabled only while the ground is shown. The height
-control had simply never been ported to the React UI even though the engine and bridge
-already supported it.
+Three bugs in the `--new-ui` Ground toolbar dropdown are fixed. First, clicking the
+prominent **"Solid colour" tile now opens a colour picker** — previously the tile only
+*selected* the solid-colour slot and the actual picker was an easily-missed secondary
+swatch beneath it, so the option looked broken. Second, **picking a solid colour now
+actually recolours the ground plane** — a separate engine bug meant the solid slot
+never applied at all under the arch-C renderer (the colour silently did nothing).
+Third, the **ground-plane height control is restored**: a "Height" field (legacy
+NT-2, #45) that raises/lowers the ground plane, enabled only while the ground is shown.
+The height control had simply never been ported to the React UI even though the engine
+and bridge already supported it.
 
-**How we tackled it.** Both fixes live in
+**How we tackled it.** The two UI fixes live in
 [`GroundTexturePanelBody`](web/apps/editor/src/screens/GroundTexturePanel.tsx:93). The
 solid-colour control now mirrors the **proven `BackgroundPicker` pattern**: the wide
 tile triggers a hidden native `<input type="color">` (an OS dialog — discoverable,
@@ -38,7 +40,14 @@ the Radix `ColorButton`. The height field uses the existing `Spinner` primitive
 (−100…100, step 0.1, disabled in lockstep with the show-ground toggle to match the
 legacy spinner at [`main.cpp:1662`](src/main.cpp:1662)) wired to the already-present
 [`engine/set/ground-z`](src/host/BridgeDispatcher.cpp:1184) handler — no new bridge or
-engine code, just the missing UI.
+engine code, just the missing UI. The "colour never applies" bug was a separate
+**engine** fix in [`CreateSolidColorTexture`](src/engine.cpp:1118): the 1×1 procedural
+texture is created `D3DPOOL_DEFAULT` (the `[MT-11]` arch-C migration moved it off
+`D3DPOOL_MANAGED`, which D3D9Ex rejects), but a DEFAULT-pool texture **cannot be
+`LockRect`'d unless it is also `D3DUSAGE_DYNAMIC`** — without it the lock failed,
+`CreateSolidColorTexture` returned false, and the ground texture never updated. Added
+`D3DUSAGE_DYNAMIC` + `D3DLOCK_DISCARD`. **lt-4-only** — master still uses the lockable
+managed pool. See [`tasks/lessons.md` L-042](tasks/lessons.md).
 
 **Issues encountered and resolutions.** Root-caused in **browser mode** (`pnpm dev` +
 mock bridge), which sidesteps the L-033 agent-window misrender entirely — the picker

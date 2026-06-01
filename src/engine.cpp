@@ -1121,17 +1121,20 @@ static bool CreateSolidColorTexture(IDirect3DDevice9*    pDevice,
 {
     if (pDevice == NULL || ppOut == NULL) return false;
     IDirect3DTexture9* pNew = NULL;
-    // [MT-11] Phase 3 Stage 1: D3DPOOL_MANAGED → D3DPOOL_DEFAULT.
-    // D3D9Ex doesn't support managed pool. Solid-colour texture is
-    // tiny (1×1) and gets recreated in Engine::Reset via the existing
-    // ReloadGroundTexture() pathway (active slot driven by
-    // m_groundTextureIndex), so the device-Reset cycle is transparent
-    // to callers.
-    if (FAILED(pDevice->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8,
+    // [MT-11] Phase 3 Stage 1: D3DPOOL_MANAGED → D3DPOOL_DEFAULT, because
+    // D3D9Ex rejects the managed pool. But a DEFAULT-pool texture cannot
+    // be LockRect'd unless it is ALSO created D3DUSAGE_DYNAMIC — without
+    // it, LockRect returns D3DERR_INVALIDCALL, CreateSolidColorTexture
+    // fails, and the solid-colour ground slot silently never applies (it
+    // worked under the old MANAGED pool, which is lockable). Add the
+    // dynamic usage so the 1×1 fill below is legal under D3D9Ex; the
+    // texture is still recreated in Engine::Reset via ReloadGroundTexture
+    // (DEFAULT/dynamic resources are lost on device reset).
+    if (FAILED(pDevice->CreateTexture(1, 1, 1, D3DUSAGE_DYNAMIC, D3DFMT_A8R8G8B8,
                                        D3DPOOL_DEFAULT, &pNew, NULL)))
         return false;
     D3DLOCKED_RECT lr;
-    if (FAILED(pNew->LockRect(0, &lr, NULL, 0)))
+    if (FAILED(pNew->LockRect(0, &lr, NULL, D3DLOCK_DISCARD)))
     {
         pNew->Release();
         return false;
