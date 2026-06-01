@@ -16,6 +16,30 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI follow-up] F1 — emitter-row icons: visibility on the left, spawn-role on the right
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Each emitter row now leads with the **visibility (eye) toggle on the left**
+(replacing the old `●` role dot), and **child** rows show their **spawn-role
+glyph on the right** — `↻` for a lifetime child (spawns continuously during the
+parent's life), `✕` for an on-death child (one-shot when the parent dies). Root
+rows are just eye + name. The eye stays an interactive toggle; the role glyph is
+presentational.
+
+**How we tackled it.** Reordered the row's CSS grid in
+[`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx:1) from
+`[role-glyph | name | eye]` to `[eye | name | spawn-role glyph]` (template
+`18px 1fr 18px`); the eye is always rendered (col 1) so the grid stays stable
+during inline rename, and the role glyph renders only for non-root rows.
+
+**Issues encountered and resolutions.** The row's accessible tree appears in
+*every* full-app a11y golden (the tree is always in the left pane), so all 20
+composition goldens were regenerated; the diff was verified surgical (only the
+row reorder + `●` removal, no theme/panel-state pollution, per L-030).
+
+---
+
 ### [LT-4 bugfix] Link groups now actually link — sync-on-link + per-edit propagation
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
@@ -51,7 +75,13 @@ propagation is correct because `copySharedParamsFrom` re-points `tracks[]` into 
 destination's own `trackContents` ([`src/ParticleSystem.cpp`](src/ParticleSystem.cpp:660)),
 remapping the lock pointer rather than aliasing the source's. The host's track keys
 are a time-keyed `std::multiset` (duplicate times legal), which also made the
-companion curve-editor multi-key edit (below) safe without a batch API.
+companion curve-editor multi-key edit (below) safe without a batch API. A
+follow-up fix: routing `linkGroups/set-membership`'s positive-id path through
+`JoinLinkGroup` narrowed the contract — `JoinLinkGroup` refuses a *non-existent*
+group, so assigning emitters to an explicit new positive id (the old stamp
+behaviour, exercised by the NT-5 native tests) silently no-op'd. Restored
+create-if-needed for positive ids (existing → join, missing → create with that
+id + sync), caught by the native `emitter-mutations` spec, not vitest.
 
 ---
 

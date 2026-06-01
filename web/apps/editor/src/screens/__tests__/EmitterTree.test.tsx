@@ -456,7 +456,7 @@ describe("EmitterTree", () => {
     expect(dots).toHaveLength(0);
   });
 
-  it("row uses a 3-column CSS grid template (glyph / name / eye)", async () => {
+  it("row uses a 3-column grid (eye / name / spawn-role glyph) — F1", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
@@ -465,7 +465,20 @@ describe("EmitterTree", () => {
 
     // Each row's outer button carries the grid template via inline style.
     const rowButton = screen.getByText("Smoke").closest("button")!;
-    expect(rowButton.style.gridTemplateColumns).toBe("12px 1fr 18px");
+    expect(rowButton.style.gridTemplateColumns).toBe("18px 1fr 18px");
+
+    // F1: the visibility toggle is the FIRST column (moved to the left,
+    // replacing the old role dot).
+    expect(rowButton.firstElementChild).toBe(
+      rowButton.querySelector('[data-testid="emitter-vis-0"]'),
+    );
+    // Root rows no longer render a role glyph; children show theirs
+    // (lifetime ↻ / on-death ✕) on the right.
+    expect(screen.queryByLabelText("root emitter")).toBeNull();
+    // Fixture has 2 lifetime children (Smoke embers, Spark trail) + 1
+    // death child (Smoke puff), each rendering its spawn-role glyph.
+    expect(screen.getAllByLabelText("lifetime child")).toHaveLength(2);
+    expect(screen.getAllByLabelText("death child")).toHaveLength(1);
   });
 
   // ─── Task 7 — toolbar moves below the tree, restyles to .tree-actions ──

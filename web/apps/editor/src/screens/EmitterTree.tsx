@@ -616,14 +616,43 @@ function EmitterRow({
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
-              gridTemplateColumns: "12px 1fr 18px",
+              // F1: [eye | name | spawn-role glyph]. Eye is the visibility
+              // toggle (was on the right); the role glyph (children only)
+              // moved to the right.
+              gridTemplateColumns: "18px 1fr 18px",
             }}
           >
+            {/* F1: visibility toggle on the LEFT (replaces the old role
+                dot). Always rendered so the grid columns stay stable
+                during inline rename. */}
             <span
-              aria-label={roleLabel(node.role)}
-              className="inline-block w-3 shrink-0 text-center font-mono text-xs text-text-3"
+              role="button"
+              tabIndex={0}
+              data-testid={`emitter-vis-${node.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                void bridge.request({
+                  kind: "emitters/set-visible",
+                  params: { id: node.id, visible: !node.visible },
+                });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void bridge.request({
+                    kind: "emitters/set-visible",
+                    params: { id: node.id, visible: !node.visible },
+                  });
+                }
+              }}
+              title={node.visible ? "Hide emitter" : "Show emitter"}
+              aria-label={node.visible ? "Hide emitter" : "Show emitter"}
+              className="grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
             >
-              {roleGlyph(node.role)}
+              {node.visible
+                ? <Eye className="size-3" />
+                : <EyeOff className="size-3" />}
             </span>
             {isEditing ? (
               // Inline-rename input. Stops click + drag propagation so
@@ -676,43 +705,15 @@ function EmitterRow({
                 {node.name}
               </span>
             )}
-            {!isEditing && (
+            {/* F1: spawn-role glyph on the RIGHT for child emitters
+                (lifetime ↻ / on-death ✕). Root rows leave it empty so
+                names stay aligned via the fixed third column. */}
+            {node.role !== "root" && (
               <span
-                role="button"
-                tabIndex={0}
-                data-testid={`emitter-vis-${node.id}`}
-                onClick={(e) => {
-                  // stopPropagation is load-bearing: the outer row button's
-                  // onClick selects the emitter. Without this, toggling
-                  // visibility would also re-select the row — confusing.
-                  e.stopPropagation();
-                  void bridge.request({
-                    kind: "emitters/set-visible",
-                    params: { id: node.id, visible: !node.visible },
-                  });
-                }}
-                onKeyDown={(e) => {
-                  // Enter / Space activate the eye, matching native
-                  // <button> semantics. preventDefault on Space stops the
-                  // page from scrolling; stopPropagation on both keeps
-                  // the tree's container-level keyboard handler from
-                  // also acting on the event.
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    void bridge.request({
-                      kind: "emitters/set-visible",
-                      params: { id: node.id, visible: !node.visible },
-                    });
-                  }
-                }}
-                title={node.visible ? "Hide emitter" : "Show emitter"}
-                aria-label={node.visible ? "Hide emitter" : "Show emitter"}
-                className="grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
+                aria-label={roleLabel(node.role)}
+                className="inline-block w-full shrink-0 text-center font-mono text-xs text-text-3"
               >
-                {node.visible
-                  ? <Eye className="size-3" />
-                  : <EyeOff className="size-3" />}
+                {roleGlyph(node.role)}
               </span>
             )}
           </button>

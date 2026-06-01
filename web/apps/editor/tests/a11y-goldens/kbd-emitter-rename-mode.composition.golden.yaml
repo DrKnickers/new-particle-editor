@@ -25,18 +25,18 @@
 - text: Particle System
 - complementary:
   - tree "Emitters":
-    - treeitem "root emitter default" [selected]:
-      - button "root emitter default":
-        - text: ●
+    - treeitem "Hide emitter default" [selected]:
+      - button "Hide emitter default":
+        - button "Hide emitter"
         - textbox: default
-    - treeitem "lifetime child default Hide emitter":
-      - button "lifetime child default Hide emitter":
-        - text: ↻ default
+    - treeitem "Hide emitter default lifetime child":
+      - button "Hide emitter default lifetime child":
         - button "Hide emitter"
-    - treeitem "death child default Hide emitter":
-      - button "death child default Hide emitter":
-        - text: ✕ default
+        - text: default ↻
+    - treeitem "Hide emitter default death child":
+      - button "Hide emitter default death child":
         - button "Hide emitter"
+        - text: default ✕
   - menubar:
     - menuitem "New Emitter"
   - button "Duplicate emitter"
