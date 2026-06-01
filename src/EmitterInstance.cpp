@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdio>
 #include "EmitterInstance.h"
 #include "ParticleSystemInstance.h"
 using namespace std;
@@ -258,6 +259,28 @@ void EmitterInstance::ResetParticle(Particle& particle, TimeF currentTime)
 void EmitterInstance::SpawnParticle(TimeF currentTime)
 {
 	Particle& particle = AllocateParticle();
+
+	// Hard index cap. Vertex indices are uint16 (the draw call uses
+	// D3DFMT_INDEX16) and m_verticesIndex = m_index * NUM_VERTICES_PER_PARTICLE
+	// feeds the (uint16_t) casts that build the index buffer below. Once
+	// m_index * NUM_VERTICES_PER_PARTICLE exceeds 0xFFFF those casts wrap and
+	// the triangles reference the wrong vertices -- silent render corruption.
+	// nParticlesPerBurst / nParticlesPerSecond are read from file without a
+	// clamp (weather emitters can instantiate a whole second's worth at once),
+	// so refuse to spawn past the ceiling: free the slot and bail. The real
+	// fix is 32-bit indexing; this keeps a pathological emitter from
+	// corrupting the frame in the meantime.
+	const size_t kMaxParticleIndex = 0xFFFF / NUM_VERTICES_PER_PARTICLE;
+	if (particle.m_index > kMaxParticleIndex)
+	{
+#ifndef NDEBUG
+		printf("[Particle] uint16 index cap reached at %zu live particles; refusing spawn\n",
+		       particle.m_index); fflush(stdout);
+#endif
+		FreeParticle(particle);
+		return;
+	}
+
 	particle.m_verticesIndex = particle.m_index * NUM_VERTICES_PER_PARTICLE;
 
     // Set and generate properties
