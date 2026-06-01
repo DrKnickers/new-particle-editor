@@ -1946,11 +1946,16 @@ modal templates in `.rc` files. Specifically:
   link group; Reset All button.
 - **About** (`AboutProc`) — version / build date / license credits.
 
-**Design checkpoint:** 🟡 iterating — sub-dialogs land in batches
-(About + Rescale System locked 2026-05-17; others pending).
+**Design checkpoint:** ✅ all sub-dialogs designed + shipped as React
+components across Batches 1–4 (see the per-sub-screen checklist below).
 
-**Wire-up:** 🟡 iterating — per-sub-dialog. Legacy chrome stays in
-`src/main.cpp` until Phase 4.2 cutover; Phase 3 dispatches add the
+**Wire-up:** ✅ mostly wired (verified 2026-06-01, L-022 — the older
+"🟡 iterating / 9 unshipped" status was stale). **Two native back-end
+gaps remain**, both punted to a never-run "file-load batch": **Import
+Emitters** (the `emitters/import-from-file` handler — audit G1) and
+**Mod Nickname** (the set/auto-trigger flow). **Spawner is fully wired**
+(the old deferral note was stale). Legacy chrome still co-exists in
+`src/main.cpp` until the Phase 4.2 cutover; Phase 3 dispatches added the
 React surface without removing the legacy launcher.
 
 **Current behaviour (legacy):**
@@ -1963,11 +1968,13 @@ Enter to OK).
 
 **Sub-dialog batching strategy:**
 
-Screen 8 contains 9 unshipped sub-dialogs + the file-ops backbone.
-The Phase 3 "one comprehensive dispatch per screen" cadence doesn't
-fit; we ship in batches, each batch being a coherent unit of work
-that's small enough for one subagent dispatch and one controller
-verification pass. Each sub-dialog has its own checkbox above.
+Screen 8 contains 12 sub-dialogs + the file-ops backbone — **all now
+shipped as React components** across Batches 1–4 (two have outstanding
+native back-end wiring; see the checklist above). The Phase 3 "one
+comprehensive dispatch per screen" cadence doesn't fit; we shipped in
+batches, each batch being a coherent unit of work small enough for one
+subagent dispatch and one controller verification pass. Each sub-dialog
+has its own checkbox above.
 
 - **Batch 1** (2026-05-17): Shared `Modal` foundation + **About** +
   **Rescale System**. Smallest sub-dialogs with React menu triggers
@@ -1989,14 +1996,14 @@ verification pass. Each sub-dialog has its own checkbox above.
 
 - [x] Lighting dialog — ✅ shipped Batch 2
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge); refactored to ToolPanel shell in Batch 2
-- [x] Ground picker — ✅ shipped Batch 2 (View → Ground Texture…)
+- [x] Ground picker — ✅ shipped Batch 2 (Ground toolbar dropdown). **2026-06-01:** fixed the solid-colour picker (wide tile now opens a native `<input type="color">`, mirroring Background) + restored the ground-height field (NT-2 `Spinner` → `engine/set/ground-z`). [`GroundTexturePanel.tsx`](../web/apps/editor/src/screens/GroundTexturePanel.tsx)
 - [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
-- [x] Import Emitters — ✅ shipped Batch 4 (component + bridge contract; real preview-from-file deferred to file-load batch)
+- [x] Import Emitters — ⚠️ component shipped Batch 4; **preview works** (`emitters/preview-from-file` IS implemented, [BridgeDispatcher.cpp:2179](../src/host/BridgeDispatcher.cpp:2179) — browse + see the source file's emitter tree), but the **import/OK step is missing**: `emitters/import-from-file` has **0 dispatcher hits** (verified 2026-06-01), so clicking "Import N selected" hits the not-implemented branch → inline error. This is audit **G1**; plan at [`tasks/post-audit-slot-g1-import-from-file.md`](post-audit-slot-g1-import-from-file.md).
 - [x] Rescale System — ✅ shipped Batch 1
 - [x] Rescale Emitter — ✅ shipped Screen 4 Batch B1 (right-click context menu → Rescale Emitter…)
 - [x] Increment Index — ✅ shipped Screen 4 Batch B1 (right-click context menu → Increment Index…)
-- [x] Mod Nickname — ✅ shipped Batch 4 (component + usePromptModNickname hook + ?demo=mod-nickname route; real auto-trigger deferred to file-load batch)
-- [x] Spawner — ✅ shipped Batch 4 (panel + schema; real SpawnerDriver wiring deferred to file-load batch)
+- [x] Mod Nickname — ⚠️ component + `usePromptModNickname` hook + `?demo=mod-nickname` route shipped Batch 4, but **partially wired** (verified 2026-06-01): the nickname is read/displayed in the `mods/list` payload ([BridgeDispatcher.cpp:1075](../src/host/BridgeDispatcher.cpp:1075)), but there's **no native set/auto-trigger handler** — the "prompt on opening a file with an unknown mod path" flow isn't driven from a real file-open. Small follow-up.
+- [x] Spawner — ✅ **fully wired** (corrected 2026-06-01; the earlier "real SpawnerDriver wiring deferred" note was stale, L-022). HostWindow owns + binds the driver to the dispatcher ([HostWindow.cpp:2814-2815](../src/host/HostWindow.cpp:2814)) and **ticks it per-frame** in the render loop ([HostWindow.cpp:770](../src/host/HostWindow.cpp:770)); `spawner/start|trigger|stop` commit real config ([BridgeDispatcher.cpp:2117+](../src/host/BridgeDispatcher.cpp:2117)).
 - [x] Link Group Settings — ✅ shipped Screen 4 Batch B1 (right-click context menu → Link Group Settings…, disabled when emitter unlinked)
 - [x] About — ✅ shipped Batch 1
 - [x] File-ops backbone (New / Open / Save / Save As / recent-files) — ✅ shipped Batch 3
