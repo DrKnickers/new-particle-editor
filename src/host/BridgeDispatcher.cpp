@@ -3669,14 +3669,40 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         else if (groupIdRaw > 0)
         {
-            // Join an existing group. Detach from any other group first.
+            // Explicit positive id. If the group already exists, JOIN each
+            // target to it (joiners adopt the group's canonical values).
+            // If it does NOT exist yet, CREATE it with this caller-chosen
+            // id — `JoinLinkGroup` refuses a non-existent group, and the
+            // contract (and the legacy stamp) is "assign to that group,
+            // creating it if needed". The real dialog only sends positive
+            // ids for existing groups, but bridge callers (and tests) rely
+            // on create-if-needed.
             uint32_t target = static_cast<uint32_t>(groupIdRaw);
+            const bool exists = !GetLinkGroupMembers(*sys, target).empty();
+            // Detach any target currently in a *different* group first.
             for (size_t i = 0; i < targets.size(); ++i)
             {
-                if (targets[i]->linkGroup == target) continue;
-                if (targets[i]->linkGroup != 0)
+                if (targets[i]->linkGroup != 0 && targets[i]->linkGroup != target)
                     LeaveLinkGroup(*sys, targets[i]);
-                JoinLinkGroup(*sys, targets[i], target);
+            }
+            if (exists)
+            {
+                for (size_t i = 0; i < targets.size(); ++i)
+                    if (targets[i]->linkGroup != target)
+                        JoinLinkGroup(*sys, targets[i], target);
+            }
+            else if (!targets.empty())
+            {
+                // New group with an explicit id: first target is canonical;
+                // the rest sync their non-exempt params to it (mirrors
+                // CreateLinkGroup, which only allocates max+1 ids).
+                const LinkExemptFlags& exempt = sys->getLinkExemptFlags(target);
+                targets[0]->linkGroup = target;
+                for (size_t i = 1; i < targets.size(); ++i)
+                {
+                    targets[i]->copySharedParamsFrom(*targets[0], exempt);
+                    targets[i]->linkGroup = target;
+                }
             }
         }
         else // groupIdRaw == -1 : new group
