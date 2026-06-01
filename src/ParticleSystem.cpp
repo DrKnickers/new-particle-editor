@@ -1061,33 +1061,12 @@ ParticleSystem::ParticleSystem(IFile* file)
 	        type = reader.next();
 	    }
 
-	    // Post-process. Validate spawn-field indices first: malformed files
-	    // (saved by external tools or by an old version of the editor that
-	    // didn't update cross-references on delete) can store an index that
-	    // points past the end of the emitter list. The "!= -1" guard alone
-	    // doesn't catch that — m_emitters[badIndex] then trips the debug
-	    // assertion "vector subscript out of range" before the file finishes
-	    // loading. Treat any out-of-range value as "no spawn".
-	    for (unsigned int i = 0; i < m_emitters.size(); i++)
-	    {
-            Emitter* emitter = m_emitters[i];
-
-            if (emitter->spawnOnDeath != (size_t)-1 && emitter->spawnOnDeath >= m_emitters.size())
-            {
-                printf("[Load] emitter %u '%s' has spawnOnDeath=%zu out of range (%zu emitters); clearing\n",
-                       i, emitter->name.c_str(), emitter->spawnOnDeath, m_emitters.size()); fflush(stdout);
-                emitter->spawnOnDeath = (size_t)-1;
-            }
-            if (emitter->spawnDuringLife != (size_t)-1 && emitter->spawnDuringLife >= m_emitters.size())
-            {
-                printf("[Load] emitter %u '%s' has spawnDuringLife=%zu out of range (%zu emitters); clearing\n",
-                       i, emitter->name.c_str(), emitter->spawnDuringLife, m_emitters.size()); fflush(stdout);
-                emitter->spawnDuringLife = (size_t)-1;
-            }
-
-		    if (emitter->spawnOnDeath    != (size_t)-1) m_emitters[emitter->spawnOnDeath]   ->parent = emitter;
-		    if (emitter->spawnDuringLife != (size_t)-1) m_emitters[emitter->spawnDuringLife]->parent = emitter;
-	    }
+	    // Post-process: make the loaded spawn-graph well-formed before any
+	    // emitter is parented or recursed over. ValidateEmitterGraph clears
+	    // out-of-range / self / duplicate-parent links, breaks cycles, and
+	    // rebuilds parent pointers. (Also covers autosave restore, which
+	    // loads through this same ParticleSystem(IFile*) constructor.)
+	    ValidateEmitterGraph();
     }
     catch (...)
     {
@@ -1096,6 +1075,101 @@ ParticleSystem::ParticleSystem(IFile* file)
             delete m_emitters[i];
         }
         throw;
+    }
+}
+
+void ParticleSystem::ValidateEmitterGraph()
+{
+    const size_t n = m_emitters.size();
+
+    // Pass 1: sanitise spawn indices so the graph is a single-parent forest.
+    //  (a) out-of-range index -> "no spawn". A malformed file (external tool,
+    //      or an old editor that didn't fix cross-references on delete) can
+    //      store an index past the end of the list; m_emitters[bad] would
+    //      otherwise trip the debug "vector subscript out of range" assert.
+    //  (b) self-link (an emitter spawning itself) -> clear.
+    //  (c) a child already claimed by an earlier parent slot -> clear, so no
+    //      child has two parents (otherwise deleteEmitter()'s recursion and
+    //      the EmitterList tree rebuild visit it twice -> double-free).
+    std::vector<bool> claimed(n, false);
+    for (size_t i = 0; i < n; i++)
+    {
+        Emitter* e = m_emitters[i];
+        size_t* slots[2] = { &e->spawnOnDeath, &e->spawnDuringLife };
+        for (size_t s = 0; s < 2; s++)
+        {
+            const size_t c = *slots[s];
+            if (c == (size_t)-1) continue;
+            const char* reason = NULL;
+            if      (c >= n)      reason = "out of range";
+            else if (c == i)      reason = "self-link";
+            else if (claimed[c])  reason = "already parented";
+            if (reason != NULL)
+            {
+                printf("[Load] emitter %zu '%s' has invalid spawn index %zu (%s); clearing\n",
+                       i, e->name.c_str(), c, reason); fflush(stdout);
+                *slots[s] = (size_t)-1;
+            }
+            else
+            {
+                claimed[c] = true;
+            }
+        }
+    }
+
+    // Pass 2: break cycles. After pass 1 every node has in-degree <= 1, so any
+    // remaining cycle is a simple loop; an iterative DFS clears the back-edge
+    // that closes it. color: 0 = unvisited, 1 = on the current path, 2 = done.
+    // Iterative (not recursive) so a deep chain can't overflow the stack.
+    std::vector<int> color(n, 0);
+    for (size_t root = 0; root < n; root++)
+    {
+        if (color[root] != 0) continue;
+        std::vector< std::pair<size_t, int> > stack;
+        color[root] = 1;
+        stack.push_back(std::make_pair(root, 0));
+        while (!stack.empty())
+        {
+            const size_t u       = stack.back().first;
+            const int    slotIdx = stack.back().second;
+            if (slotIdx >= 2)
+            {
+                color[u] = 2;
+                stack.pop_back();
+                continue;
+            }
+            stack.back().second = slotIdx + 1;   // advance before descending
+            Emitter* e = m_emitters[u];
+            const size_t v = (slotIdx == 0) ? e->spawnOnDeath : e->spawnDuringLife;
+            if (v == (size_t)-1) continue;
+            if (color[v] == 1)
+            {
+                // Back-edge into the active path: this link closes a cycle.
+                printf("[Load] emitter %zu '%s' closes a spawn cycle back to %zu; clearing\n",
+                       u, e->name.c_str(), v); fflush(stdout);
+                if (slotIdx == 0) e->spawnOnDeath    = (size_t)-1;
+                else              e->spawnDuringLife = (size_t)-1;
+            }
+            else if (color[v] == 0)
+            {
+                color[v] = 1;
+                stack.push_back(std::make_pair(v, 0));
+            }
+            // color[v] == 2 (already finished) can't occur after pass 1's
+            // in-degree<=1 guarantee, and would be a harmless cross-edge.
+        }
+    }
+
+    // Pass 3: rebuild parent pointers from the now acyclic, single-parent
+    // spawn links. Reset to NULL (root) first so a stale parent from a link
+    // we just cleared can't survive.
+    for (size_t i = 0; i < n; i++)
+        m_emitters[i]->parent = NULL;
+    for (size_t i = 0; i < n; i++)
+    {
+        Emitter* e = m_emitters[i];
+        if (e->spawnOnDeath    != (size_t)-1) m_emitters[e->spawnOnDeath]   ->parent = e;
+        if (e->spawnDuringLife != (size_t)-1) m_emitters[e->spawnDuringLife]->parent = e;
     }
 }
 

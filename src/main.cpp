@@ -7295,17 +7295,13 @@ static void ImportEmitters_Execute(APPLICATION_INFO* info,
         dst->spawnOnDeath    = rebind(src.spawnOnDeath);
     }
 
-    // Rebuild parent pointers from the re-mapped spawn fields (mirrors
-    // ParticleSystem(IFile*) load-time logic). Walk every imported emitter;
-    // any child it points at gets its parent set to the imported parent.
-    for (ParticleSystem::Emitter* dst : destEmitters)
-    {
-        if (dst == NULL) continue;
-        if (dst->spawnDuringLife != (size_t)-1)
-            info->particleSystem->getEmitter(dst->spawnDuringLife).parent = dst;
-        if (dst->spawnOnDeath != (size_t)-1)
-            info->particleSystem->getEmitter(dst->spawnOnDeath).parent = dst;
-    }
+    // Rebuild parent pointers from the re-mapped spawn fields. Delegate to
+    // ValidateEmitterGraph (mirrors the ParticleSystem(IFile*) load path): it
+    // drops any self / duplicate-parent / cyclic spawn link the import could
+    // have introduced, then re-parents the whole system. The imported links
+    // only reference imported emitters, so pre-existing emitters are
+    // revalidated harmlessly (their links are unchanged and already valid).
+    info->particleSystem->ValidateEmitterGraph();
 
     // Pass 3: re-create source link groups in destination. Bucket imports
     // by source linkGroup; ≥2-member buckets get a fresh destination group

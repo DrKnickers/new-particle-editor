@@ -274,6 +274,17 @@ public:
     Emitter*       addLifetimeEmitter(Emitter* parent, const ParticleSystem::Emitter& emitter = ParticleSystem::Emitter());
     Emitter*       addDeathEmitter(Emitter* parent, const ParticleSystem::Emitter& emitter = ParticleSystem::Emitter());
 
+    // Make the emitter spawn-graph well-formed after loading or importing
+    // data that may be malformed: clear out-of-range spawn indices, drop
+    // self-links and any child claimed by more than one parent, break
+    // cycles, then rebuild parent pointers from the resulting forest.
+    // deleteEmitter() and the EmitterList tree rebuild both recurse through
+    // spawnOnDeath / spawnDuringLife and assume an acyclic single-parent
+    // forest -- a cyclic or multi-parent graph would otherwise infinite-
+    // recurse or double-free. Called from the ParticleSystem(IFile*) loader
+    // (which also backs autosave restore) and the import-emitters helper.
+    void ValidateEmitterGraph();
+
     // Insert a copy of `source` directly after `reference` in m_emitters.
     // The new emitter becomes a root (parent=NULL, no spawn-children); existing
     // emitters at index >= reference->index + 1 shift up by one slot, with
