@@ -2451,6 +2451,28 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         m_undo->Capture(*sys, selIdx, 0);
     };
 
+    // F4: link-group propagation. After a shared (non-exempt) field is
+    // edited on a linked emitter, copy its non-exempt params to every
+    // group sibling — the new-UI equivalent of the legacy post-edit
+    // chokepoint in CaptureUndo (src/main.cpp). MUST be called AFTER the
+    // mutation; the pre-mutation captureUndo() above snapshots the whole
+    // system, so a single Ctrl+Z restores the entire group atomically.
+    // No-op for unlinked emitters (linkGroup == 0).
+    auto propagateLinkGroup = [&](ParticleSystem::Emitter* edited) {
+        if (edited == nullptr || edited->linkGroup == 0) return;
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem) return;
+        ParticleSystem* sys = m_pParticleSystem->get();
+        std::vector<ParticleSystem::Emitter*> members =
+            GetLinkGroupMembers(*sys, edited->linkGroup);
+        const LinkExemptFlags& exempt =
+            sys->getLinkExemptFlags(edited->linkGroup);
+        for (size_t i = 0; i < members.size(); ++i)
+        {
+            if (members[i] != edited)
+                members[i]->copySharedParamsFrom(*edited, exempt);
+        }
+    };
+
     // -------- emitters/get-properties (Phase 4.1 Fix dispatch 1) ----
     //
     // Walks every editable Basic + Appearance + Physics field on the
@@ -2715,6 +2737,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             }
         }
 
+        propagateLinkGroup(emit); // F4: keep link-group siblings in sync
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();
@@ -2950,6 +2973,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         sendOk(json::object());
         if (removed > 0)
         {
+            propagateLinkGroup(target); // F4: sync link-group siblings
             markDirty();
             EmitEmittersTreeChanged();
             EmitEngineStateChanged();
@@ -3006,6 +3030,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         captureUndo();
         track->interpolation = next;
 
+        propagateLinkGroup(target); // F4: sync link-group siblings
         sendOk(json::object());
         markDirty();
         EmitEmittersTreeChanged();
@@ -3095,6 +3120,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         captureUndo();
         target->tracks[channelIdx] = desired;
 
+        propagateLinkGroup(target); // F4: sync link-group siblings
         sendOk(json::object());
         markDirty();
         EmitEmittersTreeChanged();
@@ -3169,6 +3195,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         track->keys.erase(it);
         track->keys.insert(ParticleSystem::Emitter::Track::Key(newTime, newValue));
 
+        propagateLinkGroup(target); // F4: sync link-group siblings
         sendOk(json::object());
         markDirty();
         EmitEmittersTreeChanged();
@@ -3227,6 +3254,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         captureUndo();
         track->keys.insert(ParticleSystem::Emitter::Track::Key(time, value));
 
+        propagateLinkGroup(target); // F4: sync link-group siblings
         sendOk(json{{"time", time}, {"value", value}});
         markDirty();
         EmitEmittersTreeChanged();
@@ -3587,17 +3615,24 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
     // -------- linkGroups/set-membership ------------------------------
     //
-    // Walk `ids` and assign each emitter's `linkGroup` to the resolved
-    // group:
-    //   - groupId === null OR === 0 → 0 (leave the group)
-    //   - groupId  >  0             → groupId
-    //   - groupId === -1            → create a new group (smallest
-    //                                 unused positive uint32_t)
+    // Assign each emitter in `ids` to a link group:
+    //   - groupId === null OR === 0 → leave the group
+    //   - groupId  >  0             → join that existing group
+    //   - groupId === -1            → create a new group
     //
-    // For the "new group" branch we scan every existing emitter for
-    // the highest current linkGroup; the new group is `max + 1`. This
-    // matches the legacy convention from MT-5 and avoids reusing a
-    // recently-vacated id.
+    // F4: this drives the LinkGroup.h API (Create/Join/Leave) rather
+    // than stamping `e->linkGroup` raw. That stamp set the membership ID
+    // (so the bracket gutter drew) but NEVER synchronised the members'
+    // non-exempt fields, so the group had no behavioural effect — the
+    // root cause of "link groups don't work". Create/Join overwrite each
+    // member's non-exempt params from the canonical member (first in
+    // tree order for a new group; the group's canonical member for a
+    // join), and Leave auto-dissolves a group left with one member.
+    // Members already in a different group are detached first so the
+    // operation always succeeds (CreateLinkGroup refuses if any member
+    // is still grouped). The pre-mutation captureUndo() snapshots the
+    // whole system, so one Ctrl+Z restores the prior membership AND the
+    // pre-sync field values.
     if (kind == "linkGroups/set-membership")
     {
         if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
@@ -3607,8 +3642,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         const json& idsJson =
             params.contains("ids") ? params["ids"] : json::array();
-        // `groupId` may be a JSON number or null. The default-when-
-        // absent value matches "leave" (null → 0).
+        // `groupId` may be a JSON number or null. Absent/null → 0 (leave).
         int groupIdRaw = 0;
         if (params.contains("groupId") && !params["groupId"].is_null())
         {
@@ -3616,45 +3650,48 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
 
         ParticleSystem* sys = m_pParticleSystem->get();
-        uint32_t resolved = 0;
-        if (groupIdRaw == -1)
+
+        // Resolve the target emitters once.
+        std::vector<ParticleSystem::Emitter*> targets;
+        for (const auto& v : idsJson)
         {
-            // Scan all emitters for the max existing linkGroup; new is
-            // max + 1.
-            uint32_t maxGroup = 0;
-            const auto& emitters = sys->getEmitters();
-            for (size_t i = 0; i < emitters.size(); ++i)
-            {
-                if (emitters[i] != nullptr
-                    && emitters[i]->linkGroup > maxGroup)
-                {
-                    maxGroup = emitters[i]->linkGroup;
-                }
-            }
-            resolved = maxGroup + 1;
+            ParticleSystem::Emitter* e = getEmitterById(v.get<int>());
+            if (e != nullptr) targets.push_back(e);
+        }
+
+        captureUndo();
+
+        if (groupIdRaw == 0)
+        {
+            // Leave / unlink.
+            for (size_t i = 0; i < targets.size(); ++i)
+                LeaveLinkGroup(*sys, targets[i]);
         }
         else if (groupIdRaw > 0)
         {
-            resolved = static_cast<uint32_t>(groupIdRaw);
+            // Join an existing group. Detach from any other group first.
+            uint32_t target = static_cast<uint32_t>(groupIdRaw);
+            for (size_t i = 0; i < targets.size(); ++i)
+            {
+                if (targets[i]->linkGroup == target) continue;
+                if (targets[i]->linkGroup != 0)
+                    LeaveLinkGroup(*sys, targets[i]);
+                JoinLinkGroup(*sys, targets[i], target);
+            }
         }
-        // else: resolved stays 0 (leave).
-
-        captureUndo();
-        for (const auto& v : idsJson)
+        else // groupIdRaw == -1 : new group
         {
-            int id = v.get<int>();
-            ParticleSystem::Emitter* e = getEmitterById(id);
-            if (e == nullptr) continue;
-            e->linkGroup = resolved;
+            for (size_t i = 0; i < targets.size(); ++i)
+                if (targets[i]->linkGroup != 0)
+                    LeaveLinkGroup(*sys, targets[i]);
+            // Minimum group size is 2; a 1-id "new group" is a no-op.
+            if (targets.size() >= 2)
+                CreateLinkGroup(*sys, targets);
         }
-        // [NT-5] Demote any singleton groups left over from the
-        // mutation (covers all three enumerated paths: leaving a
-        // 2-member group, joining a different group that shrinks
-        // the previous, and the -1 + single-id "new group with 1
-        // member" case where resolved>0 but only one id was
-        // assigned to it). captureUndo() above covers both the
-        // mutation AND the sweep — Ctrl-Z restores pre-mutation
-        // linkGroup values.
+
+        // Idempotent safety net — the API already preserves the
+        // "no singleton groups" invariant, but a defensive sweep keeps
+        // any future caller honest.
         EnforceSingleMemberLinkGroups();
         sendOk(json::object());
         markDirty();
