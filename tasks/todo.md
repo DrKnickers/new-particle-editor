@@ -83,4 +83,39 @@ lt-4), and all P2/P3/G items. Master forward-port is the user's later call.
 - vitest stays green (384) — these are native, so no web change expected.
 
 ## Review
-_(appended as each item lands)_
+
+**All five landed on `claude/crazy-murdock-cb8519` (FF target: `origin/lt-4`).**
+Four commits (F2+F3 grouped — same files/concern):
+
+- `9a3e368` **F2+F3** — chunk-parser hardening (`ChunkReader.cpp`, `ChunkWriter.cpp`).
+- `ede76ce` **F5** — uint16 particle-index cap (`EmitterInstance.cpp`).
+- `4f43525` **F4** — `ValidateEmitterGraph()` on load + import (`ParticleSystem.h/.cpp`, `main.cpp` import hunk).
+- `24edaa2` **F1** — save-failure data-loss gate (`main.cpp` `DoSaveFile`).
+
+**Scope decisions (confirmed with user):** F4 guards all three call sites — but
+`RestoreFromAutosave` constructs `new ParticleSystem(file)`, so it flows through the
+same `ParticleSystem(IFile*)` loader as a normal open and is covered transitively by
+the one call there; only the load path and the import helper needed explicit wiring.
+The F1 host twin (`BridgeDispatcher` `file/save`) was audited and is **already
+correct** — it gates bookkeeping on success and returns early — so F1 is
+legacy-`DoSaveFile`-only.
+
+**Verification done.**
+- `.sln` **Debug + Release x64** clean after every fix (benign `LNK4098 LIBCMTD`).
+- vitest unchanged at **384** (no web files touched).
+- Native `pnpm a11y`: **153 passed**, only the 4 `splitters` percentage specs failing
+  (known agent-window artifact, L-033 — touched no layout code). `emitter-mutations`
+  (F1 save + F4 loader) and `bridge-native` pass. The suite `file/open`s real
+  multi-emitter fixtures through the modified `ChunkReader` + `ValidateEmitterGraph`,
+  so **F2/F3/F4 demonstrably accept valid files** and the emitter-tree goldens match.
+
+**Not self-verifiable (handed to user, L-033).** A full GUI **save→reload-identical**
+round-trip of a real multi-emitter `.alo` in `x64\Release\ParticleEditor.exe
+--new-ui` — agent native launches misrender, so the user should confirm. The a11y
+fixture `file/open` already covers "valid files still load"; this confirms the
+write+reload identity end-to-end.
+
+**Implementation note.** F4's cycle-break DFS is **iterative** (explicit stack), not
+recursive — a deep-but-acyclic emitter chain must load without overflowing the call
+stack. After pass-1 makes in-degree ≤ 1, any remaining cycle is a simple loop and a
+single back-edge clear breaks it.

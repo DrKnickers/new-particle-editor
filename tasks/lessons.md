@@ -2896,3 +2896,38 @@ spec caught it; vitest never could (the mock has its own `setLinkGroupMembership
 The bug was live on `origin/lt-4` between two pushes. Cross-reference
 [L-031](#l-031) (native runs are single-instance + fixed-port; serial) and
 [L-033](#l-033) (agent-launched native runs differ from the user's).
+
+## L-039 — On a fresh git worktree the `.sln` NuGet restore fails with no `nuget.exe` on PATH; materialise the cached package into the solution-local `packages/` layout instead of bootstrapping a tool
+
+**Trigger.** First `.sln` build in a freshly-provisioned worktree (or any clean
+checkout) dies with `error : This project references NuGet package(s) that are
+missing on this computer` — the missing file is
+`packages\Microsoft.Web.WebView2.<ver>\build\native\Microsoft.Web.WebView2.targets`.
+The handoff says "restore NuGet first," but doesn't say how when the box has no
+`nuget.exe` (`where.exe nuget` / `(Get-Command nuget)` both empty) and the projects
+use **`packages.config`** (so `msbuild -t:Restore`, which only handles
+`PackageReference`, won't help either).
+
+**How to apply.**
+1. Read the `packages.config` files (`src/`, `src/host/`, `src/host/spike/`) for the
+   exact `id` + `version`. Here: only `Microsoft.Web.WebView2 1.0.3967.48`.
+2. The package is almost always already in the **global** cache from a prior
+   machine-wide restore: `~/.nuget/packages/<id-lowercased>/<version>/` (e.g.
+   `microsoft.web.webview2/1.0.3967.48/`). Confirm the `build/native/*.targets`
+   exists there.
+3. Copy that folder's contents into the **solution-local** `packages.config` layout
+   — `packages/<Id>.<Version>/` (PascalCase id, e.g.
+   `packages\Microsoft.Web.WebView2.1.0.3967.48\`). The extracted contents
+   (`build/`, `lib/`, `runtimes/`, …) map 1:1; the only difference is the folder
+   name casing/flattening. Verify the `.targets` lands, then rebuild.
+4. Don't download a `nuget.exe` just for this — the cached package is already on
+   disk; copying it is faster and offline-safe. (`packages/` is git-ignored, so this
+   is per-worktree and never committed.)
+
+**Source incident (2026-06-01, audit-P1 worktree).** Building the `.sln` for the
+F1–F5 fixes failed on the missing WebView2 `.targets`; no `nuget.exe` anywhere,
+`packages.config` projects. Copying
+`~/.nuget/packages/microsoft.web.webview2/1.0.3967.48/*` →
+`packages/Microsoft.Web.WebView2.1.0.3967.48/` restored the build (Debug+Release
+x64 clean) with no tool bootstrap. Cross-reference [L-023](#l-023)/[L-025](#l-025)
+(build the `.sln`, not the `.vcxproj`).

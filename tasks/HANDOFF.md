@@ -1,5 +1,62 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-01 (session 7) — shipped the 5 audit-P1 fixes (F1–F5) on lt-4; NEXT: user GUI round-trip, then master forward-port (user's call)
+
+**`origin/lt-4` → `<push pending>`** (base was `05f7228`; four new commits on
+`claude/crazy-murdock-cb8519`, FF target `lt-4`). Working tree clean before the
+docs commit. **Not on `master`** (CHANGELOG entry carries `TODO` hash/PR
+placeholders; forward-port is the user's later call).
+
+### What shipped — the `[both]` P1 tier from [post-audit-followups.md](post-audit-followups.md)
+All in shared legacy `src/`. Four commits (F2+F3 grouped):
+- **F2+F3** `9a3e368` — `ChunkReader::readString()` bounded-buffer + NUL-required
+  (heap over-read, CWE-125); depth guards before `m_curDepth++` in
+  `ChunkReader::next()` (throws `BadFileException`) + `ChunkWriter::beginChunk()`
+  (asserts) for the fixed `[MAX_CHUNK_DEPTH=256]` arrays (CWE-787). `nextMini()`
+  uses flat `m_miniOffset`, unaffected.
+- **F5** `ede76ce` — `SpawnParticle()` refuses to spawn past
+  `0xFFFF / NUM_VERTICES_PER_PARTICLE` (~16383); frees the slot + bails (debug-log).
+  Prevents the uint16 vertex-index wrap → wrong-triangle render corruption.
+- **F4** `4f43525` — new `ParticleSystem::ValidateEmitterGraph()` (clears
+  out-of-range/self/dual-parent links, **iterative**-DFS cycle break, parent
+  rebuild). Replaces the loader's inline range-clear; called from
+  `ParticleSystem(IFile*)` (covers autosave restore, which loads via
+  `new ParticleSystem(file)`) + the import-emitters helper (`ImportEmitters_Execute`).
+- **F1** `24edaa2` — `DoSaveFile` early-returns `false` on writer failure; the three
+  bookkeeping calls (`SetFileChanged(false)`/`MarkSaved()`/`DeleteOurSession()`) are
+  now gated, and `DoCheckChanges` propagates the abort. The host twin
+  (`BridgeDispatcher` `file/save`, [BridgeDispatcher.cpp:2015](../src/host/BridgeDispatcher.cpp:2015))
+  was **already correct** — F1 is legacy-only.
+- **Out (unchanged):** audit-F6 (TextureManager/Reset — needs `--test-host` repro),
+  audit-F7 (skydome — already fixed on lt-4).
+
+### Test / build state
+- **`.sln` Debug + Release x64 clean** after every fix (benign `LNK4098 LIBCMTD`).
+- **vitest 384** unchanged (no web files touched — native fixes).
+- **Native `pnpm a11y`: 153 passed**, 4 failed — all `splitters.spec.ts` percentage
+  tests, the known agent-window artifact (L-033; touched no layout code). The suite
+  `file/open`s real fixtures (`a11y-base-state.alo` 3-emitter, `nt-5-singleton.alo`)
+  through the modified `ChunkReader` + `ValidateEmitterGraph`, so **F2/F3/F4 accept
+  valid files** and emitter-tree goldens match (parents rebuilt identically).
+
+### NEXT
+1. **User GUI round-trip** (L-033, agent launches misrender): open a real
+   multi-emitter `.alo` in `x64\Release\ParticleEditor.exe --new-ui`, save, reload,
+   confirm identical. The a11y fixture load covers "valid files load"; this confirms
+   write→reload identity end-to-end. (Optionally force a save failure — e.g.
+   read-only target — and confirm the dirty asterisk + autosave survive: F1.)
+2. **Master forward-port** of F1–F5 (user's call) — these are `[both]`; the audit
+   suggests bundling **G9** (`.meg` index OOB) into the same master PR (same
+   untrusted-binary class). Backfill the CHANGELOG `TODO` hash/PR at merge.
+- New lesson **L-039** (fresh-worktree NuGet restore from the global cache, no
+  `nuget.exe`). `tasks/todo.md` Review section has the full per-item detail.
+
+### Branch / lineage
+Session branch `claude/crazy-murdock-cb8519` branched cleanly off `05f7228`
+(== `origin/lt-4` at start, 0/0). Four fix commits + one docs commit; FF→`lt-4`.
+
+---
+
 ## 2026-06-01 (session 6) — shipped F1–F9 UI follow-ups + F4 native link groups; NEXT: audit P1 fixes (F1–F5) on lt-4, plan written, NOT started
 
 **`origin/lt-4` → `5bf0645`** (was `9244b95` at session start). Linear, FF-pushed.

@@ -16,6 +16,56 @@ Conventions:
 
 ## Changelog
 
+### [Audit P1] Five correctness & memory-safety fixes — save-failure data loss, chunk-parser hardening, emitter-graph validation, particle-index cap
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The five `[both]`-tier P1 findings from the 2026-05-24 audit pass
+([`tasks/post-audit-followups.md`](tasks/post-audit-followups.md)) are fixed. The
+user-visible one is **F1**: a *failed* save (disk full, permission denied, an I/O
+exception in the writer) no longer clears the modified marker or deletes the
+recovery autosave — the editor keeps the dirty asterisk, keeps the autosave, and
+**aborts the close/new/open that triggered the save** instead of proceeding and
+losing the document. The other four harden the loader against malformed or hostile
+`.alo` input: **F2** a heap over-read reading an unterminated string chunk, **F3**
+heap corruption from over-deeply-nested chunks, **F4** infinite recursion /
+double-free from cyclic or multi-parent emitter graphs, and **F5** silent render
+corruption once a single emitter exceeds ~16k live particles.
+
+**How we tackled it.** F1 — [`DoSaveFile`](src/main.cpp:1466) now early-returns
+`false` on writer failure so its three bookkeeping calls are gated and
+`DoCheckChanges` propagates the abort (the host twin at
+[`BridgeDispatcher` `file/save`](src/host/BridgeDispatcher.cpp:2015) already did
+this). F2 — [`ChunkReader::readString`](src/ChunkReader.cpp:90) reads into a bounded
+`std::vector<char>`, requires the trailing NUL, and builds the string
+length-bounded. F3 — depth guards before the `m_curDepth` increment in
+[`ChunkReader::next`](src/ChunkReader.cpp:65) (throws `BadFileException`) and
+[`ChunkWriter::beginChunk`](src/ChunkWriter.cpp:6) (asserts — over-deep nesting on
+write is our bug, not input). F4 — new
+[`ParticleSystem::ValidateEmitterGraph`](src/ParticleSystem.cpp:1102) clears
+out-of-range / self / duplicate-parent links, breaks cycles with an iterative DFS,
+and rebuilds parent pointers; it replaces the loader's inline range-clear and is
+called from the `ParticleSystem(IFile*)` constructor (which also backs autosave
+restore via `RestoreFromAutosave`) and from the import-emitters helper. F5 —
+[`SpawnParticle`](src/EmitterInstance.cpp:258) refuses to spawn past
+`0xFFFF / NUM_VERTICES_PER_PARTICLE`, freeing the slot and bailing rather than
+minting a wrapping uint16 index.
+
+**Issues encountered and resolutions.** The fix sites all live in shared legacy
+`src/`, so vitest can't exercise them (L-038) — verification was the native a11y
+suite, which boots the real C++ host and `file/open`s real multi-emitter fixtures
+(`a11y-base-state.alo`, `nt-5-singleton.alo`) straight through the modified
+`ChunkReader` + `ValidateEmitterGraph`. Result: **153 passed**, only the 4
+`splitters` percentage specs failing (the known agent-window artifact, L-033), so
+F2/F3/F4 demonstrably do **not** reject valid files and the emitter-tree goldens
+still match (parents rebuilt identically). F4's DFS is iterative on purpose — a
+deep-but-acyclic chain must not overflow the call stack the way a recursive
+validator would. Fresh-worktree builds need a NuGet restore with no `nuget.exe`
+on `PATH`; resolved by materialising the cached WebView2 package into the
+solution-local `packages/` layout (L-039).
+
+---
+
 ### [LT-4 UI follow-up] F1 — emitter-row icons: visibility on the left, spawn-role on the right
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
