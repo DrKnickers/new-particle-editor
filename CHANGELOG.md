@@ -16,6 +16,47 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Inspector density pass — tighter rhythm, flat sections, indent hierarchy, aligned checkboxes
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+A four-part density/readability pass on the inspector (and the shared tool
+panels). More params fit on screen, groups read more clearly, and the columns
+line up:
+
+1. **Tighter vertical rhythm** — trimmed section/body padding, inter-row gap,
+   and form-row padding (~15–25% more rows visible) without shrinking text.
+2. **Flat sections (hybrid)** — replaced the bordered+filled section *cards*
+   with a tinted, rounded **header band** + edge-to-edge rows. Keeps clear
+   group anchors while reclaiming the card border and side padding, so labels
+   and inputs get the full pane width. Shared `.panel-section`, so the
+   Lighting / Bloom / Ground / Background tool panels match.
+3. **Indent hierarchy** — section header, direct params, and radio dots now
+   share one left edge; a radio's sub-params (e.g. the Continuous/Weather
+   spinners) indent to nest *under their radio label*. Inputs stay
+   right-aligned because only the `.lbl` text is indented.
+4. **Aligned checkboxes** — checkbox right edges now line up with the
+   spinner/select box right edges across all three tabs.
+
+**How we tackled it.** All in [`components.css`](web/apps/editor/src/styles/components.css).
+The hybrid flattens `.panel-section` (drop border/bg/radius) and bands
+`.panel-section-header` (`background: var(--bg-2)` + radius). The indent
+hierarchy is CSS-only: `.inspector .panel-section-body { padding-left: 8px }`
+aligns L1 with the header, `.inspector .radio-row { padding-left: 0 }` drops
+the radio dot to that edge, and `.basic-tab [role="radiogroup"] .form-row .lbl
+{ padding-left: 22px }` nests radio-owned params — the `[role="radiogroup"]`
+wrapper already scopes exactly the radio params, so no React/markup changes.
+The checkbox fix changes `.form-row-check` from `1fr auto` to `1fr auto 40px`,
+reserving the same unit column the spinner rows carry so the checkbox shares
+their `row_right − 48px` right edge by construction.
+
+**Issues encountered and resolutions.** Indenting the *row* (not the label)
+would have shoved each spinner left and broken the input column — so the L2
+indent pads `.lbl` only, keeping inputs in one tidy right-aligned column.
+CSS-only throughout: vitest (371) and a11y goldens (CSS-independent) unaffected.
+
+---
+
 ### [LT-4 UI polish] Inspector text readability — promote labels, reserve dimming for disabled params
 
 *2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

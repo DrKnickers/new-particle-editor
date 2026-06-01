@@ -463,17 +463,21 @@
  * consumer keeps its own state model while sharing the visual.
  * B1.3.2 unification. */
 .panel-section {
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  border-radius: 6px;
-  margin-bottom: 12px;
+  /* Hybrid density (was a bordered+filled card): no container chrome — the
+     tinted header band (below) anchors each group while rows run edge-to-edge
+     for maximum label/input width. Shared with the ToolPanel.Section panels
+     (Lighting / Bloom / Ground / Background) via the B1.3.2 unification, so
+     they get the same treatment for app-wide consistency. */
+  margin-bottom: 9px;
 }
 
 .panel-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 5px 8px;
+  background: var(--bg-2);
+  border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -509,7 +513,7 @@
 }
 
 .panel-section-body {
-  padding: 12px;
+  padding: 6px 2px 2px;
 }
 /* Restore the `space-y-2` vertical rhythm that ToolPanel.Section's
  * inline Tailwind utilities previously declared on the body's direct
@@ -517,7 +521,7 @@
  * spacing so the sibling margin doesn't apply there visually — but
  * it does apply between `.form-row` blocks, which is the desired
  * inspector behavior too. */
-.panel-section-body > * + * { margin-top: 8px; }
+.panel-section-body > * + * { margin-top: 5px; }
 
 /* Generic 1px horizontal hairline. Used by CurveEditorPanel to
  * separate the colour-channel group from the transform-channel
@@ -536,7 +540,7 @@
   grid-template-columns: 1fr 58px 40px;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
+  padding: 2px 0;
   font-size: 12px;
   /* Field labels use the primary text token for readability — the dim
      --text-2 was hard to read at 12px (esp. "Bursts" / "Burst delay" and
@@ -553,6 +557,15 @@
    them without touching the markup (:has() is supported in the WebView2
    Chromium runtime). Enabled labels stay at the readable --text above. */
 .form-row:has(:disabled) .lbl { color: var(--text-2); }
+
+/* Inspector indent hierarchy (visual nesting of params):
+ *   L0 section header text .......... 8px (the tinted band's padding)
+ *   L1 direct params + radio dots ... 8px (aligned with the header)
+ *   L2 a radio's sub-params ......... ~30px (nested UNDER the radio label)
+ * Inputs stay right-aligned because L2 indents the .lbl text, not the row. */
+.inspector .panel-section-body { padding-left: 8px; }   /* L1 aligns with header */
+.inspector .radio-row { padding-left: 0; }               /* radio dot sits at L1 */
+.basic-tab [role="radiogroup"] .form-row .lbl { padding-left: 22px; }  /* L2 under the radio label */
 
 /* Basic-tab-scoped default: every plain .form-row inside .basic-tab
    picks up a wider input column (73 px, +25 % over the standard 58 px)
@@ -680,7 +693,11 @@
    width minus the checkbox. The checkbox right-aligns to the inspector's
    content edge — consistent across every checkbox row. */
 .form-row.form-row-check {
-  grid-template-columns: 1fr auto;
+  /* Reserve the same 40px unit column the spinner/select rows carry, so the
+     checkbox lands in column 2 (like the input box) and its right edge aligns
+     at row_right - 48px — flush with every spinner/dropdown box right edge.
+     Applies to every FieldCheckbox across Basic / Appearance / Physics. */
+  grid-template-columns: 1fr auto 40px;
 }
 
 /* Per-axis micro-label above each spinner in a Vec3 cluster (X / Y /
