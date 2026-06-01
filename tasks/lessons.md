@@ -2854,3 +2854,45 @@ drive the `LinkGroup.h` API in set-membership + a `propagateLinkGroup` call in a
 6 shared-field handlers. Cross-reference [L-035](#l-035) (code-reading mis-points;
 here the *absence* in the new path is the bug) — both say: verify the new path's
 actual behaviour against the legacy one, don't assume parity from a matching surface.
+
+---
+
+## L-038 — Native bridge-handler logic is gated by the native Playwright spec suite (`pnpm a11y`), NOT by vitest + a clean build; run it before pushing host changes
+
+**Rule.** A change to a `BridgeDispatcher.cpp` (or any host-side) handler can pass
+`vitest` (which exercises only the **mock** bridge + React) AND compile cleanly,
+yet still be wrong against the **real** host. The native `tests/*.spec.ts` suite
+(`emitter-mutations`, `bridge-native`, splitters, a11y goldens) driven over CDP by
+`pnpm --filter @particle-editor/editor a11y` is the real gate for host behaviour.
+Run it before pushing host-logic changes — not just `vitest` + `MSBuild`.
+
+**Trigger.** You edited a `linkGroups/*`, `emitters/*`, or other bridge handler
+and are about to FF→`lt-4`/push on the strength of "vitest green + build clean."
+Tells you're about to ship an unverified host change:
+- The change alters a handler's *contract* (what payloads it accepts, what it
+  mutates), but the only tests you ran hit the mock (`mock.ts`), which has its own
+  independent implementation that didn't change.
+- The behaviour is only observable through the real `ParticleSystem` (link-group
+  membership, undo atomicity, curve propagation), which the mock only approximates.
+
+**How to apply.**
+1. For host-logic changes, build **Debug** too (the a11y harness launches
+   `x64\Debug\ParticleEditor.exe --test-host`) and run `pnpm --filter
+   @particle-editor/editor a11y` before pushing.
+2. Read the failures by spec: native-behaviour specs (`emitter-mutations`,
+   `bridge-native`) failing = a real host regression to fix; `splitters`
+   percentage failures are usually the agent-launch window-size artifact (L-033),
+   not your change — confirm via `git log` that you touched no layout code.
+3. If you can't run the native suite in the current environment, say so and hand
+   the verification to the user — don't pass off vitest+build as full coverage.
+
+**Source incident (2026-06-01, F4 set-membership).** The F4 link-group fix passed
+vitest (384) + Release/Debug builds, so it was FF'd to `lt-4` and pushed. A later
+`pnpm a11y:update` run (for an unrelated F1 golden) surfaced that the rewrite had
+narrowed the bridge contract — routing the positive-id path through `JoinLinkGroup`
+(which refuses a non-existent group) silently no-op'd "assign to an explicit new
+group id", which the mock still supported. The native `emitter-mutations` NT-5
+spec caught it; vitest never could (the mock has its own `setLinkGroupMembership`).
+The bug was live on `origin/lt-4` between two pushes. Cross-reference
+[L-031](#l-031) (native runs are single-instance + fixed-port; serial) and
+[L-033](#l-033) (agent-launched native runs differ from the user's).
