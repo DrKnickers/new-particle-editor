@@ -23,8 +23,17 @@
 #include <d3d9.h>
 #include <winhttp.h>
 #include <shlwapi.h>  // [MT-11] Phase 0: SHCreateMemStream for WebResourceRequested response
+#include <dwmapi.h>   // title-bar dark-mode (DWMWA_USE_IMMERSIVE_DARK_MODE)
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+// See BridgeDispatcher.cpp for the runtime (theme-toggle) title-bar sync;
+// this is the startup default. Guarded for older SDKs (value 20 on modern
+// Windows, which the editor targets via WebView2 + DComp).
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
 
@@ -2745,6 +2754,22 @@ int HostWindowImpl::Run(int nCmdShow)
         CoUninitialize();
         CloseLog();
         return 1;
+    }
+
+    // Theme the native title bar to the OS app theme at startup so it
+    // doesn't flash a white caption before React mounts and pushes the
+    // real theme via host/backing-color (BridgeDispatcher re-applies on
+    // every theme toggle). The app's initial theme also follows the OS
+    // preference, so the two agree for the common case. AppsUseLightTheme
+    // (HKCU) is 0 when the OS app theme is dark.
+    {
+        DWORD appsUseLight = 1, sz = sizeof(appsUseLight);
+        RegGetValueW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &appsUseLight, &sz);
+        BOOL dark = (appsUseLight == 0) ? TRUE : FALSE;
+        DwmSetWindowAttribute(hMain, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                              &dark, sizeof(dark));
     }
 
     // Construct dispatcher AFTER hMain exists (it captures the WebView2

@@ -26,6 +26,17 @@
 #include <vector>
 #include <windows.h>
 #include <commdlg.h>
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
+
+// DWM immersive dark-mode caption attribute. Defined in dwmapi.h on
+// Windows SDK 10.0.18985+, but guard it so older SDKs still compile.
+// Value 20 is the post-Win10-2004 attribute; the editor targets modern
+// Windows (WebView2 + DComp), so the older 19 fallback isn't needed.
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 
 using nlohmann::json;
 
@@ -906,6 +917,21 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             return res;
         }
         m_layout.SetBackingColor(c);
+
+        // Theme the native title bar to match the app shell. The backing
+        // colour IS the resolved `--bg`, pushed on mount + every theme
+        // toggle, so deriving the caption's dark-mode from its luminance
+        // makes the Win32 caption follow the in-app theme for free (no new
+        // bridge surface). Perceived luminance (Rec.601); < 128 ⇒ dark.
+        if (m_hostHwnd)
+        {
+            const int luma = (GetRValue(c) * 299 + GetGValue(c) * 587 +
+                              GetBValue(c) * 114) / 1000;
+            BOOL dark = (luma < 128) ? TRUE : FALSE;
+            DwmSetWindowAttribute(m_hostHwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                                  &dark, sizeof(dark));
+        }
+
         printf("[backing] color '%s' -> RGB(%u,%u,%u)\n",
                colorStr.c_str(),
                GetRValue(c), GetGValue(c), GetBValue(c));

@@ -16,6 +16,40 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Themed emitter-list scrollbar + theme-following native title bar
+
+*2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Two theming gaps closed. The emitter list (the "Particle System" tree) showed
+Chromium's default white scrollbar in dark mode instead of the thin themed bar
+used everywhere else; it now matches. And the native Win32 title bar stayed a
+light caption regardless of theme; it now follows the in-app theme, dark or
+light, and flips live when you toggle.
+
+**How we tackled it.** The themed `::-webkit-scrollbar` rules in
+[`base.css`](web/apps/editor/src/styles/base.css:32) apply to an *enumerated*
+selector list (`.panel-body`, `.curve-list`, the tab-content testids); the
+emitter tree's scroll viewport simply wasn't on it. Added an
+`emitter-tree-scroll` class to that viewport
+([`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx:1353)) and
+listed it alongside the others. The title bar is the native caption — outside
+WebView2, so CSS can't reach it — and is themed via the DWM
+`DWMWA_USE_IMMERSIVE_DARK_MODE` attribute, driven two ways: once at window
+creation from the OS app-theme preference
+([`HostWindow.cpp`](src/host/HostWindow.cpp:2750), avoids a white-caption flash
+before React mounts) and again in the existing `host/backing-color` handler
+([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:899)) from the
+luminance of the pushed `--bg` — which `useBackingColorSync` already sends on
+mount and every theme toggle, so the caption follows the theme for free with no
+new bridge surface.
+
+**Issues encountered and resolutions.** `dwmapi.lib` was newly linked (pragma
+in both host TUs); `DWMWA_USE_IMMERSIVE_DARK_MODE` is `#ifndef`-guarded to 20
+so older Windows SDKs still compile. CSS-only + native-caption changes — no DOM
+or ARIA impact, so vitest (371) and the a11y goldens are untouched.
+
+---
+
 ### [LT-4 perf] arch-C viewport — drop the redundant per-frame layered-window readback
 
 *2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

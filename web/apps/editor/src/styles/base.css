@@ -31,18 +31,21 @@ html { height: 100%; overflow: hidden; }
    chrome in dark mode. */
 .panel-body::-webkit-scrollbar,
 .curve-list::-webkit-scrollbar,
+.emitter-tree-scroll::-webkit-scrollbar,
 [data-testid="tab-basic-content"]::-webkit-scrollbar,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar,
 [data-testid="tab-physics-content"]::-webkit-scrollbar { width: 10px; height: 10px; }
 
 .panel-body::-webkit-scrollbar-track,
 .curve-list::-webkit-scrollbar-track,
+.emitter-tree-scroll::-webkit-scrollbar-track,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-track,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-track,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-track { background: transparent; }
 
 .panel-body::-webkit-scrollbar-thumb,
 .curve-list::-webkit-scrollbar-thumb,
+.emitter-tree-scroll::-webkit-scrollbar-thumb,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-thumb,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-thumb,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-thumb {
@@ -53,6 +56,7 @@ html { height: 100%; overflow: hidden; }
 
 .panel-body::-webkit-scrollbar-thumb:hover,
 .curve-list::-webkit-scrollbar-thumb:hover,
+.emitter-tree-scroll::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-thumb:hover { background: var(--text-3); }

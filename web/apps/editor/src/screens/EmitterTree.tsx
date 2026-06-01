@@ -1350,7 +1350,7 @@ export function EmitterTree({ bridge }: Props) {
         // `flex-1 min-h-0 overflow-y-auto` so long emitter lists scroll
         // inside it while EmitterTreeToolbar (sibling below) stays
         // pinned at the pane's bottom.
-        <div className="relative flex flex-1 min-h-0 overflow-y-auto">
+        <div className="emitter-tree-scroll relative flex flex-1 min-h-0 overflow-y-auto">
           <ul
             role="tree"
             aria-label="Emitters"
