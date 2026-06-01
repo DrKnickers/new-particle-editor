@@ -1468,6 +1468,14 @@ static bool DoSaveFile(APPLICATION_INFO* info, bool saveas = false)
         MessageBox(info->hMainWnd,
                    LoadString(IDS_ERROR_FILE_SAVE, AnsiToWide(err).c_str()).c_str(),
                    NULL, MB_OK | MB_ICONERROR);
+        // Save failed (disk full, permission denied, writer I/O
+        // exception): keep the dirty flag, leave the undo stack
+        // unmarked, and KEEP the autosave so recovery stays available.
+        // Return false so DoCheckChanges aborts the close/new/open it
+        // was guarding -- otherwise the user loses the document
+        // believing it was saved. The host twin (BridgeDispatcher
+        // file/save) already gates its bookkeeping the same way.
+        return false;
     }
     SetFileChanged(info, false);
     info->undoStack.MarkSaved();
