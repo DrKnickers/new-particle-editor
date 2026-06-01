@@ -23,6 +23,18 @@
    sizing + transparency stay in globals.css. */
 html { height: 100%; overflow: hidden; }
 
+/* Native checkboxes + radios follow the theme accent everywhere (curve
+   editor channels, Spawner, Lighting/Bloom/Ground panels, the link-group
+   dialog, etc.). `accent-color` tints the check/fill while keeping native
+   behaviour — including the indeterminate state used by tri-state toggles.
+   The custom div-based `.checkbox` / `.radio` controls are unaffected
+   (they aren't <input> elements). */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* Scrollbar styling — applies to .panel-body and .curve-list scrollable
    containers (per the design's component class names), plus the
    inspector Tabs.Content panes (Basic / Appearance / Physics) which
@@ -32,6 +44,7 @@ html { height: 100%; overflow: hidden; }
 .panel-body::-webkit-scrollbar,
 .curve-list::-webkit-scrollbar,
 .emitter-tree-scroll::-webkit-scrollbar,
+.link-settings-scroll::-webkit-scrollbar,
 [data-testid="tab-basic-content"]::-webkit-scrollbar,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar,
 [data-testid="tab-physics-content"]::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -39,6 +52,7 @@ html { height: 100%; overflow: hidden; }
 .panel-body::-webkit-scrollbar-track,
 .curve-list::-webkit-scrollbar-track,
 .emitter-tree-scroll::-webkit-scrollbar-track,
+.link-settings-scroll::-webkit-scrollbar-track,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-track,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-track,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-track { background: transparent; }
@@ -46,6 +60,7 @@ html { height: 100%; overflow: hidden; }
 .panel-body::-webkit-scrollbar-thumb,
 .curve-list::-webkit-scrollbar-thumb,
 .emitter-tree-scroll::-webkit-scrollbar-thumb,
+.link-settings-scroll::-webkit-scrollbar-thumb,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-thumb,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-thumb,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-thumb {
@@ -57,6 +72,7 @@ html { height: 100%; overflow: hidden; }
 .panel-body::-webkit-scrollbar-thumb:hover,
 .curve-list::-webkit-scrollbar-thumb:hover,
 .emitter-tree-scroll::-webkit-scrollbar-thumb:hover,
+.link-settings-scroll::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-basic-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-thumb:hover { background: var(--text-3); }

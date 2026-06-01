@@ -14,6 +14,13 @@
      panel hierarchy are unchanged; only the hue is removed. Accent and
      selection deliberately stay blue (below). Don't "fix" these back to
      tinted values. */
+  /* Tell the UA to render native form controls (checkbox/radio fills +
+     backgrounds, native scrollbars) in DARK — without this they paint
+     light-mode chrome even on the dark theme. `accent-color` (base.css)
+     tints the check; `color-scheme` fixes the box background. Safe with
+     FD4 transparency: html/body/#root set explicit transparent
+     backgrounds (globals.css), so this doesn't repaint the canvas. */
+  color-scheme: dark;
   --bg: #111111;
   --bg-2: #181818;
   --bg-3: #1f1f1f;
@@ -54,6 +61,7 @@
 [data-theme="light"] {
   /* Neutral grey ramp — desaturated to match the dark theme (no cool tint).
      Lightness preserved from the prior values. Accent + selection stay blue. */
+  color-scheme: light;
   --bg: #ececec;
   --bg-2: #f2f2f2;
   --bg-3: #ffffff;
