@@ -2775,3 +2775,39 @@ place. Cross-reference [L-029](#l-029) (verify inputs before suspecting the
 pipeline — same "widen from the assumed cause" discipline) and
 [L-032](#l-032) (identical render-state ⇒ the cost is in the dimension your
 probe doesn't cover).
+
+---
+
+## L-036 — Match here-string syntax to the *tool's* shell, not the OS default; the Bash tool is bash even on Windows
+
+**Rule.** This environment exposes two shells through two different tools: the
+PowerShell tool runs `powershell.exe` (PowerShell 5.1), the Bash tool runs
+`bash`. Here-string / quoting syntax is **not** interchangeable. PowerShell's
+literal here-string is `@'…'@`; bash has no such construct. Pick the multiline
+quoting form that matches whichever tool you're invoking — or sidestep the issue
+entirely by writing the text to a file and passing `-F <file>`.
+
+**Trigger.** Any command that feeds a multiline string to a native exe — most
+commonly `git commit -m`, but also `gh pr create --body`, `git tag -m`, etc.
+Especially easy to get wrong because the PowerShell tool's own description
+documents `@'…'@` prominently, so it's primed in memory when you reach for the
+Bash tool next.
+
+**How to apply.**
+1. **Default to a message file for any multiline commit/PR body**, regardless of
+   shell: `Write` the text, then `git commit -F .git-commit-msg.tmp` (delete the
+   temp after). Shell-agnostic, no quoting hazards, and the message is reviewable
+   before it lands.
+2. If you do inline it: PowerShell tool → `@'…'@` (closing `'@` at column 0);
+   Bash tool → a single `-m $'…'` or a quoted heredoc. Never paste `@'…'@` into
+   the Bash tool — bash treats the `@` as a literal character.
+3. **Verify the subject after committing** — `git log -1 --pretty=%s`. A stray
+   leading character (e.g. `@ docs(tasks): …`) means the wrapper leaked into the
+   message; amend with `--amend -F` before pushing.
+
+**Source incident (2026-06-01).** A `git commit -m @'…'@` issued through the
+**Bash** tool produced a subject line of `@ docs(tasks): reconcile …` — bash
+took the PowerShell here-string delimiters literally, prepending `@\n` and
+appending `\n@`. Caught by reading the commit output, fixed with
+`git commit --amend -F .git-commit-msg.tmp` before the fast-forward into `lt-4`,
+so the mangled message never reached `origin`.
