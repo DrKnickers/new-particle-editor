@@ -16,6 +16,35 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Rebase Tailwind `text-sm` to the 12px body convention
+
+*2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The emitter list ("Particle System" tree) rendered ~17% larger than the
+panels around it — its names sat at 14px while the curve track names, tabs,
+form labels, and panel titles are all 12px. Now everything in those side
+panels shares the 12px body size, so the emitter names line up with the rest.
+
+**How we tackled it.** The cause was two sizing systems colliding: the
+hand-written CSS sizes in explicit `px` and consistently targets 12px, while
+Tailwind's `rem` scale is anchored to the 16px `<html>` root (not
+`body { font-size: 12px }`), so `text-sm` lands at 14px. `text-xs` (87 uses)
+already equals 12px and is the de-facto body utility; `text-sm` (24 uses,
+incl. the emitter tree) was the lone outlier. Rather than re-tag every site,
+the fix rebases the token once — `--text-sm: 0.75rem` in a `@theme` block in
+[`tokens.css`](web/apps/editor/src/styles/tokens.css) (line-height mirrored to
+`--text-xs`) — so all `text-sm` usage converges on 12px. The 87 `text-xs`
+sites are untouched, and the deliberately-large `text-lg` (About heading) /
+`text-2xl` ("+" glyphs) don't read `--text-sm`, so they stay big.
+
+**Issues encountered and resolutions.** Verified the override actually
+compiled — the dist CSS emits `--text-sm:.75rem` — since a Tailwind v4
+`@theme` token edit is easy to get subtly wrong (no `tailwind.config.js`
+exists; utilities are generated from theme vars). CSS-only change: vitest
+(371) and the a11y goldens (CSS-independent ARIA snapshots) are untouched.
+
+---
+
 ### [LT-4 UI polish] Themed emitter-list scrollbar + theme-following native title bar
 
 *2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

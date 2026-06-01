@@ -104,3 +104,21 @@
   --radius-token: var(--radius);
   --radius-token-sm: var(--radius-sm);
 }
+
+/* Type scale — rebased to the app's 12px body convention.
+ *
+ * The hand-written CSS (components.css etc.) sizes everything in explicit
+ * px and consistently targets 12px for body text. Tailwind's rem-based
+ * scale, however, is anchored to the 16px <html> root (NOT `body { 12px }`),
+ * so `text-sm` lands at 14px and is the lone outlier across the UI (24 uses,
+ * incl. the emitter list, which read ~17% larger than the 12px panels around
+ * them). Collapsing `--text-sm` to 12px makes Tailwind's small-text utilities
+ * agree with the 12px convention app-wide.
+ *
+ * Intentionally NOT rebasing `--text-xs` (already 12px, 87 uses — the de-facto
+ * body utility) or the larger steps (`text-lg` About heading, `text-2xl` "+"
+ * glyphs stay deliberately bigger). Line-height mirrors text-xs's ratio. */
+@theme {
+  --text-sm: 0.75rem;                    /* 12px (was 0.875rem / 14px) */
+  --text-sm--line-height: calc(1 / 0.75); /* match --text-xs */
+}
