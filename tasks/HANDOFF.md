@@ -1,5 +1,49 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-01 (session 6) — shipped F1–F9 UI follow-ups + F4 native link groups; NEXT: audit P1 fixes (F1–F5) on lt-4, plan written, NOT started
+
+**`origin/lt-4` → `5bf0645`** (was `9244b95` at session start). Linear, FF-pushed.
+Working tree: only **`tasks/todo.md` uncommitted** (the audit-P1 plan — commit it
+with this handoff). **Not on `master`** (CHANGELOG top entries carry `TODO` hash
+placeholders to backfill at a future master merge).
+
+### What shipped this session (all on lt-4, user-validated in the running editor)
+The entire **F1–F9 UI follow-up backlog** (`tasks/followups.md`) + the native link-group fix:
+- **F2/F3/F5** `30311a4` — tree toolbar centered+28px; pressed `:active` state; bracket gutter hugs rows (18→6px).
+- **F6/F7** `965da15` — number-field drag selects text, value-scrub moved to the arrow column (3px threshold); wheel steps 0.1 decimals / 1 integers, Shift ×10.
+- **F8/F9** `6927a97` — curve editor multi-key **average** edit (shift-by-delta, matches legacy `CurveEditor_MoveSelection`); Index channel solos like Scale.
+- **F4 (native)** `005d767` + fix `dc3d0e5` — link groups actually propagate: `set-membership` drives `LinkGroup.h` API (Create/Join/Leave) + `propagateLinkGroup()` in the 6 shared-field handlers ([BridgeDispatcher.cpp:2461](../src/host/BridgeDispatcher.cpp:2461)). **The `dc3d0e5` fix restored create-if-needed for explicit positive group ids** — the first F4 push had narrowed the contract (JoinLinkGroup refuses non-existent groups) and broke the NT-5 native spec; caught only by `pnpm a11y`, not vitest (→ **L-038**).
+- **Link-group dialog** `d04c16e` + `91a5c7f` — categorized the exempt-fields dialog (Curves/Basic/Appearance/Physics, collapsible, tri-state per-category toggle, Weather folded into Appearance); themed native checkboxes/radios + dialog scrollbar.
+- **F1** `ed1885c` — emitter-row icons: eye (visibility) on the LEFT, spawn-role glyph (`↻`/`✕`) on the RIGHT for children, root drops the `●` dot. **Regenerated all 20 composition a11y goldens** (tree appears in every full-app surface); diff verified surgical (L-030).
+- **Native control theming** — `color-scheme: dark/light` per theme in [tokens.css](../web/apps/editor/src/styles/tokens.css) + global `accent-color: var(--accent)` in [base.css](../web/apps/editor/src/styles/base.css). `color-scheme` was the actual fix (accent-color tints only the *checked* fill; the box *background* needs color-scheme). Safe with FD4 transparency (html/body/#root explicitly transparent).
+- **Docs** `2daa787`, `5bf0645` — CHANGELOG entries; **L-037** (reimplemented chokepoint dropped a legacy side effect — F4 root cause class); **L-038** (native host logic gated by `pnpm a11y`, not vitest+build). Deferred arch-C pacing plan archived to `tasks/todo-arch-c-pacing-deferred.md`.
+
+Design calls settled with the user this session: F6=scrub-from-arrows, F7=0.1/1 step, F8=shift-by-delta + match-legacy (Time disabled only when selection is all-border), F9=Index exclusive with everything, F1=eye-left/role-right + keep ↻/✕ glyphs.
+
+### Test / build state
+- **vitest 384/384** (44 files) — +12 specs this session (Spinner, CurveEditorPanel, EmitterTree, LinkGroupSettingsDialog).
+- **`.sln` Debug + Release x64** built clean (Debug `LNK4098 LIBCMTD` warning is pre-existing/benign).
+- **Native `pnpm a11y` suite: 153 passed**, 4 failed — all `splitters.spec.ts` pane-percentage tests, an **agent-launch narrow-window artifact** (L-033; I touched zero splitter/layout code — confirmed via `git log`). They should pass in a normal-sized window; **confirm on a trusted run.** `emitter-mutations` NT-5 (link groups) PASS after the F4 fix.
+- **20 composition a11y goldens regenerated** for F1; the `.json` (UIA) goldens did NOT change in that run — confirm they're current on a trusted `pnpm a11y` (UIA spec may not have re-captured).
+
+### NEXT WORK — audit P1 fixes (plan in `tasks/todo.md`, NOT started)
+User chose: fix the **[both] P1** items **on lt-4** (forward-port to master later — user's call), and take **all of F1–F5**. Source: [tasks/post-audit-followups.md](post-audit-followups.md) P1 tier. **Note:** these P1 "F1–F5" are AUDIT items — DIFFERENT from the UI F1–F9 above (naming collision; the audit doc has its own F-numbering).
+
+I **verified the sites** (current code, L-022) but wrote **no fix code** yet:
+- **Audit-F1** data-loss: [main.cpp:1466-1480](../src/main.cpp:1466) — `SaveParticleSystem()` failure shows a MessageBox then **unconditionally** runs `SetFileChanged(info,false)`, `info->undoStack.MarkSaved()`, `UpdateUndoRedoUI()`, `Autosave::DeleteOurSession()`, `return true`. Fix: capture `bool ok=...`, gate the bookkeeping + `return ok`. Also audit the host save path [BridgeDispatcher.cpp:1620](../src/host/BridgeDispatcher.cpp:1620).
+- **Audit-F2** heap over-read: [ChunkReader.cpp:90-106](../src/ChunkReader.cpp:90) — `new char[size()]` + `str = data` (NUL-walk). Fix: `std::vector<char> buf(size())`, validate `size()>0 && buf.back()=='\0'`, `std::string(buf.data(), buf.size()-1)`, else `throw BadFileException` (verify the exact exception type used in this file — saw `ReadException` at :61).
+- **Audit-F3** depth overflow: `MAX_CHUNK_DEPTH=256` ([ChunkFile.h:27](../src/ChunkFile.h:27) reader, :51 writer); reader `m_offsets[ ++m_curDepth ]` ([ChunkReader.cpp:65](../src/ChunkReader.cpp:65)) + writer `m_curDepth++; m_chunks[m_curDepth]` ([ChunkWriter.cpp:8](../src/ChunkWriter.cpp:8)) — no bound check. Fix: guard before increment — reader throws, writer asserts. (`nextMini()` uses flat `m_miniOffset`, NOT affected — audit's "both" claim is half-wrong.)
+- **Audit-F4** cyclic graph: [ParticleSystem.cpp:1071](../src/ParticleSystem.cpp:1071) — add `ValidateEmitterGraph()` after the range-clear (reject self-link / dual-parent / cycle via DFS); call from load + autosave-restore + import-emitters helper. ~40 LoC, biggest one.
+- **Audit-F5** uint16 index wrap: [EmitterInstance.cpp:133](../src/EmitterInstance.cpp:133) `AllocateParticle()` — hard cap at `numeric_limits<uint16_t>::max() / NUM_VERTICES_PER_PARTICLE`.
+- **Out:** audit-F6 (TextureManager/Reset, [lt-4], needs `--test-host` repro first), audit-F7 (skydome, already fixed on lt-4).
+
+**Critical process note (L-038):** these are native shared-`src/` fixes — after building, **run `pnpm --filter @particle-editor/editor a11y`** (needs x64\Debug) to verify `emitter-mutations`/`bridge-native`, not just vitest. Round-trip save→load a real `.alo` in the running editor to confirm F2/F3/F4 don't reject valid files.
+
+### Branch / lineage
+On `claude/nervous-lamport-e8a966` (off lt-4); `lt-4` == `origin/lt-4` == `5bf0645`, 0/0. A fresh session branches cleanly off lt-4. The running editor (Release `--new-ui`) is the final F1+F4-fix build.
+
+---
+
 ## 2026-06-01 (session 5) — arch-C perf fix + a run of UI polish (resume: the F1–F9 follow-up backlog in `tasks/followups.md`)
 
 **`origin/lt-4` → `63fb7f2`** (was `048504d` at session start). Branch is linear;

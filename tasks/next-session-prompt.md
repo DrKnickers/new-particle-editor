@@ -1,92 +1,77 @@
-# Next-session prompt — LT-4, the F1–F9 UI follow-up backlog
+# Next-session prompt — audit P1 fixes (F1–F5) on lt-4
 
 You're picking up `new-particle-editor` (the **AloParticleEditor** rewrite —
 Win32 + WebView2/React + D3D9Ex-via-DComp particle editor for Star Wars:
-Empire at War), branch **`lt-4`**. Context was handed off in two documents;
-treat them as primary context but **verify important claims against the actual
-code before acting** (file:line refs drift — L-022).
+Empire at War), branch **`lt-4`**. Context is in the handoff docs; treat them as
+primary but **verify every important claim against the actual code** before acting
+(file:line refs drift — L-022).
 
-Last session (5) shipped an arch-C perf fix (~26× faster maximized) plus a run
-of inspector UI polish, all on `origin/lt-4` and **user-confirmed**. No
-in-flight bug. This session is a fresh pick from the **F1–F9 follow-up backlog**
-in [`tasks/followups.md`](followups.md) — the user listed these from a live
-review. Confirm which item(s) to take before coding; several need a 1-minute
-clarification or design call first (flagged in the file).
+Last session (6) shipped the whole F1–F9 UI follow-up backlog + the native
+link-group fix (F4), all on `origin/lt-4` and user-validated. **This session:
+the 5 audit P1 bug fixes** — a plan is already written in `tasks/todo.md` and
+the work is **NOT started** (sites were verified, no fix code written).
 
 ## Pre-flight (run before touching anything)
-
 ```
 git fetch origin lt-4 --quiet
 git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh claude/* off lt-4
-git log --oneline origin/lt-4..HEAD | Measure-Object -Line # expect 0
-git log --oneline HEAD..origin/lt-4 | Measure-Object -Line # expect 0
-git status --porcelain                                     # empty
-git rev-parse --short origin/lt-4                          # expect 63fb7f2 (or newer)
+git log --oneline origin/lt-4..HEAD | wc -l               # expect 0
+git log --oneline HEAD..origin/lt-4 | wc -l               # expect 0
+git status --porcelain                                     # expect clean
+git rev-parse --short origin/lt-4                          # expect 5bf0645 (or newer)
 ```
-If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
+If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow
+(last session hit a 2-commit divergence — see HANDOFF for how it was rebased).
 
-Then baseline (a **fresh worktree has no `x64\` binaries**; build the **.sln**,
-NOT the `.vcxproj`, L-023; restore NuGet first on a fresh worktree):
-- From `web/`: `pnpm --filter @particle-editor/editor test` → expect **371 passed** (44 files).
-- `pnpm --filter @particle-editor/editor build` → tsc + dist clean, `dist/` composition.
-- Native only if running the editor / a11y harness:
-  `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" .\ParticleEditor.sln /p:Configuration=Release /p:Platform=x64 /nologo /verbosity:minimal /m`
-  (restore first if it fails on the WebView2 NuGet target:
-  `MSBuild .\ParticleEditor.sln /t:Restore /p:RestorePackagesConfig=true /p:Configuration=Release /p:Platform=x64`).
+## Baseline
+- From `web/`: `pnpm --filter @particle-editor/editor test` → **384 passed** (44 files).
+- `pnpm --filter @particle-editor/editor build` → tsc + dist clean.
+- Native (these fixes are native — you WILL need this): build the **`.sln`**
+  (NOT the `.vcxproj`, L-023; restore NuGet first on a fresh worktree) Debug AND
+  Release x64:
+  `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" "<repo>\ParticleEditor.sln" /p:Configuration=Debug /p:Platform=x64 /nologo /verbosity:minimal /m`
+  (Debug `LNK4098 LIBCMTD` warning is pre-existing/benign.) Use the **absolute**
+  .sln path — the PowerShell tool's cwd can drift.
 
 ## Primary context (read first, then VERIFY against code)
+- **[`tasks/todo.md`](todo.md)** — the audit-P1 plan (goal/scope, per-item fix
+  shape, risks, testing). **This is the work queue.**
+- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "2026-06-01 (session 6)" section:
+  the verified site details for each fix + the test/build state.
+- **[`tasks/post-audit-followups.md`](post-audit-followups.md)** — full P1 finding
+  text. **The audit's own F1–F5 numbering ≠ the UI F1–F9** (naming collision).
+- **[`tasks/lessons.md`](lessons.md)** — esp. **L-038** (native host logic is
+  gated by `pnpm a11y`, NOT vitest+build — run the native suite before pushing),
+  **L-033** (agent native launches misrender/differ — verify via the user),
+  **L-030** (don't blanket-regen a11y goldens), **L-023/L-025** (build the .sln).
+- `CLAUDE.md` — working principles, plan-mode, LT-4 branch flow (FF into lt-4).
 
-- **[`tasks/followups.md`](followups.md)** — the F1–F9 backlog. Each item has a
-  type tag (bug/feat/polish), code pointers, and the clarification/design call
-  needed. **This is the work queue.**
-- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "2026-06-01 (session 5)" section is
-  the latest snapshot (the perf fix + the UI-polish run + the deferred pacing).
-- **[`tasks/lessons.md`](lessons.md)** — esp. **L-035** (profile per-stage
-  before optimising; code-reading mis-points), **L-033** (agent launches *can*
-  misrender arch-C — verify visuals via the user, not agent screenshots; it
-  didn't bite session 5 but can), **L-030/L-031** (a11y goldens), standing L-022+.
-- `CLAUDE.md` — working principles, plan-mode rules, LT-4 branch flow (FF into
-  `lt-4`, never `master` without explicit OK).
-- **[`tasks/todo.md`](todo.md)** — the DEFERRED arch-C frame-pacing plan (only
-  if the editor is ever seen running hot; idle cost measured low, ~20% of a core).
+## The work (all in shared legacy `src/`, land on lt-4 per the user)
+1. **F1** save-failure data loss — [main.cpp:1466](../src/main.cpp:1466): gate the
+   post-save bookkeeping on `bool ok = SaveParticleSystem(...)`. Audit the host
+   path too ([BridgeDispatcher.cpp:1620](../src/host/BridgeDispatcher.cpp:1620)).
+2. **F2** `ChunkReader::readString()` heap over-read — [ChunkReader.cpp:90](../src/ChunkReader.cpp:90).
+3. **F3** chunk-depth overflow — [ChunkReader.cpp:65](../src/ChunkReader.cpp:65) +
+   [ChunkWriter.cpp:8](../src/ChunkWriter.cpp:8) ([ChunkFile.h:27](../src/ChunkFile.h:27)).
+4. **F4** cyclic/multi-parent loader guard — [ParticleSystem.cpp:1071](../src/ParticleSystem.cpp:1071), new `ValidateEmitterGraph()`.
+5. **F5** uint16 particle-index cap — [EmitterInstance.cpp:133](../src/EmitterInstance.cpp:133) `AllocateParticle()`.
 
-## Suggested first moves (F1–F9)
-
-- **Fast visible wins (CSS):** F2 (center + size the emitter-tree controls like
-  the main toolbar), F3 (LMB-pressed icon state on toolbar buttons), F5 (link
-  brackets closer to the emitter text, v0.2-style).
-- **Bugs:** F4 (**link groups don't actually work** though brackets render —
-  investigate host link-group state vs the React bracket render; pairs with F5),
-  F6 (number-field **drag scrubs the value instead of selecting text** —
-  `Spinner` mousedown, [Spinner.tsx:162](../web/apps/editor/src/primitives/Spinner.tsx:162)).
-- **Features (small design call first):** F7 (wheel-adjust step — legacy=0.1),
-  F8 (curve-editor multi-key = average, adjustable), F9 (Index channel
-  auto-deselects RGBA — extend the existing Scale-exclusivity).
-- **Needs a layout sketch:** F1 (emitter-row icon placement — eye left,
-  lifetime/on-death right for children; exact layout ambiguous).
-
-**Note the natural pairings:** F4+F5 (both in the link-group/bracket code);
-F6+F7 (one "how do number fields respond to mouse" decision).
+Out of scope: audit-F6 (TextureManager/Reset, needs a `--test-host` repro first),
+audit-F7 (already fixed on lt-4). Forward-port to master is the user's later call.
 
 ## Process (per CLAUDE.md — non-negotiable)
+- The plan exists; **summarize your understanding + re-verify the first site before
+  editing**, then proceed item by item (each is independently committable).
+- **Verify natively (L-038):** after building Debug+Release, run
+  `pnpm --filter @particle-editor/editor a11y` — `emitter-mutations`/`bridge-native`
+  must pass; the **4 `splitters` failures are a known agent-window artifact**
+  (L-033), not your change. Round-trip save→load a real `.alo` in the running
+  editor (`x64\Release\ParticleEditor.exe --new-ui`) so F2/F3/F4 don't reject
+  valid files. (Web UI relaunch needs a WebView2 cache clear, L-030; CDP uses
+  127.0.0.1 not localhost, L-034.)
+- When an item lands: update `CHANGELOG.md` (TODO hash placeholder), append any
+  lesson, FF-push to `origin/lt-4` (`git push origin HEAD:lt-4`). **Never `master`
+  without explicit OK.**
 
-- Treat HANDOFF + followups + lessons as primary context, but **verify any
-  important claim against the actual code before acting** (file:line drifts).
-- **Summarize your understanding of the chosen item(s) before changing
-  anything**, and wait for the user to confirm scope. Settle the F1/F7/F8/F9
-  clarifications up front.
-- 3+ step work → plan mode → `tasks/todo.md` (note: it currently holds the
-  deferred pacing plan — archive or work alongside it, don't clobber).
-- Web UI changes: rebuild `dist` + clear the WebView2 cache before relaunch
-  (L-030); they're CSS/DOM — check whether a captured a11y surface changes
-  before regenerating goldens (most inspector changes don't render in goldens).
-- When an item ships: update `CHANGELOG.md` (reverse-chron, date-line + 3
-  sections; `TODO` hash to backfill at master merge), append a `lessons.md` rule
-  after any correction, FF-push to `origin/lt-4` (`git push origin HEAD:lt-4`).
-  **Never `master` without explicit OK.**
-- Native golden/Playwright runs are single-instance + fixed-port (CDP 9222) —
-  run serially (L-031). For CDP use `127.0.0.1`, not `localhost` (L-034).
-
-Before making any changes, summarize your understanding of the project state,
-the chosen follow-up item(s), and your planned approach, and wait for me to
-confirm.
+Before changing anything, summarize your understanding of the project state, the
+chosen fixes, and your approach, and wait for me to confirm.
