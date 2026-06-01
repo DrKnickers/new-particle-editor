@@ -1,15 +1,26 @@
-# Next-session prompt — verify audit-P1 (F1–F5), then master forward-port
+# Next-session prompt — audit-P1 thread is CLOSED (both branches); resume LT-4 roadmap
 
 You're picking up `new-particle-editor` (the **AloParticleEditor** rewrite —
 Win32 + WebView2/React + D3D9Ex-via-DComp particle editor for Star Wars:
 Empire at War), branch **`lt-4`**. Context is in the handoff docs; treat them as
 primary but **verify every important claim against the actual code** before acting
-(file:line refs drift — L-022).
+(file:line refs drift — and "remaining work" can be already-done — L-022).
 
-Last session (7) **shipped the 5 audit-P1 fixes (F1–F5)** on `origin/lt-4`
-(`05f7228..f848c86`), build + a11y verified. **Two things remain**, in order:
-**(1)** a user-driven GUI round-trip that last session couldn't self-run (L-033),
-and **(2)** the master forward-port of F1–F5 (the user's call on timing).
+## Status: audit-P1 is done on both branches
+
+- **lt-4:** F1–F5 shipped session 7 (`05f7228..f848c86`); **GUI round-trip verified
+  PASS** session 8 (user-driven open→save→reload identity, L-033).
+- **master:** F1–F5 + G9 **already shipped 2026-05-24 via PR #89** (`709bd82`,
+  independent master-side implementation). **There is no master forward-port to do** —
+  the session-6/7 handoffs claimed one, but master has carried these for a week
+  (the L-022 trap; see session-8 HANDOFF for the full finding). **Do not cherry-pick
+  F1–F5 to master** — it would duplicate/conflict.
+- **lt-4 ↔ master F1–F5 diverge** (exception type, F4 coverage, F5 gate) — a
+  reconciliation note for the eventual LT-4→master integration, NOT a task now.
+  Details in the session-8 HANDOFF entry.
+
+So: the audit-P1 thread is closed. Resume normal **LT-4 roadmap** work
+(`ROADMAP.md`) or whatever the user directs.
 
 ## Pre-flight (run before touching anything)
 ```
@@ -18,13 +29,16 @@ git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh cla
 git log --oneline origin/lt-4..HEAD | wc -l               # expect 0
 git log --oneline HEAD..origin/lt-4 | wc -l               # expect 0
 git status --porcelain                                     # expect clean
-git rev-parse --short origin/lt-4                          # expect f848c86 (or newer)
 ```
 If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
 ## Baseline
 - From `web/`: `pnpm --filter @particle-editor/editor test` → **384 passed** (44 files).
-- `pnpm --filter @particle-editor/editor build` → clean.
+- `pnpm --filter @particle-editor/editor build` → clean. **This also produces
+  `web/apps/editor/dist/`, which the native `--new-ui` editor serves via the
+  `app.local` virtual-host mapping.** On a fresh worktree you MUST run this before
+  launching `--new-ui`, or the WebView shows `ERR_NAME_NOT_RESOLVED` for `app.local`
+  (the `dist` folder is missing). See **L-040**.
 - Native `.sln` Debug + Release x64 (absolute path; the Debug `LNK4098 LIBCMTD`
   warning is pre-existing/benign):
   `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" "<repo>\ParticleEditor.sln" /p:Configuration=Debug /p:Platform=x64 /nologo /verbosity:minimal /m`
@@ -34,40 +48,24 @@ If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
     See **L-039**. Then build.
 
 ## Primary context (read first, then VERIFY against code)
-- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "session 7" section: what shipped, the
-  five commits, verified state, and the exact NEXT steps.
-- **[`tasks/todo.md`](todo.md)** — the audit-P1 plan + the Review section (per-item
-  commits, scope decisions, verification, the iterative-DFS note).
+- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "session 8" section: the GUI round-trip
+  result, the master-already-has-F1–F5 finding, and the divergence note. Session 7
+  below it: what shipped on lt-4.
 - **[`tasks/post-audit-followups.md`](post-audit-followups.md)** — full finding text.
-  **G9** (`.meg` index OOB, `[both]` P1) is the audit's recommended bundle-mate for
-  the master P1 PR — same untrusted-binary class as F2/F3.
-- **[`tasks/lessons.md`](lessons.md)** — esp. **L-038** (native logic gated by
-  `pnpm a11y`, not vitest+build), **L-033** (agent native launches misrender —
-  verify via the user; the 4 `splitters` a11y failures are this artifact, not a
-  regression), **L-039** (fresh-worktree NuGet restore), **L-023/L-025** (.sln).
+  F1–F5 + G9 are now marked shipped on both branches.
+- **[`tasks/lessons.md`](lessons.md)** — esp. **L-040** (fresh-worktree `--new-ui`
+  needs the React `dist`), **L-038** (native logic gated by `pnpm a11y`, not
+  vitest+build), **L-033** (agent native launches misrender — verify via the user;
+  the 4 `splitters` a11y failures are this artifact), **L-039** (fresh-worktree
+  NuGet restore), **L-022** (handoff "remaining work" is a claim — verify it isn't
+  already done), **L-023/L-025** (.sln).
 - `CLAUDE.md` — working principles, plan-mode, LT-4 branch flow (FF into lt-4).
 
-## The work
-1. **GUI round-trip verification (user-driven, L-033).** In
-   `x64\Release\ParticleEditor.exe --new-ui`: open a real **multi-emitter** `.alo`,
-   **save**, **reload**, confirm it loads identically (F2/F3/F4 don't reject valid
-   data; the a11y fixture load already covers "valid files load" — this confirms the
-   write→reload identity). Optionally force a **save failure** (read-only target) and
-   confirm the dirty asterisk + autosave survive and the close is aborted (**F1**).
-   If a problem surfaces, fix-forward on lt-4 (FF-push).
-2. **Master forward-port of F1–F5** (user decides when). These are `[both]`; cherry-
-   pick / port the five fixes onto `master` and **backfill the CHANGELOG `TODO`
-   hash/PR** at merge. Strongly consider bundling **G9** (`.meg` index validation)
-   into the same PR per the audit's suggested ordering. **Never push `master`
-   without explicit OK.**
-
 ## Process (per CLAUDE.md)
-- Summarize your understanding + confirm scope before doing the forward-port; it's a
-  branch operation with merge implications, so align first.
 - For any native fix: build Debug+Release, run `pnpm --filter @particle-editor/editor
   a11y` (the 4 `splitters` failures are the known L-033 artifact, not yours).
 - When an item lands: update `CHANGELOG.md`, append any lesson, FF-push to the right
   branch. **Never `master` without explicit OK.**
 
-Before changing anything, summarize your understanding of the project state, the
-remaining work, and your approach, and wait for me to confirm.
+Before changing anything, summarize your understanding of the project state and
+your approach, and wait for confirmation.

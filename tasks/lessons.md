@@ -2931,3 +2931,44 @@ F1–F5 fixes failed on the missing WebView2 `.targets`; no `nuget.exe` anywhere
 `packages/Microsoft.Web.WebView2.1.0.3967.48/` restored the build (Debug+Release
 x64 clean) with no tool bootstrap. Cross-reference [L-023](#l-023)/[L-025](#l-025)
 (build the `.sln`, not the `.vcxproj`).
+
+## L-040 — Launching the `--new-ui` editor needs the React `dist` built (`pnpm build`); the native `.sln` build alone serves nothing and the WebView shows `ERR_NAME_NOT_RESOLVED` for `app.local`
+
+**Trigger.** On a fresh worktree (or any checkout where `web/apps/editor/dist/`
+was never produced), launching `x64\Release\ParticleEditor.exe --new-ui` opens a
+WebView2 window showing Edge's *"Hmmm… can't reach this page — app.local's server
+IP address could not be found. ERR_NAME_NOT_RESOLVED."* The native binary started
+fine (device created, shaders loaded — `host.log`/stdout looks healthy); the
+failure is purely that the UI content isn't on disk.
+
+**Why.** The host serves the React app from a **local folder via a virtual-host
+mapping**, not a dev server: production maps `app.local` →
+`web/apps/editor/dist/` (`SetVirtualHostNameToFolderMapping`,
+[HostWindow.cpp:243](../src/host/HostWindow.cpp:243), constant
+`kVirtualHostName = L"app.local"` at :87). When `dist/` is missing, the navigation
+to `https://app.local/index.html` falls through to real DNS, which can't resolve
+`app.local` → `ERR_NAME_NOT_RESOLVED`. The `.sln` build produces the *host*; the
+*content* it serves is a separate Vite build.
+
+**How to apply.** Before launching `--new-ui`, build the web app:
+`pnpm --filter @particle-editor/editor build` (from `web/`). This is the same
+command as the vitest-adjacent baseline build — it emits `dist/index.html` +
+`dist/assets/*`. After it exists, relaunch (a stale instance pointed at the missing
+folder won't recover cleanly — kill and relaunch rather than just Refresh). A
+fully-loaded launch logs the React-side viewport reposition
+(`SetSceneViewport x=335 y=71 …` inside the panel layout) and
+`AcceleratorBridge registered N combo(s)` — absent on a content-less launch.
+
+**Two builds, not one.** A fresh worktree needs BOTH halves to *run* the editor:
+the native `.sln` (host binary, + L-039 NuGet restore) AND `pnpm build` (the
+served `dist`). Native-only changes (e.g. the F1–F5 fixes) compile and pass a11y
+without `dist`, which is why this is easy to forget when the task is native-only —
+but you can't *launch* the GUI without it.
+
+**Source incident (2026-06-01, session 8).** Verifying the audit-P1 GUI round-trip:
+built the `.sln` Release clean, launched `--new-ui`, hit `ERR_NAME_NOT_RESOLVED`
+for `app.local`. Root cause was the un-built `dist` (the session had only done the
+native build, since F1–F5 were native-only). `pnpm --filter
+@particle-editor/editor build` + relaunch fixed it; the editor then loaded fully
+and the round-trip passed. Cross-reference [L-033](#l-033) (agent launches
+misrender — the user drives the actual round-trip).

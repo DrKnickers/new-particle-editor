@@ -1,5 +1,64 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-01 (session 8) — verified audit-P1 GUI round-trip (PASS); discovered the "master forward-port" was already done (PR #89) — no master changes; docs corrected
+
+**`origin/lt-4` → `<push pending>`** (was `76ff471` at session start; docs-only
+commit on top, FF→`lt-4`). Working tree was clean before the docs commit.
+**No `master` changes** (see the forward-port finding below — there was nothing
+to port).
+
+### Item 1 — audit-P1 GUI round-trip: **PASS** (user-driven, L-033)
+Built Release x64 clean (`x64\Release\ParticleEditor.exe`, all F1–F5 TUs
+recompiled) and launched `--new-ui`. User opened a multi-emitter `.alo`, saved,
+reloaded — **identical**. Confirms the write→reload identity the a11y fixture-load
+suite doesn't cover (F2/F3/F4 accept valid data; graph survives the round-trip).
+What I independently corroborated: the fixes are compiled into the run binary
+(verified the code sites in-tree), clean build + clean startup (D3D9Ex device, 14
+shaders, viewport positioned into the React layout), and last session's a11y
+graph-identity goldens. The visual identity itself is the user's confirmation
+(agent launches misrender arch-C — L-033). **Couldn't** pull a runtime file-op log
+post-hoc: this build streams its log to stdout, not a persisted `host.log` for a
+detached instance.
+
+**Fresh-worktree gotcha (→ L-040):** the first `--new-ui` launch showed Edge's
+`ERR_NAME_NOT_RESOLVED` for `app.local`. The host maps `app.local` →
+`web/apps/editor/dist/` ([HostWindow.cpp:243](../src/host/HostWindow.cpp:243));
+on a fresh worktree that folder doesn't exist until `pnpm --filter
+@particle-editor/editor build` runs. The native `.sln` build alone is not enough
+to *launch* the editor — the React `dist` must be built too. Fixed by running the
+web build, then relaunching.
+
+### Item 2 — "master forward-port of F1–F5": **already done; the handoff claim was stale (L-022)**
+Master already carries an **independent** F1–F5 implementation:
+`709bd82` "fix: five correctness bugs surfaced by AI audit (F1-F5)", merged via
+**PR #89** on **2026-05-24** (its own plan `tasks/post-audit-slot1-master-p1s.md`,
+Debug+Release clean). The commit message itself says it "lands separately via
+lt-4 integration" — two parallel implementations were always the intent. **G9**
+(`.meg` index validation) is **identical on both** branches
+([MegaFiles.cpp:70,113](../src/MegaFiles.cpp:70) throw `BadFileException`). So
+master's P1 posture is complete; there was nothing to forward-port, and
+cherry-picking lt-4's commits would have **duplicated/conflicted**. No master
+action taken (user confirmed: correct docs, leave master).
+
+**lt-4 ↔ master F1–F5 divergence — reconcile at LT-4 integration, not now:**
+- **F2/F3 exception:** master `ReadException`; lt-4 `BadFileException`.
+- **F4:** master `validateEmitterGraph()` (ctor-only); lt-4 `ValidateEmitterGraph()`
+  (ctor + the LT-3 import path [main.cpp:7312](../src/main.cpp:7312) — broader,
+  but import is lt-4-only).
+- **F5 gate:** master caps at *capacity ≥ 16384*; lt-4 caps at *index > 16383*.
+  Both prevent the uint16 wrap; different point/site.
+
+These collide when `lt-4` merges to `master`. Recommended resolution then: keep
+**lt-4's** versions (newer, broader F4) and harmonize the exception type. Tracked
+here so the integration session doesn't rediscover it.
+
+### NEXT
+- LT-4 work continues per `ROADMAP.md`; the audit-P1 thread is **closed on both
+  branches**. No outstanding master P1.
+- New lesson **L-040** (fresh-worktree `--new-ui` needs the React `dist` built).
+
+---
+
 ## 2026-06-01 (session 7) — shipped the 5 audit-P1 fixes (F1–F5) on lt-4; NEXT: user GUI round-trip, then master forward-port (user's call)
 
 **`origin/lt-4` → `<push pending>`** (base was `05f7228`; four new commits on

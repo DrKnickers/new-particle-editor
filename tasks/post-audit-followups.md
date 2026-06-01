@@ -28,7 +28,19 @@ future review.
 
 ## P1 — correctness, ship promptly
 
-### F1. `DoSaveFile` clears dirty flag and deletes autosave on save failure — [both] [P1, data-loss]
+> **STATUS (2026-06-01, session 8): F1–F5 + G9 are SHIPPED on BOTH branches.**
+> - **master:** F1–F5 via **PR #89** (`709bd82`, 2026-05-24, independent master-side
+>   impl); G9 present at [MegaFiles.cpp:70,113](src/MegaFiles.cpp:70).
+> - **lt-4:** F1–F5 via session 7 (`9a3e368`/`ede76ce`/`4f43525`/`24edaa2`),
+>   GUI round-trip verified session 8; G9 present (identical to master).
+> - **There is NO master forward-port to do** — master has carried F1–F5 for a week.
+>   Cherry-picking lt-4's commits would duplicate/conflict (L-022 — the old "forward-port
+>   remains" handoff note was stale). The two F1–F5 implementations **diverge** (F2/F3
+>   exception type, F4 coverage, F5 gate — see session-8 HANDOFF); reconcile at the
+>   LT-4→master integration, not before. F6 (lt-4 latent) and F7 (lt-4, closes on merge)
+>   remain as originally noted.
+
+### F1. `DoSaveFile` clears dirty flag and deletes autosave on save failure — [both] [P1, data-loss] — ✅ SHIPPED (master PR #89 · lt-4 `24edaa2`)
 
 **Source:** Audit A finding "Failed saves still clear the dirty flag and mark the undo state as saved"
 
@@ -392,7 +404,7 @@ A fifth audit (ChatGPT deep research, LT-4-focused) ran the same day. Where the 
 
 ---
 
-### G9. `.meg` archive index entries unchecked → OOB read — [both] [P1, memory safety]
+### G9. `.meg` archive index entries unchecked → OOB read — [both] [P1, memory safety] — ✅ SHIPPED (both branches, identical: [MegaFiles.cpp:70,113](src/MegaFiles.cpp:70))
 
 **Source:** ChatGPT deep-research re-run (2026-06-01), finding PAR-002. Net new — not caught by F2–F5 (those cover `.alo`/`ChunkReader`; this is the `.meg` archive path).
 
@@ -516,7 +528,10 @@ Every code-level claim in this re-run was confirmed by reading. Four findings we
 
 ## Suggested ordering
 
-1. **Now (before next public release):** F1, F2, F3, F4, F5, **G9**. All P1 master-side / `[both]` memory-safety + correctness. G9 (`.meg` index validation) is the same untrusted-binary class as F2/F3 and belongs in this PR. Smallest is ~5 LoC, largest is F4 at ~40 LoC. Realistically one focused PR.
+1. ~~**Now (before next public release):** F1, F2, F3, F4, F5, **G9**.~~ ✅ **DONE on both
+   branches** — master via PR #89 (2026-05-24), lt-4 via session 7 + session-8 GUI
+   round-trip. G9 already present on both. No remaining action; the two F1–F5
+   implementations diverge and reconcile at LT-4→master integration (session-8 HANDOFF).
 2. **Stage 4 prerequisite:** F6 (verify-then-fix). Run the smoke repro first.
 3. **Stage 3h (LT-4 sub-stage before Stage 4 starts):** F8.
 4. **First master polish PR after the P1s land:** F12, F13+F14 (bundled), F15, F16. All master-side, all small.
