@@ -16,6 +16,36 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 UI polish] Inspector text readability — promote labels, reserve dimming for disabled params
+
+*2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Inspector field labels ("Bursts", "Burst delay", "Initial spawn delay", …)
+and the collapsible section headers ("EMITTER TIMING", "GENERATION") were
+rendered in the dim secondary token and read poorly at 12px. They now use the
+primary text colour, matching the field values and curve names. Dimming is
+re-purposed to mean **disabled**: a param whose generation mode isn't selected
+(e.g. the Continuous-stream / Weather spinners while Bursts is active) now dims
+its label, and the dim follows live as you switch modes.
+
+**How we tackled it.** Three CSS edits in
+[`components.css`](web/apps/editor/src/styles/components.css): `.form-row` /
+`.form-row .lbl` and `.panel-section-header` move from `--text-2` to `--text`;
+a new `.form-row:has(:disabled) .lbl { color: var(--text-2) }` re-introduces the
+dim for disabled rows. The `:has()` rule reads the *native* `disabled` state
+already present on the Spinner's `<input>` (and Radix checkbox/select controls),
+so the label dimming tracks the real enabled/disabled state with **zero React
+changes** — toggling a mode re-dims the correct rows automatically. `:has()` is
+supported in the WebView2 Chromium runtime.
+
+**Issues encountered and resolutions.** Establishes a clear two-state
+convention for inspector labels (primary = enabled, secondary = disabled),
+replacing the prior "secondary = label chrome" usage that made everything read
+dim. CSS-only: vitest (371) and a11y goldens (CSS-independent ARIA snapshots)
+unaffected.
+
+---
+
 ### [LT-4 UI polish] Rebase Tailwind `text-sm` to the 12px body convention
 
 *2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

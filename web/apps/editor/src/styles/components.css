@@ -478,7 +478,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: var(--text-2);
+  color: var(--text);
   cursor: pointer;
   user-select: none;
   outline: none;
@@ -538,10 +538,21 @@
   gap: 8px;
   padding: 3px 0;
   font-size: 12px;
-  color: var(--text-2);
+  /* Field labels use the primary text token for readability — the dim
+     --text-2 was hard to read at 12px (esp. "Bursts" / "Burst delay" and
+     the rest of the inspector). Values live in bordered inputs, so the
+     label/value distinction survives without dimming the label. */
+  color: var(--text);
 }
-.form-row .lbl { color: var(--text-2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.form-row .lbl { color: var(--text); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .form-row .unit { color: var(--text-3); font-size: 11px; overflow: visible; min-width: 0; }
+/* Disabled params dim their label — the dim token now signals "disabled",
+   not "secondary label". Mode-gated rows (e.g. the Continuous-stream and
+   Weather spinners when that mode isn't selected, or any checkbox/select
+   passed disabled) carry a native :disabled control, so :has() catches
+   them without touching the markup (:has() is supported in the WebView2
+   Chromium runtime). Enabled labels stay at the readable --text above. */
+.form-row:has(:disabled) .lbl { color: var(--text-2); }
 
 /* Basic-tab-scoped default: every plain .form-row inside .basic-tab
    picks up a wider input column (73 px, +25 % over the standard 58 px)
