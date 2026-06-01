@@ -65,4 +65,43 @@ describe("LinkGroupSettingsDialog", () => {
       params: { groupId: 1, fields: [] },
     });
   });
+
+  it("groups fields into categories with a per-category 'share all' toggle", async () => {
+    const bridge = makeStubBridge();
+    await act(async () => {
+      useTreeContextStore.getState().openDialog("link-group", 0, 1);
+    });
+    render(<LinkGroupSettingsDialog bridge={bridge} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Curves")).toBeTruthy();
+    });
+
+    // The four category headers render (Weather folded into Appearance).
+    for (const cat of ["Curves", "Basic", "Appearance", "Physics"]) {
+      expect(screen.getByText(cat)).toBeTruthy();
+    }
+
+    // Fixture exempts trackIndex (atlas) but not the color curves, so the
+    // Curves category is MIXED → its header toggle reads unchecked.
+    const atlas = screen.getByLabelText("Atlas index curve") as HTMLInputElement;
+    const red = screen.getByLabelText("Red curve") as HTMLInputElement;
+    expect(atlas.checked).toBe(false);
+    expect(red.checked).toBe(true);
+    const shareCurves = screen.getByLabelText("Share all Curves") as HTMLInputElement;
+    expect(shareCurves.checked).toBe(false);
+
+    // Clicking it shares the whole category — atlas becomes shared.
+    fireEvent.click(shareCurves);
+    expect(atlas.checked).toBe(true);
+
+    // OK commits an exempt set that no longer contains trackIndex.
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    const call = bridge.request.mock.calls.find(
+      (c) => (c[0] as { kind: string }).kind === "linkGroups/set-exempt-fields",
+    );
+    const committed = (call![0] as { params: { fields: string[] } }).params.fields;
+    expect(committed).not.toContain("trackIndex");
+    expect(committed).toContain("colorTexture");
+  });
 });

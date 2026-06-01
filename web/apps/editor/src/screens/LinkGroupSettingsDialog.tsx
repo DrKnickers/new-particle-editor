@@ -25,7 +25,8 @@
 // Driven by the `tree-context` atom with `targetLinkGroupId` carrying
 // the group ID.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { Modal } from "@/components/Modal";
 import { useTreeContextStore } from "@/lib/tree-context";
@@ -90,30 +91,135 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   groupPosition:           "Position params (random box)",
 };
 
-// Canonical column order — matches the legacy table's grouping. Fields
-// returned by the host that aren't in this list get appended at the
-// end (forward-compat with field additions).
-const FIELD_ORDER: readonly string[] = [
-  "colorTexture", "normalTexture",
-  "trackIndex", "trackRed", "trackGreen", "trackBlue",
-  "trackAlpha", "trackScale", "trackRotationSpeed",
-  "lifetime", "initialDelay", "burstDelay", "nBursts",
-  "nParticlesPerBurst", "nParticlesPerSecond", "useBursts",
-  "gravity", "acceleration", "inwardSpeed", "inwardAcceleration",
-  "bounciness", "groundBehavior", "objectSpaceAcceleration",
-  "affectedByWind",
-  "blendMode", "textureSize", "nTriangles", "randomScalePerc",
-  "randomLifetimePerc", "hasTail", "tailSize", "noDepthTest",
-  "randomColors",
-  "isWeatherParticle", "weatherCubeSize", "weatherCubeDistance",
-  "weatherFadeoutDistance",
-  "randomRotation", "randomRotationDirection",
-  "randomRotationAverage", "randomRotationVariance",
-  "linkToSystem", "parentLinkStrength", "doColorAddGrayscale",
-  "isHeatParticle", "isWorldOriented", "freezeTime", "skipTime",
-  "emitFromMesh", "emitFromMeshOffset",
-  "groupSpeed", "groupLifetime", "groupPosition",
+// Field organization — groups the flag set into categories that mirror
+// the editor's own structure (the Curves editor + the Basic / Appearance
+// / Physics inspector tabs) so a user finds a param where they'd edit it.
+// Weather is folded into Appearance. The union of these lists is the full
+// known field universe; any host field not listed here drops into an
+// "Other" section at render time (forward-compat with field additions).
+type FieldCategory = { id: string; label: string; fields: readonly string[] };
+const FIELD_CATEGORIES: readonly FieldCategory[] = [
+  {
+    id: "curves",
+    label: "Curves",
+    fields: [
+      "trackRed", "trackGreen", "trackBlue", "trackAlpha",
+      "trackScale", "trackRotationSpeed", "trackIndex",
+    ],
+  },
+  {
+    id: "basic",
+    label: "Basic",
+    fields: [
+      "lifetime", "initialDelay", "randomLifetimePerc",
+      "useBursts", "nBursts", "burstDelay",
+      "nParticlesPerBurst", "nParticlesPerSecond",
+      "emitFromMesh", "emitFromMeshOffset", "groupLifetime",
+      "linkToSystem", "parentLinkStrength",
+    ],
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    fields: [
+      "colorTexture", "normalTexture",
+      "blendMode", "textureSize", "nTriangles", "randomScalePerc",
+      "noDepthTest", "isWorldOriented", "isHeatParticle",
+      "hasTail", "tailSize",
+      "randomColors", "doColorAddGrayscale",
+      "randomRotation", "randomRotationDirection",
+      "randomRotationAverage", "randomRotationVariance",
+      "isWeatherParticle", "weatherCubeSize",
+      "weatherCubeDistance", "weatherFadeoutDistance",
+    ],
+  },
+  {
+    id: "physics",
+    label: "Physics",
+    fields: [
+      "gravity", "acceleration", "inwardSpeed", "inwardAcceleration",
+      "objectSpaceAcceleration", "affectedByWind",
+      "bounciness", "groundBehavior",
+      "groupSpeed", "groupPosition",
+      "freezeTime", "skipTime",
+    ],
+  },
 ];
+
+// One collapsible category: a header band (collapse chevron + label +
+// tri-state "share all" checkbox) over the per-field checkboxes. The
+// header checkbox reads indeterminate when the category is mixed.
+function CategorySection({
+  label,
+  fields,
+  exempt,
+  collapsed,
+  onToggleCollapse,
+  onToggleField,
+  onToggleCategory,
+}: {
+  label: string;
+  fields: readonly string[];
+  exempt: Set<string>;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onToggleField: (field: string, sharedNext: boolean) => void;
+  onToggleCategory: (fields: readonly string[], sharedNext: boolean) => void;
+}) {
+  const sharedCount = fields.reduce((n, f) => n + (exempt.has(f) ? 0 : 1), 0);
+  const allShared = sharedCount === fields.length;
+  const noneShared = sharedCount === 0;
+  const catRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (catRef.current) catRef.current.indeterminate = !allShared && !noneShared;
+  }, [allShared, noneShared]);
+  const Chevron = collapsed ? ChevronRight : ChevronDown;
+  return (
+    <div className="mb-1">
+      <div className="flex items-center gap-2 rounded bg-bg-2 px-2 py-1">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!collapsed}
+          className="flex flex-1 items-center gap-1 text-left outline-none"
+        >
+          <Chevron className="size-3.5 text-text-3" aria-hidden="true" />
+          <span className="text-xs font-medium text-text">{label}</span>
+          <span className="text-[10px] text-text-3">
+            {sharedCount}/{fields.length} shared
+          </span>
+        </button>
+        <input
+          ref={catRef}
+          type="checkbox"
+          checked={allShared}
+          aria-label={`Share all ${label}`}
+          onChange={(e) => onToggleCategory(fields, e.target.checked)}
+        />
+      </div>
+      {!collapsed && (
+        <div className="pl-4">
+          {fields.map((field) => (
+            <label
+              key={field}
+              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-panel-2"
+            >
+              <input
+                type="checkbox"
+                data-field={field}
+                checked={!exempt.has(field)}
+                onChange={(e) => onToggleField(field, e.target.checked)}
+              />
+              <span className="text-xs text-text">
+                {FIELD_LABELS[field] ?? field}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 type Props = {
   bridge: Bridge;
@@ -130,6 +236,8 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
   const close = useTreeContextStore((s) => s.close);
 
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  // Collapsed category ids. Empty = all expanded (the default).
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   // Fetch the current exempt set when the dialog opens. Each open is a
   // fresh fetch so external edits (legacy --legacy-ui session writing
@@ -170,6 +278,28 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
     });
   };
 
+  // Flip every field in a category at once (the header tri-state toggle).
+  const setCategoryShared = (fields: readonly string[], shared: boolean) => {
+    setState((cur) => {
+      if (cur.kind !== "loaded") return cur;
+      const next = new Set(cur.exempt);
+      for (const f of fields) {
+        if (shared) next.delete(f);
+        else next.add(f);
+      }
+      return { kind: "loaded", exempt: next };
+    });
+  };
+
+  const toggleCollapse = (id: string) => {
+    setCollapsed((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const resetAll = () => {
     setState((cur) => {
       if (cur.kind !== "loaded") return cur;
@@ -190,14 +320,15 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
     close();
   };
 
-  // Build the rendered field list. Canonical order first, then any
-  // unrecognised field names appended at the bottom (forward-compat).
-  const fieldList: string[] =
+  // Host fields not covered by any category (forward-compat) → "Other".
+  const otherFields: string[] =
     state.kind === "loaded"
-      ? [
-          ...FIELD_ORDER,
-          ...Array.from(state.exempt).filter((f) => !FIELD_ORDER.includes(f)),
-        ]
+      ? (() => {
+          const categorized = new Set(
+            FIELD_CATEGORIES.flatMap((c) => c.fields),
+          );
+          return Array.from(state.exempt).filter((f) => !categorized.has(f));
+        })()
       : [];
 
   return (
@@ -225,26 +356,30 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
               edits propagate to every member. Unchecked fields are{" "}
               <em>per-emitter</em>.
             </p>
-            <div className="max-h-[40vh] overflow-y-auto">
-              {fieldList.map((field) => {
-                const shared = !state.exempt.has(field);
-                return (
-                  <label
-                    key={field}
-                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-panel-2"
-                  >
-                    <input
-                      type="checkbox"
-                      data-field={field}
-                      checked={shared}
-                      onChange={(e) => toggleField(field, e.target.checked)}
-                    />
-                    <span className="text-xs text-text">
-                      {FIELD_LABELS[field] ?? field}
-                    </span>
-                  </label>
-                );
-              })}
+            <div className="link-settings-scroll max-h-[40vh] overflow-y-auto pr-1">
+              {FIELD_CATEGORIES.map((cat) => (
+                <CategorySection
+                  key={cat.id}
+                  label={cat.label}
+                  fields={cat.fields}
+                  exempt={state.exempt}
+                  collapsed={collapsed.has(cat.id)}
+                  onToggleCollapse={() => toggleCollapse(cat.id)}
+                  onToggleField={toggleField}
+                  onToggleCategory={setCategoryShared}
+                />
+              ))}
+              {otherFields.length > 0 && (
+                <CategorySection
+                  label="Other"
+                  fields={otherFields}
+                  exempt={state.exempt}
+                  collapsed={collapsed.has("other")}
+                  onToggleCollapse={() => toggleCollapse("other")}
+                  onToggleField={toggleField}
+                  onToggleCategory={setCategoryShared}
+                />
+              )}
             </div>
           </div>
         )}
