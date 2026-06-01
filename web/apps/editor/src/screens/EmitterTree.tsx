@@ -739,14 +739,6 @@ function EmitterRow({
             <ContextMenu.Item onSelect={handleRescale} className={menuItemClass}>
               Rescale Emitter…
             </ContextMenu.Item>
-            <ContextMenu.Separator className={separatorClass} />
-            <ContextMenu.Item
-              onSelect={handleLinkGroupSettings}
-              disabled={!isLinked}
-              className={menuItemClass}
-            >
-              Link Group Settings…
-            </ContextMenu.Item>
             {/* ─── Batch B2 additions ───────────────────────────── */}
             <ContextMenu.Separator className={separatorClass} />
             <ContextMenu.Item
@@ -792,6 +784,13 @@ function EmitterRow({
             >
               Leave Link Group
             </ContextMenu.Item>
+            <ContextMenu.Item
+              onSelect={handleLinkGroupSettings}
+              disabled={!isLinked}
+              className={menuItemClass}
+            >
+              Link Group Settings…
+            </ContextMenu.Item>
           </OccludingContextMenuContent>
         </ContextMenu.Portal>
       </ContextMenu.Root>
@@ -808,6 +807,11 @@ const ROW_HEIGHT_PX     = 24;
 const LANE_WIDTH_PX     = 10;  // 2px bracket + 8px gap to next lane
 const GUTTER_LEFT_PAD_PX = 4;
 const GUTTER_MIN_PX     = 4;   // when no link groups exist (constant minimum to avoid layout shift)
+// F5: small fixed gap between the rows and the bracket gutter. The gutter
+// is now a real flex column (reserves its own width), so the old
+// `marginRight: gutterPx` was redundant double-spacing that pushed the
+// brackets ~18px off the names. A 2px gap hugs the rows like legacy 0.2.
+const GUTTER_GAP_PX     = 2;
 
 // ─── Panel-header toolbar ────────────────────────────────────────────
 // FD10 (Group A polish): restore the legacy panel toolbar from
@@ -817,8 +821,11 @@ const GUTTER_MIN_PX     = 4;   // when no link groups exist (constant minimum to
 // All four buttons here use bridge calls that already exist in the
 // schema — no host-side work needed.
 
+// F2: 28px square to match the main toolbar's `.tb-btn`. F3: `:active`
+// pressed state (lighter bg + slight scale) via Tailwind `active:`,
+// suppressed while disabled.
 const TOOLBAR_BTN =
-  "flex h-6 w-6 items-center justify-center rounded text-text-2 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent outline-none";
+  "flex h-7 w-7 items-center justify-center rounded text-text-2 transition hover:bg-panel-2 hover:text-text active:bg-panel-3 active:scale-95 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent disabled:active:scale-100 outline-none";
 
 const NEW_EMITTER_MENU_ITEM =
   "flex select-none items-center gap-2 rounded px-2 py-1 text-xs text-text hover:bg-panel-2 focus:bg-panel-2 outline-none cursor-pointer data-[disabled]:text-text-3 data-[disabled]:cursor-not-allowed data-[disabled]:hover:bg-transparent";
@@ -1355,7 +1362,7 @@ export function EmitterTree({ bridge }: Props) {
             role="tree"
             aria-label="Emitters"
             className="m-0 flex-1 list-none p-0"
-            style={{ marginRight: gutterPx }}
+            style={{ marginRight: GUTTER_GAP_PX }}
           >
           {flatRows.map((row) => (
             <EmitterRow

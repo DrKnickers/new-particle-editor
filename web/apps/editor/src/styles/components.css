@@ -160,6 +160,10 @@
   color: var(--accent);
 }
 .tb-btn.playing { color: var(--success); }
+/* F3: pressed (LMB-down) feedback — lighter bg + slight scale, distinct
+   from the accent-soft toggled state. Wins during the press because it's
+   declared last; skipped while disabled. */
+.tb-btn:active:not(:disabled) { background: var(--panel-3); transform: scale(0.96); }
 .tb-btn .ic { color: inherit; opacity: 0.9; }
 .tb-btn .ic svg { display: block; }
 
@@ -324,6 +328,7 @@
   cursor: pointer;
 }
 .panel-header .icon-btn:hover { background: var(--hover); color: var(--text); }
+.panel-header .icon-btn:active { background: var(--panel-3); transform: scale(0.96); } /* F3 */
 
 .panel-body {
   flex: 1;
@@ -413,8 +418,9 @@
 
 .tree-actions {
   display: flex;
+  justify-content: center; /* F2: center the group so it stays balanced on pane resize */
+  gap: 2px;                /* F2: match the main toolbar's compact icon spacing */
   padding: 4px 8px;
-  gap: 1px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background: var(--panel);
