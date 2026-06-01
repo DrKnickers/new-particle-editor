@@ -68,9 +68,11 @@ import { Spinner } from "@/primitives/Spinner";
 // Display order is grouped: the colour channels (R / G / B / A) sit
 // at the top, and the transform-y channels (Scale / Index / Rotation)
 // sit below, separated by a horizontal divider rendered in the
-// list. Within the transform group, Scale is exclusive — enabling
-// it hides everything else (see `handleRowClick` + the checkbox
-// onChange handler).
+// list. Within the transform group, Scale and Index are exclusive —
+// enabling either hides everything else (see `EXCLUSIVE_CHANNELS`,
+// `handleRowClick`, and the checkbox onChange handler). The Index
+// atlas sub-frame is read on its own integer scale, like Scale, so
+// it's not meaningful to overlay it with the colour curves (F9).
 export const CHANNELS: readonly ChannelDef[] = [
   { id: "red",      label: "Red",      color: "var(--x-axis)",  defaultOn: true,  trackName: "red" },
   { id: "green",    label: "Green",    color: "var(--y-axis)",  defaultOn: true,  trackName: "green" },
@@ -80,6 +82,12 @@ export const CHANNELS: readonly ChannelDef[] = [
   { id: "index",    label: "Index",    color: "var(--text)",    defaultOn: false, trackName: "index" },
   { id: "rotation", label: "Rotation", color: "var(--accent)",  defaultOn: false, trackName: "rotationSpeed" },
 ] as const;
+
+// Channels that are mutually exclusive with all others: turning one on
+// (via row click or checkbox) hides every other channel ("solo mode"),
+// and selecting any non-exclusive curve exits solo. F9 added Index to
+// the set that previously held only Scale.
+const EXCLUSIVE_CHANNELS: ReadonlySet<string> = new Set(["scale", "index"]);
 
 /** DOM tag names that own their own keyboard handling. Delete events
  *  originating inside these MUST NOT be intercepted — typing Delete in
@@ -493,15 +501,15 @@ export function CurveEditorPanel({ bridge }: Props) {
     return new Set<number>([ks[0]!.time, ks[ks.length - 1]!.time]);
   }, [focusedTrack]);
 
-  // Scale is the only exclusive channel: turning it on hides every
-  // other channel ("Scale solo mode"). Selecting a different curve
-  // via row click exits solo by hiding Scale and showing the target.
-  // Checkbox toggles on non-Scale channels do NOT exit solo — the
-  // checkbox is granular control; the user can manually keep Scale
-  // alongside other channels if they want unified-range comparison.
-  const enableScaleExclusively = useCallback(() => {
+  // Solo an exclusive channel (Scale or Index): turning it on hides
+  // every other channel. Selecting a different curve via row click
+  // exits solo by hiding the exclusive one(s) and showing the target.
+  // Checkbox toggles on non-exclusive channels do NOT exit solo — the
+  // checkbox is granular control; the user can manually keep an
+  // exclusive channel alongside others for unified-range comparison.
+  const enableExclusively = useCallback((soloId: string) => {
     const next: Record<string, boolean> = {};
-    for (const ch of CHANNELS) next[ch.id] = ch.id === "scale";
+    for (const ch of CHANNELS) next[ch.id] = ch.id === soloId;
     setVisible(next);
   }, []);
 
@@ -516,15 +524,21 @@ export function CurveEditorPanel({ bridge }: Props) {
       return id;
     });
     setVisible((v) => {
-      if (id === "scale" && !v[id]) {
-        // Off→on Scale row click enters solo mode.
+      if (EXCLUSIVE_CHANNELS.has(id) && !v[id]) {
+        // Off→on click on an exclusive channel (Scale/Index) enters solo.
         const next: Record<string, boolean> = {};
-        for (const ch of CHANNELS) next[ch.id] = ch.id === "scale";
+        for (const ch of CHANNELS) next[ch.id] = ch.id === id;
         return next;
       }
-      if (id !== "scale" && v.scale) {
-        // Selecting any other curve exits solo: hide Scale, show target.
-        return { ...v, scale: false, [id]: true };
+      if (!EXCLUSIVE_CHANNELS.has(id)) {
+        const soloOn = [...EXCLUSIVE_CHANNELS].some((e) => v[e]);
+        if (soloOn) {
+          // Selecting a non-exclusive curve exits solo: hide every
+          // exclusive channel, show the target.
+          const next = { ...v, [id]: true };
+          for (const e of EXCLUSIVE_CHANNELS) next[e] = false;
+          return next;
+        }
       }
       return v[id] ? v : { ...v, [id]: true };
     });
@@ -735,13 +749,124 @@ export function CurveEditorPanel({ bridge }: Props) {
     };
   }, [liveDrag, selectedKeyTimes, focusedTrack, borderKeyTimes, optimisticSelected]);
 
-  const spinnersDisabled = singleSelected === null || selectedId === null;
-  const timeSpinnerDisabled = spinnersDisabled || (singleSelected?.isBorder ?? false);
+  // F8: multi-key selection (>1) shows the AVERAGE time/value of the
+  // selected keys; editing shifts the whole group by the delta
+  // (preserve spread). Mirrors legacy TrackEditor.cpp / CurveEditor.cpp
+  // CurveEditor_MoveSelection: the average is over ALL selected keys
+  // (borders included), Time is editable as long as ≥1 interior
+  // (non-border) key is selected, and a Time shift moves only the
+  // interior keys (borders are pinned in time but DO shift in value).
+  const multiSelected = useMemo<
+    { keys: { time: number; value: number }[]; avgTime: number; avgValue: number; editable: boolean } | null
+  >(() => {
+    if (selectedKeyTimes.size <= 1 || focusedTrack === null) return null;
+    const keys = focusedTrack.keys.filter((k) => selectedKeyTimes.has(k.time));
+    if (keys.length <= 1) return null;
+    let st = 0;
+    let sv = 0;
+    let anyInterior = false;
+    for (const k of keys) {
+      st += k.time;
+      sv += k.value;
+      if (!borderKeyTimes.has(k.time)) anyInterior = true;
+    }
+    return { keys, avgTime: st / keys.length, avgValue: sv / keys.length, editable: anyInterior };
+  }, [selectedKeyTimes, focusedTrack, borderKeyTimes]);
+
+  // Apply a (dTime, dValue) shift to every selected key. Borders are
+  // pinned in time (value still shifts); interior keys clamp to stay
+  // strictly inside the endpoints (legacy eps = range/10000). Values
+  // clamp to the channel's engine bounds. The bridge has no batch move,
+  // so we issue ordered single-key set-track-key calls — descending
+  // oldTime for a rightward shift, ascending for leftward — so each
+  // find(oldTime) on the host's multiset never resolves to a key a
+  // prior move just parked there.
+  const applyGroupShift = useCallback(
+    (dTime: number, dValue: number) => {
+      if (selectedId === null || focusedTrack === null) return;
+      const keys = focusedTrack.keys;
+      if (keys.length === 0) return;
+      const firstTime = keys[0]!.time;
+      const lastTime = keys[keys.length - 1]!.time;
+      const eps = (lastTime - firstTime) / 10000 || 1e-4;
+      const sb = spinnerBoundsForTrack(focusedChannel.trackName);
+      const sel = keys.filter((k) => selectedKeyTimes.has(k.time));
+      const moves = sel.map((k) => {
+        const isBorder = borderKeyTimes.has(k.time);
+        let nt = isBorder ? k.time : k.time + dTime;
+        if (!isBorder) nt = Math.min(lastTime - eps, Math.max(firstTime + eps, nt));
+        const nv = Math.min(sb.max, Math.max(sb.min, k.value + dValue));
+        return { oldTime: k.time, wireTime: nt, engineTime: Math.fround(nt), newValue: nv };
+      });
+      // Optimistic overlay (same idiom as handleKeyDragEnd).
+      const moveMap = new Map(moves.map((m) => [m.oldTime, m]));
+      setTracks((prev) =>
+        prev === null
+          ? prev
+          : prev.map((t) =>
+              t.name !== focusedChannel.trackName
+                ? t
+                : {
+                    ...t,
+                    keys: t.keys
+                      .map((k) => {
+                        const m = moveMap.get(k.time);
+                        return m ? { time: m.engineTime, value: m.newValue } : k;
+                      })
+                      .sort((a, b) => a.time - b.time),
+                  },
+            ),
+      );
+      setSelectedKeyTimes(new Set(moves.map((m) => m.engineTime)));
+      setOptimisticSelected(null);
+      const ordered = [...moves].sort((a, b) =>
+        dTime > 0 ? b.oldTime - a.oldTime : a.oldTime - b.oldTime,
+      );
+      for (const m of ordered) {
+        void bridge
+          .request({
+            kind: "emitters/set-track-key",
+            params: {
+              id: selectedId,
+              track: focusedChannel.trackName,
+              oldTime: m.oldTime,
+              newTime: m.wireTime,
+              newValue: m.newValue,
+            },
+          })
+          .catch(() => { /* silent — re-fetch on tree/changed */ });
+      }
+    },
+    [bridge, selectedId, focusedTrack, focusedChannel.trackName, selectedKeyTimes, borderKeyTimes],
+  );
+
+  // Spinner display values + enablement. Single-key wins; otherwise the
+  // multi-key average. Time is disabled for a border single-key, and in
+  // multi-select when no interior key is selected (all-borders).
+  const spinnerTimeValue = singleSelected?.time ?? multiSelected?.avgTime ?? 0;
+  const spinnerValueValue = singleSelected?.value ?? multiSelected?.avgValue ?? 0;
+  const spinnersDisabled =
+    selectedId === null || (singleSelected === null && multiSelected === null);
+  const timeSpinnerDisabled =
+    spinnersDisabled ||
+    (singleSelected !== null
+      ? singleSelected.isBorder
+      : multiSelected !== null
+        ? !multiSelected.editable
+        : true);
 
   const handleTimeSpinner = useCallback(
     (nextTime: number) => {
-      if (singleSelected === null) return;
       if (selectedId === null || focusedTrack === null) return;
+      // F8: multi-key → shift the group's times by (new avg − old avg).
+      if (multiSelected !== null) {
+        if (!multiSelected.editable) return;
+        const dTime = nextTime - multiSelected.avgTime;
+        if (dTime === 0) return;
+        applyGroupShift(dTime, 0);
+        return;
+      }
+      if (singleSelected === null) return;
       if (singleSelected.isBorder) return;
       if (nextTime === singleSelected.time) return;
       const oldTime = singleSelected.time;
@@ -768,13 +893,20 @@ export function CurveEditorPanel({ bridge }: Props) {
         },
       }).catch(() => { /* silent */ });
     },
-    [singleSelected, bridge, selectedId, focusedChannel.trackName, focusedTrack],
+    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusedChannel.trackName, focusedTrack],
   );
 
   const handleValueSpinner = useCallback(
     (nextValue: number) => {
-      if (singleSelected === null) return;
       if (selectedId === null) return;
+      // F8: multi-key → shift the group's values by (new avg − old avg).
+      if (multiSelected !== null) {
+        const dValue = nextValue - multiSelected.avgValue;
+        if (dValue === 0) return;
+        applyGroupShift(0, dValue);
+        return;
+      }
+      if (singleSelected === null) return;
       if (nextValue === singleSelected.value) return;
       // No clamp to the *display* range — that range is derived from
       // current keys and we want it to GROW when the user inputs a
@@ -792,7 +924,7 @@ export function CurveEditorPanel({ bridge }: Props) {
         },
       }).catch(() => { /* silent */ });
     },
-    [singleSelected, bridge, selectedId, focusedChannel.trackName],
+    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusedChannel.trackName],
   );
 
   // ── Delete keyboard handler (window-scoped, TYPING_TAGS guard) ────
@@ -1027,16 +1159,18 @@ export function CurveEditorPanel({ bridge }: Props) {
           <div className="flex-1" />
 
           {/* Time / Value spinners — populated from the focus channel's
-              currently selected key. Disabled when 0 or 2+ keys are
-              selected. Border keys disable the Time spinner (value-only
-              edit). The Spinner `key` binds to track + selected time so
-              the input remounts when selection changes. */}
+              selected key, or the AVERAGE of the selected keys when >1 is
+              selected (F8). Disabled when nothing is selected. A border
+              single-key disables Time (value-only edit); a multi-select of
+              all-border keys does the same. The Spinner `key` binds to
+              track + selection size + displayed value so the input
+              remounts when the selection or its committed value changes. */}
           <label className="text-xs text-text-2" htmlFor="ce-spinner-time">Time:&nbsp;</label>
           <div className="w-16" data-testid="ce-spinner-time-wrapper">
             <Spinner
-              key={`time:${focusedChannel.trackName}:${singleSelected?.time ?? "none"}`}
+              key={`time:${focusedChannel.trackName}:${selectedKeyTimes.size}:${spinnerTimeValue}`}
               aria-label="Selected key time"
-              value={singleSelected?.time ?? 0}
+              value={spinnerTimeValue}
               onChange={handleTimeSpinner}
               min={0}
               max={100}
@@ -1052,9 +1186,9 @@ export function CurveEditorPanel({ bridge }: Props) {
               const sb = spinnerBoundsForTrack(focusedChannel.trackName);
               return (
                 <Spinner
-                  key={`value:${focusedChannel.trackName}:${singleSelected?.time ?? "none"}:${singleSelected?.value ?? "none"}`}
+                  key={`value:${focusedChannel.trackName}:${selectedKeyTimes.size}:${spinnerValueValue}`}
                   aria-label="Selected key value"
-                  value={singleSelected?.value ?? 0}
+                  value={spinnerValueValue}
                   onChange={handleValueSpinner}
                   min={sb.min}
                   max={sb.max}
@@ -1105,8 +1239,8 @@ export function CurveEditorPanel({ bridge }: Props) {
                     type="checkbox"
                     checked={isOn}
                     onChange={(e) => {
-                      if (c.id === "scale" && e.target.checked) {
-                        enableScaleExclusively();
+                      if (EXCLUSIVE_CHANNELS.has(c.id) && e.target.checked) {
+                        enableExclusively(c.id);
                       } else {
                         setVisible((v) => ({ ...v, [c.id]: e.target.checked }));
                       }

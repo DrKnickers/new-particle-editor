@@ -267,6 +267,68 @@ describe("CurveEditorPanel", () => {
     ).toBe(true);
   });
 
+  // F9: Index is exclusive too — enabling it hides every other channel.
+  it("enabling Index via its checkbox hides every other channel (index-exclusive)", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("curve-channel-checkbox-index"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(true);
+    for (const id of ["red", "green", "blue", "alpha", "scale", "rotation"]) {
+      expect(
+        (screen.getByTestId(`curve-channel-checkbox-${id}`) as HTMLInputElement).checked,
+      ).toBe(false);
+    }
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-index")).toBeInTheDocument();
+    });
+  });
+
+  // F9: the two exclusive channels replace each other — clicking Index
+  // while Scale is solo turns Scale off and Index on.
+  it("clicking Index while Scale is solo swaps solo to Index", () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    fireEvent.click(screen.getByTestId("curve-channel-row-scale"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-scale") as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("curve-channel-row-index"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-scale") as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      screen.getByTestId("curve-editor-panel").dataset.focusChannel,
+    ).toBe("index");
+  });
+
+  // F9: selecting a non-exclusive curve exits Index solo.
+  it("clicking a non-Index row while Index is solo exits solo", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("curve-channel-row-index"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-green") as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
   // ── Hybrid focus-channel restoration ─────────────────────────────
 
   describe("focus channel", () => {
@@ -726,3 +788,141 @@ function makeStubBridgeWithFocusInteriorKey(initialSelectedId: number) {
   };
   return { bridge };
 }
+
+/** Bridge whose `scale` track has THREE interior keys (25/50/75) plus
+ *  the two borders (0/100), so F8 multi-key average specs have a real
+ *  group to act on. */
+function makeStubBridgeMultiInterior(initialSelectedId: number) {
+  const listeners: SelectionListener[] = [];
+  const tracks: TrackDto[] = TRACK_NAMES.map((name) => ({
+    name,
+    keys: name === "scale"
+      ? [
+          { time: 0,   value: 0 },
+          { time: 25,  value: 20 },
+          { time: 50,  value: 40 },
+          { time: 75,  value: 60 },
+          { time: 100, value: 80 },
+        ]
+      : [
+          { time: 0,   value: 0 },
+          { time: 100, value: name === "rotationSpeed" ? -1 : 1 },
+        ],
+    interpolation: "linear",
+    lockedTo: null,
+  }));
+  const bridge = {
+    request: vi.fn().mockImplementation((req: { kind: string }) => {
+      if (req.kind === "engine/state/snapshot") {
+        return Promise.resolve({
+          ...makeDefaultEngineState(),
+          selectedEmitterId: initialSelectedId,
+        });
+      }
+      if (req.kind === "emitters/get-tracks") {
+        return Promise.resolve({ tracks });
+      }
+      return Promise.resolve({});
+    }),
+    on: vi.fn().mockImplementation((kind: string, h: SelectionListener) => {
+      if (kind === "emitters/selected") listeners.push(h);
+      return () => {
+        const idx = listeners.indexOf(h);
+        if (idx >= 0) listeners.splice(idx, 1);
+      };
+    }),
+  } as unknown as Bridge & {
+    request: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+  };
+  return { bridge };
+}
+
+// F8: multi-key average edit (shift-by-delta / preserve spread).
+describe("CurveEditorPanel — F8 multi-key average edit", () => {
+  /** Click a focus-channel key by its time (ctrl for additive). */
+  function clickKey(time: number, additive: boolean) {
+    const el = screen
+      .getAllByTestId("curve-key")
+      .find((k) => k.getAttribute("data-key-time") === String(time));
+    if (el === undefined) throw new Error(`no curve-key at time ${time}`);
+    fireEvent.click(el, additive ? { ctrlKey: true } : {});
+  }
+
+  function setTrackKeyCalls(bridge: { request: ReturnType<typeof vi.fn> }) {
+    return bridge.request.mock.calls
+      .map((c) => c[0] as { kind: string; params: { oldTime: number; newTime: number; newValue: number } })
+      .filter((c) => c.kind === "emitters/set-track-key")
+      .map((c) => c.params);
+  }
+
+  async function selectScaleInterior(bridge: unknown) {
+    render(<CurveEditorPanel bridge={bridge as Bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    // Solo + focus the scale channel, then select its 3 interior keys.
+    fireEvent.click(screen.getByTestId("curve-channel-row-scale"));
+    clickKey(25, false);
+    clickKey(50, true);
+    clickKey(75, true);
+  }
+
+  it("shows the AVERAGE time/value of the selected keys", async () => {
+    const { bridge } = makeStubBridgeMultiInterior(0);
+    await selectScaleInterior(bridge);
+    // avg time = (25+50+75)/3 = 50; avg value = (20+40+60)/3 = 40.
+    expect(
+      (screen.getByLabelText("Selected key time") as HTMLInputElement).value,
+    ).toBe("50");
+    expect(
+      (screen.getByLabelText("Selected key value") as HTMLInputElement).value,
+    ).toBe("40.0");
+  });
+
+  it("editing the Value average shifts every selected key by the delta", async () => {
+    const { bridge } = makeStubBridgeMultiInterior(0);
+    await selectScaleInterior(bridge);
+    const valueInput = screen.getByLabelText("Selected key value") as HTMLInputElement;
+    fireEvent.change(valueInput, { target: { value: "50" } }); // avg 40 → +10
+    fireEvent.blur(valueInput);
+    const calls = setTrackKeyCalls(bridge);
+    const byOld = new Map(calls.map((c) => [c.oldTime, c]));
+    expect(byOld.get(25)).toMatchObject({ oldTime: 25, newTime: 25, newValue: 30 });
+    expect(byOld.get(50)).toMatchObject({ oldTime: 50, newTime: 50, newValue: 50 });
+    expect(byOld.get(75)).toMatchObject({ oldTime: 75, newTime: 75, newValue: 70 });
+  });
+
+  it("editing the Time average shifts the group's times by the delta", async () => {
+    const { bridge } = makeStubBridgeMultiInterior(0);
+    await selectScaleInterior(bridge);
+    const timeInput = screen.getByLabelText("Selected key time") as HTMLInputElement;
+    fireEvent.change(timeInput, { target: { value: "60" } }); // avg 50 → +10
+    fireEvent.blur(timeInput);
+    const calls = setTrackKeyCalls(bridge);
+    const byOld = new Map(calls.map((c) => [c.oldTime, c]));
+    expect(byOld.get(25)!.newTime).toBeCloseTo(35, 3);
+    expect(byOld.get(50)!.newTime).toBeCloseTo(60, 3);
+    expect(byOld.get(75)!.newTime).toBeCloseTo(85, 3);
+    // Values untouched by a pure time shift.
+    expect(byOld.get(50)!.newValue).toBe(40);
+  });
+
+  it("disables the Time field when the selection is all border keys", async () => {
+    const { bridge } = makeStubBridgeMultiInterior(0);
+    render(<CurveEditorPanel bridge={bridge as Bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("curve-channel-row-scale"));
+    clickKey(0, false);
+    clickKey(100, true);
+    expect(
+      (screen.getByLabelText("Selected key time") as HTMLInputElement).disabled,
+    ).toBe(true);
+    // Value stays editable (border values can move).
+    expect(
+      (screen.getByLabelText("Selected key value") as HTMLInputElement).disabled,
+    ).toBe(false);
+  });
+});
