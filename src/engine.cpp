@@ -580,6 +580,19 @@ bool Engine::RecoverDeviceIfNeeded()
 	return false;
 }
 
+// [PERF] round-2 sub-profiling helpers — QPC microsecond deltas for the
+// per-pass timing in Render(). Frequency is fixed for the process; cache it.
+static LONGLONG EngQpcNow()
+{
+	LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart;
+}
+static double EngQpcUs(LONGLONG a, LONGLONG b)
+{
+	static LONGLONG f = 0;
+	if (f == 0) { LARGE_INTEGER q; if (QueryPerformanceFrequency(&q)) f = q.QuadPart; }
+	return f ? static_cast<double>(b - a) * 1.0e6 / static_cast<double>(f) : 0.0;
+}
+
 bool Engine::Render()
 {
 	static const D3DXMATRIX Identity(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1);
@@ -639,6 +652,8 @@ bool Engine::Render()
 		return p1->GetZDistance() < p2->GetZDistance();
 	});
 	
+	// [PERF] round-2 per-pass timing — scene segment starts here.
+	const LONGLONG _ptScene0 = EngQpcNow();
 	m_pDevice->BeginScene();
 
 	// FD9b: when the layered-window compositor is installed, swap slot
@@ -781,6 +796,7 @@ bool Engine::Render()
 	// no runtime write site anywhere in the program -- equivalent to a
 	// hardcoded constant. See tasks/find_bloom_iterations.md.
 	static const UINT BLOOM_BLUR_ITERATIONS = 4;
+	const LONGLONG _ptScene1 = EngQpcNow();   // scene ends / bloom begins
 	if (m_bloomEnabled && m_bloomReady && m_pBloomEffect != NULL
 	    && m_pBloomPing != NULL && m_pBloomPong != NULL)
 	{
@@ -902,6 +918,7 @@ bool Engine::Render()
 		}
 	}
 
+	const LONGLONG _ptBloom1 = EngQpcNow();   // bloom ends / distort begins
 	// Now render to the heat texture
 	IDirect3DSurface9* pDistortSurface;
 	m_pDistortTexture->GetSurfaceLevel(0, &pDistortSurface);
@@ -914,6 +931,7 @@ bool Engine::Render()
         instance->RenderHeat(m_pDevice);
 	}
 
+	const LONGLONG _ptDistort1 = EngQpcNow();  // distort ends / composite begins
 	// Now render to the screen
 	m_pDevice->SetRenderTarget(0, pScreenSurface);
 	// FD9b: in alpha-compositor mode the slot-0 RT is our off-screen
@@ -955,6 +973,7 @@ bool Engine::Render()
 	pEffect->End();
     SAFE_RELEASE(pEffect);
 
+	const LONGLONG _ptComposite1 = EngQpcNow();  // composite ends / present begins
 	m_pDevice->EndScene();
 
 	// FD9b: route the final frame either through the layered-window
@@ -963,12 +982,31 @@ bool Engine::Render()
 	// swap-chain Present.
 	if (m_pAlphaCompositor)
 	{
-		m_pAlphaCompositor->Composite(m_presentationParameters.hDeviceWindow);
+		// [PERF] arch-C: the engine renders into the AlphaCompositor's RT,
+		// but the visible pixels reach the screen via the host's DComp
+		// shared-texture path (CompositeEngineFrame reads the same RT
+		// GPU-side). The layered Composite() here is a synchronous
+		// GetRenderTargetData readback + ~19 MB memcpy every frame — pure
+		// redundant work under composition (it fed only arch-B's invisible
+		// UpdateLayeredWindow and the FramePublisher cache, which is itself
+		// gated off in composition mode). Measured at ~98-99% of Render(),
+		// scaling linearly with window area. Modal snapshots do their own
+		// on-demand readback, so they're unaffected. See tasks/todo.md.
+		if (!m_compositionMode)
+			m_pAlphaCompositor->Composite(m_presentationParameters.hDeviceWindow);
 	}
 	else
 	{
 		m_pDevice->Present(NULL, NULL, NULL, NULL);
 	}
+
+	// [PERF] round-2 — store per-pass us for the host to fold into [PERF2].
+	const LONGLONG _ptPresent1 = EngQpcNow();
+	m_lastRenderTimings.scene     = EngQpcUs(_ptScene0,     _ptScene1);
+	m_lastRenderTimings.bloom     = EngQpcUs(_ptScene1,     _ptBloom1);
+	m_lastRenderTimings.distort   = EngQpcUs(_ptBloom1,     _ptDistort1);
+	m_lastRenderTimings.composite = EngQpcUs(_ptDistort1,   _ptComposite1);
+	m_lastRenderTimings.present   = EngQpcUs(_ptComposite1, _ptPresent1);
 	return true;
 }
 
@@ -1468,10 +1506,11 @@ void Engine::IssueEndFrameQuery()
 // dxgi_spike.cpp:687-697 for the original). On timeout, logs once and
 // returns — degraded mode where the D3D11 CopyResource may read
 // partially-finished VRAM (visible tearing). Safer than blocking the
-// host message pump indefinitely on a hung GPU.
-void Engine::WaitEndFrameQuery()
+// host message pump indefinitely on a hung GPU. Returns the spin count
+// (0 = signalled on the first poll) so the host can log GPU-wait pressure.
+int Engine::WaitEndFrameQuery()
 {
-	if (m_pEndFrameQuery == NULL) return;
+	if (m_pEndFrameQuery == NULL) return 0;
 	BOOL done = FALSE;
 	int spins = 0;
 	while (m_pEndFrameQuery->GetData(&done, sizeof(done), D3DGETDATA_FLUSH) == S_FALSE)
@@ -1482,6 +1521,7 @@ void Engine::WaitEndFrameQuery()
 			break;
 		}
 	}
+	return spins;
 }
 
 // [MT-11] Phase 3 Stage 4b — adapter LUID accessor for the multi-GPU

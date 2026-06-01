@@ -145,6 +145,15 @@ public:
 	// host that doesn't enable the layered popup).
 	void SetAlphaCompositor(host::AlphaCompositor* c) { m_pAlphaCompositor = c; }
 
+	// [PERF] Composition mode (arch-C / DComp). When set, Render() skips the
+	// per-frame AlphaCompositor::Composite() readback — the visible pixels
+	// reach the screen via the host's DComp shared-texture path, so the
+	// layered-window readback + ~19 MB memcpy is pure redundant per-frame
+	// work (measured at ~98-99% of Render(), scaling with window area). The
+	// engine still renders INTO the AlphaCompositor RT (the shared source);
+	// only the layered transport is skipped. See tasks/todo.md round-3.
+	void SetCompositionMode(bool on) { m_compositionMode = on; }
+
 	// [MT-11] Phase 3 Stage 2: NT-handle alias of the engine's primary
 	// render-target texture, openable from a parallel D3D11 device via
 	// OpenSharedResource. Forwarded from m_pAlphaCompositor->GetShared
@@ -176,7 +185,17 @@ public:
 	// but DO get invalidated by IDirect3DDevice9::Reset under D3D9Ex).
 	// Next Issue lazy-recreates against the post-Reset device.
 	void IssueEndFrameQuery();
-	void WaitEndFrameQuery();
+	// Returns the number of GetData spins it busy-waited (0 = signalled on
+	// the first poll), so the host can log GPU-wait pressure ([PERF]).
+	int  WaitEndFrameQuery();
+
+	// [PERF] round-2 sub-profiling — per-pass CPU-submit timing (us) of the
+	// last Render() call; the host folds these into the [PERF2] host.log
+	// line. `present` includes the AlphaCompositor::Composite() synchronous
+	// readback. Diagnostic-only; see tasks/todo.md.
+	struct RenderPassTimingsUs { double scene = 0, bloom = 0, distort = 0, composite = 0, present = 0; };
+	RenderPassTimingsUs GetLastRenderTimings() const { return m_lastRenderTimings; }
+	RenderPassTimingsUs m_lastRenderTimings = {};
 
 	// [MT-11] Phase 3 Stage 4b — adapter LUID for the multi-GPU
 	// guard. Compositor::AttachEngineVisual compares this against
@@ -578,6 +597,10 @@ private:
 	// HostWindowImpl; detached via SetAlphaCompositor(nullptr) on
 	// WM_DESTROY before the compositor is destroyed.
 	host::AlphaCompositor*			m_pAlphaCompositor = nullptr;
+
+	// [PERF] arch-C composition mode — gates the layered Composite() readback
+	// out of Render() (set by the host via SetCompositionMode).
+	bool							m_compositionMode = false;
 
 	static D3DVERTEXELEMENT9 ParticleElements[];
     

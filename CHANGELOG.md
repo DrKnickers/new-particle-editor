@@ -16,6 +16,60 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 perf] arch-C viewport — drop the redundant per-frame layered-window readback
+
+*2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The arch-C editor felt sluggish and janky in real use, worst when maximized
+or on a large monitor. Root cause was a redundant per-frame GPU readback;
+removing it makes the viewport render essentially free regardless of window
+size. On this machine the uncapped maximized render ceiling went from
+~90 FPS to ~2380 FPS (≈26×) at 3440-wide, and per-frame cost is now flat
+across window size instead of scaling with pixel area. User-confirmed
+"performance is excellent" with the viewport, maximize, and modal-overlay
+snapshots all rendering correctly.
+
+**How we tackled it.** Measure-first, because code-reading mis-pointed twice.
+Added always-on per-stage + per-pass frame timing to `host.log`
+(`[PERF]` / `[PERF2]`, `QueryPerformanceCounter`, 1 Hz) in
+[`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:708) and
+[`src/engine.cpp`](src/engine.cpp:583). The data localised ~96–99% of the
+frame to `engine->Render()`, scaling linearly with window area even at zero
+particles; sub-profiling Render() into scene / bloom / distort / composite /
+present showed the entire cost was **`present`** — i.e. the synchronous
+`AlphaCompositor::Composite()` `GetRenderTargetData` readback + ~19 MB
+`memcpy` ([`src/host/AlphaCompositor.cpp`](src/host/AlphaCompositor.cpp:753)).
+In architecture-C the visible pixels reach the screen through the DComp
+shared-texture path (`Compositor::CompositeEngineFrame` reads the same RT
+GPU-side), so the layered-window readback is pure redundant work — the same
+class of leftover arch-A/B transport as the FramePublisher JPEG encode that
+was previously removed from composition mode. The fix adds
+[`Engine::SetCompositionMode(bool)`](src/engine.h:148); the host sets it at
+the `SetAlphaCompositor` site
+([`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:1712)) and `Render()`
+skips `Composite()` when set
+([`src/engine.cpp`](src/engine.cpp:983)). The engine still renders *into* the
+AlphaCompositor RT (the shared source); only the redundant layered transport
+is skipped. The `[PERF]` instrumentation is kept in as a permanent, always-on
+diagnostic (QPC is ~free; it only logs once per second).
+
+**Issues encountered and resolutions.** Two plausible code-reading suspects
+were refuted by measurement: the `WaitEndFrameQuery` busy-spin (~45 µs, far
+from its 100k cap) and the cross-device `CopyResource` (~45→67 µs, basically
+fixed) — the author's own comment *"the spin in WaitEndFrameQuery dominates"*
+was wrong. After the fix the bottleneck correctly *shifted* to the now-exposed
+`WaitEndFrameQuery` spin (~385 µs / ~9000 spins — the GPU fence the readback
+used to absorb), but at ~2380 FPS it's irrelevant and was left untouched
+(measure-first: don't optimise a non-problem). Risk check before removing the
+readback: nothing in arch-C consumes the per-frame sysmem DIB — modal
+snapshots do their own on-demand readback, and the `lastRawDib` cache feeds
+only the composition-mode-gated FramePublisher. Per L-033, the on-screen look
+was confirmed by the user, not by agent screenshots (the host-side mechanism —
+`[COMP-engine-frame]` still presenting every frame — was verified in
+`host.log`). See **L-035** for the measure-first lesson.
+
+---
+
 ### [LT-4 UI polish] 1px light-grey hairline framing the viewport — removed
 
 *2026-05-31 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

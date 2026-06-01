@@ -127,6 +127,38 @@ public:
     }
 };
 
+// [PERF] arch-C per-stage frame timing. QPC microsecond helpers + a tiny
+// per-stage accumulator. Always-on (QPC is ~20 ns/call, ~6 calls/frame),
+// emitted to host.log at 1 Hz under the [PERF] prefix to localise which
+// composition-path stage's cost scales with window area. See
+// tasks/todo.md (measurement round). The QPC frequency is fixed for the
+// process lifetime, so cache it once.
+static LONGLONG PerfQpcFreq()
+{
+    static LONGLONG freq = 0;
+    if (freq == 0) { LARGE_INTEGER f; if (QueryPerformanceFrequency(&f)) freq = f.QuadPart; }
+    return freq;
+}
+static LONGLONG PerfQpcNow()
+{
+    LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart;
+}
+static double PerfUsSince(LONGLONG start)
+{
+    const LONGLONG f = PerfQpcFreq();
+    if (f <= 0) return 0.0;
+    return static_cast<double>(PerfQpcNow() - start) * 1.0e6 / static_cast<double>(f);
+}
+struct PerfStage
+{
+    double   sumUs = 0.0;
+    double   maxUs = 0.0;
+    unsigned n     = 0;
+    void   add(double us) { sumUs += us; if (us > maxUs) maxUs = us; ++n; }
+    double avg() const    { return n ? sumUs / n : 0.0; }
+    void   reset()        { sumUs = 0.0; maxUs = 0.0; n = 0; }
+};
+
 // Probe the installed WebView2 Evergreen runtime. Returns true if
 // GetAvailableCoreWebView2BrowserVersionString succeeds and returns a
 // non-empty version string. Call AFTER CoInitializeEx so that
@@ -364,6 +396,15 @@ struct HostWindowImpl
     AcceleratorBridge                  accelerator;
     std::unique_ptr<BridgeDispatcher>  dispatcher;
     FPSMeasurer                        fpsMeasurer;
+
+    // [PERF] arch-C per-stage frame-timing accumulators. Reset each 1 Hz
+    // emit in RenderD3D9. Always-on; see tasks/todo.md (measurement round).
+    PerfStage          perfUpdate, perfRender, perfWait, perfComposite, perfFrame;
+    // [PERF2] round-2 — engine Render() per-pass sub-timing (us).
+    PerfStage          perfRScene, perfRBloom, perfRDistort, perfRCompose, perfRPresent;
+    unsigned long long perfWaitSpinsSum = 0;
+    unsigned           perfWaitSpinsMax = 0;
+    DWORD              perfLastEmitTick = 0;
 
     // LT-4 D6: mod state shared with React. ModManager constructed in
     // the impl ctor (DiscoverMods + RestoreLastSelectedMod run before
@@ -713,6 +754,10 @@ void HostWindowImpl::RenderD3D9()
     float dt  = (m_lastRenderTime > 0.0f) ? (now - m_lastRenderTime) : 0.0f;
     m_lastRenderTime = now;
 
+    // [PERF] start of the timed region (covers Tick + Update + Render +
+    // the composition sync/copy). Per-stage deltas are taken below.
+    const LONGLONG perfFrameStart = PerfQpcNow();
+
     if (spawnerDriver && particleSystem)
         spawnerDriver->Tick(dt, particleSystem.get(), engine.get());
 
@@ -724,8 +769,22 @@ void HostWindowImpl::RenderD3D9()
     // unconditionally each frame whether or not a system is attached.
     m_mouseCursor.UpdateVelocity();
 
+    const LONGLONG perfT0 = PerfQpcNow();
     engine->Update();
+    const double perfUpdateUs = PerfUsSince(perfT0);
+
+    const LONGLONG perfT1 = PerfQpcNow();
     engine->Render();
+    const double perfRenderUs = PerfUsSince(perfT1);
+
+    // [PERF2] fold the engine's per-pass sub-timing of this Render() call.
+    const Engine::RenderPassTimingsUs perfPasses = engine->GetLastRenderTimings();
+    perfRScene.add(perfPasses.scene);
+    perfRBloom.add(perfPasses.bloom);
+    perfRDistort.add(perfPasses.distort);
+    perfRCompose.add(perfPasses.composite);
+    perfRPresent.add(perfPasses.present);
+
     fpsMeasurer.measure();
 
     // [MT-11] Phase 3 Stage 4c — composition-mode per-frame composite.
@@ -746,7 +805,11 @@ void HostWindowImpl::RenderD3D9()
     if (m_compositionMode && m_compositor && m_compositor->IsReady())
     {
         engine->IssueEndFrameQuery();
-        engine->WaitEndFrameQuery();
+        // [PERF] WaitEndFrameQuery is the suspected hot stage — time the
+        // busy-spin and capture the spin count it now returns.
+        const LONGLONG perfT2     = PerfQpcNow();
+        const int      perfSpins  = engine->WaitEndFrameQuery();
+        const double   perfWaitUs = PerfUsSince(perfT2);
         // [MT-11] Phase 3 Stage 4d — pass the engine's current shared
         // handle so Compositor can lazy-detect AlphaCompositor::Resize
         // invalidation and re-open the D3D11 alias. Without this, a
@@ -755,7 +818,58 @@ void HostWindowImpl::RenderD3D9()
         // at the released old one). Single pointer compare per frame
         // in the steady state; full re-open + swapchain ResizeBuffers
         // only on actual handle change.
+        const LONGLONG perfT3 = PerfQpcNow();
         m_compositor->CompositeEngineFrame(engine->GetSharedTextureHandle());
+        const double perfCompositeUs = PerfUsSince(perfT3);
+
+        perfWait.add(perfWaitUs);
+        perfComposite.add(perfCompositeUs);
+        perfWaitSpinsSum += static_cast<unsigned long long>(perfSpins < 0 ? 0 : perfSpins);
+        if (static_cast<unsigned>(perfSpins) > perfWaitSpinsMax)
+            perfWaitSpinsMax = static_cast<unsigned>(perfSpins);
+    }
+
+    // [PERF] accumulate this frame's stage costs and emit a 1 Hz summary
+    // to host.log (mirrors the [COMP-engine-frame] GetTickCount throttle).
+    // Times are microseconds. The fps field is derived from frame.avg for
+    // sanity only — under an agent-driven launch it is unrepresentative of
+    // the user's healthy run (L-033); read per-stage ratios + spin counts.
+    perfUpdate.add(perfUpdateUs);
+    perfRender.add(perfRenderUs);
+    perfFrame.add(PerfUsSince(perfFrameStart));
+
+    const DWORD perfNow = GetTickCount();
+    if (perfLastEmitTick == 0 || (perfNow - perfLastEmitTick) >= 1000)
+    {
+        perfLastEmitTick = perfNow;
+        RECT pr = {};
+        GetClientRect(hMain, &pr);
+        const double favg    = perfFrame.avg();
+        const double fps     = favg > 0.0 ? 1.0e6 / favg : 0.0;
+        const double spinAvg = perfWait.n
+            ? static_cast<double>(perfWaitSpinsSum) / static_cast<double>(perfWait.n) : 0.0;
+        Log("[PERF] win=%ldx%ld fps=%.0f frame=%.0f/%.0f update=%.0f/%.0f "
+            "render=%.0f/%.0f wait=%.0f/%.0f spins=%.0f/%u composite=%.0f/%.0f (us avg/max)\n",
+            pr.right - pr.left, pr.bottom - pr.top, fps,
+            perfFrame.avg(), perfFrame.maxUs,
+            perfUpdate.avg(), perfUpdate.maxUs,
+            perfRender.avg(), perfRender.maxUs,
+            perfWait.avg(), perfWait.maxUs,
+            spinAvg, perfWaitSpinsMax,
+            perfComposite.avg(), perfComposite.maxUs);
+        Log("[PERF2] win=%ldx%ld render-passes: scene=%.0f/%.0f bloom=%.0f/%.0f "
+            "distort=%.0f/%.0f compose=%.0f/%.0f present=%.0f/%.0f (us avg/max)\n",
+            pr.right - pr.left, pr.bottom - pr.top,
+            perfRScene.avg(), perfRScene.maxUs,
+            perfRBloom.avg(), perfRBloom.maxUs,
+            perfRDistort.avg(), perfRDistort.maxUs,
+            perfRCompose.avg(), perfRCompose.maxUs,
+            perfRPresent.avg(), perfRPresent.maxUs);
+        perfUpdate.reset(); perfRender.reset(); perfWait.reset();
+        perfComposite.reset(); perfFrame.reset();
+        perfRScene.reset(); perfRBloom.reset(); perfRDistort.reset();
+        perfRCompose.reset(); perfRPresent.reset();
+        perfWaitSpinsSum = 0; perfWaitSpinsMax = 0;
     }
 
     // [MT-11] Phase 1: hand the just-composited frame to FramePublisher
@@ -1596,6 +1710,10 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 GetClientRect(hViewport, &vrc);
                 alphaCompositor->Resize(vrc.right - vrc.left, vrc.bottom - vrc.top);
                 engine->SetAlphaCompositor(alphaCompositor.get());
+                // [PERF] In composition mode the DComp shared-texture path is
+                // the transport; tell the engine to skip the redundant
+                // per-frame layered Composite() readback (round-3 fix).
+                engine->SetCompositionMode(m_compositionMode);
                 layout.SetAlphaCompositor(alphaCompositor.get());
                 Log("[host] AlphaCompositor up (%ldx%ld)\n",
                     vrc.right - vrc.left, vrc.bottom - vrc.top);

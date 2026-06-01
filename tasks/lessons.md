@@ -2720,3 +2720,58 @@ reverted for resting on an unverified assumption — this time the cause was pro
 before the fix. Cross-reference [L-033](#l-033) (verify arch-C visuals via
 host.log + CDP + user, not agent screenshots) and the systematic-debugging
 "isolate the failing component before proposing fixes" discipline.
+
+---
+
+## L-035 — Profile per-stage before optimising a render loop; code-reading (and the author's own comments) mis-point. Instrument the frame, measure ratios + area-scaling, then fix the proven stage
+
+**Rule.** For a "feels slow" performance complaint, do NOT optimise the stage
+your code-reading (or an existing in-code comment) fingers. Add cheap per-stage
+timing to the actual hot loop, capture it under a realistic run, and let the
+**measured** dominant stage — and how it scales with the trigger variable
+(here: window area) — pick the target. `QueryPerformanceCounter` deltas around
+each stage, accumulated and logged at 1 Hz, are ~free and decisive. Only after
+the data names the stage do you design the fix; re-measure to prove it.
+
+**Trigger.** Any perf task where you're tempted to jump straight to a fix
+because the cause "is obviously X." Symptoms you're about to mis-spend effort:
+- An in-code comment asserts where the cost is (e.g. *"the spin in
+  WaitEndFrameQuery dominates"*) and you're inclined to trust it.
+- The complaint correlates with a variable (window size, item count) — that
+  correlation is the *measurement axis*, not a diagnosis.
+- You have a clean architectural story for why stage X is slow but no numbers.
+
+**How to apply.**
+1. **Instrument the loop, gated cheap or always-on.** Per-stage QPC deltas →
+   `sum/max/count` accumulators → one log line per second. On this project
+   that's the `[PERF]` (host stages) + `[PERF2]` (engine `Render()` sub-passes)
+   lines in [`HostWindow.cpp`](../src/host/HostWindow.cpp) / engine timings via
+   `Engine::GetLastRenderTimings()`.
+2. **Read ratios + scaling, not absolutes** — especially under a launch you
+   can't fully trust (L-033). The stage whose `avg` grows ≈linearly with the
+   trigger variable is the culprit, regardless of headline FPS.
+3. **Sub-profile the winning stage** before guessing *why* — one level of
+   timing inside the hot function usually collapses the search to a single line.
+4. **Fix the proven stage; re-measure.** Confirm the cost drops AND watch where
+   the bottleneck *shifts* (a shifted bottleneck that's now irrelevant means
+   stop, don't keep optimising).
+
+**Source incident (2026-05-31, arch-C "janky when maximized").** Code-reading
+produced two confident priors — the `WaitEndFrameQuery` busy-spin (the engine
+author's own comment called it dominant) and the cross-device `CopyResource`.
+`[PERF]` timing refuted **both**: each was ~45 µs and ~flat with area, while
+`engine->Render()` was 96–99% of the frame and scaled dead-linearly with pixel
+count. `[PERF2]` sub-profiling of Render() then pinned the entire cost to the
+`present` segment — the synchronous `AlphaCompositor::Composite()`
+`GetRenderTargetData` readback + 19 MB `memcpy`, a redundant arch-A/B
+layered-window transport still running every frame under arch-C (the DComp
+shared-texture path is the real transport). Gating it out in composition mode
+([`Engine::SetCompositionMode`](../src/engine.h:148)) took maximized from ~90 to
+~2380 FPS (≈26×) and flattened the area-scaling; the bottleneck then *shifted*
+to the now-exposed `WaitEndFrameQuery` spin (~385 µs), left untouched because
+at 2380 FPS it's a non-problem. Had the first instinct (fix the spin) been
+followed, it would have optimised a 45 µs stage and left the 10 ms readback in
+place. Cross-reference [L-029](#l-029) (verify inputs before suspecting the
+pipeline — same "widen from the assumed cause" discipline) and
+[L-032](#l-032) (identical render-state ⇒ the cost is in the dimension your
+probe doesn't cover).
