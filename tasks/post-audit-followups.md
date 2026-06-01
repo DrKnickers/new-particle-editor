@@ -392,6 +392,64 @@ A fifth audit (ChatGPT deep research, LT-4-focused) ran the same day. Where the 
 
 ---
 
+### G9. `.meg` archive index entries unchecked → OOB read — [both] [P1, memory safety]
+
+**Source:** ChatGPT deep-research re-run (2026-06-01), finding PAR-002. Net new — not caught by F2–F5 (those cover `.alo`/`ChunkReader`; this is the `.meg` archive path).
+
+**Sites:**
+- [src/MegaFiles.cpp:58-66](src/MegaFiles.cpp:58) — constructor reads each `FileInfo` (`crc`, `nameIndex`, `start`, `size`) straight from the archive with no validation
+- [src/MegaFiles.cpp:100](src/MegaFiles.cpp:100) — `filenames[files[mid].nameIndex]` dereferenced with no bound check
+- [src/MegaFiles.cpp:102](src/MegaFiles.cpp:102) — `new SubFile(file, files[mid].start, files[mid].size)` with no range check
+- [src/MegaFiles.cpp:56](src/MegaFiles.cpp:56) — `file->size() - start` unsigned-underflows if `start > file->size()`
+- Reachable via [src/managers.cpp:49](src/managers.cpp:49) — `FileManager::getFile` calls `MegaFile::getFile(path)` on every loaded archive during ordinary asset resolution
+
+**Bug:** Same class as F2/F3 but for the archive index instead of the chunk stream. A forged `nameIndex` (e.g. `0xFFFFFFFF`) on an entry whose `crc` matches a requested asset drives an out-of-range `std::vector` access at `filenames[...]`. A forged `start`/`size` hands an out-of-bounds window to `SubFile` for later reads. Confirmed by reading; the report's PoC (1 string, 1 file, `nameIndex = 0xFFFFFFFF`, `crc` matching a requested asset) is sound.
+
+**Fix shape:** validate at construction in the `FileInfo` read loop — reject `nameIndex >= filenames.size()`, reject `start > file->size()` or `size > file->size() - start`. Optionally sanity-cap `numStrings`/`numFiles` before allocating. Throw `BadFileException` on failure. ~15 LoC, concentrated in `src/MegaFiles.cpp`.
+
+---
+
+### G10. `XMLNode` attribute loop never advances `atts` → infinite loop — [both] [P3, latent DoS]
+
+**Source:** ChatGPT deep-research re-run (2026-06-01), finding PAR-003. Net new.
+
+**Site:** [src/xml.cpp:15-18](src/xml.cpp:15). Reached via [src/xml.cpp:66](src/xml.cpp:66) (`onStartElement` builds every node) → [src/managers.cpp:71](src/managers.cpp:71) (`FileManager` parses `Data\MegaFiles.xml` at startup).
+
+**Bug:** `while (*atts != NULL) { attributes.insert(make_pair(atts[0], atts[1])); }` never increments `atts`, so any element carrying ≥1 attribute spins forever (100% CPU on one core). Confirmed by reading. **Latency caveat:** the canonical `MegaFiles.xml` schema is attribute-less (`<Mega_Files><File>…</File></Mega_Files>`), so the loop is never entered on well-formed game data — which also proves this attribute branch has never successfully executed. Practical trigger requires a malformed or mod-supplied attribute-bearing XML; hence P3, not a live-path bug.
+
+**Fix shape:** advance by pairs — `while (atts && atts[0] && atts[1]) { attributes.insert(make_pair(atts[0], atts[1])); atts += 2; }`. Defensively tolerates a malformed odd-length array. ~2 LoC.
+
+---
+
+### G11. WebView2 host has no navigation / new-window / permission / origin policy — [lt-4] [P3, hardening]
+
+**Source:** ChatGPT deep-research re-run (2026-06-01), finding BR-001. Net new.
+
+**Sites:**
+- [src/host/HostWindow.cpp:1218-1253](src/host/HostWindow.cpp:1218) — `add_WebMessageReceived` forwards the raw message to `OnWebMessage` → dispatcher with no source-URL check
+- No `add_NavigationStarting`, `add_NewWindowRequested`, or `add_PermissionRequested` registration anywhere in `src/host` (grep returns 0 hits)
+- [src/host/HostWindow.cpp:1201-1213](src/host/HostWindow.cpp:1201) — production loads local `dist` via `SetVirtualHostNameToFolderMapping(app.local)`
+
+**Bug:** The effective trust boundary is "whatever page is loaded in the WebView," not "the intended editor origin." The bridge is not read-only (file open/save, texture/shader reload, engine + viewport mutation), so any attacker-controlled page would inherit the full surface. **Severity caveat (disagree with the report's "High"):** the app only ever loads local `dist`; the report demonstrates no navigation-hijack or content-injection primitive for a local desktop tool, so the realistic risk is defense-in-depth, not an exploitable path. Logged as P3 hardening, not a release blocker — but the fix is cheap and standard.
+
+**Fix shape:** in `HostWindow` WebView setup — register `NavigationStarting` and cancel anything outside `https://app.local/*` (plus `http://localhost:5174/*` when `useDevUi`); register `NewWindowRequested` and `PermissionRequested` to deny-by-default; reject `WebMessageReceived` when the source URL is outside the approved set. Localized to `src/host/HostWindow.cpp`. ~30-40 LoC.
+
+---
+
+### G12. `NativeBridge` pending-request map has no timeout or disconnect cleanup — [lt-4] [P2, reliability]
+
+**Source:** ChatGPT deep-research re-run (2026-06-01), finding BR-002. Net new.
+
+**Sites:**
+- [web/apps/editor/src/bridge/native.ts:45-52](web/apps/editor/src/bridge/native.ts:45) — `request()` inserts `{resolve, reject}` then calls `postMessage`; no `try/catch`, no timeout
+- [web/apps/editor/src/bridge/native.ts:76-81](web/apps/editor/src/bridge/native.ts:76) — `onMessage` deletes the pending entry only on a matching `type:"res"` id
+
+**Bug:** Any path where a `res` never arrives — host-side silent drop of malformed traffic, WebView teardown mid-flight, or `postMessage`/`JSON.stringify` throwing after the entry is inserted — leaves a permanently pending promise and a leaked map entry. The caller hangs with no failure signal; a long session slowly accumulates dead entries. Confirmed by reading.
+
+**Fix shape:** wrap `stringify`/`postMessage` in `try/catch` and `delete pending[id]` before rejecting on failure; add a per-request timeout that rejects + deletes after a bounded interval; add a `dispose()`/`beforeunload` handler that rejects and clears all outstanding entries; surface a host-disconnected state so the UI fails closed instead of drifting. ~25 LoC in `native.ts` + one state hook in the app shell.
+
+---
+
 ### A-new. Bridge contract drift — no capability-manifest test — [lt-4] [architecture]
 
 **Context:** Schema (TypeScript) + mock (TypeScript) + dispatcher (C++) are three sources of truth that can drift independently. G1 (`emitters/import-from-file`) is one symptom; the deferred `emitters/update` case is documented but easy to forget. The existing `native-spec-allowlist.test.ts` only checks Playwright spec presence, not native handler implementation parity.
@@ -442,16 +500,28 @@ Listed so the same finding doesn't get re-raised next round. References to L-018
 | Audit B "skydome OnLostDevice missing" | Already fixed on `lt-4` (F7 above), closes on merge |
 | Audit B's "parser still too trusting beyond depth+readString" | Generic — concrete instances captured by F2, F3, F4. Pattern observation noted in architecture section |
 
+### From the 2026-06-01 ChatGPT deep-research re-run (dedup)
+
+Every code-level claim in this re-run was confirmed by reading. Four findings were net new (→ G9–G12 above). The rest dedup against already-tracked items — recorded here so they aren't re-raised as new:
+
+| Re-run finding | Status |
+|---|---|
+| PAR-001 — `ChunkReader::readString()` heap over-read | **Duplicate of F2.** The re-run labels it "NEW" but it was caught by Audit A + Audit B and is already a tracked P1 with a fix shape. Not new. |
+| BR-003 — `emitters/import-from-file` schema/dispatcher gap | **Duplicate of G1.** Re-run correctly labels it KNOWN-OPEN. |
+| WebMessageReceived token leak (re-run did NOT re-raise) | Correctly observed as fixed — G5's `webMessageTok` member + `WM_DESTROY` unregister is in the reviewed tree. |
+| DevTools / host-object "always on" (re-run did NOT re-raise) | Correctly observed as `useTestHost`-gated ([src/host/HostWindow.cpp:1085-1136](src/host/HostWindow.cpp:1085)). Re-run's residual concern (runtime-flag gate vs compile-time gate) noted, not actioned. |
+| XML-001 — old Expat (2.2.0) + no wrapper hardening | Confirmed: `libs/expat-2.2.0` bundled (2017-era; current 2.6.x). Re-run's CVE-applicability pass was explicitly incomplete, so no specific finding to action. The one concrete sub-bug (attribute infinite loop) is captured as G10; an Expat bump + DTD/entity/size-cap hardening is separate hygiene worth a dedicated item if/when the dependency is touched. |
+
 ---
 
 ## Suggested ordering
 
-1. **Now (before next public release):** F1, F2, F3, F4, F5. All P1 master-side correctness. Smallest is ~5 LoC, largest is F4 at ~40 LoC. Realistically one focused PR.
+1. **Now (before next public release):** F1, F2, F3, F4, F5, **G9**. All P1 master-side / `[both]` memory-safety + correctness. G9 (`.meg` index validation) is the same untrusted-binary class as F2/F3 and belongs in this PR. Smallest is ~5 LoC, largest is F4 at ~40 LoC. Realistically one focused PR.
 2. **Stage 4 prerequisite:** F6 (verify-then-fix). Run the smoke repro first.
 3. **Stage 3h (LT-4 sub-stage before Stage 4 starts):** F8.
 4. **First master polish PR after the P1s land:** F12, F13+F14 (bundled), F15, F16. All master-side, all small.
 5. **LT-4 bridge-contract-hardening PR:** G1, G2, G3, G4 bundled. All `BridgeDispatcher` / `HostBridgeProxy` territory. Single coherent PR.
-6. **LT-4 host polish PR:** F9, F10, F11, G5, G6, G7, G8. All small, all host-side.
+6. **LT-4 host polish PR:** F9, F10, F11, G5, G6, G7, G8, **G11, G12**. All small, all host/bridge-side. (G10 — XML attribute loop — is `[both]` and trivial; fold into the P1 parser PR or this one, either works.)
 7. **Bridge contract test (A-new):** worth doing as its own focused PR; gates future G1-class drift at CI time.
 8. **Deferred until reproducer / further verification exists:** F17, N1, plus the LT-4 audit's "items NOT queued" list (window-scoped keyboard, undo-invariant audit, Playwright bridge architecture).
 9. **Opportunistic during normal file touches:** N2–N8.
@@ -461,4 +531,4 @@ Listed so the same finding doesn't get re-raised next round. References to L-018
 
 ## Provenance
 
-Full per-finding verification trail is in the 2026-05-24 session transcript. Verification protocol followed: see [`lessons.md` L-018](lessons.md). Master tip at audit time: `b28f624`. `lt-4` tip: `d3f0fae`. Audits aggregated here (5 total): ChatGPT-1 (LT-4/DXGI), Gemini (general, 11/12 rejected), Audit A (ChatGPT broader, supersedes pending Audit B), Audit B (ChatGPT deep research, master-targeted), and the LT-4-specific deep research audit (host + React layer).
+Full per-finding verification trail is in the 2026-05-24 session transcript. Verification protocol followed: see [`lessons.md` L-018](lessons.md). Master tip at audit time: `b28f624`. `lt-4` tip: `d3f0fae`. Audits aggregated here (6 total): ChatGPT-1 (LT-4/DXGI), Gemini (general, 11/12 rejected), Audit A (ChatGPT broader, supersedes pending Audit B), Audit B (ChatGPT deep research, master-targeted), the LT-4-specific deep research audit (host + React layer, → G1–G8), and a ChatGPT deep-research re-run on 2026-06-01 (`lt-4` tip `63fb7f2`, → G9–G12; every claim confirmed by reading, PAR-001 deduped to F2 and BR-003 to G1).
