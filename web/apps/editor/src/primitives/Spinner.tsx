@@ -3,10 +3,12 @@
 // Behaviors (ported from legacy src/UI/Spinner.cpp):
 //   - Up/down arrow buttons: always visible (matches legacy Win32
 //     UDS_ALIGNRIGHT spin button), increment/decrement by `step`.
-//   - Scroll-wheel adjust: wheel-up increments, wheel-down decrements.
-//     Shift modifier uses `step * 10` (coarse) per NT-1 legacy convention.
-//   - Drag-to-adjust: vertical mouse-Y drag from the input rect.
-//     Shift = fine (step/10), Ctrl = coarse (step*10).
+//   - Scroll-wheel adjust (F7): wheel-up increments, wheel-down
+//     decrements. Step is a flat 0.1 on decimal fields and 1 on integer
+//     fields (dp === 0), matching legacy. Shift = ×10 (coarse).
+//   - Drag-to-adjust (F6): vertical mouse-Y drag on the ARROW COLUMN
+//     (not the text input — dragging the input selects text). Shift =
+//     fine (step/10), Ctrl = coarse (step*10).
 //   - Scientific notation parse: "1e-3", "2.5E4", etc.
 //   - Range clamp: clamp to [min, max] on blur/commit; NOT on keystroke.
 //   - Unit suffix: greyed-out text after the number.
@@ -23,6 +25,10 @@ const ROW_HEIGHT: Record<SpinnerDensity, string> = {
   default: "26px",
   loose: "32px",
 };
+
+// F6: pixels of vertical movement on the arrow column before a press is
+// treated as a value-scrub rather than a click.
+const DRAG_THRESHOLD_PX = 3;
 
 export type SpinnerProps = {
   value: number;
@@ -138,8 +144,8 @@ export function Spinner({
   // The latest value/min/max/step/disabled are stashed in a ref so
   // the listener doesn't need to be re-bound on every render.
   const wrapRef = useRef<HTMLDivElement>(null);
-  const wheelDepsRef = useRef({ value, min, max, step, disabled, onChange, fmt });
-  wheelDepsRef.current = { value, min, max, step, disabled, onChange, fmt };
+  const wheelDepsRef = useRef({ value, min, max, step, dp, disabled, onChange, fmt });
+  wheelDepsRef.current = { value, min, max, step, dp, disabled, onChange, fmt };
   useEffect(() => {
     const el = wrapRef.current;
     if (el === null) return;
@@ -148,9 +154,15 @@ export function Spinner({
       if (d.disabled) return;
       e.preventDefault();
       e.stopPropagation();
-      const s = e.shiftKey ? d.step * 10 : d.step;
+      // F7: legacy stepped a flat 0.1 per wheel notch. Integer fields
+      // (dp === 0, e.g. Index / particle counts) step by 1 so the wheel
+      // never produces fractional integers. Shift = ×10 (coarse).
+      const base = d.dp === 0 ? 1 : 0.1;
+      const s = e.shiftKey ? base * 10 : base;
       const delta = e.deltaY < 0 ? s : -s;
-      const next = clamp(d.value + delta, d.min, d.max);
+      // Round to kill float drift from repeated 0.1 additions
+      // (0.1+0.1+0.1 = 0.30000000000000004).
+      const next = clamp(Math.round((d.value + delta) * 1e6) / 1e6, d.min, d.max);
       setText(d.fmt(next));
       d.onChange(next);
     };
@@ -158,15 +170,31 @@ export function Spinner({
     return () => el.removeEventListener("wheel", onWheelNative);
   }, []);
 
-  // Drag-to-adjust: pointer-capture on mousedown, track Y delta.
-  const handleMouseDown = (e: React.MouseEvent<HTMLInputElement>) => {
+  // F6: value-scrub lives on the arrow column ONLY. The text input is a
+  // plain field, so a horizontal drag across it selects text for partial
+  // edits (the old behaviour scrubbed the value from the input and blocked
+  // selection). A plain click on an arrow still steps by ±step (the
+  // buttons' onClick); a vertical drag past the threshold scrubs
+  // continuously. Shift = fine (step/10), Ctrl = coarse (step*10), to
+  // match the keyboard arrows. `scrubbedRef` suppresses the trailing
+  // click so a drag that ends on the button doesn't also step.
+  const scrubbedRef = useRef(false);
+  const handleArrowsMouseDown = (e: React.MouseEvent) => {
     if (disabled || e.button !== 0) return;
+    // Keep the input's focus/caret (don't blur on arrow mousedown) and
+    // suppress text selection while scrubbing.
+    e.preventDefault();
     dragStartY.current = e.clientY;
     dragStartValue.current = value;
-    setDragging(true);
+    scrubbedRef.current = false;
 
     const onMove = (me: MouseEvent) => {
       const dy = dragStartY.current - me.clientY; // up = positive = increase
+      if (!scrubbedRef.current) {
+        if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+        scrubbedRef.current = true;
+        setDragging(true);
+      }
       const s = me.shiftKey ? step / 10 : me.ctrlKey ? step * 10 : step;
       const next = clamp(dragStartValue.current + dy * s, min, max);
       setText(fmt(next));
@@ -222,10 +250,9 @@ export function Spinner({
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
         onFocus={handleFocus}
-        onMouseDown={handleMouseDown}
         className={`w-full rounded border border-border-2 bg-bg-2 pl-2 text-xs text-text outline-none transition focus:border-accent ${
           disabled ? "cursor-not-allowed opacity-40" : "cursor-text"
-        } ${dragging ? "cursor-ns-resize select-none" : ""}`}
+        } ${dragging ? "select-none" : ""}`}
         style={{ height, paddingRight: `${inputPadRight}px` }}
         spellCheck={false}
         autoComplete="off"
@@ -241,9 +268,12 @@ export function Spinner({
         </span>
       )}
       {/* Up/down arrow column — always visible, mirrors Win32 spin
-          button. Disabled state fades them to match the input. */}
+          button. Disabled state fades them to match the input. F6: also
+          the value-scrub affordance — mousedown here starts a drag-scrub
+          (ns-resize cursor); a plain click on a button steps by ±step. */}
       <div
-        className={`absolute right-0 top-0 flex flex-col border-l border-border-2 ${disabled ? "opacity-40" : ""}`}
+        onMouseDown={handleArrowsMouseDown}
+        className={`absolute right-0 top-0 flex flex-col border-l border-border-2 ${disabled ? "opacity-40" : "cursor-ns-resize"}`}
         style={{ height, width: `${ARROW_W}px` }}
         aria-hidden={disabled}
       >
@@ -252,7 +282,7 @@ export function Spinner({
           tabIndex={-1}
           disabled={disabled}
           aria-label="Increment"
-          onMouseDown={(e) => { e.preventDefault(); adjustBy(step); }}
+          onClick={() => { if (!scrubbedRef.current) adjustBy(step); }}
           className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
           style={{ fontSize: "7px", lineHeight: 1 }}
         >
@@ -263,7 +293,7 @@ export function Spinner({
           tabIndex={-1}
           disabled={disabled}
           aria-label="Decrement"
-          onMouseDown={(e) => { e.preventDefault(); adjustBy(-step); }}
+          onClick={() => { if (!scrubbedRef.current) adjustBy(-step); }}
           className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
           style={{ fontSize: "7px", lineHeight: 1 }}
         >

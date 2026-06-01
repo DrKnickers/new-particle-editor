@@ -45,4 +45,66 @@ describe("Spinner", () => {
     fireEvent.blur(input);
     expect(onChange).toHaveBeenCalledWith(2500);
   });
+
+  // F7: wheel steps a flat 0.1 on decimal fields (regardless of `step`).
+  it("scroll-wheel steps 0.1 on a decimal field", () => {
+    const onChange = vi.fn();
+    render(
+      <Spinner value={5} onChange={onChange} step={0.1} aria-label="test-spinner" />
+    );
+    const input = screen.getByRole("textbox");
+    fireEvent.wheel(input, { deltaY: -100 });
+    expect(onChange).toHaveBeenCalledWith(5.1);
+  });
+
+  // F7: Shift coarsens the wheel step by ×10 (0.1 → 1 on a decimal field).
+  it("scroll-wheel with Shift steps ×10", () => {
+    const onChange = vi.fn();
+    render(
+      <Spinner value={5} onChange={onChange} step={0.1} aria-label="test-spinner" />
+    );
+    const input = screen.getByRole("textbox");
+    fireEvent.wheel(input, { deltaY: -100, shiftKey: true });
+    expect(onChange).toHaveBeenCalledWith(6);
+  });
+
+  // F6: dragging the text INPUT must NOT scrub the value (it selects text).
+  it("dragging the text input does not change the value", () => {
+    const onChange = vi.fn();
+    render(
+      <Spinner value={5} onChange={onChange} step={1} aria-label="test-spinner" />
+    );
+    const input = screen.getByRole("textbox");
+    fireEvent.mouseDown(input, { clientY: 100, button: 0 });
+    fireEvent.mouseMove(document, { clientY: 60 });
+    fireEvent.mouseUp(document);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // F6: dragging the ARROW COLUMN vertically scrubs the value.
+  it("dragging the arrow column scrubs the value", () => {
+    const onChange = vi.fn();
+    render(
+      <Spinner value={5} onChange={onChange} step={1} aria-label="test-spinner" />
+    );
+    const column = screen.getByLabelText("Increment").parentElement as HTMLElement;
+    // Drag up 20px (dy = +20) at step 1 → 5 + 20 = 25.
+    fireEvent.mouseDown(column, { clientY: 100, button: 0 });
+    fireEvent.mouseMove(document, { clientY: 80 });
+    fireEvent.mouseUp(document);
+    expect(onChange).toHaveBeenLastCalledWith(25);
+  });
+
+  // F6: a plain click on an arrow still steps by ±step (no drag).
+  it("clicking the increment arrow steps by step", () => {
+    const onChange = vi.fn();
+    render(
+      <Spinner value={5} onChange={onChange} step={1} aria-label="test-spinner" />
+    );
+    const incr = screen.getByLabelText("Increment");
+    fireEvent.mouseDown(incr, { clientY: 100, button: 0 });
+    fireEvent.mouseUp(incr);
+    fireEvent.click(incr);
+    expect(onChange).toHaveBeenLastCalledWith(6);
+  });
 });
