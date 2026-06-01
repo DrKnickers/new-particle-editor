@@ -1,4 +1,4 @@
-# Next-session prompt — audit P1 fixes (F1–F5) on lt-4
+# Next-session prompt — verify audit-P1 (F1–F5), then master forward-port
 
 You're picking up `new-particle-editor` (the **AloParticleEditor** rewrite —
 Win32 + WebView2/React + D3D9Ex-via-DComp particle editor for Star Wars:
@@ -6,10 +6,10 @@ Empire at War), branch **`lt-4`**. Context is in the handoff docs; treat them as
 primary but **verify every important claim against the actual code** before acting
 (file:line refs drift — L-022).
 
-Last session (6) shipped the whole F1–F9 UI follow-up backlog + the native
-link-group fix (F4), all on `origin/lt-4` and user-validated. **This session:
-the 5 audit P1 bug fixes** — a plan is already written in `tasks/todo.md` and
-the work is **NOT started** (sites were verified, no fix code written).
+Last session (7) **shipped the 5 audit-P1 fixes (F1–F5)** on `origin/lt-4`
+(`05f7228..f848c86`), build + a11y verified. **Two things remain**, in order:
+**(1)** a user-driven GUI round-trip that last session couldn't self-run (L-033),
+and **(2)** the master forward-port of F1–F5 (the user's call on timing).
 
 ## Pre-flight (run before touching anything)
 ```
@@ -18,60 +18,56 @@ git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh cla
 git log --oneline origin/lt-4..HEAD | wc -l               # expect 0
 git log --oneline HEAD..origin/lt-4 | wc -l               # expect 0
 git status --porcelain                                     # expect clean
-git rev-parse --short origin/lt-4                          # expect 5bf0645 (or newer)
+git rev-parse --short origin/lt-4                          # expect f848c86 (or newer)
 ```
-If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow
-(last session hit a 2-commit divergence — see HANDOFF for how it was rebased).
+If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
 ## Baseline
 - From `web/`: `pnpm --filter @particle-editor/editor test` → **384 passed** (44 files).
-- `pnpm --filter @particle-editor/editor build` → tsc + dist clean.
-- Native (these fixes are native — you WILL need this): build the **`.sln`**
-  (NOT the `.vcxproj`, L-023; restore NuGet first on a fresh worktree) Debug AND
-  Release x64:
+- `pnpm --filter @particle-editor/editor build` → clean.
+- Native `.sln` Debug + Release x64 (absolute path; the Debug `LNK4098 LIBCMTD`
+  warning is pre-existing/benign):
   `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" "<repo>\ParticleEditor.sln" /p:Configuration=Debug /p:Platform=x64 /nologo /verbosity:minimal /m`
-  (Debug `LNK4098 LIBCMTD` warning is pre-existing/benign.) Use the **absolute**
-  .sln path — the PowerShell tool's cwd can drift.
+  - **Fresh worktree?** NuGet restore with no `nuget.exe` on PATH: copy
+    `~/.nuget/packages/microsoft.web.webview2/1.0.3967.48/*` →
+    `packages/Microsoft.Web.WebView2.1.0.3967.48/` (the `packages.config` layout).
+    See **L-039**. Then build.
 
 ## Primary context (read first, then VERIFY against code)
-- **[`tasks/todo.md`](todo.md)** — the audit-P1 plan (goal/scope, per-item fix
-  shape, risks, testing). **This is the work queue.**
-- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "2026-06-01 (session 6)" section:
-  the verified site details for each fix + the test/build state.
-- **[`tasks/post-audit-followups.md`](post-audit-followups.md)** — full P1 finding
-  text. **The audit's own F1–F5 numbering ≠ the UI F1–F9** (naming collision).
-- **[`tasks/lessons.md`](lessons.md)** — esp. **L-038** (native host logic is
-  gated by `pnpm a11y`, NOT vitest+build — run the native suite before pushing),
-  **L-033** (agent native launches misrender/differ — verify via the user),
-  **L-030** (don't blanket-regen a11y goldens), **L-023/L-025** (build the .sln).
+- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "session 7" section: what shipped, the
+  five commits, verified state, and the exact NEXT steps.
+- **[`tasks/todo.md`](todo.md)** — the audit-P1 plan + the Review section (per-item
+  commits, scope decisions, verification, the iterative-DFS note).
+- **[`tasks/post-audit-followups.md`](post-audit-followups.md)** — full finding text.
+  **G9** (`.meg` index OOB, `[both]` P1) is the audit's recommended bundle-mate for
+  the master P1 PR — same untrusted-binary class as F2/F3.
+- **[`tasks/lessons.md`](lessons.md)** — esp. **L-038** (native logic gated by
+  `pnpm a11y`, not vitest+build), **L-033** (agent native launches misrender —
+  verify via the user; the 4 `splitters` a11y failures are this artifact, not a
+  regression), **L-039** (fresh-worktree NuGet restore), **L-023/L-025** (.sln).
 - `CLAUDE.md` — working principles, plan-mode, LT-4 branch flow (FF into lt-4).
 
-## The work (all in shared legacy `src/`, land on lt-4 per the user)
-1. **F1** save-failure data loss — [main.cpp:1466](../src/main.cpp:1466): gate the
-   post-save bookkeeping on `bool ok = SaveParticleSystem(...)`. Audit the host
-   path too ([BridgeDispatcher.cpp:1620](../src/host/BridgeDispatcher.cpp:1620)).
-2. **F2** `ChunkReader::readString()` heap over-read — [ChunkReader.cpp:90](../src/ChunkReader.cpp:90).
-3. **F3** chunk-depth overflow — [ChunkReader.cpp:65](../src/ChunkReader.cpp:65) +
-   [ChunkWriter.cpp:8](../src/ChunkWriter.cpp:8) ([ChunkFile.h:27](../src/ChunkFile.h:27)).
-4. **F4** cyclic/multi-parent loader guard — [ParticleSystem.cpp:1071](../src/ParticleSystem.cpp:1071), new `ValidateEmitterGraph()`.
-5. **F5** uint16 particle-index cap — [EmitterInstance.cpp:133](../src/EmitterInstance.cpp:133) `AllocateParticle()`.
+## The work
+1. **GUI round-trip verification (user-driven, L-033).** In
+   `x64\Release\ParticleEditor.exe --new-ui`: open a real **multi-emitter** `.alo`,
+   **save**, **reload**, confirm it loads identically (F2/F3/F4 don't reject valid
+   data; the a11y fixture load already covers "valid files load" — this confirms the
+   write→reload identity). Optionally force a **save failure** (read-only target) and
+   confirm the dirty asterisk + autosave survive and the close is aborted (**F1**).
+   If a problem surfaces, fix-forward on lt-4 (FF-push).
+2. **Master forward-port of F1–F5** (user decides when). These are `[both]`; cherry-
+   pick / port the five fixes onto `master` and **backfill the CHANGELOG `TODO`
+   hash/PR** at merge. Strongly consider bundling **G9** (`.meg` index validation)
+   into the same PR per the audit's suggested ordering. **Never push `master`
+   without explicit OK.**
 
-Out of scope: audit-F6 (TextureManager/Reset, needs a `--test-host` repro first),
-audit-F7 (already fixed on lt-4). Forward-port to master is the user's later call.
-
-## Process (per CLAUDE.md — non-negotiable)
-- The plan exists; **summarize your understanding + re-verify the first site before
-  editing**, then proceed item by item (each is independently committable).
-- **Verify natively (L-038):** after building Debug+Release, run
-  `pnpm --filter @particle-editor/editor a11y` — `emitter-mutations`/`bridge-native`
-  must pass; the **4 `splitters` failures are a known agent-window artifact**
-  (L-033), not your change. Round-trip save→load a real `.alo` in the running
-  editor (`x64\Release\ParticleEditor.exe --new-ui`) so F2/F3/F4 don't reject
-  valid files. (Web UI relaunch needs a WebView2 cache clear, L-030; CDP uses
-  127.0.0.1 not localhost, L-034.)
-- When an item lands: update `CHANGELOG.md` (TODO hash placeholder), append any
-  lesson, FF-push to `origin/lt-4` (`git push origin HEAD:lt-4`). **Never `master`
-  without explicit OK.**
+## Process (per CLAUDE.md)
+- Summarize your understanding + confirm scope before doing the forward-port; it's a
+  branch operation with merge implications, so align first.
+- For any native fix: build Debug+Release, run `pnpm --filter @particle-editor/editor
+  a11y` (the 4 `splitters` failures are the known L-033 artifact, not yours).
+- When an item lands: update `CHANGELOG.md`, append any lesson, FF-push to the right
+  branch. **Never `master` without explicit OK.**
 
 Before changing anything, summarize your understanding of the project state, the
-chosen fixes, and your approach, and wait for me to confirm.
+remaining work, and your approach, and wait for me to confirm.
