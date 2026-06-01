@@ -2811,3 +2811,46 @@ took the PowerShell here-string delimiters literally, prepending `@\n` and
 appending `\n@`. Caught by reading the commit output, fixed with
 `git commit --amend -F .git-commit-msg.tmp` before the fast-forward into `lt-4`,
 so the mangled message never reached `origin`.
+
+---
+
+## L-037 — In the arch-A→arch-C/bridge migration, a feature that *renders* can still be behaviourally dead: the new path often reimplemented a chokepoint and silently dropped a side effect the legacy version performed
+
+**Rule.** When a new-UI feature "draws but doesn't work," don't trust that the
+bridge handler does what the legacy code did just because the visible output
+matches. The React rewrite frequently reimplemented a shared chokepoint and kept
+only its *primary* job, dropping a quiet *side effect* the legacy version folded
+in. The view state (what the gutter/badge reads) is set, so it *looks* wired; the
+behavioural invariant the side effect enforced is gone. Diff the legacy chokepoint
+against the new one for side effects, not just the headline mutation.
+
+**Trigger.** Any "the new UI shows X but X has no effect" report, especially where
+a host model + API already exist and the React side clearly sends a command.
+Tells: the legacy version routed through a single function (`CaptureUndo`, a
+WM_COMMAND handler) that did N things; the new version split that across per-handler
+lambdas; the rendered indicator reads a raw field (`node.linkGroup`) that the new
+path *does* set.
+
+**How to apply.**
+1. Find the legacy chokepoint the feature flowed through and **enumerate every
+   side effect** it performed (propagation, normalisation, cache invalidation,
+   re-sync), not just the obvious mutation.
+2. For each side effect, check whether the new bridge path performs it. Watch for
+   **timing inversions** — legacy `CaptureUndo` propagated *then* snapshotted
+   (post-edit); the bridge `captureUndo` lambda snapshots *pre*-mutation, so a
+   bolted-on propagation must run after the mutation, not inside the snapshot.
+3. If the side effect must fire on *every* edit, enumerate **all** handlers that
+   make that class of edit (here: the 6 shared-field handlers) — there's usually
+   no single post-mutation chokepoint in the bridge, so the call is explicit and
+   easy to miss one.
+
+**Source incident (2026-06-01, F4 "link groups draw but don't link").** Brackets
+rendered off `node.linkGroup` (set), but linking had no effect. Two dropped side
+effects: `linkGroups/set-membership` stamped `e->linkGroup` instead of calling
+`CreateLinkGroup`/`JoinLinkGroup` (no field sync on link), and per-edit
+propagation — performed by legacy [`CaptureUndo`](../src/main.cpp:864) for *every*
+edit — was absent from the bridge's pre-mutation `captureUndo` lambda. Fix:
+drive the `LinkGroup.h` API in set-membership + a `propagateLinkGroup` call in all
+6 shared-field handlers. Cross-reference [L-035](#l-035) (code-reading mis-points;
+here the *absence* in the new path is the bug) — both say: verify the new path's
+actual behaviour against the legacy one, don't assume parity from a matching surface.

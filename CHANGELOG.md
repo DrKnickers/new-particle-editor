@@ -16,6 +16,96 @@ Conventions:
 
 ## Changelog
 
+### [LT-4 bugfix] Link groups now actually link — sync-on-link + per-edit propagation
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Linking emitters into a group had no behavioural effect in the new UI: the
+bracket gutter drew, but the members didn't share parameters and editing one
+didn't update the others. Both halves of link-group behaviour now work, matching
+legacy: **linking** unifies the members' non-exempt fields immediately (textures,
+name, and the atlas-index curve stay per-emitter; everything else — RGBA/scale/
+rotation curves, lifetime, physics, appearance — is shared), and **editing** any
+shared field on one member propagates to the rest as a single undoable step.
+
+**How we tackled it.** Two changes in [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1).
+(1) `linkGroups/set-membership` now drives the existing `LinkGroup.h` API
+(`CreateLinkGroup` / `JoinLinkGroup` / `LeaveLinkGroup`, detaching any
+already-grouped member first) instead of stamping `e->linkGroup` raw — the raw
+stamp set the membership id (so brackets drew) but never synced fields, the root
+cause. (2) A new `propagateLinkGroup(edited)` lambda mirrors the legacy post-edit
+chokepoint in [`src/main.cpp`](src/main.cpp:864) `CaptureUndo` — it copies the
+edited emitter's non-exempt params to every sibling via
+`Emitter::copySharedParamsFrom` using the group's exempt flags — and is called
+after the mutation in the six handlers that touch shared fields (`set-properties`,
+`set-track-interpolation`, `set-track-lock`, `set-track-key`, `add-track-key`,
+`delete-track-keys`). The pre-mutation `captureUndo()` already snapshots the whole
+system, so one Ctrl+Z restores the entire group.
+
+**Issues encountered and resolutions.** The new UI reimplemented undo capture as
+a *pre-mutation* bridge lambda and silently dropped the propagation side effect
+the legacy *post-edit* `CaptureUndo` performed — so the fix is a chokepoint, not a
+one-liner; propagation had to be added to each shared-field handler (structural /
+identity / per-emitter `visible` handlers are correctly excluded). `set-track-lock`
+propagation is correct because `copySharedParamsFrom` re-points `tracks[]` into the
+destination's own `trackContents` ([`src/ParticleSystem.cpp`](src/ParticleSystem.cpp:660)),
+remapping the lock pointer rather than aliasing the source's. The host's track keys
+are a time-keyed `std::multiset` (duplicate times legal), which also made the
+companion curve-editor multi-key edit (below) safe without a batch API.
+
+---
+
+### [LT-4 UI follow-ups] F-series — number fields, curve editor, emitter toolbar, brackets
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Seven UI refinements from a live review (the `F2`–`F9` backlog, minus the native
+F4 above and the deferred F1 icon-layout):
+
+1. **F2** — the emitter-tree toolbar is centered and its buttons sized 28px to
+   match the main toolbar (was 24px, left-aligned and lopsided on resize).
+2. **F3** — toolbar, tree, and panel-header icon buttons show a pressed
+   (`:active`) state — lighter bg + slight scale — distinct from hover/toggled.
+3. **F5** — the link-group bracket gutter hugs the emitter rows (row→bracket gap
+   18px → 6px), matching legacy 0.2; the old `marginRight: gutterPx` was a
+   leftover from when the gutter was absolutely positioned.
+4. **F6** — dragging across a number field now selects text; the value-scrub
+   gesture moved to the up/down arrow column (a plain click still steps).
+5. **F7** — the scroll wheel steps a flat 0.1 on decimal fields and 1 on integer
+   fields (Shift = ×10), matching legacy, instead of the field's configured step.
+6. **F8** — selecting >1 curve key shows the **average** Time/Value; editing it
+   shifts the whole group by the delta (preserve spread). Matches legacy
+   `CurveEditor_MoveSelection`: average over all selected keys; Time editable when
+   ≥1 interior key is selected; Time-shift moves interior keys only (borders
+   pinned in time but shift in value); Value-shift moves all.
+7. **F9** — selecting the **Index** curve auto-deselects every other channel
+   (solo), exactly like Scale; the two replace each other.
+
+**How we tackled it.** F2/F3 in [`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx:1)
+(the `TOOLBAR_BTN` utility string) + [`components.css`](web/apps/editor/src/styles/components.css:1);
+F5 swaps the redundant `marginRight: gutterPx` for a small `GUTTER_GAP_PX`. F6/F7
+in [`Spinner.tsx`](web/apps/editor/src/primitives/Spinner.tsx:1): the drag handler
+moved off the `<input>` onto the arrow-column wrapper with a 3px movement
+threshold and a `scrubbedRef` click-suppressor; the wheel base derives from the
+field's decimal-places (`dp === 0 ? 1 : 0.1`). F8/F9 in
+[`CurveEditorPanel.tsx`](web/apps/editor/src/components/CurveEditorPanel.tsx:1):
+F9 generalizes the Scale-solo logic to an `EXCLUSIVE_CHANNELS` set; F8 adds a
+`multiSelected` average memo + an `applyGroupShift` helper that issues ordered
+single-key `set-track-key` calls (descending `oldTime` for a rightward shift,
+ascending for leftward) so each host-side `find(oldTime)` is unambiguous on the
+time-keyed multiset — no batch API needed.
+
+**Issues encountered and resolutions.** F5 looked like a one-constant tweak but
+the `<ul>` is `flex-1`, so the brackets stay glued to the rows' right edge
+regardless — the real cause was double-spacing (margin + a now-real flex gutter
+column). F8's "shift the group" is constrained by immovable border keys; after
+checking the legacy source we matched its exact rule (Time disabled only when the
+selection is *all* borders) rather than the stricter first proposal. 12 new vitest
+specs across Spinner (F6/F7) and CurveEditorPanel (F8/F9); full suite 383/383,
+a11y goldens untouched (all CSS/DOM-state, no captured-surface change).
+
+---
+
 ### [LT-4 UI polish] Inspector density pass — tighter rhythm, flat sections, indent hierarchy, aligned checkboxes
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
