@@ -4,10 +4,14 @@
 //      pops the DDS/TGA picker, not the .alo one).
 //   3. On a resolved path, the chain dispatches set-ground-slot-custom-path
 //      then set-ground-texture in order.
+//   4. Height spinner → engine/set/ground-z.
+//   5. Solid-colour tile → selects slot 4; native colour input →
+//      engine/set/ground-solid-color.
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { GroundTexturePanel } from "../GroundTexturePanel";
+import { hexToColorref } from "@/lib/colorref";
 import type { Bridge } from "@particle-editor/bridge-schema";
 
 type RequestFn = (req: { kind: string; params?: Record<string, unknown> }) => Promise<unknown>;
@@ -108,5 +112,39 @@ describe("GroundTexturePanel", () => {
     const activateCalls = calls.filter((c) => c.kind === "engine/set/ground-texture");
     const lastActivate = activateCalls[activateCalls.length - 1];
     expect(lastActivate.params).toEqual({ slot: 5 });
+  });
+
+  it("changing the Height spinner dispatches engine/set/ground-z", () => {
+    const bridge = makeStubBridge();
+    render(<GroundTexturePanel bridge={bridge} onClose={() => {}} />);
+    // Spinner commits on blur, not keystroke.
+    const height = screen.getByRole("textbox", { name: "Ground height" });
+    fireEvent.change(height, { target: { value: "5" } });
+    fireEvent.blur(height);
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const setZ = calls.find((c) => c.kind === "engine/set/ground-z");
+    expect(setZ).toBeDefined();
+    expect(setZ.params.z).toBe(5);
+  });
+
+  it("clicking the Solid colour tile selects slot 4; the native colour input dispatches engine/set/ground-solid-color", () => {
+    const bridge = makeStubBridge();
+    const { container } = render(<GroundTexturePanel bridge={bridge} onClose={() => {}} />);
+
+    // The prominent wide tile both selects the solid-colour slot (4) and
+    // (in the host) pops the OS picker via the hidden native input.
+    fireEvent.click(screen.getByRole("button", { name: "Solid colour" }));
+    let calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const setSlot = calls.find((c) => c.kind === "engine/set/ground-texture");
+    expect(setSlot?.params.slot).toBe(4);
+
+    // The native <input type="color"> drives the colour change.
+    const colorInput = container.querySelector('input[type="color"]') as HTMLInputElement;
+    expect(colorInput).toBeTruthy();
+    fireEvent.change(colorInput, { target: { value: "#ff0000" } });
+    calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const setColor = calls.find((c) => c.kind === "engine/set/ground-solid-color");
+    expect(setColor).toBeDefined();
+    expect(setColor.params.rgb).toBe(hexToColorref("#ff0000"));
   });
 });

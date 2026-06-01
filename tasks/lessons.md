@@ -2972,3 +2972,52 @@ native build, since F1–F5 were native-only). `pnpm --filter
 @particle-editor/editor build` + relaunch fixed it; the editor then loaded fully
 and the round-trip passed. Cross-reference [L-033](#l-033) (agent launches
 misrender — the user drives the actual round-trip).
+
+## L-041 — Debug new-UI (React) bugs in browser mode (`pnpm dev` + MockBridge) to sidestep L-033; and for colour pickers that may overlay the arch-C viewport, prefer a native `<input type="color">` over a Radix DOM popover
+
+**Trigger.** A user reports a new-UI bug you can't see, because agent-launched native
+runs misrender arch-C (L-033). Two such bugs landed 2026-06-01: the Ground "Solid
+colour" option "didn't raise a colour picker", and there was "no ground-height
+parameter."
+
+**How to apply — reproduce in the browser, not the host.** The React app +
+`primitives/` (incl. the `ColorButton` Radix picker) are *pure React* — they run in a
+normal browser via `pnpm dev` against the TypeScript MockBridge, exercising the exact
+component tree the WebView2 host loads, **without** the arch-C compositing. Use the
+`preview_*` tools: `preview_start` (launch config `editor`, port 5173), then drive the
+DOM. **A bug that reproduces in browser is a React bug; one that doesn't is either
+native-host-specific or a user-interaction/discoverability issue.** The solid-colour
+picker opened *fine* in browser — which immediately ruled out a logic bug and pointed
+at discoverability and/or native occlusion. This three-layer split is the template:
+**vitest** proves the bridge contract, **browser preview** proves the interaction,
+the **user** confirms only what neither can (does the OS dialog paint over the live
+viewport).
+
+**Gotcha — `preview_click` doesn't reliably toggle a Radix popover.** Radix
+`Popover.Trigger` opens on `pointerdown`; the preview tool's plain `.click()` can fail
+to latch it (especially after the open/closed state gets confused by repeated clicks).
+Drive it from `preview_eval` with real pointer events instead:
+`btn.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); …('pointerup'…); btn.click();`
+then `await` a frame and read the *portaled* dialog (`[role="dialog"]`) from
+`document`, not from a subtree. Also: scope element queries to the open dialog — a bare
+`querySelector('button[aria-label="Increment"]')` grabs the *first* spinner on the page
+(e.g. a Spawner field), not the one in your dropdown.
+
+**Design rule — native OS picker beats a DOM popover over the viewport.** In arch-C the
+engine viewport composites over the WebView except where a DOM element is
+occlusion-registered (`OccludingPopover` / `useViewportOcclusion`). A Radix
+`Popover.Content` is portaled to `document.body` and is **not** occlusion-registered, so
+if it overlaps the viewport it renders *behind* the live 3-D view — present but
+invisible. `BackgroundPicker` avoids this by triggering a native `<input type="color">`
+(an OS dialog — a separate always-on-top window, immune to compositing). When a
+toolbar/dropdown colour control can overlay the viewport, mirror that pattern rather
+than nesting a Radix colour popover. (Whether other Radix colour popovers — Lighting,
+etc. — are actually occluded natively is unverified; check via the user before
+assuming, and fix only if confirmed.)
+
+**Source incident (2026-06-01, session 8).** Fixed both ground bugs in
+`GroundTexturePanelBody` by mirroring `BackgroundPicker` (wide tile → native colour
+input) and porting the missing height `Spinner` to the existing `engine/set/ground-z`.
+vitest 386 + build clean + browser-verified (picker fires from the tile, height
+round-trips and disables with the ground toggle). Native OS-dialog-over-viewport paint
+left to the user (L-033). Cross-reference [L-033](#l-033), [L-040](#l-040).

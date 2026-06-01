@@ -29,12 +29,11 @@
 // picker to invoke without the host. Populated custom slots just
 // switch via `engine/set/ground-texture { slot }`.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
-import { ColorButton } from "@/primitives/ColorButton";
+import { Spinner } from "@/primitives/Spinner";
 import { ToolPanel } from "@/components/ToolPanel";
 import { colorrefToHex, hexToColorref } from "@/lib/colorref";
-import type { RgbColor } from "@/primitives/palette-store";
 
 type Props = {
   bridge: Bridge;
@@ -69,20 +68,6 @@ function basename(path: string): string {
   return i >= 0 ? norm.slice(i + 1) : norm;
 }
 
-function hexToRgbColor(hex: string): RgbColor {
-  const m = hex.replace("#", "");
-  return {
-    r: parseInt(m.slice(0, 2), 16),
-    g: parseInt(m.slice(2, 4), 16),
-    b: parseInt(m.slice(4, 6), 16),
-  };
-}
-
-function rgbColorToHex(rgb: RgbColor): string {
-  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
-  return `#${h(rgb.r)}${h(rgb.g)}${h(rgb.b)}`;
-}
-
 /**
  * GroundTexturePanelBody — the slot-grid + solid-colour-picker markup
  * that used to live inside <ToolPanel>. Extracted so both the legacy
@@ -110,10 +95,12 @@ export function GroundTexturePanelBody({ bridge }: BodyProps) {
     };
   }, [bridge]);
 
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+
   const groundOn = snapshot?.ground ?? false;
   const selectedSlot = snapshot?.groundTexture ?? 0;
+  const groundZ = snapshot?.groundZ ?? 0;
   const solidHex = snapshot ? colorrefToHex(snapshot.groundSolidColor) : "#888888";
-  const solidRgb = hexToRgbColor(solidHex);
   // Custom-slot paths live at the array's tail. The bridge DTO carries
   // all 8 slots indexed by slot number; we read 5..7 directly.
   const customPaths = snapshot?.groundSlotCustomPaths ?? [];
@@ -124,10 +111,10 @@ export function GroundTexturePanelBody({ bridge }: BodyProps) {
   const handleSelectSlot = (slot: number) => {
     void bridge.request({ kind: "engine/set/ground-texture", params: { slot } });
   };
-  const handleSolidColorChange = (rgb: RgbColor) => {
+  const handleSolidColorChange = (hex: string) => {
     void bridge.request({
       kind: "engine/set/ground-solid-color",
-      params: { rgb: hexToColorref(rgbColorToHex(rgb)) },
+      params: { rgb: hexToColorref(hex) },
     });
     // Selecting a colour switches to the solid-colour slot as well, so
     // the change is immediately visible without an extra click.
@@ -137,6 +124,24 @@ export function GroundTexturePanelBody({ bridge }: BodyProps) {
         params: { slot: SOLID_COLOR_SLOT },
       });
     }
+  };
+  // Clicking the wide solid-colour tile selects the slot AND pops the
+  // native colour picker (mirrors BackgroundPicker's proven pattern — an
+  // OS dialog, immune to the arch-C viewport occlusion a DOM popover hits,
+  // and discoverable because the obvious target is the one that opens it).
+  const handleSolidColorClick = () => {
+    if (selectedSlot !== SOLID_COLOR_SLOT) {
+      void bridge.request({
+        kind: "engine/set/ground-texture",
+        params: { slot: SOLID_COLOR_SLOT },
+      });
+    }
+    colorInputRef.current?.click();
+  };
+  // Ground-plane height (legacy NT-2). Session-only — the engine has no
+  // persistence for it, matching the legacy spinner.
+  const handleGroundZChange = (z: number) => {
+    void bridge.request({ kind: "engine/set/ground-z", params: { z } });
   };
   const handleCustomClick = (slot: number, isEmpty: boolean) => {
     if (isEmpty) {
@@ -176,13 +181,31 @@ export function GroundTexturePanelBody({ bridge }: BodyProps) {
         <span>Show ground</span>
       </label>
 
-      {/* Solid-colour slot — wide tile, full-width, with ColorButton
-          inline on the right so the swatch is editable without a
-          second click. */}
+      {/* Ground-plane height (legacy NT-2). Enabled only when the ground
+          is shown, in lockstep with the toggle — matches the legacy
+          spinner (main.cpp:1662). */}
+      <div className="mb-3 flex items-center justify-between gap-2 text-xs text-text">
+        <span className={groundOn ? "" : "opacity-40"}>Height</span>
+        <Spinner
+          value={groundZ}
+          onChange={handleGroundZChange}
+          min={-100}
+          max={100}
+          step={0.1}
+          decimals={1}
+          disabled={!groundOn}
+          density="tight"
+          aria-label="Ground height"
+        />
+      </div>
+
+      {/* Solid-colour slot — wide tile. Clicking it selects the slot and
+          pops the native colour picker via the hidden <input type="color">
+          below (mirrors BackgroundPicker). */}
       <div className="mb-3">
         <button
           type="button"
-          onClick={() => handleSelectSlot(SOLID_COLOR_SLOT)}
+          onClick={handleSolidColorClick}
           className={`relative flex h-16 w-full items-center justify-between rounded-md border-2 px-3 transition ${
             selectedSlot === SOLID_COLOR_SLOT
               ? "border-accent"
@@ -201,13 +224,17 @@ export function GroundTexturePanelBody({ bridge }: BodyProps) {
             </span>
           )}
         </button>
-        <div className="mt-2 flex items-center justify-end">
-          <ColorButton
-            value={solidRgb}
-            onChange={handleSolidColorChange}
-            aria-label="Ground solid colour"
-          />
-        </div>
+        {/* Hidden native colour input. Clicking the solid-colour tile
+            triggers it programmatically. */}
+        <input
+          ref={colorInputRef}
+          type="color"
+          value={solidHex}
+          onChange={(e) => handleSolidColorChange(e.target.value)}
+          className="sr-only pointer-events-none absolute"
+          tabIndex={-1}
+          aria-hidden="true"
+        />
       </div>
 
       {/* Bundled slots 0..3 — 2×2 grid. */}

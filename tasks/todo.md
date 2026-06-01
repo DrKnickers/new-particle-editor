@@ -1,121 +1,113 @@
-# Audit P1 fixes (F1–F5) — session 6 continued
-
-**Branch:** `lt-4` (session branch `claude/nervous-lamport-e8a966`). User chose
-to fix the [both] P1 items **on lt-4** (forward-port to master later), and to take
-**all of F1–F5**. Source: [tasks/post-audit-followups.md](post-audit-followups.md) P1 tier.
-
-The F-series (F1–F9 UI) shipped earlier this session (see CHANGELOG + git
-`965da15..ed1885c`); this plan supersedes that one in todo.md.
+# Fix two ground-control bugs in the new UI (GroundTexturePanel)
 
 ## 1. Goal + scope
+Two user-reported bugs in the `--new-ui` ground controls:
+- **Bug 1** — the solid-colour ground option doesn't raise a colour picker.
+- **Bug 2** — there's no ground-height parameter to change.
 
-Fix the five [both] P1 correctness/data-loss/memory-safety bugs in shared legacy
-`src/` code. **In:** F1 (save-failure data loss), F2 (ChunkReader heap over-read),
-F3 (chunk-depth overflow), F4 (cyclic/multi-parent emitter graph), F5 (uint16
-particle-index wrap). **Out:** F6 (TextureManager/Reset — [lt-4], needs a
-`--test-host` repro to confirm P1 vs P2; separate), F7 (skydome — already fixed on
-lt-4), and all P2/P3/G items. Master forward-port is the user's later call.
+**Root causes (verified, Phase-1 debugging):**
+- Bug 1 is **not** a React logic bug — the Radix `ColorButton` picker opens
+  fine in browser mode. It's a discoverability defect (the prominent wide
+  "Solid colour" tile only *selects* the slot; the real picker is a small
+  secondary swatch below) **and/or** an arch-C native occlusion of the Radix
+  DOM popover (unverifiable by agent, L-033). `BackgroundPicker` avoids both by
+  using a **native `<input type="color">`** (an OS dialog — always on top, no
+  occlusion) triggered by its wide tile. User confirmed Background works natively.
+- Bug 2: engine `SetGroundZ` + bridge `engine/set/ground-z` + dispatcher handler
+  all exist; the legacy NT-2 (#45) control was **never ported** to React. No
+  component reads/writes `groundZ`.
 
-## 2. What the codebase already gives us (verify each — L-022 drift)
+**In:** mirror Background's solid-colour pattern in `GroundTexturePanelBody`
+(wide tile → native colour input; remove the secondary Radix `ColorButton`);
+add a ground-height `Spinner` to the same panel (user chose "inside the Ground
+dropdown").
+**Out:** native visual verification (user-driven, L-033 — agent can't see arch-C);
+auditing/occlusion-fixing other `ColorButton` usages (Lighting etc. — separate,
+only if confirmed broken natively); ground-Z persistence (legacy is session-only —
+match that).
 
-- **F1:** `DoSaveFile` [main.cpp:1452](../src/main.cpp:1452) — `SaveParticleSystem()`
-  returns bool; bookkeeping (`SetFileChanged(false)`, `undoStack.MarkSaved()`,
-  `Autosave::DeleteOurSession()`) runs unconditionally. Host twin to audit:
-  [BridgeDispatcher.cpp:1620](../src/host/BridgeDispatcher.cpp:1620).
-- **F2:** `ChunkReader::readString()` [ChunkReader.cpp:90](../src/ChunkReader.cpp:90) —
-  `new char[size()]` + `str = data` (walks to NUL). `BadFileException` exists.
-- **F3:** `MAX_CHUNK_DEPTH=256` [ChunkFile.h:27](../src/ChunkFile.h:27); reader
-  `++m_curDepth` [ChunkReader.cpp:65](../src/ChunkReader.cpp:65); writer
-  `m_curDepth++` [ChunkWriter.cpp:8](../src/ChunkWriter.cpp:8) — no bound checks.
-- **F4:** loader range-clears `spawnOnDeath`/`spawnDuringLife` then sets
-  `child->parent` [ParticleSystem.cpp:1071](../src/ParticleSystem.cpp:1071); no
-  self-link / dual-parent / cycle check. `deleteEmitter` recurses on these.
-- **F5:** `uint16_t index[]` [EmitterInstance.h:25](../src/EmitterInstance.h:25);
-  wrap at `m_verticesIndex` casts [EmitterInstance.cpp:340](../src/EmitterInstance.cpp:340);
-  `AllocateParticle()` [EmitterInstance.cpp:133](../src/EmitterInstance.cpp:133).
+## 2. What the codebase already gives us
+- `BackgroundPicker.tsx:100-178` — the proven wide-tile→`colorInputRef.click()`→
+  hidden `<input type="color">` pattern. Mirror it verbatim.
+- `Spinner` primitive (`primitives/Spinner.tsx`) — `value/onChange/min/max/step/
+  decimals/disabled/density/aria-label`; commit-on-blur, no bridge spam.
+- `colorref` helpers — `hexToColorref(hex)`, `colorrefToHex(c)` (Background uses
+  the same for encoding; COLORREF channel order proven correct).
+- Bridge handlers already live: `engine/set/ground-solid-color` (BridgeDispatcher
+  :1202), `engine/set/ground-z` (:1184); mock handles both (mock.ts:215,223).
+- Legacy ground-Z spinner spec (main.cpp:2157-2165): float, **−100…100, step 0.1**,
+  default 0, **enabled only when ground shown** (lockstep with the toggle).
 
-## 3. Implementation approach
-
-- **F1:** track `bool ok = SaveParticleSystem(...)`; run the three bookkeeping
-  calls only inside `if (ok)`. Apply the same shape to the host save path if it
-  has the same bug.
-- **F2:** read into `std::vector<char> buf(size())`; validate `size() > 0 &&
-  buf.back() == '\0'`; construct `std::string(buf.data(), buf.size()-1)`; throw
-  `BadFileException` otherwise.
-- **F3:** depth guard before `++m_curDepth`/`m_curDepth++` — reader throws
-  `BadFileException` at `>= MAX_CHUNK_DEPTH`; writer `assert` (our-bug, not input).
-- **F4:** add `ValidateEmitterGraph()` after the range-clear — reject self-links,
-  reject a child claimed by two parents, DFS for cycles (clear the offending
-  link). Call from load + autosave-restore + the import-emitters helper.
-- **F5:** hard cap in `AllocateParticle()` at
-  `numeric_limits<uint16_t>::max() / NUM_VERTICES_PER_PARTICLE`; refuse to spawn
-  beyond it (debug-log).
+## 3. Approach
+Edit `web/apps/editor/src/screens/GroundTexturePanel.tsx` (`GroundTexturePanelBody`):
+- Imports: drop `ColorButton` + `RgbColor` + the `hexToRgbColor/rgbColorToHex`
+  helpers; add `useRef` + `Spinner`.
+- Add `colorInputRef`, `groundZ = snapshot?.groundZ ?? 0`.
+- `handleSolidColorChange(hex: string)` (was RgbColor) → `engine/set/ground-solid-color`
+  with `hexToColorref(hex)`; `handleSolidColorClick()` selects slot + `.click()`s
+  the input; `handleGroundZChange(z)` → `engine/set/ground-z`.
+- JSX: wide tile `onClick={handleSolidColorClick}`; replace the `ColorButton` block
+  with a hidden `<input type="color" ref={colorInputRef} value={solidHex} …>`; add
+  a "Height" `Spinner` row (−100..100, step 0.1, dp 1, `disabled={!groundOn}`) under
+  the Show-ground toggle.
+- Update `GroundTexturePanel.test.tsx`: height field → `engine/set/ground-z`;
+  solid-colour input change → `engine/set/ground-solid-color`; tile click selects
+  slot 4.
 
 ## 4. Risks + mitigations
-
-1. **F4 false-positives reject valid files.** A legitimate deep-but-acyclic graph
-   must still load. *Mitigation:* only reject true self-link / dual-parent /
-   cycle; clear the bad link rather than refusing the whole file where possible;
-   test with a normal multi-emitter file (must load unchanged).
-2. **F2/F3 break loading of valid files.** Over-strict validation rejects good
-   `.alo`s. *Mitigation:* only the malformed cases throw; round-trip a
-   save→load of a real particle system and confirm identical.
-3. **F5 cap too low clips real effects.** ~16k particles is a real ceiling.
-   *Mitigation:* cap at the exact uint16/verts boundary, not lower; log so it's
-   visible; note the 32-bit-index long-term fix.
-4. **Native-only behaviour, mock can't cover it (L-038).** vitest won't catch
-   regressions here. *Mitigation:* build Debug+Release and run the native
-   `pnpm a11y` suite (emitter-mutations/bridge-native) after; round-trip a real
-   file via `--test-host`/the editor.
+1. **Losing the rich palette picker (basic/custom/hex/sliders).** Replacing the
+   Radix `ColorButton` with the native OS picker is a feature downgrade. *Mitigation:*
+   accepted — it matches Background (consistency), is the only mechanism *proven* to
+   work in the native host, and fixes the bug under both hypotheses. Flagged for the
+   user to veto on review.
+2. **Native occlusion unconfirmed.** If the Radix popover *did* work natively, this
+   is "merely" a consistency/discoverability change. *Mitigation:* native input is
+   strictly safer regardless; no downside to converging.
+3. **jsdom can't open a real OS picker.** *Mitigation:* test the observable contract
+   (onChange → bridge dispatch, slot-select on tile click), not the OS dialog.
 
 ## 5. Testing & verification
+- **vitest:** new specs (height→ground-z, solid input change→ground-solid-color,
+  tile click→ground-texture slot 4); full `editor` suite stays green (was 384).
+- **Browser repro (preview):** click wide "Solid colour" tile → native picker
+  fires (input present + click wired); Height spinner change → `engine/set/ground-z`
+  in the bridge log; Height disabled when ground off.
+- **Build:** `pnpm --filter @particle-editor/editor build` clean.
+- **Native (user-driven, L-033):** in `--new-ui`, click the Ground "Solid colour"
+  tile → OS colour dialog appears; adjust Height → ground plane moves. Deferred to
+  the user; agent can't see arch-C.
 
-- Build **Debug + Release** x64 clean after each fix.
-- **Native spec suite** (`pnpm --filter @particle-editor/editor a11y`) — confirm
-  `emitter-mutations` + `bridge-native` pass (F1 save, F4 loader); `splitters`
-  failures are the known agent-window artifact (L-033), not these fixes.
-- **Round-trip:** save then reload a real multi-emitter particle system in the
-  running editor — loads identically (F2/F3/F4 don't reject valid data).
-- **F1 happy/fail:** normal save still clears dirty; a forced failure (e.g.
-  read-only path) keeps dirty + autosave (manual/code-review).
-- **F4:** a normal nested file loads; (if feasible) a crafted self-link file is
-  rejected/cleared without crash.
-- vitest stays green (384) — these are native, so no web change expected.
+---
 
-## Review
+## Review (2026-06-01, session 8)
 
-**All five landed on `claude/crazy-murdock-cb8519` (FF target: `origin/lt-4`).**
-Four commits (F2+F3 grouped — same files/concern):
+**Both bugs fixed in one file** (`web/apps/editor/src/screens/GroundTexturePanel.tsx`),
+consistent with the goal.
 
-- `9a3e368` **F2+F3** — chunk-parser hardening (`ChunkReader.cpp`, `ChunkWriter.cpp`).
-- `ede76ce` **F5** — uint16 particle-index cap (`EmitterInstance.cpp`).
-- `4f43525` **F4** — `ValidateEmitterGraph()` on load + import (`ParticleSystem.h/.cpp`, `main.cpp` import hunk).
-- `24edaa2` **F1** — save-failure data-loss gate (`main.cpp` `DoSaveFile`).
+- **Bug 1 (solid-colour picker).** Replaced the split "wide tile selects / small Radix
+  swatch picks" with Background's pattern: the wide "Solid colour" tile now selects
+  slot 4 **and** triggers a hidden native `<input type="color">`. Removed the Radix
+  `ColorButton` + its `RgbColor`/hex helpers. Fixes the bug under both live hypotheses
+  (discoverability **and** arch-C occlusion of a DOM popover) by using the OS dialog.
+- **Bug 2 (ground height).** Added a "Height" `Spinner` (−100…100, step 0.1, dp 1) under
+  the Show-ground toggle, `disabled` in lockstep with it (legacy `main.cpp:1662`
+  parity), wired to the pre-existing `engine/set/ground-z`. Session-only (matches legacy).
 
-**Scope decisions (confirmed with user):** F4 guards all three call sites — but
-`RestoreFromAutosave` constructs `new ParticleSystem(file)`, so it flows through the
-same `ParticleSystem(IFile*)` loader as a normal open and is covered transitively by
-the one call there; only the load path and the import helper needed explicit wiring.
-The F1 host twin (`BridgeDispatcher` `file/save`) was audited and is **already
-correct** — it gates bookkeeping on success and returns early — so F1 is
-legacy-`DoSaveFile`-only.
+**Verification.**
+- vitest: **386 passed** (44 files; +2 new ground specs; `GroundDropdown.test.tsx`
+  still green). Build (`tsc -b && vite build`): **clean**.
+- Browser (preview, mock bridge): Height `0.0→0.1` on increment (round-trips via
+  `engine/set/ground-z` + mock broadcast); Height **disables** when ground hidden;
+  clicking the wide "Solid colour" tile fires the native colour input **and** selects
+  slot 4; no render/console errors.
+- **Deferred to user (L-033):** in `--new-ui`, confirm the OS colour dialog actually
+  paints over the arch-C viewport and the ground plane visibly moves with Height.
 
-**Verification done.**
-- `.sln` **Debug + Release x64** clean after every fix (benign `LNK4098 LIBCMTD`).
-- vitest unchanged at **384** (no web files touched).
-- Native `pnpm a11y`: **153 passed**, only the 4 `splitters` percentage specs failing
-  (known agent-window artifact, L-033 — touched no layout code). `emitter-mutations`
-  (F1 save + F4 loader) and `bridge-native` pass. The suite `file/open`s real
-  multi-emitter fixtures through the modified `ChunkReader` + `ValidateEmitterGraph`,
-  so **F2/F3/F4 demonstrably accept valid files** and the emitter-tree goldens match.
+**Decision flagged:** dropped the rich Radix palette picker (basic/custom/hex/sliders)
+for the native OS picker — accepted for consistency with Background + proven native
+visibility. Veto-able on review.
 
-**Not self-verifiable (handed to user, L-033).** A full GUI **save→reload-identical**
-round-trip of a real multi-emitter `.alo` in `x64\Release\ParticleEditor.exe
---new-ui` — agent native launches misrender, so the user should confirm. The a11y
-fixture `file/open` already covers "valid files still load"; this confirms the
-write+reload identity end-to-end.
-
-**Implementation note.** F4's cycle-break DFS is **iterative** (explicit stack), not
-recursive — a deep-but-acyclic emitter chain must load without overflowing the call
-stack. After pass-1 makes in-degree ≤ 1, any remaining cycle is a simple loop and a
-single back-edge clear breaks it.
+**Process notes →** new lesson **L-041** (browser-mode repro sidesteps L-033;
+native-input vs Radix popover over the arch-C viewport; `preview_click` pointer-event
+gotcha). Root-caused via the systematic-debugging skill (4 phases; the browser repro
+*refuted* the nested-popover-logic hypothesis before any code changed).

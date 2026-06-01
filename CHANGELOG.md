@@ -16,6 +16,42 @@ Conventions:
 
 ## Changelog
 
+### New-UI ground controls — solid-colour picker now opens, and the ground-height field is back
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Two user-reported bugs in the `--new-ui` Ground toolbar dropdown are fixed. First,
+clicking the prominent **"Solid colour" tile now opens a colour picker** — previously
+the tile only *selected* the solid-colour slot and the actual picker was an
+easily-missed secondary swatch beneath it, so the option looked broken. Second, the
+**ground-plane height control is restored**: a "Height" field (legacy NT-2, #45) that
+raises/lowers the ground plane, enabled only while the ground is shown. The height
+control had simply never been ported to the React UI even though the engine and bridge
+already supported it.
+
+**How we tackled it.** Both fixes live in
+[`GroundTexturePanelBody`](web/apps/editor/src/screens/GroundTexturePanel.tsx:93). The
+solid-colour control now mirrors the **proven `BackgroundPicker` pattern**: the wide
+tile triggers a hidden native `<input type="color">` (an OS dialog — discoverable,
+and immune to the arch-C viewport compositing that can hide a DOM popover), replacing
+the Radix `ColorButton`. The height field uses the existing `Spinner` primitive
+(−100…100, step 0.1, disabled in lockstep with the show-ground toggle to match the
+legacy spinner at [`main.cpp:1662`](src/main.cpp:1662)) wired to the already-present
+[`engine/set/ground-z`](src/host/BridgeDispatcher.cpp:1184) handler — no new bridge or
+engine code, just the missing UI.
+
+**Issues encountered and resolutions.** Root-caused in **browser mode** (`pnpm dev` +
+mock bridge), which sidesteps the L-033 agent-window misrender entirely — the picker
+opened *fine* in the browser, which ruled out a React logic bug and narrowed the cause
+to discoverability **and/or** arch-C occlusion of the Radix DOM popover (the user
+confirmed Background's *native* colour input works in the host, but Background uses a
+different mechanism than Ground did). Converging Ground onto the native-input pattern
+fixes the bug under either hypothesis. The one thing browser mode can't show — that the
+OS colour dialog paints over the live arch-C viewport — is left to a user spot-check
+(L-033). See [`tasks/lessons.md` L-041](tasks/lessons.md).
+
+---
+
 ### [Audit P1] Five correctness & memory-safety fixes — save-failure data loss, chunk-parser hardening, emitter-graph validation, particle-index cap
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
