@@ -1,5 +1,141 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-01 (session 5) — arch-C perf fix + a run of UI polish (resume: the F1–F9 follow-up backlog in `tasks/followups.md`)
+
+**`origin/lt-4` → `63fb7f2`** (was `048504d` at session start). Branch is linear;
+FF-pushed throughout (`git push origin HEAD:lt-4`). Working tree **clean**.
+**Not on `master`** (user wants it left on `lt-4`; CHANGELOG top entries carry
+`TODO` hash/PR placeholders to backfill at a future master merge).
+
+### What shipped (7 commits)
+
+1. **`5aa8b3d` feat(perf) — arch-C: skip the redundant per-frame layered-window
+   readback. THE big one.** The arch-C editor felt janky, worst when maximized.
+   Measure-first (added always-on `[PERF]`/`[PERF2]` per-stage + per-pass frame
+   timing to `host.log`, QPC, 1 Hz) localised ~96–99% of the frame to
+   `engine->Render()`, scaling linearly with window area *even at zero
+   particles*. Sub-profiling Render() pinned the entire cost to the `present`
+   segment — the synchronous `AlphaCompositor::Composite()` `GetRenderTargetData`
+   readback + ~19 MB `memcpy` ([AlphaCompositor.cpp:753](../src/host/AlphaCompositor.cpp:753)),
+   running every frame even though arch-C's visible pixels come from the DComp
+   shared-texture path (`CompositeEngineFrame`). It's pure redundant work (the
+   same class of leftover transport as the removed FramePublisher encode). Fix:
+   new [`Engine::SetCompositionMode(bool)`](../src/engine.h:148); host sets it at
+   the `SetAlphaCompositor` site ([HostWindow.cpp:1712](../src/host/HostWindow.cpp:1712));
+   `Render()` skips `Composite()` in composition mode
+   ([engine.cpp:983](../src/engine.cpp:983)). Result: maximized **~90 → ~2380
+   FPS (~26×)**, frame cost now flat across window size. `WaitEndFrameQuery` now
+   returns its spin count for `[PERF]`. **Two code-reading priors (the
+   busy-spin, the cross-device copy) were refuted by measurement.** `[PERF]`
+   kept in as a permanent diagnostic. **User-confirmed** viewport + modal
+   snapshots render correctly. Lesson **L-035**.
+2. **`265139d` fix(ui) — themed emitter-list scrollbar + theme-following native
+   title bar.** Emitter tree scroll viewport gained the themed `::-webkit-
+   scrollbar` (added `.emitter-tree-scroll` to the enumerated selector list in
+   [base.css](../web/apps/editor/src/styles/base.css)). The native Win32 caption
+   (un-themeable from CSS) now follows the theme via DWM
+   `DWMWA_USE_IMMERSIVE_DARK_MODE`: set at window creation from the OS pref (no
+   flash) + re-applied in the `host/backing-color` handler
+   ([BridgeDispatcher.cpp:899](../src/host/BridgeDispatcher.cpp:899)) from the
+   pushed `--bg` luminance — reuses the existing theme→host channel, no new
+   bridge surface. `dwmapi.lib` newly linked. **User-confirmed incl. live toggle.**
+3. **`398964e` fix(ui) — rebase Tailwind `text-sm` to 12px.** The emitter list
+   read ~17% larger (14px) than the 12px panels: Tailwind's rem scale is
+   anchored to the 16px `<html>` root, not `body { font-size: 12px }`, so
+   `text-sm`=14px while `text-xs`(87 uses)=12px. Collapsed `--text-sm` to
+   `0.75rem` in a `@theme` block in [tokens.css](../web/apps/editor/src/styles/tokens.css);
+   verified the dist CSS emits `--text-sm:.75rem`. 24 `text-sm` sites converge
+   on 12px; `text-xs`/`text-lg`/`text-2xl` untouched.
+4. **`981a39b` fix(ui) — inspector text readability + semantic disabled-dim.**
+   Field labels + section headers moved `--text-2`→`--text` (the dim token read
+   poorly at 12px). Dimming re-purposed to mean **disabled**: new
+   `.form-row:has(:disabled) .lbl { color: var(--text-2) }` reads the native
+   `:disabled` on the Spinner input / Radix checkbox+select, so mode-gated
+   params (Continuous/Weather while Bursts active) dim automatically — zero
+   React changes. `:has()` is supported in the WebView2 Chromium runtime.
+5. **`b675783` fix(ui) — inspector density pass (4 parts, all CSS).** (a) tighter
+   vertical rhythm; (b) **flat hybrid sections** — replaced bordered+filled
+   `.panel-section` cards with a tinted rounded `.panel-section-header` band +
+   edge-to-edge rows (shared class, so the Lighting/Bloom/Ground/Background tool
+   panels match); (c) **indent hierarchy** — section header / direct params /
+   radio dots share one left edge, a radio's sub-params indent *under their
+   radio label* via `.basic-tab [role="radiogroup"] .form-row .lbl` (label-only
+   pad keeps inputs right-aligned); (d) **aligned checkboxes** — `.form-row-check`
+   `1fr auto`→`1fr auto 40px` so checkbox right edges share the spinner/select
+   boxes' `row_right−48px` edge across all 3 tabs. **Each step confirmed live
+   (mockups via Playwright-served HTML for the section-style choice).**
+6. **`a5789f2` docs — defer the arch-C frame-pacing plan.** See "Deferred" below.
+7. **`63fb7f2` docs — capture the F1–F9 follow-up backlog.** See "What's next."
+
+### Test / build state
+
+- **vitest 371/371** (44 files) — ran after each web change; unchanged count
+  (all changes CSS/token-only on the web side, so no spec drift).
+- **Release + Debug x64** built clean repeatedly (`.sln` via PowerShell,
+  L-023/L-025; the Debug `LNK4098 LIBCMTD` warning is pre-existing/benign).
+  `x64\Release\ParticleEditor.exe` current; a live instance is running.
+- **`dist`** rebuilt (composition) after every web change; WebView2 cache cleared
+  on each relaunch (L-030; needs `dangerouslyDisableSandbox` for the Remove-Item).
+- **a11y goldens** untouched — every web change was CSS/token-only (no DOM/ARIA),
+  and the host changes are native; goldens are CSS-independent. Did **not**
+  regen (correct, L-030/L-033).
+
+### Verification notes (important)
+
+- **L-033 did NOT bite this session** — agent-driven launches composited
+  healthily (engine attached; hundreds-to-thousands FPS in `[PERF]`), so the
+  perf numbers are trustworthy, not the degraded ~4 FPS path. Still, all
+  *on-screen* looks were **user-confirmed**, not asserted from agent screenshots.
+- **The perf "pegs a core" claim was an inference that measurement corrected.**
+  When the user asked about the pacing follow-up's value, a live CPU sample of
+  the running editor read **~20% of one core / ~1% total** (20-core desktop) —
+  far below the inferred ~100%. That killed the case for the pacing work (see
+  Deferred). Lesson logged in-line in `todo.md`: CPU% is the metric, not the
+  `[PERF]` frame timer.
+
+### Deferred (ready-to-go, not worth it now)
+
+- **arch-C frame pacing + cooperative wait** ("idle cool") — full ★★★★ plan in
+  [`tasks/todo.md`](todo.md). Goal: cap the uncapped render loop to refresh +
+  replace the `WaitEndFrameQuery` busy-spin with a yielding wait. **Keyed-mutex
+  sync is NOT available for this D3D9Ex→D3D11 share** (verified: legacy
+  `CreateTexture`+shared-handle, plain `OpenSharedResource`, no `IDXGIKeyedMutex`
+  on the D3D9 side) — the event query is the correct primitive; only the *wait*
+  is wasteful. Deferred because measured idle cost is low and it touches the
+  host message loop (most delicate path). Pick up only if the editor is seen
+  running hot, or on a laptop.
+
+### Lessons added
+
+- **L-035 (new)** — profile per-stage before optimising a render loop;
+  code-reading (and the engine author's own "the spin dominates" comment)
+  mis-pointed twice. Instrument the frame, read ratios + area-scaling, fix the
+  proven stage, re-measure, and watch where the bottleneck *shifts*.
+
+### What's next — the F1–F9 backlog ([`tasks/followups.md`](followups.md))
+
+Nine user-reported items from a live review. Suggested first moves:
+- **Quick CSS wins:** F2 (center/size emitter-tree controls like the toolbar),
+  F3 (LMB-pressed icon state), F5 (link brackets closer to text).
+- **Bugs:** F4 (link groups don't actually work — investigate host vs web),
+  F6 (number-field drag scrubs instead of selecting text — Spinner mousedown).
+- **Features needing a small design call:** F7 (wheel-adjust step; legacy=0.1),
+  F8 (curve multi-key average edit), F9 (Index channel auto-deselects RGBA).
+- **Needs a layout sketch first:** F1 (emitter row icon placement).
+F4+F5 pair (both in the link-group/bracket code); F6+F7 are one "number-field
+interaction model" decision. Full pointers + clarifications in `followups.md`.
+
+### Carried forward (older, still open)
+
+- **Open Issues** (CHANGELOG): mod-bundled megafiles not loaded; `d3dx9_43.dll`
+  redistribution.
+- **Feature-parity gap audit** (the long-standing recommended item — enumerate
+  what legacy 0.2 still has that the new UI lacks; gates MT-13 arch-A deletion).
+  Superseded as the *immediate* pick by the F1–F9 backlog, but still the
+  structural next-big-thing.
+
+---
+
 ## 2026-05-31 (session 4) — 1px viewport-edge hairline ROOT-CAUSED + FIXED (resume: feature-parity gap audit, the recommended next LT-4 item)
 
 **`origin/lt-4` → `3728967`** (was `5a84ace` at session start). Branch is linear;
