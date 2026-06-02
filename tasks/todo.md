@@ -1,127 +1,113 @@
-# G11 — WebView2 navigation / new-window / permission policy + WebMessage source check
+# G7 — transactional `AlphaCompositor::Resize`
 
-`[lt-4]` `[P3 hardening]`. Plan source: `tasks/post-audit-slot6-lt4-host-polish.md`
-(G11 was deferred out of slot 6; this is its focused pass). Branch: `lt-4`
-(FF-push on land; **never `master` without explicit OK**).
+`[lt-4]` `[P3 latent]`. Source: post-audit reconciliation block (`G7`). Branch:
+`lt-4` (FF-push on land; **never `master` without explicit OK**).
 
 ## 1. Goal + scope
 
-**Goal.** The WebView2 host currently trusts whatever page is loaded and whoever
-posts a WebMessage. After this change the host enforces an origin allow-list:
-it cancels any top-level navigation outside the approved set, denies all popups
-and permission requests, and ignores WebMessages whose source origin isn't
-approved. Defence-in-depth against a compromised/redirected renderer.
+**Goal.** `AlphaCompositor::Resize` currently frees all old GPU/GDI resources
+*before* allocating the new ones. If any allocation throws, the compositor is
+left half-destroyed (old gone, new partial, `width/height` stale) → a dead
+viewport until process restart. Make it transactional: build new resources into
+locals, swap into `m_impl` only on full success, roll back (keep the old
+resources) on any failure.
 
-**In:**
-- `add_NavigationStarting` → `put_Cancel(TRUE)` for non-approved URIs.
-- `add_NewWindowRequested` → `put_Handled(TRUE)`, create nothing (deny popups).
-- `add_PermissionRequested` → `put_State(..._DENY)`.
-- `get_Source` check inside the existing `add_WebMessageReceived` lambda.
-- 3 new `EventRegistrationToken` members + `remove_*` in WM_DESTROY.
-- A single shared origin helper `IsApprovedWebViewOrigin(uri, devUi)`.
+**In:** rewrite `AlphaCompositor::Resize` ([src/host/AlphaCompositor.cpp:114](src/host/AlphaCompositor.cpp:114)).
 
-**Out (with reasons):**
-- G7 (`AlphaCompositor::Resize` transactional rebuild) — separate open item.
-- F9 (vcxproj SDK macro-ize) — needs a 2nd-SDK CI matrix, can't verify here.
-- Tightening *sub-resource* loads — `NavigationStarting` only fires for
-  documents/iframes; assets aren't navigations, by design.
-- `master` forward-port — lt-4 work only; reconcile at LT-4→master cutover.
+**Out (reasons):** `ReleaseGpuResources()` — its job *is* a full release before
+device Reset; not a resize, leave it. Composite/readback path — untouched.
+Fault-injection test harness — over-engineering for a P3 (the rollback is
+correct-by-construction; no runtime trigger on a healthy box).
 
 ## 2. What the codebase already gives us
 
-- **G5 pattern to mirror exactly** — `webMessageTok` member at
-  `HostWindow.cpp:362`; stored in `add_WebMessageReceived` at `:1253`;
-  `remove_WebMessageReceived` in WM_DESTROY at `:2019`. The 3 new tokens
-  follow this lifecycle 1:1.
-- **`useDevUi`** is a member (`:539`, set in ctor `:568`) — available in
-  `InitWebView2` where handlers are registered.
-- **`kVirtualHostName = L"app.local"`** (`:87`) — the prod origin host.
-- **Navigate targets** — `https://app.local/index.html` (prod, `:1271`) /
-  `http://localhost:5174/` (dev, `:1267`). Handlers must register BEFORE these.
-- **Existing WebMessage lambda** at `:1218-1253` — the `get_Source` guard
-  drops in at the top of the lambda body.
+- Resource set in `Impl` ([:45](src/host/AlphaCompositor.cpp:45)): `sharedTex`
+  (`ComPtr<IDirect3DTexture9>`), `sharedHandle` (HANDLE, **owned by sharedTex** —
+  no CloseHandle), `offscreenRT` (`ComPtr`, = sharedTex level 0), `sysMemSurface`
+  (`ComPtr`), `dibBitmap` (HBITMAP), `dibPixels` (void*), `memDC` (HDC), `width`,
+  `height`.
+- `ThrowIfFailed` ([:31](src/host/AlphaCompositor.cpp:31)) throws on bad HRESULT;
+  the two GDI failures throw `std::runtime_error`. So the build sequence already
+  signals failure by exception — the swap just needs to be exception-safe.
+- Caller: `Engine` device-Reset path ([engine.cpp:1435](src/engine.cpp:1435)),
+  non-null in **both** arch-B and arch-C (engine.cpp:985). Exercised by the a11y
+  `viewport-resize.spec.ts` happy path under composition (the default lane).
 
-## 3. Architecture / implementation approach
+## 3. Implementation approach
 
-```cpp
-// File-scope helper (near kVirtualHostName / other host constants).
-// about: covers WebView2's own about:blank init nav. localhost only in dev.
-static bool IsApprovedWebViewOrigin(PCWSTR uri, bool devUi);
 ```
-- `https://app.local/` prefix → allowed always (prod, virtual-host mapped dist).
-- `http://localhost:5174/` prefix → allowed only when `devUi`.
-- `about:` prefix → allowed (init may navigate `about:blank`).
-- anything else → rejected.
+void Resize(w, h):
+  if (w,h)==current return;  if degenerate return;   // unchanged guards
+  // locals
+  ComPtr newTex; HANDLE newHandle=nullptr; ComPtr newRT, newSys;
+  HBITMAP newDib=nullptr; void* newPixels=nullptr; HDC newDC=nullptr;
+  try {
+    CreateTexture(... &newTex, &newHandle); ThrowIfFailed;
+    newTex->GetSurfaceLevel(0,&newRT);      ThrowIfFailed;
+    CreateOffscreenPlainSurface(... &newSys); ThrowIfFailed;
+    newDib = CreateDIBSection(... &newPixels); if(!newDib||!newPixels) throw;
+    newDC  = CreateCompatibleDC(nullptr);      if(!newDC) throw;
+    SelectObject(newDC, newDib);
+  } catch (...) {
+    if (newDC)  DeleteDC(newDC);      // DC first so the DIB is deselected
+    if (newDib) DeleteObject(newDib); // ComPtr locals auto-release on unwind
+    throw;                            // m_impl UNTOUCHED → old size still live
+  }
+  // commit: release old, then move locals in
+  offscreenRT.Reset(); sharedTex.Reset(); sharedHandle=nullptr; sysMemSurface.Reset();
+  if (dibBitmap) DeleteObject; if (memDC) DeleteDC;
+  sharedTex=move(newTex); sharedHandle=newHandle; offscreenRT=move(newRT);
+  sysMemSurface=move(newSys); dibBitmap=newDib; dibPixels=newPixels; memDC=newDC;
+  width=w; height=h;
+  fprintf(stderr,"[AlphaCompositor] shared RT ...", newHandle);  // moved after swap
+```
 
-Three handlers registered adjacent to `add_WebMessageReceived` (~`:1218`),
-storing into 3 new members `navStartingTok`, `newWindowTok`, `permissionTok`
-(beside `webMessageTok` at `:362`). `remove_*` each in WM_DESTROY beside the
-G5 removal (~`:2019`). WebMessage lambda gains a `get_Source` → helper check
-that logs + early-returns `S_OK` on a non-approved source.
+Key decisions: (a) GDI handles need manual cleanup in `catch` (no ComPtr); order
+`DeleteDC` before `DeleteObject` so the DIB isn't deleted while selected. (b) the
+debug `fprintf` moves below the swap so it logs only on a *committed* resize. (c)
+no behavioural change on the happy path — same resources, same order of creation.
 
 ## 4. Risks + mitigations
 
-1. **Over-tight allow-list cancels the app's OWN initial navigation** → editor
-   never loads → every a11y spec goes dark. *Mitigation:* the a11y suite is the
-   gate. The harness launches `--test-host` with `useDevUi=false` → it loads the
-   **prod** `https://app.local` origin (verified: `--test-host` sets CDP/DevTools
-   only, orthogonal to `--dev-ui`). So a11y directly exercises the `app.local`
-   branch. Build Debug, run `pnpm a11y`; native-behaviour specs must stay green
-   (baseline: 157 pass, 4 `splitters` fail = L-033 artifact, not mine).
-2. **`about:blank` init nav cancelled** → blank WebView. *Mitigation:* helper
-   explicitly allows `about:`.
-3. **`get_Source` check is the least-tested piece** — under `--test-host` the
-   bridge also uses `AddHostObjectToScript` (`:1102`), so a11y may not drive the
-   postMessage path. *Mitigation:* it's correct-by-construction defence-in-depth;
-   documented as such in the handoff, not claimed as a11y-verified.
-4. **localhost dev branch is a11y-uncovered** (only hit under manual `--dev-ui`).
-   *Mitigation:* note in handoff; logic is a simple prefix-match symmetric with
-   the prod branch.
+1. **GDI leak on the failure path** — if `CreateCompatibleDC` throws after the
+   DIB was made, the DIB must be freed. *Mitigation:* the `catch` frees both
+   locals; ComPtrs auto-release. Verified by reading the unwind order.
+2. **Deleting a selected DIB** — `DeleteObject(dib)` fails if the bitmap is still
+   selected into a DC. *Mitigation:* `catch` does `DeleteDC(newDC)` first; commit
+   path only deletes the *old* dib whose DC is also being deleted in the same block.
+3. **Happy-path regression** — the rewrite must produce byte-identical resources.
+   *Mitigation:* same Create* calls, same params, same SelectObject; a11y
+   `viewport-resize` is the gate.
 
 ## 5. Testing & verification
 
-- [ ] **Baseline first** (before any edit): vitest 390 · `pnpm build` (+dist) ·
-      `.sln` Debug+Release x64 clean (L-039 NuGet restore done) · a11y 157 pass
-      / 4 splitters fail.
-- [ ] Build Debug + Release x64 clean after the change (no new warnings beyond
-      the pre-existing LNK4098 LIBCMTD).
-- [ ] `pnpm a11y` after the change → still 157 pass / 4 splitters fail. Any
-      `bridge-native` / `emitter-mutations` / golden regression = allow-list too
-      tight → loosen.
-- [ ] Static walk: handlers registered before `Navigate`; `about:` allowed;
-      tokens removed in WM_DESTROY (no stale `this`-capturing lambda after
-      teardown); helper rejects an off-origin URI and accepts both navigate
-      targets.
-- [ ] Couldn't verify autonomously (hand to user): popup-deny and
-      permission-deny behaviour (needs a page that calls `window.open` /
-      `getUserMedia`); the `get_Source` rejection path (test-host uses the host
-      object, not postMessage).
+- [ ] Debug + Release x64 clean (only the pre-existing LNK4098).
+- [ ] a11y → **157 pass / 4 splitters** (L-033), unchanged — proves resize +
+      device-Reset happy path still allocates a valid RT under composition.
+- [ ] Static walk: catch frees newDC+newDib and rethrows; commit releases old
+      before moving locals; `sharedHandle` never CloseHandle'd (owned by tex);
+      `width/height` set only on commit; degenerate/unchanged guards intact.
+- [ ] Couldn't verify autonomously: the actual rollback-on-alloc-failure path
+      (no runtime trigger on a healthy box) — correct-by-construction.
 
 ## Review section
 
-**What landed.** Two files.
-
-| Change | File | Detail |
-|---|---|---|
-| G11 origin helper | `src/host/HostWindow.cpp` | `IsApprovedWebViewOrigin(uri, devUi)` in the anon namespace — prefix-match `https://app.local/` (always), `http://localhost:5174/` (dev only), `about:`. Trailing `/` blocks `app.local.evil.test`. |
-| G11 nav policy | `src/host/HostWindow.cpp` | `add_NavigationStarting` (cancel off-origin), `add_NewWindowRequested` (deny popups), `add_PermissionRequested` (deny) — registered before `Navigate`; 3 tokens removed in WM_DESTROY (mirrors G5). |
-| G11 message source check | `src/host/HostWindow.cpp` | `get_Source` guard at the top of the existing `WebMessageReceived` lambda — drops messages from non-approved documents. |
-| Harness fix (out-of-band) | `web/apps/editor/scripts/run-native-tests.mjs` | `killAny()` scoped from blanket `taskkill /IM` to a `--test-host` CIM filter so a user's parallel legacy editor survives (→ L-045). |
+**What landed.** One function rewritten — `AlphaCompositor::Resize`
+([src/host/AlphaCompositor.cpp:114](src/host/AlphaCompositor.cpp:114)) — destroy-
+then-rebuild → build-locals-then-swap. ~40 LoC net. `ReleaseGpuResources()`
+untouched.
 
 **Verification (all run).**
-- Baseline (pre-edit): vitest 45/390 · `pnpm build` clean (+dist) · Debug+Release x64 clean · a11y 157 pass / 4 splitters (L-033).
-- Post-edit: Debug+Release x64 clean (only pre-existing LNK4098). a11y **157 pass / 4 splitters** — unchanged ⇒ the allow-list does NOT cancel the app's own `app.local` load and the bridge still works.
-- All WebView2 APIs confirmed against the SDK 1.0.3967.48 header before coding.
-- Harness fix proven: dry-run filter empty against the live legacy editor; controlled decoy(no-arg)+target(`--test-host`) test → decoy survived, test-host killed.
+- Debug + Release x64 clean.
+- a11y: first run showed 156/**5** — the 5th was a transient L-033 agent-launch
+  flake (the `viewport-resize` spec itself passed). Re-run → **157 pass / 4
+  splitters**, baseline-identical. Lesson: don't accept/reject on one native run
+  when the failure isn't in the deterministic splitter set (→ L-038 reinforced).
+- Static walk: catch frees `newDC` then `newDib` and rethrows with `m_impl`
+  untouched; commit releases old before moving locals in; `sharedHandle` never
+  CloseHandle'd; `width/height` set only on commit.
 
-**Couldn't verify autonomously (hand to user).** Popup-deny and permission-deny
-runtime behaviour (needs a page calling `window.open`/`getUserMedia`); the
-`get_Source` rejection path (under `--test-host` the bridge also uses
-`AddHostObjectToScript`, so a11y exercises the nav policy but not necessarily the
-message-source drop). Both are correct-by-construction.
-
-**Lessons captured.** L-045 (scoped process kill), L-046 (vitest⊥build
-concurrency + Git-Bash MSBuild switch mangling).
-
-**Not yet done (awaiting user OK):** CHANGELOG entry · post-audit reconciliation
-block G11 ✅ · commit + FF-push to `lt-4`.
+**Couldn't verify autonomously.** The rollback-on-allocation-failure path has no
+runtime trigger on a healthy box (the P3 rationale). Correct-by-construction: the
+`try` only mutates locals, the `catch` cleans them and rethrows before any
+`m_impl` write.

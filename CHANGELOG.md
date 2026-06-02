@@ -16,6 +16,46 @@ Conventions:
 
 ## Changelog
 
+### `AlphaCompositor::Resize` is now transactional — a failed reallocation no longer kills the viewport (audit G7)
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+`AlphaCompositor::Resize` reallocates the off-screen ARGB render target, the
+SYSTEMMEM readback surface, and the CreateDIBSection bitmap whenever the popup's
+client area changes (and on every device-Reset). Previously it freed **all** the
+old resources up front and *then* allocated the new ones — so a single failed
+`Create*` (transient VRAM or GDI-handle exhaustion: alt-tabbing out of a fullscreen
+game, a driver TDR) left the compositor half-destroyed: old resources gone, new
+ones partial, `width`/`height` stale. The result was a dead viewport
+(`GetRenderTarget()` → null, every frame rendering nothing) until the editor was
+restarted. Now the resize is **all-or-nothing**: it builds the full new resource
+set into locals first and only swaps them into the live state once every allocation
+has succeeded — any failure throws with the old resources still intact, so the
+viewport keeps rendering at the old size and the next resize retries cleanly. Rare
+on a healthy box (which is why it was a latent P3), but a real recoverable-hiccup-
+turned-fatal hazard under memory pressure.
+
+**How we tackled it.** A `try`/`catch` in
+[`src/host/AlphaCompositor.cpp`](src/host/AlphaCompositor.cpp:114): the COM resources
+go into local `ComPtr`s (auto-released on unwind) and the GDI handles into local
+`HBITMAP`/`HDC`; the `catch` deletes the GDI locals (DC before bitmap, so the DIB is
+deselected before `DeleteObject`) and rethrows **before** any write to `m_impl`. The
+commit block — release-old-then-`std::move`-locals-in, set `width`/`height`, log —
+runs only on full success. Same `Create*` calls, params, and order as before, so the
+happy path is byte-identical; the debug `fprintf` moved below the swap so it logs
+only a committed resize. `ReleaseGpuResources()` (the deliberate full release before
+`IDirect3DDevice9::Reset`) is unchanged.
+
+**Issues encountered and resolutions.** The first native a11y run reported 156/**5**
+— one above the 4 deterministic `splitters` failures (the L-033 window-size
+artifact). The `viewport-resize` spec itself passed; a re-run came back at the
+baseline **157 pass / 4 splitters**, confirming the 5th was a transient L-033
+agent-launch flake, not a regression. Reinforces L-038: a single red native run
+isn't a verdict when the extra failure isn't in the known-deterministic set —
+re-run and check the delta is consistent.
+
+---
+
 ### WebView2 navigation / new-window / permission policy + message-source check (audit G11)
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

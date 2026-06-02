@@ -116,69 +116,107 @@ void AlphaCompositor::Resize(int w, int h)
     if (w == m_impl->width && h == m_impl->height) return;
     if (w <= 0 || h <= 0) return;
 
-    // Drop old resources first. ComPtr::Reset releases the COM ref;
-    // GDI handles need explicit cleanup. sharedHandle is owned by
-    // sharedTex — releasing the texture invalidates the handle, no
-    // explicit CloseHandle.
+    // [Post-audit G7] Transactional rebuild. Build every new resource into
+    // LOCALS first; only once they all succeed do we release the old set and
+    // move the locals into m_impl. Pre-fix this freed all old resources up
+    // front and then allocated — so a single failed Create* (transient VRAM /
+    // GDI exhaustion: alt-tab from a fullscreen game, a driver TDR) left the
+    // compositor half-destroyed (old gone, new partial, width/height stale),
+    // i.e. a dead viewport until process restart. With the swap, any failure
+    // throws with m_impl untouched, so the compositor keeps compositing the
+    // old size and the next Resize can retry cleanly.
+    Microsoft::WRL::ComPtr<IDirect3DTexture9> newTex;
+    HANDLE                                    newHandle = nullptr; // owned by newTex
+    Microsoft::WRL::ComPtr<IDirect3DSurface9> newRT;
+    Microsoft::WRL::ComPtr<IDirect3DSurface9> newSys;
+    HBITMAP newDib    = nullptr;
+    void*   newPixels = nullptr;
+    HDC     newDC     = nullptr;
+
+    try
+    {
+        // [MT-11] Phase 3 Stage 2: shared-handle render-target texture.
+        // CreateTexture with USAGE_RENDERTARGET + D3DPOOL_DEFAULT and a
+        // non-null pSharedHandle yields an NT-handle alias openable from a
+        // parallel D3D11 device via OpenSharedResource. The level-0 surface
+        // serves as the engine's render target slot 0, so the existing
+        // arch-A render+readback path is structurally unchanged. The
+        // sharedHandle out-param is populated only when the device is
+        // D3D9Ex (Stage 1 hard-fails otherwise, so this is always the case
+        // post-Stage-1). D3DMULTISAMPLE_NONE because GetRenderTargetData
+        // rejects multisampled sources; scene AA still handled via texturing.
+        HRESULT hr = m_impl->device->CreateTexture(
+            static_cast<UINT>(w), static_cast<UINT>(h),
+            1 /*levels*/, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT, &newTex, &newHandle);
+        ThrowIfFailed(hr, "CreateTexture(shared RT)");
+        hr = newTex->GetSurfaceLevel(0, &newRT);
+        ThrowIfFailed(hr, "GetSurfaceLevel(0)");
+
+        // Readback target. SYSTEMMEM is the only pool that
+        // GetRenderTargetData can write to.
+        hr = m_impl->device->CreateOffscreenPlainSurface(
+            static_cast<UINT>(w), static_cast<UINT>(h),
+            D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
+            &newSys, nullptr);
+        ThrowIfFailed(hr, "CreateOffscreenPlainSurface");
+
+        // Top-down DIB (negative biHeight) so row 0 matches D3D9's row 0.
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+        bi.bmiHeader.biWidth       = w;
+        bi.bmiHeader.biHeight      = -h;
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+
+        HDC screenDC = GetDC(nullptr);
+        newDib = CreateDIBSection(screenDC, &bi, DIB_RGB_COLORS,
+                                  &newPixels, nullptr, 0);
+        ReleaseDC(nullptr, screenDC);
+        if (!newDib || !newPixels)
+            throw std::runtime_error("AlphaCompositor: CreateDIBSection failed");
+
+        newDC = CreateCompatibleDC(nullptr);
+        if (!newDC) throw std::runtime_error("AlphaCompositor: CreateCompatibleDC failed");
+        SelectObject(newDC, newDib);
+    }
+    catch (...)
+    {
+        // Roll back the GDI locals (ComPtr locals auto-release during unwind).
+        // DeleteDC first so the DIB is deselected before DeleteObject — a
+        // bitmap still selected into a DC can't be deleted. m_impl is left
+        // entirely untouched: the old resources stay live and valid.
+        if (newDC)  DeleteDC(newDC);
+        if (newDib) DeleteObject(newDib);
+        throw;
+    }
+
+    // All allocations succeeded — commit. Release the old resources, then
+    // move the locals in. ComPtr::Reset releases the COM ref; GDI handles
+    // need explicit cleanup. The old sharedHandle is owned by the old
+    // sharedTex — releasing the texture invalidates it, no explicit
+    // CloseHandle.
     m_impl->offscreenRT.Reset();
     m_impl->sharedTex.Reset();
     m_impl->sharedHandle = nullptr;
     m_impl->sysMemSurface.Reset();
     if (m_impl->dibBitmap) { DeleteObject(m_impl->dibBitmap); m_impl->dibBitmap = nullptr; }
     if (m_impl->memDC)     { DeleteDC(m_impl->memDC);         m_impl->memDC     = nullptr; }
-    m_impl->dibPixels = nullptr;
 
-    // [MT-11] Phase 3 Stage 2: shared-handle render-target texture.
-    // CreateTexture with USAGE_RENDERTARGET + D3DPOOL_DEFAULT and a
-    // non-null pSharedHandle yields an NT-handle alias openable from a
-    // parallel D3D11 device via OpenSharedResource. The level-0 surface
-    // serves as the engine's render target slot 0, so the existing
-    // arch-A render+readback path is structurally unchanged. The
-    // sharedHandle out-param is populated only when the device is
-    // D3D9Ex (Stage 1 hard-fails otherwise, so this is always the case
-    // post-Stage-1). D3DMULTISAMPLE_NONE because GetRenderTargetData
-    // rejects multisampled sources; scene AA still handled via texturing.
-    HRESULT hr = m_impl->device->CreateTexture(
-        static_cast<UINT>(w), static_cast<UINT>(h),
-        1 /*levels*/, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
-        D3DPOOL_DEFAULT, &m_impl->sharedTex, &m_impl->sharedHandle);
-    ThrowIfFailed(hr, "CreateTexture(shared RT)");
-    hr = m_impl->sharedTex->GetSurfaceLevel(0, &m_impl->offscreenRT);
-    ThrowIfFailed(hr, "GetSurfaceLevel(0)");
+    m_impl->sharedTex     = std::move(newTex);
+    m_impl->sharedHandle  = newHandle;
+    m_impl->offscreenRT   = std::move(newRT);
+    m_impl->sysMemSurface = std::move(newSys);
+    m_impl->dibBitmap     = newDib;
+    m_impl->dibPixels     = newPixels;
+    m_impl->memDC         = newDC;
+    m_impl->width  = w;
+    m_impl->height = h;
+
     fprintf(stderr, "[AlphaCompositor] shared RT %dx%d handle=%p\n",
             w, h, m_impl->sharedHandle);
     fflush(stderr);
-
-    // Readback target. SYSTEMMEM is the only pool that
-    // GetRenderTargetData can write to.
-    hr = m_impl->device->CreateOffscreenPlainSurface(
-        static_cast<UINT>(w), static_cast<UINT>(h),
-        D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
-        &m_impl->sysMemSurface, nullptr);
-    ThrowIfFailed(hr, "CreateOffscreenPlainSurface");
-
-    // Top-down DIB (negative biHeight) so row 0 matches D3D9's row 0.
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth       = w;
-    bi.bmiHeader.biHeight      = -h;
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    HDC screenDC = GetDC(nullptr);
-    m_impl->dibBitmap = CreateDIBSection(screenDC, &bi, DIB_RGB_COLORS,
-                                         &m_impl->dibPixels, nullptr, 0);
-    ReleaseDC(nullptr, screenDC);
-    if (!m_impl->dibBitmap || !m_impl->dibPixels)
-        throw std::runtime_error("AlphaCompositor: CreateDIBSection failed");
-
-    m_impl->memDC = CreateCompatibleDC(nullptr);
-    if (!m_impl->memDC) throw std::runtime_error("AlphaCompositor: CreateCompatibleDC failed");
-    SelectObject(m_impl->memDC, m_impl->dibBitmap);
-
-    m_impl->width  = w;
-    m_impl->height = h;
 }
 void AlphaCompositor::ReleaseGpuResources()
 {
