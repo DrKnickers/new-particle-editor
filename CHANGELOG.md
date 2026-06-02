@@ -48,9 +48,21 @@ during the red→green: (1) the `captureUndo` helper is a lambda defined *partwa
 `DispatchInternal`, so the handler had to sit **after** its definition with the other
 mutation handlers, not next to `preview-from-file` — see [`tasks/lessons.md` L-043](tasks/lessons.md);
 (2) `emitters/list` returns its tree under `root` while `preview-from-file` uses `tree`
-(a pre-existing response-shape inconsistency the test had to account for). Verified:
-a11y 155 passed (only the 4 known `splitters` L-033 artifacts fail), vitest 386,
-Debug+Release clean.
+(a pre-existing response-shape inconsistency the test had to account for).
+
+**Hardening (post-implementation adversarial review).** A multi-agent review of the
+change surfaced two worth fixing: (a) the handler reported failures via
+`sendOk{ok:false}`, which `NativeBridge` *resolves* as success — so a failed import
+(e.g. file locked/deleted between preview and import) closed the dialog silently with
+no feedback; switched the four failure paths to `sendErr` so the promise rejects and
+the dialog's existing error UI fires, and added a bound-check that drops out-of-range
+picks before `captureUndo` (no stray undo entry / dirty flag on a no-op). (b) the
+test's count-only assertion couldn't distinguish a correct parent/child rebind from a
+broken one (both yield the same node count); the spec now asserts the imported
+subtree's **shape** (one new root re-parenting its lifetime + death children), plus
+new partial-import (link-drop miss-branch) and failed-import (rejects + no-stray-undo)
+cases. Verified: a11y 157 passed (only the 4 known `splitters` L-033 artifacts fail),
+vitest 386, Debug+Release clean.
 
 ---
 

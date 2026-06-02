@@ -2763,15 +2763,19 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // emitter-mutation handlers.
     if (kind == "emitters/import-from-file")
     {
+        // Hard failures go through sendErr (envelope ok:false) so the bridge
+        // promise REJECTS and the dialog's catch surfaces the error + keeps the
+        // modal open. (A nested sendOk{ok:false} would resolve as success and
+        // close the dialog silently — review finding, the G3 nested-ok trap.)
         if (!m_pParticleSystem || !*m_pParticleSystem)
         {
-            sendOk(json{{"ok", false}, {"error", "no particle system bound"}});
+            sendErr("no particle system bound");
             return res;
         }
         std::string path8 = params.value("path", std::string{});
         if (path8.empty())
         {
-            sendOk(json{{"ok", false}, {"error", "missing path"}});
+            sendErr("missing path");
             return res;
         }
         std::vector<size_t> picks;
@@ -2786,7 +2790,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         if (picks.empty())
         {
-            sendOk(json{{"ok", false}, {"error", "no emitters selected"}});
+            sendErr("no emitters selected");
             return res;
         }
         std::wstring path = Utf8ToWide(path8);
@@ -2794,23 +2798,38 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         std::unique_ptr<ParticleSystem> tmp = LoadParticleSystem(path, &err);
         if (!tmp)
         {
-            sendOk(json{
-                {"ok",    false},
-                {"error", err.empty() ? std::string("could not load file") : err},
-            });
+            sendErr(err.empty() ? std::string("could not load file") : err);
             return res;
         }
-        // Snapshot BEFORE mutating so the whole import is one undo unit and a
-        // failed load never leaves a stray undo entry.
+        // Drop out-of-range picks BEFORE capturing undo. An all-out-of-range
+        // request imports nothing, so it must not push an undo snapshot or
+        // dirty the document (audit-F1 'no dirty on a no-op'). In-range picks
+        // keep their order.
+        const size_t srcCount = tmp->getEmitters().size();
+        std::vector<size_t> validPicks;
+        for (size_t p : picks) if (p < srcCount) validPicks.push_back(p);
+        if (validPicks.empty())
+        {
+            sendErr("no valid emitters to import");
+            return res;
+        }
+        // Snapshot BEFORE mutating so the whole import is one undo unit; the
+        // load + bound-check above ran first, so a failed/no-op import never
+        // leaves a stray undo entry.
         captureUndo();
         ParticleSystem* sys = m_pParticleSystem->get();
         size_t n = sys->ImportEmittersFrom(
-            *tmp, picks,
+            *tmp, validPicks,
             [sys](const std::string& nm) { return GenerateDuplicateName(sys, nm); });
         sendOk(json{{"ok", true}, {"imported", static_cast<int>(n)}});
-        markDirty();
-        EmitEngineStateChanged();
-        EmitEmittersTreeChanged();
+        // Only signal a mutation if something actually imported (n could be 0
+        // only if every clone threw — a corrupt source that still loaded).
+        if (n > 0)
+        {
+            markDirty();
+            EmitEngineStateChanged();
+            EmitEmittersTreeChanged();
+        }
         return res;
     }
 

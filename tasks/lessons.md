@@ -3093,3 +3093,41 @@ so handler code can call UI-layer helpers like `GenerateDuplicateName` that are 
 (2) Response-shape drift: `emitters/list` returns its tree under **`root`** while
 `emitters/preview-from-file` uses **`tree`** — mind the field when writing specs that
 read both. Cross-reference [L-038](#l-038) (native logic gated by `pnpm a11y`).
+
+## L-044 — A bridge handler backing a dialog with inline error UI must report hard failures via `sendErr` (envelope `ok:false` → promise REJECTS), not nested `sendOk{ok:false}` (which RESOLVES as success); and a count-only test assertion can be blind to structural correctness
+
+**Two findings from the adversarial review of the G1 import handler, both worth
+internalising for the next bridge handler + its test.**
+
+**1. `sendErr` vs nested `sendOk{ok:false}` (the G3 trap, made concrete).** `sendOk`
+wraps data in an envelope with `ok:true` and nests your `{ok:false,error}` *inside*
+`data`. `NativeBridge` (`web/.../bridge/native.ts`) rejects the request promise ONLY
+on **envelope** `ok:false` — so a nested `sendOk{ok:false}` **resolves** the promise
+(carrying the failure as data). If the caller is `await bridge.request(...)` followed
+by an unconditional success action (e.g. `onOpenChange(false)` to close a dialog) with
+the error handling in a `catch`, that catch **never fires** — the dialog closes
+silently on failure, its error UI dead code. Fix: real failures → `sendErr(msg)` so the
+envelope is `ok:false` and the promise rejects into the caller's `catch`. (Fire-and-
+forget callers like `void bridge.request(...)` are unaffected; the trap is specifically
+handlers whose UI has explicit error rendering.) The broad codebase still uses the
+nested convention widely (audit **G3**) — fix it per-handler where the caller actually
+consumes errors.
+
+**2. Count-only assertions are blind to shape.** The G1 import spec asserted only that
+the live emitter count grew by N. But a *correct* import (one root re-parenting two
+children → 3 nodes) and a *broken* rebind (three loose roots → 3 nodes) yield the
+**same count** — so the assertion was invariant to the single most regression-prone
+part of the logic (the spawn-index re-map + `ValidateEmitterGraph` re-parenting). A
+count test that "passes" can give false confidence. Assert the **shape** the feature
+promises: here, "exactly one new top-level node, with two children of roles `lifetime`
+and `death`" — which a broken rebind fails. Also test the branch the happy path can't
+reach: full-import never exercises the "child not in picks → drop link" miss-branch, so
+add a **partial**-selection case; and a failed-path case (rejects + mutates nothing +
+no stray undo entry) to pin the error contract.
+
+**Source incident (2026-06-01, session 8).** A `superpowers:dispatching-parallel-agents`
+/ Workflow adversarial review of commit `f2eb7f7` raised 11 findings (0 refuted); none
+were live correctness bugs, but it caught the silent-failure UX defect and the
+count-blind test. Both fixed + re-verified (a11y 157, vitest 386, builds clean) before
+the change landed. Cross-reference [L-037](#l-037) (chokepoint side effects),
+[L-038](#l-038).
