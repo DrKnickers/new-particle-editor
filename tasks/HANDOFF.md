@@ -1,61 +1,105 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-01 (session 8) — verified audit-P1 GUI round-trip (PASS); discovered the "master forward-port" was already done (PR #89) — no master changes; docs corrected
+## 2026-06-01 (session 8) — audit-P1 closed + verified; ground bugs fixed; G1 import shipped (reviewed); G10/G12; full backlog reconciliation. NEXT: G11 (WebView2 nav policy)
 
-**`origin/lt-4` → `<push pending>`** (was `76ff471` at session start; docs-only
-commit on top, FF→`lt-4`). Working tree was clean before the docs commit.
-**No `master` changes** (see the forward-port finding below — there was nothing
-to port).
+**`origin/lt-4` = `685dbbd`** (was `76ff471` at session start; **9 commits**,
+all FF-pushed). Tree clean. **No `master` changes** all session (the F1–F5
+forward-port turned out already done — see below). vitest **390**, native a11y
+**157 passed** (only the 4 `splitters` L-033 artifacts fail), Debug+Release x64
+clean. Long session — read this whole entry.
 
-### Item 1 — audit-P1 GUI round-trip: **PASS** (user-driven, L-033)
-Built Release x64 clean (`x64\Release\ParticleEditor.exe`, all F1–F5 TUs
-recompiled) and launched `--new-ui`. User opened a multi-emitter `.alo`, saved,
-reloaded — **identical**. Confirms the write→reload identity the a11y fixture-load
-suite doesn't cover (F2/F3/F4 accept valid data; graph survives the round-trip).
-What I independently corroborated: the fixes are compiled into the run binary
-(verified the code sites in-tree), clean build + clean startup (D3D9Ex device, 14
-shaders, viewport positioned into the React layout), and last session's a11y
-graph-identity goldens. The visual identity itself is the user's confirmation
-(agent launches misrender arch-C — L-033). **Couldn't** pull a runtime file-op log
-post-hoc: this build streams its log to stdout, not a persisted `host.log` for a
-detached instance.
+### The 9 commits (newest first)
+- `685dbbd` docs — G12 changelog + **post-audit reconciliation** (the big one).
+- `6e95a0e` **G12** — `NativeBridge` pending-request leak fix (TDD, `native.test.ts`).
+- `32ff0d6` **G10** — `XMLNode` attribute loop advanced (`xml.cpp:15`) + NT-5 ROADMAP fix.
+- `7b0ac16` **G1 hardening** — silent-failure UX (`sendErr`) + count-blind test, from an adversarial review.
+- `f2eb7f7` **G1** — `emitters/import-from-file` native handler (TDD).
+- `5fef68e` **engine** — solid-colour ground texture D3D9Ex `LockRect` fix.
+- `1737c16` docs — Screen-8 dialog status corrections + G1 plan.
+- `d547ef8` **ground UI** — solid-colour picker opens + ground-height field.
+- `4deaf0d` docs — closed audit-P1 thread (forward-port already done).
 
-**Fresh-worktree gotcha (→ L-040):** the first `--new-ui` launch showed Edge's
-`ERR_NAME_NOT_RESOLVED` for `app.local`. The host maps `app.local` →
-`web/apps/editor/dist/` ([HostWindow.cpp:243](../src/host/HostWindow.cpp:243));
-on a fresh worktree that folder doesn't exist until `pnpm --filter
-@particle-editor/editor build` runs. The native `.sln` build alone is not enough
-to *launch* the editor — the React `dist` must be built too. Fixed by running the
-web build, then relaunching.
+### What shipped, grouped
+**1. Audit-P1 verification (`4deaf0d`).** User-driven GUI round-trip (open
+multi-emitter `.alo` → save → reload → identical) **PASSED** — confirms F2/F3/F4
+accept valid data. **Master forward-port was already done** (PR #89 `709bd82`,
+2026-05-24, independent impl) — nothing to port; cherry-picking would conflict.
+**lt-4↔master F1–F5 diverge** (F2/F3 `BadFileException` vs `ReadException`; F4
+`ValidateEmitterGraph` broader on lt-4; F5 index-cap vs capacity-cap) — reconcile
+at the LT-4→master merge, keeping lt-4's. (→ **L-040**: fresh-worktree `--new-ui`
+needs `pnpm --filter @particle-editor/editor build` to produce `dist/` or the
+WebView shows `app.local` `ERR_NAME_NOT_RESOLVED`.)
 
-### Item 2 — "master forward-port of F1–F5": **already done; the handoff claim was stale (L-022)**
-Master already carries an **independent** F1–F5 implementation:
-`709bd82` "fix: five correctness bugs surfaced by AI audit (F1-F5)", merged via
-**PR #89** on **2026-05-24** (its own plan `tasks/post-audit-slot1-master-p1s.md`,
-Debug+Release clean). The commit message itself says it "lands separately via
-lt-4 integration" — two parallel implementations were always the intent. **G9**
-(`.meg` index validation) is **identical on both** branches
-([MegaFiles.cpp:70,113](../src/MegaFiles.cpp:70) throw `BadFileException`). So
-master's P1 posture is complete; there was nothing to forward-port, and
-cherry-picking lt-4's commits would have **duplicated/conflicted**. No master
-action taken (user confirmed: correct docs, leave master).
+**2. Ground controls — 3 bugs (`d547ef8` + `5fef68e`).** All in
+[`GroundTexturePanel.tsx`](../web/apps/editor/src/screens/GroundTexturePanel.tsx) +
+engine. (a) solid-colour picker now opens — the wide tile fires a native
+`<input type="color">` (mirrors `BackgroundPicker`; replaced the Radix `ColorButton`);
+(b) **colour now actually applies** — engine `CreateSolidColorTexture`
+([engine.cpp:1130](../src/engine.cpp:1130)) was `D3DPOOL_DEFAULT` + `LockRect`
+without `D3DUSAGE_DYNAMIC`, so the lock silently failed under D3D9Ex (**lt-4-only**;
+master uses lockable MANAGED) — added `D3DUSAGE_DYNAMIC`+`D3DLOCK_DISCARD` (→ **L-042**);
+(c) restored the legacy ground-height `Spinner` → `engine/set/ground-z`. Root-caused
+in **browser mode** (`pnpm dev`) to sidestep L-033 (→ **L-041**); engine bug
+localised by the user ("bundled textures apply, solid never switches"). User-verified
+in `--new-ui`.
 
-**lt-4 ↔ master F1–F5 divergence — reconcile at LT-4 integration, not now:**
-- **F2/F3 exception:** master `ReadException`; lt-4 `BadFileException`.
-- **F4:** master `validateEmitterGraph()` (ctor-only); lt-4 `ValidateEmitterGraph()`
-  (ctor + the LT-3 import path [main.cpp:7312](../src/main.cpp:7312) — broader,
-  but import is lt-4-only).
-- **F5 gate:** master caps at *capacity ≥ 16384*; lt-4 caps at *index > 16383*.
-  Both prevent the uint16 wrap; different point/site.
+**3. G1 — `emitters/import-from-file` (`f2eb7f7` + `7b0ac16`).** The Import Emitters
+dialog's OK button now works. Extracted the legacy import core into shared
+[`ParticleSystem::ImportEmittersFrom`](../src/ParticleSystem.cpp:1176) (UI-free via an
+injected name-uniquifier callback); legacy `ImportEmitters_Execute` delegates to it;
+new handler ([BridgeDispatcher.cpp:2756](../src/host/BridgeDispatcher.cpp:2756), placed
+**after** the `captureUndo` lambda — L-043) mirrors `emitters/duplicate`. Test-first:
+[`emitter-import.spec.ts`](../web/apps/editor/tests/emitter-import.spec.ts). **A
+multi-agent adversarial review** (11 findings, 0 refuted; no live bugs) caught two
+worth fixing → the `7b0ac16` hardening: error paths now `sendErr` (were
+`sendOk{ok:false}` → resolved as success → dialog closed silently); test now asserts
+the imported subtree **shape** (was count-only, blind to the rebind) + partial +
+failed-import cases. (→ **L-043**, **L-044**.)
 
-These collide when `lt-4` merges to `master`. Recommended resolution then: keep
-**lt-4's** versions (newer, broader F4) and harmonize the exception type. Tracked
-here so the integration session doesn't rediscover it.
+**4. G10 (`32ff0d6`) + G12 (`6e95a0e`).** G10: `XMLNode` attribute loop never advanced
+`atts` → 100% CPU on any attribute-bearing XML (latent — canonical `MegaFiles.xml` is
+attribute-less). G12: `NativeBridge.request()` leaked pending entries on
+`postMessage`-throw / teardown — added try/catch cleanup + `dispose()` (on
+`beforeunload`) + **opt-in** timeout (off by default *deliberately* — interactive file
+dialogs).
 
-### NEXT
-- LT-4 work continues per `ROADMAP.md`; the audit-P1 thread is **closed on both
-  branches**. No outstanding master P1.
-- New lesson **L-040** (fresh-worktree `--new-ui` needs the React `dist` built).
+**5. Reconciliation (`685dbbd`) — THE headline.** This session L-022 fired ~9 times:
+docs implied items were open that had **already shipped** (master fwd-port, Spawner
+wiring, import-preview, Mod-Nickname, NT-5, F10/G5/G6/G2/G4/G8; F11 mooted by MT-12).
+Walked the whole post-audit backlog against current code; added a **"Status
+reconciliation" block at the top of
+[`tasks/post-audit-followups.md`](post-audit-followups.md)** (the trustworthy
+shipped/moot/open snapshot) + fixed the NT-5 ROADMAP lapse. **The planning docs were
+the bottleneck, not the code.**
+
+### Verified state
+- vitest **390** (45 files; +4 G1 import, +4 G12 native, +2 ground). Build clean.
+- native a11y **157 passed**, 4 failed = the known `splitters` L-033 window-size
+  artifact (NOT regressions). `.sln` Debug+Release x64 clean.
+- New lessons: **L-040**…**L-044**.
+
+### NEXT — G11 (user-chosen, this is the next session's task)
+**G11 — WebView2 has no navigation / new-window / permission policy + no WebMessage
+source check** ([lt-4] [P3 hardening], plan in
+[`tasks/post-audit-slot6-lt4-host-polish.md`](post-audit-slot6-lt4-host-polish.md)).
+Register `add_NavigationStarting` (cancel anything outside `https://app.local/*` +
+`http://localhost:5174/*` when `useDevUi`), `add_NewWindowRequested` (deny),
+`add_PermissionRequested` (deny), and reject `WebMessageReceived` from an untrusted
+`get_Source`. All in [`HostWindow.cpp`](../src/host/HostWindow.cpp) near the
+WebMessageReceived registration (~line 1218); navigate targets are
+`https://app.local/index.html` (prod) / `http://localhost:5174/` (dev). Store the
+3 tokens + remove them in WM_DESTROY (mirror the G5 `webMessageTok` pattern at ~2019).
+**Risk: over-restricting cancels the app's own load** — the a11y suite is the guard
+(every spec needs the app to load + the bridge to work), so build Debug + run
+`pnpm --filter @particle-editor/editor a11y`; if specs go dark, the allow-list is too
+tight. ~30–40 LoC. **Do it as its own focused pass.**
+
+After G11: the genuinely-open list (verified, see the reconciliation block) is **G7**
+(transactional `AlphaCompositor::Resize`), **F9** (vcxproj SDK macro-ize — needs a
+2nd-SDK CI matrix), **G3** (20-site `sendOk{ok:false}` sweep), **F6/F8/A-new**, **NT-6**,
+and the `[both]` **F12/F14/F15/F16** (shipped on master via PR #89, still open on
+lt-4). Strategic: the **LT-4→master cutover** (Phase 4; gated on arch-C trust — user
+still daily-drives legacy/arch-A).
 
 ---
 

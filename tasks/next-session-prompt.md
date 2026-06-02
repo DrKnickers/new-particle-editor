@@ -1,71 +1,80 @@
-# Next-session prompt — audit-P1 thread is CLOSED (both branches); resume LT-4 roadmap
+# Next-session prompt — G11 (WebView2 navigation/permission policy)
 
 You're picking up `new-particle-editor` (the **AloParticleEditor** rewrite —
 Win32 + WebView2/React + D3D9Ex-via-DComp particle editor for Star Wars:
-Empire at War), branch **`lt-4`**. Context is in the handoff docs; treat them as
-primary but **verify every important claim against the actual code** before acting
-(file:line refs drift — and "remaining work" can be already-done — L-022).
+Empire at War), branch **`lt-4`**, at `origin/lt-4 = 685dbbd`. The handoff docs
+are primary context but **verify every important claim against the actual code**
+before acting — this is not boilerplate: session 8 found ~9 backlog items the docs
+implied were open that had **already shipped** (the L-022 trap). The
+**reconciliation block** (top of `tasks/post-audit-followups.md`) is the trustworthy
+status snapshot; trust it over older notes, but still confirm the specific site you
+touch.
 
-## Status: audit-P1 is done on both branches
+## The task: G11 — WebView2 has no navigation / new-window / permission policy
+`[lt-4]` `[P3 hardening]`. Plan: `tasks/post-audit-slot6-lt4-host-polish.md`. The
+WebView2 host trusts "whatever page is loaded" rather than the intended origin. Add,
+all in [`src/host/HostWindow.cpp`](../src/host/HostWindow.cpp) near the
+`add_WebMessageReceived` registration (~line 1218):
+- `add_NavigationStarting` → `put_Cancel(TRUE)` for any URI outside the approved set:
+  `https://app.local/*` (prod) + `http://localhost:5174/*` (only when `useDevUi`).
+  Allow `about:` (init may navigate about:blank). Navigate targets are
+  `https://app.local/index.html` / `http://localhost:5174/`.
+- `add_NewWindowRequested` → `put_Handled(TRUE)`, don't create a window (deny popups).
+- `add_PermissionRequested` → `put_State(COREWEBVIEW2_PERMISSION_STATE_DENY)`.
+- In the existing `WebMessageReceived` handler, reject when `get_Source` is outside the
+  approved origins (a helper `IsApprovedWebViewOrigin(uri)` is clean).
+Store the 3 new `EventRegistrationToken`s as members and `remove_*` them in WM_DESTROY
+(mirror the G5 `webMessageTok` pattern at ~line 2019). ~30–40 LoC.
 
-- **lt-4:** F1–F5 shipped session 7 (`05f7228..f848c86`); **GUI round-trip verified
-  PASS** session 8 (user-driven open→save→reload identity, L-033).
-- **master:** F1–F5 + G9 **already shipped 2026-05-24 via PR #89** (`709bd82`,
-  independent master-side implementation). **There is no master forward-port to do** —
-  the session-6/7 handoffs claimed one, but master has carried these for a week
-  (the L-022 trap; see session-8 HANDOFF for the full finding). **Do not cherry-pick
-  F1–F5 to master** — it would duplicate/conflict.
-- **lt-4 ↔ master F1–F5 diverge** (exception type, F4 coverage, F5 gate) — a
-  reconciliation note for the eventual LT-4→master integration, NOT a task now.
-  Details in the session-8 HANDOFF entry.
+**The risk (and its guard):** an over-tight allow-list cancels the app's OWN initial
+navigation → the editor never loads → every a11y spec goes dark. So the a11y suite IS
+the verification: build Debug, run `pnpm --filter @particle-editor/editor a11y`; if
+specs that previously passed now fail to find the app/bridge, loosen the allow-list.
+(The 4 `splitters` failures are the known L-033 window-size artifact — not yours.)
 
-So: the audit-P1 thread is closed. Resume normal **LT-4 roadmap** work
-(`ROADMAP.md`) or whatever the user directs.
-
-## Pre-flight (run before touching anything)
+## Pre-flight
 ```
 git fetch origin lt-4 --quiet
-git rev-parse --abbrev-ref HEAD                            # lt-4 or a fresh claude/* off lt-4
-git log --oneline origin/lt-4..HEAD | wc -l               # expect 0
-git log --oneline HEAD..origin/lt-4 | wc -l               # expect 0
-git status --porcelain                                     # expect clean
+git rev-parse --abbrev-ref HEAD                 # lt-4 or a fresh claude/* off lt-4
+git log --oneline origin/lt-4..HEAD | wc -l     # expect 0
+git log --oneline HEAD..origin/lt-4 | wc -l     # expect 0
+git status --porcelain                          # expect clean
+git rev-parse --short origin/lt-4               # expect 685dbbd or newer
 ```
 If lineage doesn't match, STOP and reconcile per `CLAUDE.md` branch-workflow.
 
-## Baseline
-- From `web/`: `pnpm --filter @particle-editor/editor test` → **384 passed** (44 files).
-- `pnpm --filter @particle-editor/editor build` → clean. **This also produces
-  `web/apps/editor/dist/`, which the native `--new-ui` editor serves via the
-  `app.local` virtual-host mapping.** On a fresh worktree you MUST run this before
-  launching `--new-ui`, or the WebView shows `ERR_NAME_NOT_RESOLVED` for `app.local`
-  (the `dist` folder is missing). See **L-040**.
-- Native `.sln` Debug + Release x64 (absolute path; the Debug `LNK4098 LIBCMTD`
+## Baseline (verify before changing anything)
+- From `web/`: `pnpm --filter @particle-editor/editor test` → **390 passed** (45 files).
+- `pnpm --filter @particle-editor/editor build` → clean. **This also builds
+  `web/apps/editor/dist/`** — a fresh worktree MUST run it before launching `--new-ui`
+  (else `app.local` `ERR_NAME_NOT_RESOLVED`). See **L-040**.
+- Native `.sln` **Debug + Release x64** (absolute path; the Debug `LNK4098 LIBCMTD`
   warning is pre-existing/benign):
   `& "C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" "<repo>\ParticleEditor.sln" /p:Configuration=Debug /p:Platform=x64 /nologo /verbosity:minimal /m`
-  - **Fresh worktree?** NuGet restore with no `nuget.exe` on PATH: copy
+  - **Fresh worktree?** NuGet restore with no `nuget.exe`: copy
     `~/.nuget/packages/microsoft.web.webview2/1.0.3967.48/*` →
-    `packages/Microsoft.Web.WebView2.1.0.3967.48/` (the `packages.config` layout).
-    See **L-039**. Then build.
+    `packages/Microsoft.Web.WebView2.1.0.3967.48/` (**L-039**), then build.
+- `pnpm --filter @particle-editor/editor a11y` (needs `x64\Debug`) → **157 passed**, 4
+  `splitters` failures (the L-033 artifact). **L-038**: native host logic is gated by
+  a11y, not vitest+build.
 
-## Primary context (read first, then VERIFY against code)
-- **[`tasks/HANDOFF.md`](HANDOFF.md)** — top "session 8" section: the GUI round-trip
-  result, the master-already-has-F1–F5 finding, and the divergence note. Session 7
-  below it: what shipped on lt-4.
-- **[`tasks/post-audit-followups.md`](post-audit-followups.md)** — full finding text.
-  F1–F5 + G9 are now marked shipped on both branches.
-- **[`tasks/lessons.md`](lessons.md)** — esp. **L-040** (fresh-worktree `--new-ui`
-  needs the React `dist`), **L-038** (native logic gated by `pnpm a11y`, not
-  vitest+build), **L-033** (agent native launches misrender — verify via the user;
-  the 4 `splitters` a11y failures are this artifact), **L-039** (fresh-worktree
-  NuGet restore), **L-022** (handoff "remaining work" is a claim — verify it isn't
-  already done), **L-023/L-025** (.sln).
-- `CLAUDE.md` — working principles, plan-mode, LT-4 branch flow (FF into lt-4).
+## Read first (then VERIFY)
+- **`tasks/HANDOFF.md`** top "session 8" entry — what shipped (9 commits), verified
+  state, and this G11 task in full.
+- **`tasks/post-audit-followups.md`** — the **Status reconciliation block** at the top
+  (trustworthy open/shipped list) + the G11 entry; **`slot6`** doc has the G11 plan.
+- **`tasks/lessons.md`** — **L-033** (agent native launches misrender — verify via the
+  user / a11y, not your screenshots), **L-038/L-039/L-040** (a11y gate / NuGet / dist),
+  **L-022** (verify "open" items aren't already done), **L-043** (dispatcher handler
+  placement), **L-044** (`sendErr` vs nested-`ok`; assert shape not count).
+- `CLAUDE.md` — working principles, LT-4 branch flow (FF into `lt-4`; never `master`
+  without explicit OK).
 
 ## Process (per CLAUDE.md)
-- For any native fix: build Debug+Release, run `pnpm --filter @particle-editor/editor
-  a11y` (the 4 `splitters` failures are the known L-033 artifact, not yours).
-- When an item lands: update `CHANGELOG.md`, append any lesson, FF-push to the right
-  branch. **Never `master` without explicit OK.**
+- Summarize your understanding + the G11 approach and confirm scope before coding.
+- TDD where it fits; for the native handler, the a11y suite is the gate (L-038).
+- On landing: update `CHANGELOG.md`, mark G11 ✅ in the reconciliation block + its
+  followups heading, append any lesson, FF-push to `lt-4`. **Never `master` without OK.**
 
-Before changing anything, summarize your understanding of the project state and
-your approach, and wait for confirmation.
+Before changing anything, summarize your understanding of the project state and your
+approach, and wait for confirmation.
