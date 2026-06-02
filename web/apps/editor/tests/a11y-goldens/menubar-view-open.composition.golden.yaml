@@ -150,7 +150,6 @@
 - contentinfo: FPS — · Emitters — · Particles — · Instances — · Cursor —
 - menu "View":
   - menuitem "Ground"
-  - menuitem "Bloom"
   - menuitem "Lighting…"
   - separator
   - menuitem "Pause F8"

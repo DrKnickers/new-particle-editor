@@ -170,13 +170,12 @@
       - button "Sun specular colour": "#000000"
     - group: Fill 1
     - group: Fill 2
-    - text: Ambient Colour
+    - checkbox "Force Align Fill Lights" [checked]
+    - text: Force Align Fill Lights Ambient Colour
     - button "Ambient colour": "#000000"
     - text: Shadow Colour
     - button "Shadow colour": "#000000"
-    - group: Bloom
-    - checkbox "Force Align Fill Lights" [checked]
-    - text: Force Align
     - button "Mirror Sun" [disabled]
     - button "Reset"
+    - group: Bloom
 - contentinfo: FPS — · Emitters — · Particles — · Instances — · Cursor —

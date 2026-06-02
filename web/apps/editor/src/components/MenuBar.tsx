@@ -205,8 +205,8 @@ export function MenuBar({
   }, [bridge]);
 
   const ground = state?.ground ?? false;
-  const bloom = state?.bloom ?? false;
-  const bloomAvailable = state?.bloomAvailable ?? false;
+  // Bloom enable/disable lives on the toolbar's "Toggle bloom" button, not
+  // the View menu (session 11 follow-up), so no bloom state is read here.
   const paused = state?.paused ?? false;
   const heatDebug = state?.heatDebug ?? false;
 
@@ -619,22 +619,12 @@ export function MenuBar({
               <CheckSlot active={ground} />
               Ground
             </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              disabled={!bloomAvailable}
-              onSelect={send({
-                kind: "engine/set/bloom",
-                params: { enabled: !bloom },
-              })}
-            >
-              <CheckSlot active={bloom} />
-              Bloom
-              {!bloomAvailable && <Hint>unavailable</Hint>}
-            </Menubar.Item>
             {/* Lighting opens the docked right-dock pane (shared with the
-                Spawner; LT-4 session 11). Bloom settings now live as a
-                section inside that pane, so the former "Bloom Settings…"
-                entry was retired — the on/off "Bloom" item above stays. */}
+                Spawner; LT-4 session 11). Bloom is fully handled elsewhere:
+                its settings live as a section inside the Lighting pane, and
+                its on/off toggle is the toolbar's "Toggle bloom" button — so
+                the former View-menu "Bloom" + "Bloom Settings…" items were
+                both retired (session 11 follow-up). */}
             <Menubar.Item
               className={ITEM}
               onSelect={() => toggleDock("lighting")}

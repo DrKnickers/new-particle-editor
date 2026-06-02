@@ -26,9 +26,12 @@ The Lighting panel is no longer a floating overlay that covers the viewport — 
 Lighting and the Spawner **share one right-dock slot**: opening Lighting closes the
 Spawner and vice-versa, so the viewport is never squeezed into a fourth column. The
 **Bloom settings** (Enable / Strength / Cutoff / Size) now live as a collapsible section
-*inside* the Lighting pane, so the standalone "Bloom Settings…" menu entry is gone (the
-on/off "Bloom" toggle on the toolbar + View menu stays). Open Lighting from View →
-Lighting; the Spawner toggles from the toolbar or View → Spawner (F7) as before.
+at the **bottom** of the Lighting pane (below Mirror Sun / Reset), and **both** former
+View-menu Bloom entries are gone: "Bloom Settings…" folded into that section, and the
+on/off "Bloom" toggle is now solely the toolbar's "Toggle bloom" button (no duplicate menu
+item). The **Force Align Fill Lights** toggle moved out of the footer to sit directly under
+the Fill 1 / Fill 2 sections it governs (it snaps the fills' azimuth to the sun). Open
+Lighting from View → Lighting; the Spawner toggles from the toolbar or View → Spawner (F7).
 
 **How we tackled it.** The Spawner column had already solved every hard layout problem
 (width persistence across the 2-col/3-col mode switch, carrying widths on toggle, the

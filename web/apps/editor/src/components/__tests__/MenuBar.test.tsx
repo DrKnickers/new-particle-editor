@@ -152,7 +152,7 @@ describe("MenuBar — top-level structure (FD5)", () => {
     expect(toggleVis.getAttribute("data-disabled")).not.toBeNull();
   });
 
-  it("View menu exposes Lighting… and no longer has Bloom Settings… (folded into Lighting, session 11)", async () => {
+  it("View menu exposes Lighting… and no longer has any Bloom entries (folded into Lighting + toolbar, session 11)", async () => {
     const bridge = makeStubBridge();
     renderMenuBar(bridge);
     const trigger = screen.getByRole("menuitem", { name: "View" });
@@ -161,12 +161,10 @@ describe("MenuBar — top-level structure (FD5)", () => {
     await waitFor(() => {
       expect(screen.getByRole("menuitem", { name: /Lighting/ })).toBeTruthy();
     });
-    // The standalone "Bloom Settings…" entry was retired — its controls
-    // now live inside the Lighting pane. The on/off "Bloom" item remains.
-    expect(
-      screen.queryByRole("menuitem", { name: /Bloom Settings/ }),
-    ).toBeNull();
-    expect(screen.getByRole("menuitem", { name: /^Bloom/ })).toBeTruthy();
+    // Both View-menu Bloom entries were retired: "Bloom Settings…" moved
+    // into the Lighting pane's Bloom section, and the on/off "Bloom" toggle
+    // is the toolbar's "Toggle bloom" button. No Bloom menuitem remains.
+    expect(screen.queryByRole("menuitem", { name: /Bloom/ })).toBeNull();
   });
 
   it("View > Reset panel layout fires the onResetPanelLayout callback (B1.4 T6)", async () => {

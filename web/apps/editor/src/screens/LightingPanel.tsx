@@ -499,6 +499,23 @@ export function LightingPanel({ bridge, onClose }: Props) {
         </ToolPanel.Row>
       </ToolPanel.Section>
 
+      {/* Force Align governs the two fill lights' azimuth (snaps them to
+          sun.az + the canonical offsets and disables their az/alt
+          spinners), so it lives directly under the fill sections it
+          controls rather than in the footer. */}
+      <div className="px-1 py-2">
+        <label className="flex select-none items-center gap-1.5 text-xs text-text-2">
+          <input
+            type="checkbox"
+            checked={forceAlign}
+            onChange={(e) => handleForceAlignToggle(e.target.checked)}
+            className="size-3.5 accent-sky-500"
+            aria-label="Force Align Fill Lights"
+          />
+          Force Align Fill Lights
+        </label>
+      </div>
+
       <ToolPanel.Section title="Ambient" alwaysOpen>
         <ToolPanel.Row label="Colour">
           <ColorButton
@@ -519,21 +536,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
         </ToolPanel.Row>
       </ToolPanel.Section>
 
-      {/* Bloom folded into Lighting (LT-4 session 11). Self-contained —
-          owns its own engine-state subscription. Collapsed by default. */}
-      <BloomSection bridge={bridge} />
-
       <ToolPanel.Footer>
-        <label className="flex select-none items-center gap-1.5 text-xs text-text-2">
-          <input
-            type="checkbox"
-            checked={forceAlign}
-            onChange={(e) => handleForceAlignToggle(e.target.checked)}
-            className="size-3.5 accent-sky-500"
-            aria-label="Force Align Fill Lights"
-          />
-          Force Align
-        </label>
         <button
           type="button"
           onClick={handleMirrorSun}
@@ -551,6 +554,12 @@ export function LightingPanel({ bridge, onClose }: Props) {
           Reset
         </button>
       </ToolPanel.Footer>
+
+      {/* Bloom sits at the very bottom, below the footer (Mirror Sun /
+          Reset) per user request — it's a post-process effect unrelated
+          to the lights, so it's the last thing in the pane. Collapsed by
+          default; self-contained engine-state subscription. */}
+      <BloomSection bridge={bridge} />
     </ToolPanel>
   );
 }

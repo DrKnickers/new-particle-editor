@@ -61,9 +61,12 @@ test("Edit > Clear All Particles dispatches engine/action/clear", async () => {
   expect(result).toBe(true);
 });
 
-// ── 3. View › Bloom toggle flips state ───────────────────────────────────────
+// ── 3. Bloom toggle flips state ──────────────────────────────────────────────
+// (Bloom moved off the View menu in session 11 — its on/off toggle is the
+// toolbar's "Toggle bloom" button. This drives the same engine/set/bloom
+// command directly through the bridge.)
 
-test("View > Bloom dispatches engine/set/bloom and flips state", async () => {
+test("engine/set/bloom flips bloom state", async () => {
   const result = await page.evaluate(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b = (window as any).bridge;
