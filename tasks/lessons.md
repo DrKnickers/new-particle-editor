@@ -3345,3 +3345,41 @@ on touch), and clicks already work in arch-C (selection), so pointer events do t
 layer) is the same shape: a web capability that silently no-ops specifically under arch-C
 composition hosting. When something "works in the browser but not the new-UI build,"
 suspect a composition-hosting limitation before a logic bug.
+
+## L-051 — A startup restore gated under `!useTestHost` CANNOT be verified over the `--test-host` CDP bridge (the gate turns the very thing off); verify from a faithful non-test-host launch + a `host.log` dump instead
+
+**The trap.** When you add a registry/startup restore to the new-UI host and gate it
+under `if (!useTestHost)` — which you must, whenever any restored value surfaces in an
+a11y golden, so the harness sees deterministic ctor defaults (see [L-049](#l-049); bloom
+gated on `dialog-bloom-settings`, ground/skydome on `dialog-lighting`'s "Show ground"
+toggle) — the agent's *only* no-user verification channel is **also** disabled. The
+`--test-host` CDP host-object bridge (`connectOverCDP('http://127.0.0.1:9222')` →
+`window.bridge.request('engine/state/snapshot')`) launches *with* `--test-host`, so the
+restore never runs and the snapshot shows ctor defaults — even when the restore is
+perfectly correct. A handoff note claiming "snapshot shows the saved value under
+`--test-host`" is therefore self-contradictory and must not be trusted (an instance of the
+[L-022](#l-022) "docs say X" trap — the session-10 bloom handoff carried exactly this
+inconsistent claim).
+
+**How to apply.** Verify the restore from a **faithful, non-`--test-host` launch** and read
+the result from **`host.log`** (the trusted arch-C surface — L-033/L-034 — because it
+reports engine *getters*, independent of whether the compositor renders correctly for an
+agent-launched window):
+1. Add a `Log("[view-restore] …", engine->GetX()…)` line at the end of the restore block
+   (inside the `!useTestHost` gate, so it only fires on real launches). Make it permanent,
+   not temporary — it's the standing verification channel for this whole class of parity
+   fix, and it's consistent with the existing `[COMP-*]`/`[host]` host.log diagnostics.
+2. Pick registry values that are **distinct from the engine ctor defaults** before
+   launching (the dev box usually already has tuned values, since the user daily-drives
+   legacy). Predict the expected log line from the registry, then launch and confirm each
+   field equals the *saved* value, not the default.
+3. PowerShell recipe: clear `%LOCALAPPDATA%\AloParticleEditor\host.log`,
+   `Start-Process …\x64\Release\ParticleEditor.exe --new-ui -PassThru`, `Start-Sleep 8`,
+   grep the log for `view-restore`, `Stop-Process`. No CDP, no port 9222, no user.
+
+**Source incident (2026-06-02, session 11, ground/background/skydome restore).** Registry
+held `bg=0x6E6E6E groundTex=5 groundSolid=0x626262 skydome=1` (all non-default); the faithful
+launch logged exactly those, proving the restore end-to-end, while `a11y` stayed at the
+baseline **157 passed / 4 splitters** (gate intact — the restore stayed off under
+`--test-host`). Cross-reference [L-049](#l-049) (the parity-restore pattern), [L-033](#l-033)
+(host.log + the user are the arch-C truth, not agent screenshots).

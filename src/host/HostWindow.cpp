@@ -1835,6 +1835,90 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     engine->SetBloomStrength(readF(L"BloomStrength", engine->GetBloomStrength()));
                     engine->SetBloomCutoff  (readF(L"BloomCutoff",   engine->GetBloomCutoff()));
                     engine->SetBloomSize    (readF(L"BloomSize",     engine->GetBloomSize()));
+
+                    // [view-settings-restore, session 11] Mirror legacy
+                    // main.cpp's startup restore (main.cpp:7614-7692) so the
+                    // new-UI viewport opens with the user's persisted
+                    // background / ground / skydome instead of engine ctor
+                    // defaults. Same value names/types legacy reads, so
+                    // settings round-trip between the two UIs. Same
+                    // !useTestHost gate as bloom: the a11y goldens (e.g.
+                    // dialog-lighting's "Show ground" toggle) must see
+                    // deterministic ctor defaults. GroundZ is intentionally
+                    // NOT restored — legacy resets it to 0 each launch by
+                    // design (main.cpp:7626).
+                    auto readDword = [&](const wchar_t* name, DWORD& out) -> bool {
+                        DWORD t = 0, s = sizeof(out);
+                        return RegQueryValueExW(hKey, name, nullptr, &t,
+                                                reinterpret_cast<LPBYTE>(&out), &s) == ERROR_SUCCESS
+                               && t == REG_DWORD && s == sizeof(out);
+                    };
+                    // REG_SZ two-pass sized read (mirrors ReadGroundSlotPath:
+                    // the stored value may omit the trailing NUL).
+                    auto readSz = [&](const wchar_t* name) -> std::wstring {
+                        DWORD t = 0, cb = 0;
+                        if (RegQueryValueExW(hKey, name, nullptr, &t, nullptr, &cb) != ERROR_SUCCESS
+                            || t != REG_SZ || cb < sizeof(wchar_t))
+                            return std::wstring();
+                        std::vector<wchar_t> buf(cb / sizeof(wchar_t) + 1, 0);
+                        if (RegQueryValueExW(hKey, name, nullptr, &t,
+                                             reinterpret_cast<LPBYTE>(buf.data()), &cb) != ERROR_SUCCESS)
+                            return std::wstring();
+                        buf.back() = 0;
+                        return std::wstring(buf.data());
+                    };
+
+                    DWORD dw = 0;
+                    if (readDword(L"BackgroundColor", dw))
+                        engine->SetBackground(static_cast<COLORREF>(dw));
+                    if (readDword(L"ShowGround", dw))
+                        engine->SetGround(dw != 0);
+                    engine->SetGroundZ(0.0f);
+
+                    // Ground texture: per-slot custom paths BEFORE the
+                    // selected index, so SetGroundTexture can find the right
+                    // source for a custom slot (ordering is load-bearing).
+                    for (int slot = 0; slot < Engine::kGroundTextureCount; ++slot)
+                    {
+                        wchar_t name[32];
+                        swprintf_s(name, L"GroundTextureSlot%d", slot);
+                        std::wstring path = readSz(name);
+                        if (!path.empty())
+                            engine->SetGroundSlotCustomPath(slot, path);
+                    }
+                    if (readDword(L"GroundSolidColor", dw))
+                        engine->SetGroundSolidColor(static_cast<COLORREF>(dw));
+                    if (readDword(L"GroundTexture", dw)
+                        && dw < static_cast<DWORD>(Engine::kGroundTextureCount))
+                        engine->SetGroundTexture(static_cast<int>(dw));
+
+                    // Skydome: custom paths first so SetSkydomeSlot can reload
+                    // a previously-active custom slot.
+                    for (int s = Engine::kSkydomeFirstCustomSlot;
+                         s < Engine::kSkydomeSlotCount; ++s)
+                    {
+                        wchar_t name[64];
+                        swprintf_s(name, L"SkydomeCustomSlot%d", s);
+                        engine->SetSkydomeCustomPath(s, readSz(name));
+                    }
+                    if (readDword(L"SkydomeIndex", dw)
+                        && static_cast<int>(dw) < Engine::kSkydomeSlotCount)
+                        engine->SetSkydomeSlot(static_cast<int>(dw));
+
+                    // Dump restored view-settings to host.log. This is the
+                    // ONLY no-user verification channel for this restore: the
+                    // --test-host CDP bridge can't observe it (the whole block
+                    // is gated off under --test-host), so a faithful
+                    // non-test-host launch + this log line is how parity is
+                    // confirmed (host.log is trusted under arch-C; agent
+                    // screenshots are not — see tasks/lessons.md L-033/L-051).
+                    Log("[view-restore] bg=0x%06X showGround=%d groundTex=%d "
+                        "groundSolid=0x%06X skydome=%d\n",
+                        static_cast<unsigned>(engine->GetBackground()),
+                        engine->GetGround() ? 1 : 0,
+                        engine->GetGroundTexture(),
+                        static_cast<unsigned>(engine->GetGroundSolidColor()),
+                        engine->GetSkydomeSlot());
                     RegCloseKey(hKey);
                 }
             }

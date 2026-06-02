@@ -16,6 +16,44 @@ Conventions:
 
 ## Changelog
 
+### Ground, background, and skydome view settings restored from the registry in the new-UI host
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Launching the new UI now opens the viewport with the same persisted view settings the
+legacy editor restores — your tuned **background colour**, **ground visibility**, **ground
+texture** (per-slot custom paths, the solid-colour slot, and the selected slot), and
+**skydome** (custom slot paths + the selected slot). Previously the new-UI host restored
+none of these (only recent-files + last-mod), so a ground/background/skydome you tuned in
+the legacy editor reset to engine defaults in the new UI. This completes the same parity
+sweep the [bloom restore](#bloom-settings-restored-from-the-registry-in-the-new-ui-host)
+started. Ground-Z is intentionally *not* restored — legacy deliberately resets it to 0 each
+launch ([`src/main.cpp`](src/main.cpp:7626)), and the new UI mirrors that.
+
+**How we tackled it.** [`HostWindow`](src/host/HostWindow.cpp:1799) reads the values from
+`HKCU\Software\AloParticleEditor` right after the `Engine` is constructed, folded into the
+**same** `if (!useTestHost) { … }` registry block the bloom restore opened — one key open,
+one gate, reusing `hKey`. It mirrors legacy's startup sequence at
+[`src/main.cpp`](src/main.cpp:7614) in the load-bearing order (ground slot custom paths
+*before* `SetGroundTexture`, skydome custom paths *before* `SetSkydomeSlot`) and reuses the
+exact value names/types (`BackgroundColor`/`ShowGround`/`GroundTexture`/`GroundSolidColor`
+as `REG_DWORD`, `GroundTextureSlot%d`/`SkydomeCustomSlot%d` as `REG_SZ`, `SkydomeIndex` as
+bounds-checked `REG_DWORD`), so settings round-trip between the two UIs. Because the legacy
+`Read*` helpers are `static` in `main.cpp` (no external linkage), the reads are inlined via
+two small lambdas (`readDword`, a two-pass-sized `readSz`) rather than shared.
+
+**Issues encountered and resolutions.** The verification channel and the gate are in
+tension: the only no-user way to drive the new-UI host is the `--test-host` CDP bridge, but
+the whole restore is gated *off* under `--test-host` (so the `dialog-lighting` "Show ground"
+a11y golden stays deterministic — same reason bloom is gated). The bridge therefore can
+**never** observe the restored values. Resolved by emitting a permanent `[view-restore]`
+line to `host.log` and verifying from a faithful **non**-test-host launch: a fresh launch
+logged `bg=0x6E6E6E showGround=1 groundTex=5 groundSolid=0x626262 skydome=1` — every field
+the saved registry value, none the engine ctor default. `host.log` is the trusted arch-C
+verification surface (agent screenshots are not — L-033). Captured as **L-051**.
+
+---
+
 ### Emitter-tree drag-to-reorder works under arch-C (pointer events replace HTML5 DnD)
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
