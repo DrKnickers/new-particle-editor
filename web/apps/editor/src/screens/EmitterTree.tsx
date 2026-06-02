@@ -666,7 +666,7 @@ function EmitterRow({
               // parent's `commitEdit`).
               <input
                 ref={inputRef}
-                style={{ gridColumn: 3 }}
+                style={{ gridColumn: 3, gridRow: 1 }}
                 data-testid={`emitter-rename-input-${node.id}`}
                 value={editing!.value}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -698,7 +698,7 @@ function EmitterRow({
             ) : (
               <span
                 className="truncate"
-                style={{ gridColumn: 3 }}
+                style={{ gridColumn: 3, gridRow: 1 }}
                 onDoubleClick={(e) => {
                   // Double-click on the label starts inline rename. The
                   // stopPropagation prevents the click-handler chain
@@ -720,7 +720,7 @@ function EmitterRow({
             {node.role !== "root" && (
               <span
                 aria-label={roleLabel(node.role)}
-                style={{ gridColumn: 2 }}
+                style={{ gridColumn: 2, gridRow: 1 }}
                 className="inline-block w-full shrink-0 text-center font-mono text-xs text-text-3"
               >
                 {roleGlyph(node.role)}
