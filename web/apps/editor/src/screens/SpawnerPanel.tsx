@@ -270,6 +270,7 @@ export function SpawnerPanel({ bridge }: Props) {
             min={0}
             max={MAX_SPACING_SEC}
             step={0.05}
+            decimals={3}
             unit="s"
             aria-label="Burst spacing"
           />
@@ -282,6 +283,7 @@ export function SpawnerPanel({ bridge }: Props) {
               min={0}
               max={MAX_INTERVAL_SEC}
               step={0.5}
+              decimals={3}
               unit="s"
               aria-label="Burst interval"
             />
@@ -361,6 +363,7 @@ export function SpawnerPanel({ bridge }: Props) {
             min={0}
             max={MAX_LIFETIME_SEC}
             step={0.5}
+            decimals={3}
             unit="s"
             aria-label="Max lifetime"
           />

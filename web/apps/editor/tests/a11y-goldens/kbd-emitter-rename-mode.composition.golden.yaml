@@ -55,15 +55,15 @@
   - textbox "Name": default
   - button "Emitter Timing" [expanded]
   - text: "Initial spawn delay:"
-  - textbox "Initial spawn delay:": "0.0"
+  - textbox "Initial spawn delay:": "0.000"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Skip time:"
-  - textbox "Skip time:": "0.0"
+  - textbox "Skip time:": "0.000"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Freeze time:"
-  - textbox "Freeze time:": "0.0"
+  - textbox "Freeze time:": "0.000"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: s
@@ -73,7 +73,7 @@
     - text: "Bursts:"
     - textbox "Bursts:" [disabled]: "0"
     - text: "Burst delay:"
-    - textbox "Burst delay:" [disabled]: "1.0"
+    - textbox "Burst delay:" [disabled]: "1.000"
     - text: "s Particles/burst:"
     - textbox "Particles/burst:" [disabled]: "1"
     - radio "Continuous stream" [checked]
@@ -90,7 +90,7 @@
     - textbox "Cube size:" [disabled]: "500.0"
     - text: units
   - text: "Maximum lifetime:"
-  - textbox "Maximum lifetime:": "1.0"
+  - textbox "Maximum lifetime:": "1.000"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Minimum lifetime:"
@@ -165,11 +165,11 @@
     - button "Increment": ▲
     - button "Decrement": ▼
     - text: Spacing
-    - textbox "Burst spacing": "0.00"
+    - textbox "Burst spacing": "0.000"
     - button "Increment": ▲
     - button "Decrement": ▼
     - text: Interval
-    - textbox "Burst interval": "10.0"
+    - textbox "Burst interval": "10.000"
     - button "Increment": ▲
     - button "Decrement": ▼
   - group:
@@ -199,7 +199,7 @@
     - button "Increment": ▲
     - button "Decrement": ▼
   - text: Lifetime Max lifetime
-  - textbox "Max lifetime": "5.0"
+  - textbox "Max lifetime": "5.000"
   - button "Increment": ▲
   - button "Decrement": ▼
   - group: Jitter position

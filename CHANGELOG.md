@@ -16,6 +16,42 @@ Conventions:
 
 ## Changelog
 
+### New-UI review polish — emitter role glyph placement + legacy-precision time fields
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Two polish fixes from a `--new-ui` review pass. **(1)** In the emitter tree, a child
+emitter's spawn-role glyph (lifetime `↻` / on-death `✕`) now sits **between** the
+visibility eye and the name instead of off on the right edge. **(2)** Every
+seconds-unit field now shows and accepts **three decimals**, matching legacy — so a
+burst delay of `0.01` (or `0.250`, etc.) round-trips instead of being truncated to one
+decimal. Applies to Emitter Timing (initial spawn delay, skip time, freeze time,
+maximum lifetime), Generation burst delay, and the Spawner's spacing / interval / max
+lifetime.
+
+**How we tackled it.** The glyph move
+([`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx:617)) is **CSS-only** —
+the row grid became `18px 18px 1fr` with the glyph at `grid-column:2` and the label at
+`grid-column:3`, but the **DOM order is unchanged** (glyph still rendered last). That
+keeps the accessibility tree — and the `emitter-tree` a11y goldens, which capture the
+row's accessible name and `"default ↻"` text — byte-identical, so no golden churn. The
+precision fix sets `decimals={3}` on the eight `s`-unit Spinners (legacy formats every
+emitter float as `%.3f`, [`EmitterList.cpp:2509`](src/UI/EmitterList.cpp:2509)).
+
+**Issues encountered and resolutions.** The precision change shifted displayed default
+values (`1.0`→`1.000`, `10.0`→`10.000`, …) that are baked into **20**
+`*.composition.golden.yaml` a11y goldens. Rather than a full `a11y:update` regen — which
+L-033 cautions against on this machine (UIA non-determinism) — the goldens were updated
+by **surgical value substitution**: the UIA `.json` goldens capture only field *labels*
+(not values) so they were untouched, and the DOM-based composition goldens got eight
+exact `label: "x.x"` → `"x.xxx"` replacements. a11y returned to the **157 / 4-splitter**
+baseline. A third review item — a black line along the Spawner panel's viewport edge —
+turned out to be an **arch-C compositor seam** (engine backing through a ~1px scene-rect
+gap), not a DOM/CSS issue (confirmed by live DOM inspection); it's deferred to a
+host-side investigation since it can't be agent-verified (L-033).
+
+---
+
 ### `AlphaCompositor::Resize` is now transactional — a failed reallocation no longer kills the viewport (audit G7)
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

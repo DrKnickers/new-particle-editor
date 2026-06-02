@@ -1,113 +1,97 @@
-# G7 — transactional `AlphaCompositor::Resize`
+# New-UI review polish — 3 items from the 2026-06-02 user launch
 
-`[lt-4]` `[P3 latent]`. Source: post-audit reconciliation block (`G7`). Branch:
-`lt-4` (FF-push on land; **never `master` without explicit OK**).
+`[lt-4]`. All web/ (React/CSS). Branch `lt-4`. Verify in browser mode (L-041)
+where possible; arch-C visuals confirmed by the user on relaunch (L-033).
 
-## 1. Goal + scope
+## Item 1 — black line along the Spawner panel's viewport-facing edge
 
-**Goal.** `AlphaCompositor::Resize` currently frees all old GPU/GDI resources
-*before* allocating the new ones. If any allocation throws, the compositor is
-left half-destroyed (old gone, new partial, `width/height` stale) → a dead
-viewport until process restart. Make it transactional: build new resources into
-locals, swap into `m_impl` only on full success, roll back (keep the old
-resources) on any failure.
+**Diagnosis.** `.panel` ([components.css:275](web/apps/editor/src/styles/components.css:275))
+has `border-radius: 8px` on all corners. The LEFT panel squares its
+viewport-facing (right) corners via `.panel-flush-right`
+([PanelLayout.tsx:262](web/apps/editor/src/components/PanelLayout.tsx:262)) —
+its comment: *"square the corners that face the engine viewport so the rounded
+corner doesn't leave a wedge of (clipped) engine backing showing."* The Spawner
+panel ([SpawnerPanel.tsx:167](web/apps/editor/src/screens/SpawnerPanel.tsx:167))
+is a bare `.panel` with rounded LEFT corners facing the viewport and no mirror —
+so its rounded corner exposes the black engine backing.
 
-**In:** rewrite `AlphaCompositor::Resize` ([src/host/AlphaCompositor.cpp:114](src/host/AlphaCompositor.cpp:114)).
+**Fix.** Add `.panel-flush-left` (square top-left + bottom-left radius) to
+components.css; apply it to the SpawnerPanel root `.panel`.
+**Verify:** arch-C visual → user confirms on relaunch (browser mode has no
+engine backing, so it can't show this; L-033).
 
-**Out (reasons):** `ReleaseGpuResources()` — its job *is* a full release before
-device Reset; not a resize, leave it. Composite/readback path — untouched.
-Fault-injection test harness — over-engineering for a P3 (the rollback is
-correct-by-construction; no runtime trigger on a healthy box).
+## Item 2 — move the role glyph between the visibility icon and the label
 
-## 2. What the codebase already gives us
+**Diagnosis.** Row grid is `"18px 1fr 18px"` = [eye | label | role-glyph]
+([EmitterTree.tsx:622](web/apps/editor/src/screens/EmitterTree.tsx:622)); the
+role glyph (↻ / ✕) renders in the right column. User wants it between the eye
+and the label.
 
-- Resource set in `Impl` ([:45](src/host/AlphaCompositor.cpp:45)): `sharedTex`
-  (`ComPtr<IDirect3DTexture9>`), `sharedHandle` (HANDLE, **owned by sharedTex** —
-  no CloseHandle), `offscreenRT` (`ComPtr`, = sharedTex level 0), `sysMemSurface`
-  (`ComPtr`), `dibBitmap` (HBITMAP), `dibPixels` (void*), `memDC` (HDC), `width`,
-  `height`.
-- `ThrowIfFailed` ([:31](src/host/AlphaCompositor.cpp:31)) throws on bad HRESULT;
-  the two GDI failures throw `std::runtime_error`. So the build sequence already
-  signals failure by exception — the swap just needs to be exception-safe.
-- Caller: `Engine` device-Reset path ([engine.cpp:1435](src/engine.cpp:1435)),
-  non-null in **both** arch-B and arch-C (engine.cpp:985). Exercised by the a11y
-  `viewport-resize.spec.ts` happy path under composition (the default lane).
+**Constraint.** The row is captured in `emitter-tree*.golden.*` as
+`text: "default ↻"` + accessible name `"Hide emitter default lifetime child"`.
+A DOM reorder changes both → breaks the golden, which L-033 says not to
+regenerate here.
 
-## 3. Implementation approach
+**Fix (golden-safe).** Keep DOM order [eye, label, role] unchanged; reorder
+*visually* with CSS grid placement — grid `"18px 18px 1fr"`, role glyph
+`grid-column: 2`, label/input `grid-column: 3`, eye stays column 1. DOM order
+and accessible names are untouched → goldens stable. Update the one vitest
+assertion (`gridTemplateColumns` in EmitterTree.test.tsx:468) + its comment.
+Minor a11y note: visual order (eye·glyph·label) now differs from reading order
+(eye·label·glyph) — accepted to preserve goldens.
+**Verify:** vitest green; browser-mode preview shows glyph between eye + label.
 
-```
-void Resize(w, h):
-  if (w,h)==current return;  if degenerate return;   // unchanged guards
-  // locals
-  ComPtr newTex; HANDLE newHandle=nullptr; ComPtr newRT, newSys;
-  HBITMAP newDib=nullptr; void* newPixels=nullptr; HDC newDC=nullptr;
-  try {
-    CreateTexture(... &newTex, &newHandle); ThrowIfFailed;
-    newTex->GetSurfaceLevel(0,&newRT);      ThrowIfFailed;
-    CreateOffscreenPlainSurface(... &newSys); ThrowIfFailed;
-    newDib = CreateDIBSection(... &newPixels); if(!newDib||!newPixels) throw;
-    newDC  = CreateCompatibleDC(nullptr);      if(!newDC) throw;
-    SelectObject(newDC, newDib);
-  } catch (...) {
-    if (newDC)  DeleteDC(newDC);      // DC first so the DIB is deselected
-    if (newDib) DeleteObject(newDib); // ComPtr locals auto-release on unwind
-    throw;                            // m_impl UNTOUCHED → old size still live
-  }
-  // commit: release old, then move locals in
-  offscreenRT.Reset(); sharedTex.Reset(); sharedHandle=nullptr; sysMemSurface.Reset();
-  if (dibBitmap) DeleteObject; if (memDC) DeleteDC;
-  sharedTex=move(newTex); sharedHandle=newHandle; offscreenRT=move(newRT);
-  sysMemSurface=move(newSys); dibBitmap=newDib; dibPixels=newPixels; memDC=newDC;
-  width=w; height=h;
-  fprintf(stderr,"[AlphaCompositor] shared RT ...", newHandle);  // moved after swap
-```
+## Item 3 — burst-delay field drops the 2nd decimal (legacy allows 0.01) — DECISION NEEDED
 
-Key decisions: (a) GDI handles need manual cleanup in `catch` (no ComPtr); order
-`DeleteDC` before `DeleteObject` so the DIB isn't deleted while selected. (b) the
-debug `fprintf` moves below the swap so it logs only on a *committed* resize. (c)
-no behavioural change on the happy path — same resources, same order of creation.
+**Diagnosis.** GENERATION "Burst delay" Spinner uses `step={0.1}`
+([EmitterPropertyTabs.tsx:496](web/apps/editor/src/screens/EmitterPropertyTabs.tsx:496)).
+Spinner derives `dp = -floor(log10(step))` → 1 decimal, and `commit` does
+`toFixed(dp)`, so a typed `0.01` truncates to `0.0`. Legacy displays burst delay
+as `%.3f` ([EmitterList.cpp:2511](src/UI/EmitterList.cpp:2511)) and clamps to
+`max(0.01f, …)` ([EmitterInstance.cpp:665](src/EmitterInstance.cpp:665)) → 3
+decimals is the faithful legacy match.
 
-## 4. Risks + mitigations
+**The fork.** Any precision change alters the displayed default `1.0` → `1.000`
+(or `1.00`), and that value is baked into **~18 a11y goldens** (9 surfaces ×
+json+yaml: spinner-focused, property-tabs, dialogs, kbd-*, curve-editor). Fixing
+the field forces a golden refresh, which **L-033 says not to do on this machine**
+(UIA non-determinism + flake risk). Options for the user:
+- (a) Make the code change here + `pnpm a11y:update` to regen goldens (the
+  DOM/composition goldens are deterministic on this box — they pass 157/4 — so
+  regen risk is mostly the UIA-json variant).
+- (b) Make the code change; hand golden regen to the user/CI.
+- (c) Hold item 3 until a golden-regen-safe moment.
+Also confirm precision: **3dp** (legacy-faithful `1.000`) vs 2dp (`1.00`).
 
-1. **GDI leak on the failure path** — if `CreateCompatibleDC` throws after the
-   DIB was made, the DIB must be freed. *Mitigation:* the `catch` frees both
-   locals; ComPtrs auto-release. Verified by reading the unwind order.
-2. **Deleting a selected DIB** — `DeleteObject(dib)` fails if the bitmap is still
-   selected into a DC. *Mitigation:* `catch` does `DeleteDC(newDC)` first; commit
-   path only deletes the *old* dib whose DC is also being deleted in the same block.
-3. **Happy-path regression** — the rewrite must produce byte-identical resources.
-   *Mitigation:* same Create* calls, same params, same SelectObject; a11y
-   `viewport-resize` is the gate.
+## Testing & verification
 
-## 5. Testing & verification
-
-- [ ] Debug + Release x64 clean (only the pre-existing LNK4098).
-- [ ] a11y → **157 pass / 4 splitters** (L-033), unchanged — proves resize +
-      device-Reset happy path still allocates a valid RT under composition.
-- [ ] Static walk: catch frees newDC+newDib and rethrows; commit releases old
-      before moving locals; `sharedHandle` never CloseHandle'd (owned by tex);
-      `width/height` set only on commit; degenerate/unchanged guards intact.
-- [ ] Couldn't verify autonomously: the actual rollback-on-alloc-failure path
-      (no runtime trigger on a healthy box) — correct-by-construction.
+- [ ] vitest green (45 files; EmitterTree.test.tsx gridTemplateColumns updated).
+- [ ] Browser-mode preview: role glyph sits between eye + label; spawner panel
+      left corners square (no rounded wedge in DOM — engine backing N/A here).
+- [ ] Rebuild dist so the user can relaunch for the arch-C visual review
+      (item 1 black line; item 2 reorder in the real compositor).
+- [ ] a11y unaffected by items 1+2 (no DOM-order / value changes). Item 3
+      deferred pending the decision above.
 
 ## Review section
 
-**What landed.** One function rewritten — `AlphaCompositor::Resize`
-([src/host/AlphaCompositor.cpp:114](src/host/AlphaCompositor.cpp:114)) — destroy-
-then-rebuild → build-locals-then-swap. ~40 LoC net. `ReleaseGpuResources()`
-untouched.
+**What landed (all web/).**
+| Item | Files | Change |
+|---|---|---|
+| 1 — black line | **(reverted)** | Hypothesised `.panel-flush-left` (rounded-corner wedge) — **WRONG**. Browser DOM inspection proved the line isn't a DOM element (no dark element; border is `#dcdcdc`; splitter already opaque `var(--bg)`). It's an **arch-C compositor seam** at the viewport↔Spawner boundary — engine black backing through a ~1px scene-rect/edge gap (L-034 family). Host-side; needs user verification (L-033). **Deferred to its own investigation.** flush-left reverted (cosmetic no-op; corners sit against the opaque splitter). |
+| 2 — role glyph | `screens/EmitterTree.tsx` (+ its test) | grid `18px 18px 1fr`; role glyph `grid-column:2`, label/input `grid-column:3`. Visual order eye·glyph·label; **DOM order unchanged** → a11y goldens stable. |
+| 3 — precision | `screens/EmitterPropertyTabs.tsx`, `screens/SpawnerPanel.tsx`, 20 `*.composition.golden.yaml` | `decimals={3}` on all 8 `s`-unit fields (initialDelay, skipTime, freezeTime, burstDelay, lifetime, spacing, interval, maxLifetime) — matches legacy `%.3f`. Goldens updated by surgical value substitution (no full regen, per L-033). |
 
-**Verification (all run).**
-- Debug + Release x64 clean.
-- a11y: first run showed 156/**5** — the 5th was a transient L-033 agent-launch
-  flake (the `viewport-resize` spec itself passed). Re-run → **157 pass / 4
-  splitters**, baseline-identical. Lesson: don't accept/reject on one native run
-  when the failure isn't in the deterministic splitter set (→ L-038 reinforced).
-- Static walk: catch frees `newDC` then `newDib` and rethrows with `m_impl`
-  untouched; commit releases old before moving locals in; `sharedHandle` never
-  CloseHandle'd; `width/height` set only on commit.
+**Verification.**
+- vitest **390/45** green (EmitterTree grid assertion updated; no value-format assertions existed for item 3).
+- Item 2 browser-verified (preview, 1728px): rows render `eye → ↻/✕ → label`, labels aligned, DOM order preserved.
+- Item 3: a11y **157 pass / 4 splitters** (L-033) after the golden substitution — was ~24 failing pre-substitution, confirming the 20 goldens now match.
+- dist rebuilt (composition) with all 3.
 
-**Couldn't verify autonomously.** The rollback-on-allocation-failure path has no
-runtime trigger on a healthy box (the P3 rationale). Correct-by-construction: the
-`try` only mutates locals, the `catch` cleans them and rethrows before any
-`m_impl` write.
+**Couldn't self-verify (hand to user).** Item 1 (black line) is arch-C compositing —
+browser mode has no engine backing, so it can't show the wedge (L-033). Needs a
+user relaunch to confirm the line is gone. Items 2 & 3 also worth an eyeball in
+the real compositor.
+
+**Not yet committed** — holding the FF-push until the user confirms item 1 on
+relaunch (don't push an unverified arch-C fix).

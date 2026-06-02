@@ -442,6 +442,7 @@ export function BasicTab({
           value={properties.initialDelay}
           min={0}
           step={0.1}
+          decimals={3}
           unit="s"
           onCommit={(v) => onCommit({ initialDelay: v })}
         />
@@ -450,6 +451,7 @@ export function BasicTab({
           value={properties.skipTime}
           min={0}
           step={0.1}
+          decimals={3}
           unit="s"
           onCommit={(v) => onCommit({ skipTime: v })}
         />
@@ -458,6 +460,7 @@ export function BasicTab({
           value={properties.freezeTime}
           min={0}
           step={0.1}
+          decimals={3}
           unit="s"
           onCommit={(v) => onCommit({ freezeTime: v })}
         />
@@ -494,6 +497,7 @@ export function BasicTab({
             value={properties.burstDelay}
             min={0}
             step={0.1}
+            decimals={3}
             unit="s"
             disabled={!burstsEnabled}
             onCommit={(v) => onCommit({ burstDelay: v })}
@@ -576,6 +580,7 @@ export function BasicTab({
           value={properties.lifetime}
           min={0}
           step={0.1}
+          decimals={3}
           unit="s"
           onCommit={(v) => onCommit({ lifetime: v })}
         />
