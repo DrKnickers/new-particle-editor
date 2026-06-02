@@ -16,6 +16,28 @@ Conventions:
 
 ## Changelog
 
+### `NativeBridge` no longer leaks pending requests on send-failure or page teardown (audit G12)
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The WebView2 bridge's `request()` registered its pending-promise entry *before* calling
+`postMessage`, so if `JSON.stringify`/`postMessage` threw — or the page tore down
+mid-flight — the entry was never removed: a permanently-pending promise the caller
+awaited forever, plus a slowly-accumulating leak over a long session. Now `request()`
+wraps the send in try/catch (clean up + reject on throw), a `dispose()` method rejects
+and clears every outstanding request and is wired to `beforeunload` so teardown fails
+callers closed, and an **opt-in** per-request timeout (`new NativeBridge({ requestTimeoutMs })`)
+backstops a silently-dropped response.
+
+**How we tackled it.** All in [`web/apps/editor/src/bridge/native.ts`](web/apps/editor/src/bridge/native.ts),
+test-first against a new [`native.test.ts`](web/apps/editor/src/bridge/__tests__/native.test.ts).
+The deliberate design call: the timeout is **off by default** — several requests are
+interactive and legitimately block (the native file dialog behind `file/open`,
+`emitters/import-from-file` reading a chosen file), so a blanket timeout would reject
+valid slow operations; the teardown path covers the common "response never comes" case.
+
+---
+
 ### Fix an infinite loop in the XML attribute parser (audit G10)
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

@@ -26,6 +26,51 @@ future review.
 
 ---
 
+## Status reconciliation — 2026-06-01 (session 8)
+
+Each item below was **verified against current `lt-4` code/commits** this session (not
+trusted from prior notes — the L-022 lesson kept biting: several items the docs implied
+were open had already shipped). This is the trustworthy snapshot; individual headings
+carry ✅/⚠️ markers matching it.
+
+**✅ Shipped on `lt-4`** (verified present in code):
+`F1`–`F5` (session 7) · `G9` · **`G1`** (import handler, session 8) · **`G10`** (XML
+loop, session 8) · **`G12`** (NativeBridge leak, session 8) · `NT-5` (link-group
+demotion) · `F10` (TME_LEAVE/WM_MOUSELEAVE) · `G2` (json::exception catches) ·
+`G4` (JSON error envelope) · `G5` (WebMessageReceived token unsubscribe) ·
+`G6` (MediaQueryList removeEventListener) · `G8` (class-brush cleanup) ·
+`F13` (IFile `Release()` on the FileManager path).
+
+**◻️ Moot / obsoleted:** `F11` — the env-var dual-toggle it described was retired by
+**MT-12** (single `ALO_HOSTING_MODE` now); the bad combination can't occur.
+`F7` — fixed on `lt-4` long ago; closes on the master merge.
+
+**🔶 Genuinely OPEN on `lt-4`** (verified not-yet-done):
+- **`G11`** — WebView2 has no NavigationStarting / NewWindowRequested / PermissionRequested
+  policy + no WebMessage source check (P3 hardening; ~30–40 LoC; carries app-loading
+  risk → do as a focused change with a11y verification).
+- **`G7`** — `AlphaCompositor::Resize` releases old resources before rebuild, no
+  transactional swap/rollback (P3 latent; critical-path restructure).
+- **`F9`** — `ParticleEditor.vcxproj:267` still hardcodes `10.0.26100.0` include paths
+  (P2 portability; **can't verify a fix without a second SDK box** → needs a CI matrix,
+  risk of breaking the one working box if done blind).
+- **`G3`** — broad `sendOk{ok:false}` → resolve-as-success sweep (~20 sites); the
+  **import handler site was fixed** in session 8 (G1 hardening), the rest is a design-laden
+  per-site (user-cancel vs hard-fail) PR.
+- **`F6`** (TextureManager cache vs D3D9Ex Reset — needs a `--test-host` repro first) ·
+  **`F8`** (composition async-failure fallback, `slot3`) · **`A-new`** (bridge
+  contract-drift CI test) · **`NT-6`** (lane-stability setting — optional).
+- **`F12`** (render `WM_PAINT` still `Render(); break;` — no BeginPaint/EndPaint) and
+  the rest of the `[both]` polish set (`F14`/`F15`/`F16`) **shipped on `master` via
+  PR #89** but are **mostly still open on `lt-4`** — `F13` is the exception (done). Each
+  `F12`/`F14`/`F15`/`F16` needs a per-item lt-4 check before claiming.
+
+**Deferred pending repro/verification:** `F17`, `N1` (and the LT-4 audit's "items NOT
+queued" list). **Opportunistic nits:** `N2`–`N8`. **Architecture splits:** each needs
+its own plan (main.cpp / ParticleSystem.cpp / EmitterList.cpp).
+
+---
+
 ## P1 — correctness, ship promptly
 
 > **STATUS (2026-06-01, session 8): F1–F5 + G9 are SHIPPED on BOTH branches.**
@@ -182,7 +227,7 @@ Downstream `deleteEmitter` recurses through `spawnOnDeath`/`spawnDuringLife`; tr
 
 ---
 
-### F11. Composition env-var combinations unconstrained — [lt-4]
+### F11. Composition env-var combinations unconstrained — [lt-4] — ◻️ MOOT (MT-12 retired the dual env-var toggle; single `ALO_HOSTING_MODE` now — the bad combination can't occur)
 
 **Source:** ChatGPT-1 finding #5
 
@@ -454,7 +499,7 @@ A fifth audit (ChatGPT deep research, LT-4-focused) ran the same day. Where the 
 
 ---
 
-### G12. `NativeBridge` pending-request map has no timeout or disconnect cleanup — [lt-4] [P2, reliability]
+### G12. `NativeBridge` pending-request map has no timeout or disconnect cleanup — [lt-4] [P2, reliability] — ✅ SHIPPED (2026-06-01, lt-4: try/catch leak fix + `dispose()` on `beforeunload` + opt-in timeout; `native.test.ts`)
 
 **Source:** ChatGPT deep-research re-run (2026-06-01), finding BR-002. Net new.
 
@@ -541,8 +586,16 @@ Every code-level claim in this re-run was confirmed by reading. Four findings we
 2. **Stage 4 prerequisite:** F6 (verify-then-fix). Run the smoke repro first.
 3. **Stage 3h (LT-4 sub-stage before Stage 4 starts):** F8.
 4. **First master polish PR after the P1s land:** F12, F13+F14 (bundled), F15, F16. All master-side, all small.
-5. **LT-4 bridge-contract-hardening PR:** G1, G2, G3, G4 bundled. All `BridgeDispatcher` / `HostBridgeProxy` territory. Single coherent PR.
-6. **LT-4 host polish PR:** F9, F10, F11, G5, G6, G7, G8, **G11, G12**. All small, all host/bridge-side. (G10 — XML attribute loop — is `[both]` and trivial; fold into the P1 parser PR or this one, either works.)
+5. **LT-4 bridge-contract-hardening:** ~~G1, G2, G3, G4 bundled.~~ G1 ✅ (session 8),
+   G2 ✅, G4 ✅ already shipped. **G3** remains — the broad `sendOk{ok:false}` sweep
+   (~20 sites; the import-handler site was fixed with G1); a design-laden per-site
+   (user-cancel vs hard-fail) PR, not a quick win.
+6. **LT-4 host polish PR:** ~~F9, F10, F11, G5, G6, G7, G8, G11, G12~~ — **mostly DONE**
+   (session 8 reconciliation). Shipped: F10, G5, G6, G8, **G12**. Moot: F11 (MT-12).
+   **Still open:** **G11** (WebView2 nav/permission policy — its own focused PR, app-loading
+   risk), **G7** (transactional `AlphaCompositor::Resize`), **F9** (vcxproj SDK macro-ize —
+   needs a 2nd-SDK CI matrix to verify). G10 (XML loop) shipped on lt-4. See the
+   reconciliation status block at the top of this doc.
 7. **Bridge contract test (A-new):** worth doing as its own focused PR; gates future G1-class drift at CI time.
 8. **Deferred until reproducer / further verification exists:** F17, N1, plus the LT-4 audit's "items NOT queued" list (window-scoped keyboard, undo-invariant audit, Playwright bridge architecture).
 9. **Opportunistic during normal file touches:** N2–N8.
