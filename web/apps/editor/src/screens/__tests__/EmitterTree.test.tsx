@@ -456,7 +456,7 @@ describe("EmitterTree", () => {
     expect(dots).toHaveLength(0);
   });
 
-  it("row uses a 3-column grid (eye / name / spawn-role glyph) — F1", async () => {
+  it("row uses a 3-column grid (eye / role-glyph / name) — visual reorder", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
@@ -464,11 +464,14 @@ describe("EmitterTree", () => {
     });
 
     // Each row's outer button carries the grid template via inline style.
+    // Columns are [eye | role-glyph | name]: the glyph sits between the
+    // eye and the label. DOM order stays [eye, label, role] (glyph + label
+    // re-placed visually via grid-column) so the a11y tree / goldens are
+    // unchanged — assert that DOM order explicitly below.
     const rowButton = screen.getByText("Smoke").closest("button")!;
-    expect(rowButton.style.gridTemplateColumns).toBe("18px 1fr 18px");
+    expect(rowButton.style.gridTemplateColumns).toBe("18px 18px 1fr");
 
-    // F1: the visibility toggle is the FIRST column (moved to the left,
-    // replacing the old role dot).
+    // The visibility toggle is the FIRST DOM child (auto-placed in column 1).
     expect(rowButton.firstElementChild).toBe(
       rowButton.querySelector('[data-testid="emitter-vis-0"]'),
     );

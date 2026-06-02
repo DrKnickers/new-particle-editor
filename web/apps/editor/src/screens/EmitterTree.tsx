@@ -616,10 +616,14 @@ function EmitterRow({
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
-              // F1: [eye | name | spawn-role glyph]. Eye is the visibility
-              // toggle (was on the right); the role glyph (children only)
-              // moved to the right.
-              gridTemplateColumns: "18px 1fr 18px",
+              // Visual columns: [eye | role-glyph | name]. The role glyph
+              // (children only) sits between the visibility toggle and the
+              // label. DOM order stays [eye, label, role] — the glyph and
+              // label are re-placed VISUALLY via grid-column below — so the
+              // accessibility tree (and the emitter-tree a11y goldens, which
+              // capture "default ↻" + the row's accessible name) are
+              // unchanged. Eye auto-places into column 1.
+              gridTemplateColumns: "18px 18px 1fr",
             }}
           >
             {/* F1: visibility toggle on the LEFT (replaces the old role
@@ -662,6 +666,7 @@ function EmitterRow({
               // parent's `commitEdit`).
               <input
                 ref={inputRef}
+                style={{ gridColumn: 3 }}
                 data-testid={`emitter-rename-input-${node.id}`}
                 value={editing!.value}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -693,6 +698,7 @@ function EmitterRow({
             ) : (
               <span
                 className="truncate"
+                style={{ gridColumn: 3 }}
                 onDoubleClick={(e) => {
                   // Double-click on the label starts inline rename. The
                   // stopPropagation prevents the click-handler chain
@@ -705,12 +711,16 @@ function EmitterRow({
                 {node.name}
               </span>
             )}
-            {/* F1: spawn-role glyph on the RIGHT for child emitters
-                (lifetime ↻ / on-death ✕). Root rows leave it empty so
-                names stay aligned via the fixed third column. */}
+            {/* Spawn-role glyph for child emitters (lifetime ↻ / on-death ✕),
+                placed VISUALLY in column 2 (between the eye and the label)
+                via grid-column. Rendered last in DOM so the accessible name
+                stays "…default lifetime child" and the goldens are stable.
+                Root rows omit it; column 2 then sits empty and the label
+                stays in column 3. */}
             {node.role !== "root" && (
               <span
                 aria-label={roleLabel(node.role)}
+                style={{ gridColumn: 2 }}
                 className="inline-block w-full shrink-0 text-center font-mono text-xs text-text-3"
               >
                 {roleGlyph(node.role)}
