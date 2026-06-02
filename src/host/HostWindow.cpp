@@ -1795,6 +1795,49 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             // LT-4 D6: bind engine to ModManager so subsequent
             // SelectMod() calls can hot-swap shaders + textures.
             if (modManager) modManager->SetEngine(engine.get());
+
+            // [bloom-restore, session 10] Restore bloom config from the
+            // registry (HKCU\Software\AloParticleEditor), mirroring legacy
+            // main.cpp's startup restore (SetBloom* from ReadBloom*). The
+            // new-UI host previously skipped this, so the engine kept its
+            // strength=0 constructor default and toggling "Enable bloom"
+            // produced NO visible glow even when the user has saved bloom
+            // settings from the legacy editor. Same value names/types legacy
+            // reads/writes, so settings round-trip between the two UIs.
+            //
+            // Skipped under --test-host: the a11y goldens capture the bloom
+            // dialog's strength value, so the harness must see the
+            // constructor defaults (0.00) deterministically, not whatever the
+            // dev machine has saved in the registry.
+            if (!useTestHost)
+            {
+                HKEY hKey = nullptr;
+                if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\AloParticleEditor",
+                                  0, KEY_READ, &hKey) == ERROR_SUCCESS)
+                {
+                    DWORD en = 0, type = 0, size = sizeof(en);
+                    if (RegQueryValueExW(hKey, L"BloomEnabled", nullptr, &type,
+                                         reinterpret_cast<LPBYTE>(&en), &size) == ERROR_SUCCESS
+                        && type == REG_DWORD)
+                        engine->SetBloom(en != 0);
+
+                    // REG_BINARY float; reject NaN/Inf so a corrupt blob can't
+                    // drive bloom into a silly state (matches legacy's check).
+                    auto readF = [&](const wchar_t* name, float fallback) -> float {
+                        float v = 0.0f; DWORD t = 0, s = sizeof(v);
+                        if (RegQueryValueExW(hKey, name, nullptr, &t,
+                                             reinterpret_cast<LPBYTE>(&v), &s) == ERROR_SUCCESS
+                            && t == REG_BINARY && s == sizeof(v)
+                            && v == v && (v - v) == 0.0f)
+                            return v;
+                        return fallback;
+                    };
+                    engine->SetBloomStrength(readF(L"BloomStrength", engine->GetBloomStrength()));
+                    engine->SetBloomCutoff  (readF(L"BloomCutoff",   engine->GetBloomCutoff()));
+                    engine->SetBloomSize    (readF(L"BloomSize",     engine->GetBloomSize()));
+                    RegCloseKey(hKey);
+                }
+            }
             Log("[host] Engine constructed OK\n");
         }
         catch (const std::exception& e)

@@ -16,6 +16,40 @@ Conventions:
 
 ## Changelog
 
+### Bloom settings restored from the registry in the new-UI host
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Enabling bloom in the new UI produces visible glow again. Previously, ticking "Enable
+bloom" did nothing visible: the new-UI host never restored the persisted bloom settings,
+so the engine kept its constructor default of **strength 0**, and the bloom pass — though
+it ran — added zero contribution. The host now restores `BloomEnabled` / `BloomStrength` /
+`BloomCutoff` / `BloomSize` from the registry at startup, so your saved bloom tuning (and
+the parity with the legacy editor) is honoured.
+
+**How we tackled it.** [`HostWindow`](src/host/HostWindow.cpp:1797) reads the four bloom
+values from `HKCU\Software\AloParticleEditor` right after the `Engine` is constructed and
+applies them via `SetBloom`/`SetBloomStrength`/`SetBloomCutoff`/`SetBloomSize` — mirroring
+legacy's startup restore at [`src/main.cpp`](src/main.cpp:7647) and reusing the exact value
+names/types (`BloomEnabled` as `REG_DWORD`, the three floats as finite-checked `REG_BINARY`),
+so settings round-trip between the legacy and new UIs. The engine's bloom defaults
+(`engine.cpp` ctor) are unchanged, so legacy behaviour is untouched.
+
+**Issues encountered and resolutions.** The toggle and the render path were never broken —
+that's the trap. Reading the render-gate flags live over CDP showed `enabled=1 ready=1
+effect=1 ping=1 pong=1` after a toggle and the pass executing (`bloom=66/5091µs`), so the
+shader, RTs, and `engine/set/bloom` dispatch were all fine. The only fault was the
+un-restored `strength=0`. The new-UI host was simply missing the engine-settings registry
+restore that legacy performs at startup (ground settings have the same gap — a separate
+follow-up). Diagnosed without user input by driving `engine/set/bloom` and reading the
+snapshot through the `--test-host` CDP host-object bridge. One knock-on: the
+`dialog-bloom-settings` a11y golden captures the strength textbox value, which is now
+registry-dependent — so the restore is **skipped under `--test-host`** (the harness sees
+the deterministic constructor default `0.00`), keeping the goldens machine-independent
+while normal launches honour the saved value.
+
+---
+
 ### Viewport "black line" on the Spawner edge — D3D9Ex→D3D11 shared-surface guard band
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

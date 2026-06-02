@@ -3266,3 +3266,42 @@ mechanism is a hypothesis, not a fact. The decisive move was the cross-API readb
 no amount of compositor-side reasoning would have reached. Cross-reference [L-033](#l-033)
 (faithful grabs for arch-C), [L-034](#l-034) (recolour each layer; measure, don't eyeball),
 [L-022](#l-022) (verify handoff claims against code/logs before acting).
+
+---
+
+## L-049 — The new-UI host must restore the same persisted (registry) engine settings legacy does; a "feature is broken in the new UI" bug is often a missing startup restore, not a broken feature
+
+**Rule.** When a feature "works in legacy but not the new UI," before debugging the
+feature, check whether legacy restores a persisted setting at startup that the new-UI
+host skips. The legacy `main.cpp` startup restores a block of engine settings from
+`HKCU\Software\AloParticleEditor` (ground slot paths / solid colour / texture, bloom
+enabled + strength/cutoff/size, skydome, custom colours — `src/main.cpp:7636-7652`).
+The new-UI `HostWindow` ports the *engine* but historically restored only recent-files
+and the last mod — so any engine setting whose default differs from a useful value, and
+which the user had tuned in legacy, comes up at its constructor default in the new UI.
+
+**The bloom instance (2026-06-02).** "Enable bloom does nothing." The toggle, shader,
+RTs, and render pass were all fine (verified live over CDP: `enabled=1 ready=1 effect=1
+ping=1 pong=1`, `bloom=66/5091µs`). The fault was `m_bloomStrength` stuck at its `0.00`
+constructor default because the host never ran legacy's
+`SetBloomStrength(ReadBloomFloat("BloomStrength", ...))` restore — so the combine
+multiplied by zero. Fix: restore the four bloom values in `HostWindow` after `Engine`
+construction, same reg names/types. The user's registry had `BloomStrength=1` (legacy
+use), so the restore immediately produced visible bloom.
+
+**How to apply.**
+- Diagnose render-gate skips by logging EVERY condition, not the one you suspect — the
+  surprise here was that 4/5 flags were already true; only the value was wrong.
+- Drive the bridge without the user via the `--test-host` CDP **host-object** channel
+  (`chromium.connectOverCDP('http://127.0.0.1:9222')` → `window.bridge.request(...)`);
+  it's unaffected by the [L-003](#l-003) page→host postMessage drop, and you only need
+  state/log readback, so the [L-033](#l-033) degraded render doesn't matter. (Use
+  `127.0.0.1`, not `localhost` — the CDP port binds IPv4 and `localhost` may resolve to
+  `::1`.)
+- **Registry-restoring a setting can make an a11y golden machine-dependent.** The
+  `dialog-bloom-settings` golden captures the strength textbox value; once it's restored
+  from the registry it differs per machine. Gate the restore on `!useTestHost` so the
+  a11y harness sees the deterministic constructor default while real launches honour the
+  saved value — cheaper than per-run registry save/clear/restore in the harness.
+- **Parity gap is broader than bloom:** ground settings have the same missing restore.
+  Worth a sweep of legacy's startup-restore block vs the host.
