@@ -56,6 +56,7 @@ import type {
 import { Spinner } from "@/primitives/Spinner";
 import { ColorButton } from "@/primitives/ColorButton";
 import { ToolPanel } from "@/components/ToolPanel";
+import { BloomSection } from "@/screens/BloomSection";
 import { vec4ToColorref } from "@/lib/colorref";
 import type { RgbColor } from "@/primitives/palette-store";
 
@@ -360,7 +361,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Lighting" onClose={onClose} bridge={bridge} occlusionId="tool-panel:lighting">
+    <ToolPanel title="Lighting" onClose={onClose} variant="docked">
       <ToolPanel.Section title="Sun" defaultOpen>
         <ToolPanel.Row label="Intensity">
           <Spinner
@@ -517,6 +518,10 @@ export function LightingPanel({ bridge, onClose }: Props) {
           />
         </ToolPanel.Row>
       </ToolPanel.Section>
+
+      {/* Bloom folded into Lighting (LT-4 session 11). Self-contained —
+          owns its own engine-state subscription. Collapsed by default. */}
+      <BloomSection bridge={bridge} />
 
       <ToolPanel.Footer>
         <label className="flex select-none items-center gap-1.5 text-xs text-text-2">

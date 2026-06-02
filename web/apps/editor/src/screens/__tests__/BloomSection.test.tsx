@@ -1,10 +1,11 @@
-// Vitest unit tests for the BloomPanel.
-// Verifies: 3 Spinners render (Strength / Cutoff / Size); changing
-// Strength dispatches engine/set/bloom-strength with the new value.
+// Vitest unit tests for BloomSection (the bloom controls folded into the
+// Lighting pane, session 11; formerly BloomPanel).
+// Verifies: Enable checkbox + 3 Spinners (Strength / Cutoff / Size) render;
+// changing Strength dispatches engine/set/bloom-strength with the new value.
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { BloomPanel } from "../BloomPanel";
+import { BloomSection } from "../BloomSection";
 import type { Bridge } from "@particle-editor/bridge-schema";
 
 function makeStubBridge(): Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> } {
@@ -45,10 +46,11 @@ function makeStubBridge(): Bridge & { request: ReturnType<typeof vi.fn>; on: Ret
   } as unknown as Bridge & { request: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
 }
 
-describe("BloomPanel", () => {
-  it("renders 3 Spinners (Strength / Cutoff / Size)", () => {
+describe("BloomSection", () => {
+  it("renders the Enable checkbox + 3 Spinners (Strength / Cutoff / Size)", () => {
     const bridge = makeStubBridge();
-    render(<BloomPanel bridge={bridge} onClose={() => {}} />);
+    render(<BloomSection bridge={bridge} defaultOpen />);
+    expect(screen.getByLabelText("Enable bloom")).toBeInTheDocument();
     expect(screen.getByLabelText("Bloom strength")).toBeInTheDocument();
     expect(screen.getByLabelText("Bloom cutoff")).toBeInTheDocument();
     expect(screen.getByLabelText("Bloom size")).toBeInTheDocument();
@@ -56,7 +58,7 @@ describe("BloomPanel", () => {
 
   it("changing Strength dispatches engine/set/bloom-strength", () => {
     const bridge = makeStubBridge();
-    render(<BloomPanel bridge={bridge} onClose={() => {}} />);
+    render(<BloomSection bridge={bridge} defaultOpen />);
     const strength = screen.getByLabelText("Bloom strength") as HTMLInputElement;
     fireEvent.change(strength, { target: { value: "2.5" } });
     fireEvent.blur(strength);

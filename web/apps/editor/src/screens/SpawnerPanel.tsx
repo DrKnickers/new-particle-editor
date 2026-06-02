@@ -34,7 +34,7 @@ import type {
 import { Spinner } from "@/primitives/Spinner";
 import { ToolPanel } from "@/components/ToolPanel";
 import { makeDefaultSpawnerParams } from "@/bridge/mock-state";
-import { toggleSpawner } from "@/lib/spawner-visibility";
+import { setDock } from "@/lib/right-dock";
 
 type Props = {
   bridge: Bridge;
@@ -187,7 +187,7 @@ export function SpawnerPanel({ bridge }: Props) {
             type="button"
             className="icon-btn"
             aria-label="Close Spawner"
-            onClick={toggleSpawner}
+            onClick={() => setDock(null)}
           >
             <X className="size-3.5" />
           </button>

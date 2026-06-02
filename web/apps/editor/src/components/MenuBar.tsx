@@ -32,7 +32,7 @@ import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
 import { useTreeContextStore } from "@/lib/tree-context";
 import { requestEmitterRename } from "@/lib/tree-action";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
-import { toggleSpawner } from "@/lib/spawner-visibility";
+import { toggleDock } from "@/lib/right-dock";
 import { Modal } from "@/components/Modal";
 
 // FD8 follow-up: each MenubarContent needs to register itself with the
@@ -94,8 +94,6 @@ function OccludingMenubarSubContent({
 
 type Props = {
   bridge: Bridge;
-  onOpenLightingPanel: () => void;
-  onOpenBloomPanel: () => void;
   onOpenImportEmittersDialog: () => void;
   onOpenAboutDialog: () => void;
   onOpenRescaleDialog: () => void;
@@ -142,8 +140,6 @@ function basename(path: string): string {
 
 export function MenuBar({
   bridge,
-  onOpenLightingPanel,
-  onOpenBloomPanel,
   onOpenImportEmittersDialog,
   onOpenAboutDialog,
   onOpenRescaleDialog,
@@ -524,7 +520,7 @@ export function MenuBar({
               Hide All Emitters
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} onSelect={toggleSpawner}>
+            <Menubar.Item className={ITEM} onSelect={() => toggleDock("spawner")}>
               Spawner<Hint>F7</Hint>
             </Menubar.Item>
           </OccludingMenubarContent>
@@ -635,17 +631,13 @@ export function MenuBar({
               Bloom
               {!bloomAvailable && <Hint>unavailable</Hint>}
             </Menubar.Item>
-            {/* FD5: Bloom Settings + Lighting moved from Tools to View. */}
+            {/* Lighting opens the docked right-dock pane (shared with the
+                Spawner; LT-4 session 11). Bloom settings now live as a
+                section inside that pane, so the former "Bloom Settings…"
+                entry was retired — the on/off "Bloom" item above stays. */}
             <Menubar.Item
               className={ITEM}
-              onSelect={() => onOpenBloomPanel()}
-            >
-              <CheckSlot active={false} />
-              Bloom Settings…
-            </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              onSelect={() => onOpenLightingPanel()}
+              onSelect={() => toggleDock("lighting")}
             >
               <CheckSlot active={false} />
               Lighting…

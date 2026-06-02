@@ -37,22 +37,43 @@ type ToolPanelProps = {
   /** FD8 follow-up: when provided, the panel registers itself with
    *  the host as an occlusion. The host punches a SetWindowRgn hole
    *  in the viewport popup over this panel's rect so the panel HTML
-   *  shows through. Each panel needs a stable, unique id. */
+   *  shows through. Each panel needs a stable, unique id.
+   *
+   *  Only meaningful for `variant="overlay"` (a panel floating over the
+   *  engine popup). A `docked` panel sits in its own layout column
+   *  beside the viewport, not over it, so it needs no hole-punch. */
   bridge?: Bridge;
   occlusionId?: string;
+  /** "overlay" (default) floats over the viewport, absolute-right, 320px.
+   *  "docked" fills its parent layout column (the right-dock slot, shared
+   *  with the Spawner) and skips viewport occlusion. */
+  variant?: "overlay" | "docked";
 };
 
 const HEADER_HEIGHT_PX = 48;
 
-export function ToolPanel({ title, onClose, children, bridge, occlusionId }: ToolPanelProps) {
+export function ToolPanel({
+  title,
+  onClose,
+  children,
+  bridge,
+  occlusionId,
+  variant = "overlay",
+}: ToolPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const docked = variant === "docked";
   // The hook is a no-op when bridge or id is missing (browser-mode,
-  // tests, or panels that haven't opted in yet).
-  useViewportOcclusion(bridge, occlusionId ?? "", ref);
+  // tests, or panels that haven't opted in yet). A docked panel never
+  // overlays the engine, so we pass an empty id to skip the hole-punch.
+  useViewportOcclusion(bridge, docked ? "" : occlusionId ?? "", ref);
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-border bg-bg text-text"
+      className={
+        docked
+          ? "flex h-full w-full flex-col border-l border-border bg-bg text-text"
+          : "absolute right-0 top-0 bottom-0 z-10 flex w-80 flex-col border-l border-border bg-bg text-text"
+      }
       role="dialog"
       aria-label={title}
     >

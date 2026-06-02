@@ -26,7 +26,7 @@ import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { BackgroundDropdown } from "@/components/BackgroundDropdown";
 import { GroundDropdown } from "@/components/GroundDropdown";
-import { useSpawnerVisibility } from "@/lib/spawner-visibility";
+import { useRightDock, toggleDock } from "@/lib/right-dock";
 import { promptSaveChanges } from "@/lib/file-state";
 
 type Props = { bridge: Bridge };
@@ -51,7 +51,7 @@ export function Toolbar({ bridge }: Props) {
   const ground = state?.ground ?? false;
   const bloom = state?.bloom ?? false;
   const leaveParticles = state?.leaveParticles ?? true;
-  const { visible: spawnerVisible, toggle: toggleSpawner } = useSpawnerVisibility();
+  const spawnerVisible = useRightDock() === "spawner";
 
   return (
     <div data-testid="toolbar" className="toolbar">
@@ -189,7 +189,7 @@ export function Toolbar({ bridge }: Props) {
           aria-label="Toggle Spawner panel"
           title="Toggle Spawner panel"
           aria-pressed={spawnerVisible}
-          onClick={toggleSpawner}
+          onClick={() => toggleDock("spawner")}
         >
           <CirclePlus {...ICON} />
         </button>

@@ -33,7 +33,7 @@ import {
   PANEL_LAYOUT_KEYS,
   type Layout,
 } from "../PanelLayout";
-import { __resetSpawnerVisibilityForTests } from "@/lib/spawner-visibility";
+import { __resetRightDockForTests, setDock } from "@/lib/right-dock";
 
 function makeStubBridge(): Bridge {
   return {
@@ -43,7 +43,9 @@ function makeStubBridge(): Bridge {
 }
 
 beforeEach(() => {
-  __resetSpawnerVisibilityForTests();
+  localStorage.removeItem("alo:right-dock");
+  localStorage.removeItem("alo:spawner-visible");
+  __resetRightDockForTests();
 });
 
 describe("PanelLayout — persistence helpers", () => {
@@ -172,7 +174,7 @@ describe("PanelLayout — DOM structure", () => {
         <PanelLayout bridge={bridge} />
       </BridgeContext.Provider>,
     );
-    // Default Spawner visibility is `true` (lib/spawner-visibility.ts).
+    // Default right-dock is `"spawner"` (lib/right-dock.ts).
     expect(screen.getByTestId("quadrant-emitter-tree")).toBeInTheDocument();
     expect(screen.getByTestId("quadrant-property-tabs")).toBeInTheDocument();
     expect(screen.getByTestId("quadrant-viewport")).toBeInTheDocument();
@@ -180,11 +182,11 @@ describe("PanelLayout — DOM structure", () => {
     expect(screen.getByTestId("quadrant-spawner")).toBeInTheDocument();
   });
 
-  it("hides quadrant-spawner when Spawner visibility is false", () => {
-    // Seed the localStorage-backed visibility store with `false`, then
-    // reset the in-memory store so it re-reads from localStorage.
-    localStorage.setItem("alo:spawner-visible", "false");
-    __resetSpawnerVisibilityForTests();
+  it("hides the right-dock column when the dock is closed", () => {
+    // Seed the localStorage-backed dock store with `none`, then reset the
+    // in-memory store so it re-reads from localStorage.
+    localStorage.setItem("alo:right-dock", "none");
+    __resetRightDockForTests();
 
     const bridge = makeStubBridge();
     render(
@@ -195,6 +197,24 @@ describe("PanelLayout — DOM structure", () => {
     expect(screen.queryByTestId("quadrant-spawner")).not.toBeInTheDocument();
     // The other four stay mounted.
     expect(screen.getByTestId("quadrant-viewport")).toBeInTheDocument();
+  });
+
+  it("renders the Lighting pane in the shared right-dock slot when dock=lighting", () => {
+    // The slot keeps the `quadrant-spawner` testid (its identity is the
+    // right-dock, not the tool inside); the content is the Lighting pane,
+    // and the centre column (curve editor) stays mounted alongside it.
+    setDock("lighting");
+    const bridge = makeStubBridge();
+    render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+    expect(screen.getByTestId("quadrant-spawner")).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Lighting" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("quadrant-curve-editor")).toBeInTheDocument();
   });
 
   it("quadrant-viewport rect is the innermost wrapper (Modal portal target preservation)", () => {

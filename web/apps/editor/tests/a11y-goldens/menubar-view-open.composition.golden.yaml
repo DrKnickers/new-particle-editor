@@ -151,7 +151,6 @@
 - menu "View":
   - menuitem "Ground"
   - menuitem "Bloom"
-  - menuitem "Bloom Settings…"
   - menuitem "Lighting…"
   - separator
   - menuitem "Pause F8"

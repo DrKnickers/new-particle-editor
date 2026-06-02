@@ -1,195 +1,232 @@
-# TODO — New-UI HostWindow startup view-settings restore parity (session 11)
+# TODO — Lighting becomes a docked pane (shared right slot) with Bloom folded in (session 11)
+
+Branch `lt-4` @ `4526ab6`. Design approved by user. **Pure web-layer change — no
+native rebuild** (the lighting/bloom overlays' viewport hole-punch simply stops
+being registered; host C++ untouched).
 
 ## 1. Goal + scope
 
-**Goal.** When the user launches the new-UI (`--new-ui`) build, the viewport
-should open with the same persisted *view settings* the legacy editor restores
-at startup — background colour, ground visibility, ground texture (slot custom
-paths + solid colour + selected index), and skydome (custom paths + selected
-index). Today the new-UI `HostWindow` restores **none** of these (only
-recent-files + last-mod), so a user who tuned their ground/background/skydome in
-the legacy editor sees them reset to engine-constructor defaults in the new UI.
-This is the same class of gap as the session-10 bloom fix (L-049).
+**Goal.** Promote the **Lighting** panel from a floating `ToolPanel` overlay to a
+**docked, full-height column** that behaves exactly like the Spawner panel (carves
+space from the centre column → pushes the viewport + curve editor narrower), and
+**fold the Bloom settings into it** as a collapsible section. Lighting and Spawner
+**share one right-dock slot** (exclusive: opening one closes the other).
 
 **In:**
-- Background colour — `BackgroundColor` REG_DWORD → `SetBackground`.
-- Show-ground visibility — `ShowGround` REG_DWORD → `SetGround`.
-- Ground texture: per-slot custom paths (`GroundTextureSlot%d` REG_SZ, 0..7) →
-  `SetGroundSlotCustomPath`; solid colour (`GroundSolidColor` REG_DWORD) →
-  `SetGroundSolidColor`; selected index (`GroundTexture` REG_DWORD, bounds
-  `< kGroundTextureCount`) → `SetGroundTexture`.
-- Skydome: per-slot custom paths (`SkydomeCustomSlot%d` REG_SZ, slots 9..11) →
-  `SetSkydomeCustomPath`; selected index (`SkydomeIndex` REG_DWORD, bounds
-  `[0, kSkydomeSlotCount)`) → `SetSkydomeSlot`.
-- Whole new block gated under `!useTestHost`, sharing the existing bloom
-  `if (!useTestHost)` scope.
+- New `right-dock` store: `dock: "spawner" | "lighting" | null`, exclusive `toggle(target)`.
+- `PanelLayout` right column renders Spawner *or* Lighting based on `dock`; reuses the
+  existing 2col/3col persistence + `deriveOuterLayoutOnToggle` width-carry unchanged.
+- `ToolPanel` gains `variant: "overlay" | "docked"` (docked = `h-full w-full`, no occlusion).
+- Extract `BloomSection.tsx` (bloom controls as a `ToolPanel.Section`, owns its own
+  snapshot + `bloom-available` subscription); render it inside `LightingPanel`.
+- Delete `BloomPanel.tsx` + its test + its a11y goldens; remove the View → "Bloom
+  Settings…" menu item.
+- Keep the docked Lighting header `×` (closes the dock).
+- Update all affected unit tests + Playwright specs + the `dialog-lighting` golden.
 
 **Out (with reasons):**
-- **GroundZ** — legacy *deliberately does NOT restore it* (`main.cpp:7626`
-  forces `SetGroundZ(0.0f)` every launch, by design — see the comment there).
-  Parity = also force 0 (already the ctor default; we mirror the explicit reset
-  for intent-clarity only).
-- **Custom-colour palette** (`ReadCustomColors`) — a Win32 ColorButton concept
-  with no new-UI surface yet. Separate gap.
-- **Lighting** (`PushLightingToEngine`) — larger subsystem; out-of-scope unless
-  asked. Separate future item.
-- **Dialog positions** (`ReadSpawnerDialogPos` etc.) — legacy HWND dialogs;
-  the new UI lays out panels differently. N/A.
-- **Toolbar button re-sync** (`TB_CHECKBUTTON`) — legacy-only Win32 toolbar;
-  the React UI reads engine state via `engine/state/snapshot`, so no manual
-  control re-sync is needed (the snapshot already reflects restored state).
+- **Background / Ground panels** stay `ToolPanel variant="overlay"` — user scoped only
+  Lighting. (Their overlay + occlusion path is unchanged.)
+- **Bloom enable/disable controls** (toolbar "Toggle bloom" button + View → "Bloom"
+  checkbox) — unchanged; they toggle the *effect*, orthogonal to the settings pane.
+- **4-column coexistence** — explicitly rejected (user chose shared exclusive slot).
+- **Lighting toolbar toggle button** — not requested; Lighting stays menu-opened
+  (View → Lighting). Could add later for Spawner-parity if asked.
+- **`role="dialog"` → `region` reclassification** for the docked pane — deferred;
+  keeping `role="dialog"` minimises a11y-harness churn and ToolPanel is already
+  non-modal/non-Esc. Revisit if the semantics bother us.
+- **Native / legacy Win32 UI** — untouched (legacy keeps its own dialogs until Phase 4.2).
 
 ## 2. What the codebase already gives us
 
-- Legacy startup restore: `src/main.cpp:7614-7692` — the exact sequence to
-  mirror (background → show-ground → groundZ=0 → ground slot paths → ground
-  solid colour → ground texture index → skydome custom paths → skydome index).
-- Registry contract (value names / types) from the legacy helpers (all `static`
-  in main.cpp → NOT linkable from the host TU, so we inline the reads):
-  - `ReadBackgroundColor` `main.cpp:3177` — `BackgroundColor` REG_DWORD.
-  - `ReadShowGround` `main.cpp:3205` — `ShowGround` REG_DWORD.
-  - `ReadGroundTexture` `main.cpp:3269` — `GroundTexture` REG_DWORD (`< count`).
-  - `ReadGroundSlotPath` `main.cpp:3307` — `GroundTextureSlot%d` REG_SZ
-    (two-pass sized read; may omit trailing NUL).
-  - `ReadGroundSolidColor` `main.cpp:3379` — `GroundSolidColor` REG_DWORD.
-  - `ReadSkydomeIndex` `main.cpp:5510` — `SkydomeIndex` REG_DWORD (`[0,count)`).
-  - `ReadSkydomeCustomPath` `main.cpp:5540` — `SkydomeCustomSlot%d` REG_SZ
-    (legacy uses a `MAX_PATH` fixed buffer here).
-- The session-10 bloom restore in `HostWindow.cpp:1799-1840` — the precise
-  pattern to follow (open `HKCU\Software\AloParticleEditor` once, inline
-  `RegQueryValueExW`, type-check, fall back to current engine value on miss,
-  whole block under `!useTestHost`). We **extend this same block**.
-- Engine public API (all confirmed in `Engine.h`): `SetBackground`/`GetBackground`,
-  `SetGround`/`GetGround`, `SetGroundZ`, `SetGroundSlotCustomPath`,
-  `SetGroundSolidColor`/`GetGroundSolidColor`, `SetGroundTexture`/`GetGroundTexture`,
-  `SetSkydomeCustomPath`, `SetSkydomeSlot`; constants `kGroundTextureCount=8`,
-  `kSkydomeFirstCustomSlot=9`, `kSkydomeSlotCount=12`.
+- **Docking mechanism** — `PanelLayout.tsx` already docks the Spawner as a 3rd column:
+  `deriveOuterLayoutOnToggle` ([PanelLayout.tsx:141](web/apps/editor/src/components/PanelLayout.tsx:141))
+  carries widths on open/close; `:2col`/`:3col` localStorage keys; the outer `Group` is
+  `key`'d on visibility so it remounts cleanly. The right column renders at
+  [PanelLayout.tsx:356-382](web/apps/editor/src/components/PanelLayout.tsx:356). **The
+  logic is content-agnostic — it only cares whether the column exists**, so generalising
+  `spawnerVisible` → `dockVisible = dock !== null` reuses it wholesale.
+- **Lighting/Bloom overlays** mount at [PanelLayout.tsx:326-337](web/apps/editor/src/components/PanelLayout.tsx:326)
+  inside the viewport quadrant (`openPanel === "lighting"`).
+- **`ToolPanel`** ([components/ToolPanel.tsx](web/apps/editor/src/components/ToolPanel.tsx)) —
+  the shell (header + `×` + scrollable body) and the `.Section`/`.Row`/`.Footer` compound
+  pieces both panels already use. Outer container is `absolute right-0 ... w-80`; the
+  `variant` prop swaps that for `h-full w-full` and skips `useViewportOcclusion`.
+- **`spawner-visibility.ts`** ([lib/spawner-visibility.ts](web/apps/editor/src/lib/spawner-visibility.ts)) —
+  the Zustand + localStorage pattern (`alo:spawner-visible`, `__resetForTests`, compat
+  shim) to model `right-dock.ts` on. Consumers: Toolbar (`useSpawnerVisibility`), MenuBar
+  (`toggleSpawner`, F7), PanelLayout (`useSpawnerVisible`), SpawnerPanel (X-close).
+- **`tool-panel.ts`** ([lib/tool-panel.ts](web/apps/editor/src/lib/tool-panel.ts)) — overlay
+  store; strip `"lighting"`/`"bloom"` from `ToolPanelId`, leaving `"background"|"ground"|null`.
+- **Bloom logic to lift** — [BloomPanel.tsx:36-141](web/apps/editor/src/screens/BloomPanel.tsx:36)
+  (snapshot + `engine/query/bloom-available` + 4 controls). Zero new bridge surface.
+- **a11y surface registry** — `tests/helpers/a11y-surfaces.ts`: `dialog-lighting`
+  ([:240-255](web/apps/editor/tests/helpers/a11y-surfaces.ts:240)) opens via menu, waits
+  on `[role="dialog"][aria-label="Lighting"]`, closes via `×`; `dialog-bloom-settings`
+  ([:256-268](web/apps/editor/tests/helpers/a11y-surfaces.ts:256)) to be removed.
+  `seedCanonicalUiState` ([:38](web/apps/editor/tests/helpers/a11y-surfaces.ts:38)) seeds
+  `alo:spawner-visible=true` — update to seed the new dock key.
 
 ## 3. Architecture / implementation approach
 
-Single, self-contained extension of the existing bloom `if (!useTestHost) { ...
-RegOpenKeyExW(...) ... }` scope in `HostWindow.cpp` (~:1812). The key is already
-open there — reuse `hKey` rather than reopening it four more times (elegance +
-fewer failure points). After the three `SetBloom*` calls and before
-`RegCloseKey`, add, **in legacy order**:
+**New `lib/right-dock.ts`** (models on `spawner-visibility.ts`):
+```ts
+export type RightDock = "spawner" | "lighting" | null;
+// store: { dock, setDock(d), toggle(target) }   // toggle: dock===target ? null : target
+// persist to localStorage('alo:right-dock'); migrate from 'alo:spawner-visible'
+//   on first read (true→"spawner", false→null) so existing users keep their column.
+// hooks: useRightDock(), useToggleDock(); imperative toggleDock(target), setDock(d);
+//        __resetRightDockForTests().  default "spawner".
+```
+`spawner-visibility.ts` is **deleted**; its consumers repoint to `right-dock`.
 
-1. `BackgroundColor` (REG_DWORD) → `engine->SetBackground(...)`, fallback
-   `GetBackground()`.
-2. `ShowGround` (REG_DWORD) → `engine->SetGround(v != 0)`, fallback `GetGround()`.
-3. `engine->SetGroundZ(0.0f)` — unconditional; mirrors legacy's deliberate reset.
-4. Loop `slot` 0..`kGroundTextureCount`: read `GroundTextureSlot%d` (REG_SZ,
-   two-pass sized read, force-NUL-terminate); on non-empty →
-   `SetGroundSlotCustomPath(slot, path)`. (Order: paths BEFORE the index, so the
-   selected slot's `SetGroundTexture` can find its source — load-bearing.)
-5. `GroundSolidColor` (REG_DWORD) → `SetGroundSolidColor(...)`, fallback
-   `GetGroundSolidColor()`.
-6. `GroundTexture` (REG_DWORD, bounds `< kGroundTextureCount`) →
-   `SetGroundTexture(...)`, fallback `GetGroundTexture()`.
-7. Loop `s` `kSkydomeFirstCustomSlot`..`kSkydomeSlotCount`: read
-   `SkydomeCustomSlot%d` (REG_SZ) → `SetSkydomeCustomPath(s, path)` (empty OK —
-   matches legacy passing the raw read through).
-8. `SkydomeIndex` (REG_DWORD, bounds `[0, kSkydomeSlotCount)`) →
-   `SetSkydomeSlot(...)`, fallback 0.
+**`PanelLayout.tsx`** — replace `spawnerVisible` with `dockVisible = useRightDock() !== null`
+through the outer-Group/persistence logic (the `:2col`/`:3col` keys + `deriveOuterLayoutOnToggle`
+stay verbatim). The right `Panel` body becomes:
+```tsx
+{dock === "spawner" ? <SpawnerPanel bridge/> : <LightingPanel bridge onClose={() => setDock(null)} />}
+```
+Drop the in-viewport `LightingPanel`/`BloomPanel` overlay mounts (lines 326-337). Background/
+Ground overlays are NOT here (they mount elsewhere via tool-panel) — confirm during impl.
 
-Helper lambdas to keep it tight: reuse the existing `readF` shape; add
-`readDword(name, &out) -> bool` and `readSz(name) -> std::wstring` so each
-restore is one readable line. No new functions outside the block; no header
-changes.
+**`ToolPanel.tsx`** — add `variant?: "overlay" | "docked"` (default `"overlay"`). Container
+className branches; in `"docked"` the `useViewportOcclusion` call is skipped (pass empty id
+/ guard). `role="dialog"` + header `×` retained in both.
 
-**Why fold into the bloom block, not a new function:** the registry key, the
-`!useTestHost` gate, and the "fall back to live engine value on miss" idiom are
-identical. One open/close, one gate, one comment block referencing L-049.
+**`BloomSection.tsx`** (new) — `<ToolPanel.Section title="Bloom">` with the lifted
+snapshot/available logic + the 4 controls (Enable / Strength / Cutoff / Size). Self-contained.
+
+**`LightingPanel.tsx`** — `variant="docked"`, drop `occlusionId`; insert `<BloomSection bridge/>`
+after the Shadow section, before the Footer. `onClose` now collapses the dock.
+
+**`MenuBar.tsx` / `Toolbar.tsx` / `App.tsx`** — Spawner entries call `toggleDock("spawner")`;
+View → Lighting calls `toggleDock("lighting")`; remove "Bloom Settings…" item +
+`onOpenBloomPanel` prop + `onOpenLightingPanel`'s `setOpenToolPanel("lighting")` (now dock).
+Toolbar Spawner button `aria-pressed={dock==="spawner"}`.
+
+**Deletions:** `BloomPanel.tsx`, `BloomPanel.test.tsx`, `dialog-bloom-settings.golden.json`,
+`dialog-bloom-settings.composition.golden.yaml`, `spawner-visibility.ts`.
 
 ## 4. Risks named up front + mitigations
 
-1. **Determinism regression in the a11y harness.** `ShowGround` restores a
-   *toggle* state that the `dialog-lighting` golden captures ("Show ground").
-   If restored unconditionally, the dev machine's registry would flip the
-   golden. **Mitigation:** the whole block is under `!useTestHost` (the a11y
-   harness launches with `--test-host`), so the harness always sees ctor
-   defaults — same guarantee bloom relies on. Verify post-change: `a11y` still
-   **157 / 4 splitters**.
-2. **Ground/skydome texture load failure at restore time.** `SetGroundTexture` /
-   `SetSkydomeSlot` trigger a file load through TextureManager/ModManager. If a
-   persisted custom path is stale/missing, the engine must fall back gracefully
-   (legacy already relies on this — it falls back to dirt / off-slot).
-   **Mitigation:** call after `modManager->SetEngine(engine.get())` (already the
-   case at :1797) so the same fallback path legacy uses is wired; the setters
-   return bool and self-heal. Verify: launch with a bogus `GroundTextureSlot0`
-   path → no crash, falls back.
-3. **REG_SZ without trailing NUL.** `ReadGroundSlotPath` does a two-pass sized
-   read and force-terminates; a naive fixed-buffer read could miss the NUL or
-   truncate long paths. **Mitigation:** mirror the two-pass sized read for
-   ground slot paths; mirror legacy's `MAX_PATH` fixed buffer for skydome to
-   stay byte-identical to its read.
-4. **Double-restore / ordering vs. CLI file load.** The restore runs before
-   `DoCloseFile`/`LoadFile` (legacy does too). A loaded `.alo` doesn't carry
-   view settings, so no conflict. **Accepted:** no mitigation needed — ordering
-   matches legacy.
+1. **a11y golden churn masking a real regression.** Overlay→docked changes the
+   `dialog-lighting` tree (container differences + new Bloom section); the blanket
+   `a11y:update` would rewrite it. **Mitigation:** regenerate, then **read the golden diff
+   line-by-line** — confirm every change is explained by (a) the added Bloom section or (b)
+   the docked container, and nothing else (e.g. a dropped aria-label). Delete
+   `dialog-bloom-settings` deliberately, not via blanket update.
+2. **Right-dock persistence migration breaks existing users.** Users have
+   `alo:spawner-visible`; a naive new key defaults them to a different state. **Mitigation:**
+   `right-dock` reads `alo:right-dock` first, falls back to migrating `alo:spawner-visible`
+   (true→"spawner"). Unit-test the migration both ways + the missing-key default.
+3. **Width-carry logic assumes the column is the Spawner.** `deriveOuterLayoutOnToggle` +
+   the `:2col`/`:3col` keys must fire on dock *presence*, not spawner specifically, else
+   switching spawner↔lighting (column stays open) wrongly reflows or mis-persists.
+   **Mitigation:** the toggled-detection keys on `dockVisible` (present↔absent) only; a
+   content swap (spawner→lighting, both non-null) is NOT a toggle → no reflow. Add a
+   PanelLayout test: spawner→lighting keeps the column width; lighting→closed restores 2col.
+4. **`engine/set/bloom` snapshot Playwright specs open the old Bloom panel.**
+   `composition-hosting.spec.ts` clicks a "Bloom"/"Bloom Settings" menu item to reach the
+   "Enable bloom" checkbox. **Mitigation:** repoint those specs to open Lighting (the
+   checkbox now lives in its Bloom section); the `aria-label="Enable bloom"` selector is
+   unchanged, so only the open-path edits.
+5. **SpawnerPanel X-close + F7 still target the old store.** **Mitigation:** repoint
+   SpawnerPanel's close + the F7 handler to `toggleDock("spawner")`/`setDock(null)`; grep
+   every `spawner-visibility` importer before deleting the file.
+6. **Occlusion guard when `variant="docked"`.** `useViewportOcclusion(bridge, id, ref)` is
+   a hook — can't be called conditionally. **Mitigation:** keep the call unconditional but
+   pass `""`/skip when docked (the hook already no-ops on empty id per its own contract at
+   ToolPanel.tsx:50-51); verify that contract holds before relying on it.
 
 ## 5. Testing & verification
 
-**Build (floor):**
-- [ ] `pnpm --filter @particle-editor/editor test` → 392 passed (45 files) — unchanged (no web change expected).
-- [ ] `pnpm --filter @particle-editor/editor build` → clean (+dist/).
-- [ ] Native `.sln` Debug x64 — clean (PowerShell MSBuild, L-046).
-- [ ] Native `.sln` Release x64 — clean (needed for `--test-host` CDP + faithful launch).
-- [ ] `pnpm --filter @particle-editor/editor a11y` → 157 passed / 4 splitters (L-033) — **proves the `!useTestHost` gate holds**.
+**Build / typecheck:**
+- [ ] `pnpm --filter @particle-editor/editor build` → clean (+dist/, needed for the host).
+- [ ] No native rebuild expected; if any host file is touched, that's a red flag — stop & re-scope.
 
-**Happy path (registry round-trip):**
-- [ ] In legacy (or regedit), set a non-default background colour, hide ground,
-      pick a non-default ground texture slot, set a solid colour, pick a skydome.
-- [ ] Launch the faithful `--new-ui` (NON-test-host, since the restore is gated
-      OFF under `--test-host`) and confirm via snapshot/host.log instrumentation
-      that background / showGround / groundTexture / groundSolidColor /
-      skydomeIndex reflect the saved values, NOT ctor defaults. **Resolve the
-      verify channel before claiming pass** (the CDP bridge needs `--test-host`,
-      which gates the restore off — so verification likely needs a temporary
-      host.log dump of the restored engine values, or the user's on-screen
-      confirm).
+**Unit (vitest) — expect a NEW total (bloom test deleted, dock tests added):**
+- [ ] `right-dock.test.ts` (new): toggle exclusivity, migration from `alo:spawner-visible`, default.
+- [ ] `LightingPanel.test.tsx`: docked variant renders; Bloom section present + controls wired.
+- [ ] `BloomSection.test.tsx` (new, lifted from BloomPanel.test): enable/strength/cutoff/size
+      dispatch the right bridge kinds; unavailable → disabled.
+- [ ] `MenuBar.test.tsx`: no "Bloom Settings" item; Lighting toggles dock; Spawner toggles dock.
+- [ ] `Toolbar.test.tsx`: Spawner button `aria-pressed` tracks `dock==="spawner"`.
+- [ ] `PanelLayout.test.tsx`: spawner→lighting keeps column open + width; lighting→closed → 2col;
+      right column renders the correct child per `dock`.
+- [ ] `ToolPanel.test.tsx`: docked variant container classes; overlay unchanged.
+- [ ] `BloomPanel.test.tsx` deleted; grep shows no dangling import.
+- [ ] `pnpm --filter @particle-editor/editor test` → all green (record the new file/test counts).
 
-**Edge cases:**
-- [ ] Fresh registry (no values) → all fall back to ctor defaults; no crash.
-- [ ] Stale/missing custom ground path → falls back, no crash (Risk 2).
-- [ ] Out-of-range `GroundTexture` / `SkydomeIndex` DWORD → bounds-rejected, default.
-- [ ] Corrupt (wrong-type) value → type-check rejects, falls back.
+**a11y goldens:**
+- [ ] Remove `dialog-bloom-settings` from `DIALOG_SURFACES`; delete its 2 goldens.
+- [ ] Update `seedCanonicalUiState` to seed `alo:right-dock`.
+- [ ] Regenerate `dialog-lighting` (.json + .composition.yaml); **diff-review** every change (Risk 1).
+- [ ] `pnpm --filter @particle-editor/editor a11y` → passes (new count = 157 − bloom surface;
+      4 splitters baseline). CDP flaky → retry, `127.0.0.1:9222`.
 
-**Arch-C on-screen confirm (hand to user — L-033):**
-- [ ] User launches faithful `--new-ui`, confirms their tuned ground/background/
-      skydome appears (not defaults). Agent screenshots NOT trusted.
+**Playwright specs:**
+- [ ] `composition-hosting.spec.ts`, `tools.spec.ts`, `menu-bar.spec.ts`: repoint bloom-open
+      paths to Lighting; remove Bloom-Settings assertions.
+- [ ] `splitters.spec.ts`, `spawner-import-mod.spec.ts`: spawner-visibility → right-dock; still pass.
 
-**On landing:** CHANGELOG entry (what ships / how / gotchas) + lesson if the
-verify-channel-vs-gate interaction is non-obvious + FF-push `lt-4`. No `master`.
+**Manual / arch-C (hand on-screen confirm to user — L-033):**
+- [ ] Faithful `--new-ui`: View → Lighting docks a full-height right column, curve editor
+      narrows (like Spawner); Bloom section present + sliders affect glow; toolbar Spawner
+      button toggles the same slot exclusively; closing restores the 2-col layout.
+
+**On landing:** CHANGELOG + lesson (if a non-obvious gotcha) + FF-push `lt-4`. No `master`.
+
+## Progress (live)
+
+- [x] `right-dock.ts` store + test (8/8).
+- [x] `ToolPanel` `variant` prop + tests.
+- [x] `BloomSection.tsx` + test (lifted from BloomPanel).
+- [x] `LightingPanel` docked + Bloom section.
+- [x] `PanelLayout` right-dock wiring (Spawner/Lighting shared slot) + tests.
+- [x] MenuBar / Toolbar / App / SpawnerPanel / tool-panel repointed.
+- [x] Deleted BloomPanel.tsx + test, spawner-visibility.ts.
+- [x] vitest: **403 passed / 46 files** (was 392); build/typecheck clean.
+- [x] Playwright specs repointed (composition-hosting, tools, spawner-import-mod).
+- [x] a11y-surfaces: seed `alo:right-dock`; bloom surface removed; bloom goldens deleted.
+- [x] a11y:update (composition) → **155 passed / 4 splitters** (155 = 157 − 2 removed
+      bloom surface; the 4 splitter fails are the *identical* L-033 baseline lines
+      125/163/227/258 that also fail in unrelated runs — not a regression).
+- [x] **Risk-1 diff-review PASSED.** Only 2 composition goldens changed, both fully
+      explained: `menubar-view-open` = exactly one line removed (`Bloom Settings…`);
+      `dialog-lighting` = (a) Spawner toggle loses `[pressed]` (Lighting took the
+      exclusive slot → closed Spawner ✓), (b) Lighting block moved overlay→`complementary`
+      (docked ✓), (c) Spawner content replaced by Lighting (shared slot ✓), (d)
+      `group: Bloom` added (new section ✓), (e) every lighting control label preserved.
+- [x] a11y:update:legacy churned ~25 unrelated UIA goldens → legacy lane is unmaintained;
+      reverted it wholesale (kept only the removed-bloom `.golden.json` deletion). **L-052.**
+- [x] Rebuilt composition dist; `pnpm a11y` (verify) → **155 passed / 4 splitters** — the
+      committed composition goldens PASS.
+- [ ] arch-C on-screen confirm (hand to user).
 
 ## Review
 
-**Shipped.** Full view-settings parity in the new-UI `HostWindow`, folded into the
-existing bloom `if (!useTestHost)` registry block at
-[`HostWindow.cpp:1799`](src/host/HostWindow.cpp:1799): background colour, show-ground,
-ground slot custom paths → solid colour → texture index, skydome custom paths → index
-(legacy order preserved). Two inline lambdas (`readDword`, two-pass `readSz`) since the
-legacy `Read*` helpers are `static`. GroundZ forced to 0 (mirrors legacy intent). A
-permanent `[view-restore]` `host.log` line added as the standing verification channel.
+**Shipped.** Lighting promoted from a floating `ToolPanel` overlay to a **docked, full-
+height pane** sharing the Spawner's right-dock slot (exclusive), with Bloom settings folded
+in as a collapsible section. Pure web-layer change, **no native rebuild**.
 
-**Verification (all green).**
-- vitest **392 / 45** (baseline, unchanged — no web change).
-- Native Debug + Release x64 — **0 errors** (pre-existing expat C4244 + LIBCMTD LNK4098
-  warnings only).
-- a11y **157 passed / 4 splitters** — the documented L-033 baseline; **gate proven** (all
-  157 goldens incl. `dialog-lighting` "Show ground" unchanged → restore stayed off under
-  `--test-host`).
-- Faithful non-test-host launch logged
-  `[view-restore] bg=0x6E6E6E showGround=1 groundTex=5 groundSolid=0x626262 skydome=1` —
-  every field the saved registry value, none the engine ctor default. **Restore proven
-  end-to-end.**
+**Design decisions that held:** (1) make the dock slot *content-agnostic* and reuse the
+Spawner's entire width/persistence/reflow machinery — the toggle-detection keys on dock
+*presence*, so a spawner↔lighting swap reflows nothing; (2) `ToolPanel variant="docked"`
+(fills column, skips occlusion) instead of a parallel component; (3) extract `BloomSection`
+to keep `LightingPanel` focused; (4) `right-dock` migrates the legacy `alo:spawner-visible`
+key. Net **−215 lines** in touched files.
 
-**Deferred (named in scope, not done):** custom-colour palette (`ReadCustomColors`),
-lighting (`PushLightingToEngine`), dialog positions. Separate gaps.
+**Verification (all green):**
+- vitest **403 / 46 files** (was 392: −2 BloomPanel, +8 right-dock, +2 BloomSection, +2 ToolPanel, +1 PanelLayout).
+- build + typecheck clean.
+- Composition a11y **155 / 4 splitters** (155 = 157 − removed bloom surface; 4 splitters = L-033 baseline, not a regression — toggle logic covered green by PanelLayout unit tests).
+- **Risk-1 diff-review PASSED** — only `dialog-lighting` + `menubar-view-open` composition goldens changed, every line explained (Lighting overlay→docked, Spawner toggle un-pressed from the exclusive swap, `group: Bloom` added, one menu line removed).
 
-**Lesson captured:** **L-051** — a `!useTestHost`-gated restore can't be verified over the
-`--test-host` CDP bridge (the gate disables it); verify via host.log + a faithful
-non-test-host launch. (The session-10 bloom handoff carried the contradictory claim that
-bit here.)
+**Deliberate non-action:** the legacy UIA (`*.golden.json`) lane is unmaintained — a full
+regen churned ~25 unrelated surfaces, so it was left as-is (only the removed-bloom golden
+dropped). Documented in **L-052** + CHANGELOG.
 
-**Outstanding:** arch-C on-screen confirm by the user (L-033 — the only remaining check
-the agent cannot make).
+**Lessons:** **L-052** (the two a11y lanes diverge; never blanket-regenerate the legacy
+lane for an unrelated change).
+
+**Outstanding:** arch-C on-screen confirm by the user (L-033).

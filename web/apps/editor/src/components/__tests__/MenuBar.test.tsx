@@ -43,8 +43,6 @@ function renderMenuBar(
   return render(
     <MenuBar
       bridge={bridge}
-      onOpenLightingPanel={() => {}}
-      onOpenBloomPanel={() => {}}
       onOpenImportEmittersDialog={() => {}}
       onOpenAboutDialog={() => {}}
       onOpenRescaleDialog={() => {}}
@@ -154,7 +152,7 @@ describe("MenuBar — top-level structure (FD5)", () => {
     expect(toggleVis.getAttribute("data-disabled")).not.toBeNull();
   });
 
-  it("View menu exposes Lighting… and Bloom Settings… (moved from Tools)", async () => {
+  it("View menu exposes Lighting… and no longer has Bloom Settings… (folded into Lighting, session 11)", async () => {
     const bridge = makeStubBridge();
     renderMenuBar(bridge);
     const trigger = screen.getByRole("menuitem", { name: "View" });
@@ -163,7 +161,12 @@ describe("MenuBar — top-level structure (FD5)", () => {
     await waitFor(() => {
       expect(screen.getByRole("menuitem", { name: /Lighting/ })).toBeTruthy();
     });
-    expect(screen.getByRole("menuitem", { name: /Bloom Settings/ })).toBeTruthy();
+    // The standalone "Bloom Settings…" entry was retired — its controls
+    // now live inside the Lighting pane. The on/off "Bloom" item remains.
+    expect(
+      screen.queryByRole("menuitem", { name: /Bloom Settings/ }),
+    ).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /^Bloom/ })).toBeTruthy();
   });
 
   it("View > Reset panel layout fires the onResetPanelLayout callback (B1.4 T6)", async () => {

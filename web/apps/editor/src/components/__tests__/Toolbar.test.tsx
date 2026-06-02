@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { Toolbar } from "../Toolbar";
 import type { Bridge } from "@particle-editor/bridge-schema";
-import { __resetSpawnerVisibilityForTests } from "@/lib/spawner-visibility";
+import { __resetRightDockForTests } from "@/lib/right-dock";
 
 function makeBridge() {
   const snap = {
@@ -24,10 +24,11 @@ function makeBridge() {
 }
 
 beforeEach(() => {
+  localStorage.removeItem("alo:right-dock");
   localStorage.removeItem("alo:spawner-visible");
-  // The Zustand store's `visible` state is module-level and survives
+  // The Zustand store's `dock` state is module-level and survives
   // across tests; clearing localStorage isn't enough on its own.
-  __resetSpawnerVisibilityForTests();
+  __resetRightDockForTests();
 });
 
 describe("Toolbar — Particle Editor 2026 layout", () => {
@@ -70,10 +71,10 @@ describe("Toolbar — Particle Editor 2026 layout", () => {
     const b = makeBridge();
     render(<Toolbar bridge={b} />);
     const btn = await screen.findByRole("button", { name: "Toggle Spawner panel" });
-    expect(btn).toHaveAttribute("aria-pressed", "true"); // default visible
+    expect(btn).toHaveAttribute("aria-pressed", "true"); // default dock = spawner
     fireEvent.click(btn);
     expect(btn).toHaveAttribute("aria-pressed", "false");
-    expect(localStorage.getItem("alo:spawner-visible")).toBe("false");
+    expect(localStorage.getItem("alo:right-dock")).toBe("none");
   });
 
   // ── Viewport engine toggles (moved here from the deleted ViewportPill) ──

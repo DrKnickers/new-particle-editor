@@ -1,19 +1,19 @@
-// Phase 3 Screen 8 Batch 2 contract tests: modeless tool windows
-// (Lighting / Bloom Settings / Ground Texture) wired against the real
-// native bridge inside ParticleEditor.exe --new-ui --test-host. Same
-// CDP-attach harness as sibling specs.
+// Phase 3 Screen 8 Batch 2 contract tests: the Lighting tool pane (now
+// docked, with Bloom folded in as a section — session 11) + the Ground /
+// Background toolbar popovers, wired against the real native bridge inside
+// ParticleEditor.exe --new-ui --test-host. Same CDP-attach harness as
+// sibling specs.
 //
-// What the six specs cover:
-//   1. View → Lighting opens the panel.
+// What the specs cover:
+//   1. View → Lighting opens the (now docked, session-11) Lighting pane.
 //   2. Opening the Background popover does NOT close Lighting (the two
 //      surfaces are orthogonal post-Task-2.2).
-//   3. View → Bloom Settings… opens the panel.
-//   4. Toggling Enable in the Bloom panel fires engine/set/bloom,
-//      observed via the engine/state/changed event.
-//   5. The Ground popover opens from the toolbar dropdown trigger
+//   3. Toggling Enable inside Lighting's Bloom section fires
+//      engine/set/bloom, observed via the engine/state/changed event.
+//   4. The Ground popover opens from the toolbar dropdown trigger
 //      (Task 2.3: View → Ground Texture… became a popover on the
 //      Toolbar).
-//   6. Clicking a bundled ground slot in the popover updates the
+//   5. Clicking a bundled ground slot in the popover updates the
 //      snapshot's groundTexture.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
@@ -53,9 +53,9 @@ async function openMenuItem(p: Page, menu: string, item: string) {
 }
 
 // Helper — wait for a ToolPanel with the given title to mount. ToolPanel
-// uses role="dialog" with the title as aria-label; the remaining ToolPanel
-// titles after Tasks 2.2/2.3 are "Lighting" and "Bloom Settings"
-// (Background and Ground moved to toolbar popovers).
+// uses role="dialog" with the title as aria-label; the only menu-opened
+// ToolPanel after session 11 is "Lighting" (docked; Bloom folded into it,
+// Background and Ground are toolbar popovers).
 async function waitForPanel(p: Page, title: string) {
   await p.waitForSelector(`[role="dialog"][aria-label="${title}"]`, {
     timeout: 2000,
@@ -109,16 +109,17 @@ test("Opening the Background popover does not close the Lighting panel (independ
   await closeAnyPanel(page);
 });
 
-test("View → Bloom Settings… opens the Bloom Settings panel", async () => {
-  await closeAnyPanel(page);
-  await openMenuItem(page, "View", "Bloom Settings");
-  await waitForPanel(page, "Bloom Settings");
-});
-
 test("Toggling Enable Bloom fires engine/set/bloom (observed via state/changed)", async () => {
+  // Bloom settings folded into the Lighting pane (session 11): open
+  // Lighting, then expand the collapsible Bloom section to reach the
+  // Enable checkbox.
   await closeAnyPanel(page);
-  await openMenuItem(page, "View", "Bloom Settings");
-  await waitForPanel(page, "Bloom Settings");
+  await openMenuItem(page, "View", "Lighting");
+  await waitForPanel(page, "Lighting");
+  await page
+    .locator('[role="dialog"][aria-label="Lighting"] summary:has-text("Bloom")')
+    .first()
+    .click();
 
   // Subscribe to engine/state/changed and capture the bloom flag from
   // each payload. The React panel commits Enable changes directly to

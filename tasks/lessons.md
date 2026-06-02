@@ -3383,3 +3383,41 @@ launch logged exactly those, proving the restore end-to-end, while `a11y` stayed
 baseline **157 passed / 4 splitters** (gate intact — the restore stayed off under
 `--test-host`). Cross-reference [L-049](#l-049) (the parity-restore pattern), [L-033](#l-033)
 (host.log + the user are the arch-C truth, not agent screenshots).
+
+## L-052 — The two a11y golden lanes diverge: the **composition** lane (`*.composition.golden.yaml`) is maintained, the **legacy UIA** lane (`*.golden.json`) is not — never blanket-regenerate the legacy lane as part of an unrelated change
+
+**The trap.** The native a11y harness has two lanes with separate goldens:
+`*.composition.golden.yaml` (DOM snapshot via `page.accessibility.snapshot()`, the
+**default** `pnpm a11y` / arch-C composition lane — this is the documented `157/4`
+baseline) and `*.golden.json` (Windows UIA tree via `uia_inspector`, the
+`pnpm a11y:legacy` / arch-A HWND lane). Recent work keeps **only the composition lane**
+current. So when you legitimately need to update one surface's golden and reach for
+`a11y:update:legacy` to keep the UIA lane consistent, the regen rewrites **~25 unrelated
+surfaces** (`emitter-tree`, `property-tabs-*`, `kbd-*`, `curve-editor-focused`, every
+`menubar-*`…) — accumulated drift since the legacy lane was last generated. Committing that
+is the "blanket update buries a regression in noise" anti-pattern: the reviewer can't tell
+your one intended change from 24 surfaces of drift.
+
+**How to apply.**
+1. **Update only the composition lane** for a normal change. Run `pnpm a11y:update` (NOT
+   `:legacy`), then **diff-review every changed `*.composition.golden.yaml`** — each line
+   must be explained by your change (a moved/added/removed node), nothing else.
+2. If you removed a *surface* entirely (e.g. folded Bloom into Lighting), delete BOTH its
+   goldens (`*.composition.golden.yaml` + `*.golden.json`) — that deletion is your
+   intentional change and is cheap to attribute.
+3. **Do NOT run `a11y:update:legacy`** to "tidy up" the UIA lane as part of an unrelated
+   feature. If `git status` shows `*.golden.json` churn on surfaces you didn't touch,
+   `git checkout HEAD -- 'web/apps/editor/tests/a11y-goldens/*.golden.json'` to revert the
+   whole legacy lane, then re-delete only the removed surface's `.golden.json`. A
+   wholesale legacy-lane refresh is its own dedicated chore, reviewed on its own.
+4. Gotcha: `a11y:update:legacy` rebuilds `dist/` in **legacy** mode (`VITE_HOSTING_MODE=
+   legacy`) and refuses to run if `dist/` is a composition build (needs `--rebuild`). After
+   any legacy run, **rebuild composition dist** (`pnpm build`) before the faithful
+   `--new-ui` launch or the next composition `a11y`, or you'll test the wrong hosting mode.
+
+**Source incident (2026-06-02, session 11, Lighting-dock + Bloom-merge).** Composition
+lane updated to exactly 2 surgical diffs (`dialog-lighting`, `menubar-view-open`) + the
+removed Bloom surface; `a11y:update:legacy --rebuild` then churned ~25 `*.golden.json`
+files, so the legacy lane was reverted wholesale and left as-is. Cross-reference
+[L-033](#l-033) (arch-C verification truth) and the L-022 "trust-but-verify the tooling"
+theme — a green `a11y` proves the *composition* lane only.

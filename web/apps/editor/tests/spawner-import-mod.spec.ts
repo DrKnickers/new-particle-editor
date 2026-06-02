@@ -49,10 +49,10 @@ async function waitForPanel(p: Page, title: string) {
   });
 }
 
-/** Task 2.4: Spawner panel is now a permanent right-side column with
- *  visibility tracked in localStorage('alo:spawner-visible'). Force it
- *  visible before the assertions so we don't depend on test-order
- *  leftovers. */
+/** Task 2.4: Spawner panel is a right-side column. Session 11: it shares
+ *  the right-dock slot with Lighting, tracked in
+ *  localStorage('alo:right-dock'). Force it visible before the assertions
+ *  via the toolbar toggle so we don't depend on test-order leftovers. */
 async function ensureSpawnerVisible(p: Page) {
   const visible = await p.evaluate(() => {
     return !!document.querySelector('[aria-label="Spawner"].panel');
@@ -72,9 +72,10 @@ async function ensureSpawnerHidden(p: Page) {
 }
 
 async function closeAnyPanel(p: Page) {
-  // Task 2.4: SpawnerPanel is no longer a ToolPanel slide-in (it's a
-  // permanent column controlled by alo:spawner-visible); only Lighting
-  // and Bloom still use ToolPanel chrome. Keep cleaning those up so
+  // Task 2.4: SpawnerPanel is a docked column (session 11: shares the
+  // right-dock slot with the docked Lighting pane via alo:right-dock).
+  // The remaining ToolPanel-chrome dialogs are the docked Lighting pane
+  // plus the Background/Ground popovers. Keep cleaning those up so
   // earlier-test residue can't leak forward.
   const dialog = p.locator('[role="dialog"]:not([data-state])').first();
   if (await dialog.count()) {

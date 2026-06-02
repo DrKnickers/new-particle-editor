@@ -43,14 +43,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type { Bridge } from "@particle-editor/bridge-schema";
-import { useSpawnerVisible } from "@/lib/spawner-visibility";
-import { useOpenToolPanel, setOpenToolPanel } from "@/lib/tool-panel";
+import { useRightDock, setDock } from "@/lib/right-dock";
 import { ViewportSlot } from "./ViewportSlot";
 import { CurveEditorPanel } from "./CurveEditorPanel";
 import { EmitterPropertyTabs } from "@/screens/EmitterPropertyTabs";
 import { EmitterTree } from "@/screens/EmitterTree";
 import { LightingPanel } from "@/screens/LightingPanel";
-import { BloomPanel } from "@/screens/BloomPanel";
 import { SpawnerPanel } from "@/screens/SpawnerPanel";
 
 export type { Layout };
@@ -174,36 +172,41 @@ function usePersistedLayout(key: string, defaults: Layout) {
 type Props = { bridge: Bridge };
 
 export function PanelLayout({ bridge }: Props) {
-  const spawnerVisible = useSpawnerVisible();
-  const openPanel = useOpenToolPanel();
+  // The right-dock slot holds the Spawner OR the Lighting pane (exclusive),
+  // or nothing. The outer layout only cares whether the column EXISTS —
+  // swapping spawner↔lighting keeps it open and reflows nothing; only the
+  // present↔absent transition carves / absorbs the column's width.
+  const dock = useRightDock();
+  const dockVisible = dock !== null;
 
-  const outerKey = spawnerVisible
+  const outerKey = dockVisible
     ? "alo:layout:outer:3col"
     : "alo:layout:outer:2col";
-  const outerDefaults = spawnerVisible
+  const outerDefaults = dockVisible
     ? OUTER_3COL_DEFAULTS
     : OUTER_2COL_DEFAULTS;
 
-  // The outer Group is key'd on spawnerVisible, so it remounts on every
-  // Spawner toggle. Rather than letting it snap to the destination mode's
-  // independently-stored preset, carry the CURRENT widths across (left
-  // stays put; center absorbs / releases the spawner's space). Only on
-  // the toggle transition — a fresh mount uses the mode's own layout.
-  const prevSpawnerVisible = useRef<boolean | null>(null);
+  // The outer Group is key'd on dockVisible, so it remounts whenever the
+  // right column opens or closes. Rather than letting it snap to the
+  // destination mode's independently-stored preset, carry the CURRENT
+  // widths across (left stays put; center absorbs / releases the column's
+  // space). Only on the open/close transition — a fresh mount uses the
+  // mode's own layout, and a spawner↔lighting swap is NOT a transition.
+  const prevDockVisible = useRef<boolean | null>(null);
   const toggled =
-    prevSpawnerVisible.current !== null &&
-    prevSpawnerVisible.current !== spawnerVisible;
+    prevDockVisible.current !== null &&
+    prevDockVisible.current !== dockVisible;
 
   const outerDefaultLayout = useMemo<Layout>(() => {
     if (toggled) {
       return deriveOuterLayoutOnToggle(
-        spawnerVisible,
+        dockVisible,
         loadLayout("alo:layout:outer:2col", OUTER_2COL_DEFAULTS),
         loadLayout("alo:layout:outer:3col", OUTER_3COL_DEFAULTS),
       );
     }
     return loadLayout(outerKey, outerDefaults);
-  }, [toggled, spawnerVisible, outerKey, outerDefaults]);
+  }, [toggled, dockVisible, outerKey, outerDefaults]);
 
   const onOuterLayoutChanged = useCallback(
     (l: Layout) => saveLayout(outerKey, l),
@@ -214,8 +217,8 @@ export function PanelLayout({ bridge }: Props) {
   // toggle reads consistent state; advance the prev-visible marker.
   useEffect(() => {
     if (toggled) saveLayout(outerKey, outerDefaultLayout);
-    prevSpawnerVisible.current = spawnerVisible;
-  }, [toggled, spawnerVisible, outerKey, outerDefaultLayout]);
+    prevDockVisible.current = dockVisible;
+  }, [toggled, dockVisible, outerKey, outerDefaultLayout]);
 
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
@@ -238,7 +241,7 @@ export function PanelLayout({ bridge }: Props) {
   // canonical knob — pull it from the loaded layout.
   return (
     <Group
-      key={spawnerVisible ? "3col" : "2col"}
+      key={dockVisible ? "3col" : "2col"}
       orientation="horizontal"
       defaultLayout={outerDefaultLayout}
       onLayoutChanged={onOuterLayoutChanged}
@@ -323,18 +326,6 @@ export function PanelLayout({ bridge }: Props) {
               className="relative h-full w-full min-h-0"
             >
               <ViewportSlot bridge={bridge} />
-              {openPanel === "lighting" && (
-                <LightingPanel
-                  bridge={bridge}
-                  onClose={() => setOpenToolPanel(null)}
-                />
-              )}
-              {openPanel === "bloom" && (
-                <BloomPanel
-                  bridge={bridge}
-                  onClose={() => setOpenToolPanel(null)}
-                />
-              )}
             </div>
           </Panel>
           <Separator className="ce-splitter ce-splitter-h" />
@@ -353,29 +344,35 @@ export function PanelLayout({ bridge }: Props) {
         </Group>
       </Panel>
 
-      {spawnerVisible && (
+      {dockVisible && (
         <>
           <Separator className="ce-splitter ce-splitter-v" />
-          {/* Pixel minSize for the same reason as `left`: the Spawner
-              panel's labels (e.g. "Initial spawn delay:") truncate when
-              dragged narrow. ~260px keeps them readable. */}
+          {/* Pixel minSize for the same reason as `left`: the docked
+              panels' labels (e.g. Spawner's "Initial spawn delay:",
+              Lighting's "Intensity") truncate when dragged narrow.
+              ~260px keeps them readable. The Panel id stays "spawner"
+              regardless of content so the existing 3col persistence keys
+              (alo:layout:outer:3col → {left,center,spawner}) keep
+              working — the slot's *identity* is the right-dock, not the
+              specific tool inside it. */}
           <Panel
             id="spawner"
             defaultSize={`${outerDefaultLayout.spawner}%`}
             minSize={260}
             maxSize="40%"
           >
-            {/* Plain layout container — the panel chrome (bg, border,
-                rounded corners) lives on the single `.panel` that
-                SpawnerPanel renders, matching the curve editor's
-                wrapper. Previously this aside ALSO carried `bg-panel` +
-                `border-l`, nesting a card inside a card (a redundant
-                inset border ring on the spawner). */}
+            {/* Plain layout container — the panel chrome (bg, border)
+                lives on the `.panel` (SpawnerPanel) or the docked
+                ToolPanel (LightingPanel) rendered inside. */}
             <aside
               data-testid="quadrant-spawner"
               className="h-full w-full overflow-hidden"
             >
-              <SpawnerPanel bridge={bridge} />
+              {dock === "spawner" ? (
+                <SpawnerPanel bridge={bridge} />
+              ) : (
+                <LightingPanel bridge={bridge} onClose={() => setDock(null)} />
+              )}
             </aside>
           </Panel>
         </>

@@ -26,11 +26,11 @@ async function dismissModals(page: Page) {
  * folder (`ComputeUserDataFolder`, src/host/HostWindow.cpp), so whatever
  * theme / panel state a prior interactive session (e.g. a live smoke) left
  * in `localStorage` leaks into the next capture. Every golden is pinned to
- * **light theme + Spawner visible** — seed those keys and reload so the
- * module-init reads (ThemeToggle's `alo:theme`, the spawner-visibility
- * store's `alo:spawner-visible`) pick them up regardless of persisted
- * state. Without this, a blanket `a11y:update` rewrites every golden with
- * the machine's incidental theme/panel state.
+ * **light theme + Spawner docked** — seed those keys and reload so the
+ * module-init reads (ThemeToggle's `alo:theme`, the right-dock store's
+ * `alo:right-dock`) pick them up regardless of persisted state. Without
+ * this, a blanket `a11y:update` rewrites every golden with the machine's
+ * incidental theme/panel state.
  *
  * Call once per a11y spec's `beforeAll`, after the bridge is ready and
  * before any capture (HWND lane: before `discoverHostHwnd`).
@@ -38,7 +38,11 @@ async function dismissModals(page: Page) {
 export async function seedCanonicalUiState(page: Page): Promise<void> {
   await page.evaluate(() => {
     localStorage.setItem("alo:theme", "light");
-    localStorage.setItem("alo:spawner-visible", "true");
+    // Right-dock = "spawner" (session 11; was the legacy
+    // `alo:spawner-visible=true`). The Spawner occupies the shared
+    // right-dock slot for every full-page golden; the dialog-lighting
+    // surface swaps it to Lighting for its own capture.
+    localStorage.setItem("alo:right-dock", "spawner");
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(
@@ -247,25 +251,14 @@ export const DIALOG_SURFACES: SurfaceCapture[] = [
     },
     teardown: async (page) => {
       // ToolPanel does NOT close on Esc by design (modeless tool
-      // window). Click its X glyph instead.
+      // window). Click its X glyph instead — it collapses the dock.
       await page
         .locator('[role="dialog"][aria-label="Lighting"] [aria-label="Close"]')
         .click();
     },
   },
-  {
-    id: "dialog-bloom-settings",
-    setup: async (page) => {
-      await page.locator('button:has-text("View")').click();
-      await page.locator('[role="menuitem"]:has-text("Bloom Settings")').click();
-      await page.waitForSelector('[role="dialog"][aria-label="Bloom Settings"]');
-    },
-    teardown: async (page) => {
-      await page
-        .locator('[role="dialog"][aria-label="Bloom Settings"] [aria-label="Close"]')
-        .click();
-    },
-  },
+  // dialog-bloom-settings removed (session 11): Bloom settings folded into
+  // the Lighting pane as a section, so they're captured by dialog-lighting.
 
   // ── Demo-route auto-open ─────────────────────────────────────────
   {

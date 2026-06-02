@@ -15,7 +15,6 @@ import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
 import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
-import { setOpenToolPanel } from "@/lib/tool-panel";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
 import { BridgeContext } from "@/lib/bridge-context";
@@ -45,10 +44,11 @@ function AppShell() {
   // black host backing. Pushes on mount + on every theme change.
   useBackingColorSync(bridge);
 
-  // B1.4 [NT-8]: tool-panel visibility + spawner visibility now live
-  // inside `PanelLayout`, which mounts the relevant child components
-  // directly. AppShell no longer subscribes to either store — only
-  // `setOpenToolPanel` (used by the MenuBar callbacks below) remains.
+  // B1.4 [NT-8]: tool-panel + right-dock visibility now live inside
+  // `PanelLayout`, which mounts the relevant child components directly.
+  // The MenuBar drives the right-dock (Spawner / Lighting) via
+  // `toggleDock` imported there, so AppShell no longer threads any
+  // panel-open callbacks.
   const [aboutOpen, setAboutOpen] = useState(false);
   const [rescaleOpen, setRescaleOpen] = useState(false);
   const [importEmittersOpen, setImportEmittersOpen] = useState(false);
@@ -167,8 +167,6 @@ function AppShell() {
         <span className="font-semibold">AloParticleEditor</span>
         <MenuBar
           bridge={bridge}
-          onOpenLightingPanel={() => setOpenToolPanel("lighting")}
-          onOpenBloomPanel={() => setOpenToolPanel("bloom")}
           onOpenImportEmittersDialog={() => setImportEmittersOpen(true)}
           onOpenAboutDialog={() => setAboutOpen(true)}
           onOpenRescaleDialog={() => setRescaleOpen(true)}

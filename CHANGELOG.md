@@ -16,6 +16,50 @@ Conventions:
 
 ## Changelog
 
+### Lighting is now a docked pane (sharing the Spawner's slot) with Bloom settings folded in
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The Lighting panel is no longer a floating overlay that covers the viewport — it's a
+**docked, full-height column** on the right, behaving exactly like the Spawner panel
+(it carves space from the centre column, pushing the viewport + curve editor narrower).
+Lighting and the Spawner **share one right-dock slot**: opening Lighting closes the
+Spawner and vice-versa, so the viewport is never squeezed into a fourth column. The
+**Bloom settings** (Enable / Strength / Cutoff / Size) now live as a collapsible section
+*inside* the Lighting pane, so the standalone "Bloom Settings…" menu entry is gone (the
+on/off "Bloom" toggle on the toolbar + View menu stays). Open Lighting from View →
+Lighting; the Spawner toggles from the toolbar or View → Spawner (F7) as before.
+
+**How we tackled it.** The Spawner column had already solved every hard layout problem
+(width persistence across the 2-col/3-col mode switch, carrying widths on toggle, the
+curve-editor reflow in [`PanelLayout.tsx`](web/apps/editor/src/components/PanelLayout.tsx)),
+so the work was to make that slot **content-agnostic** rather than rebuild it. A new
+[`lib/right-dock.ts`](web/apps/editor/src/lib/right-dock.ts) store (`dock: "spawner" |
+"lighting" | null`, exclusive `toggle`) replaces the old `spawner-visibility` boolean;
+`PanelLayout` keys its outer-Group remount + the `deriveOuterLayoutOnToggle` width-carry
+on dock *presence* (so a spawner↔lighting swap keeps the column open and reflows nothing —
+only open↔closed carves/absorbs the width). `ToolPanel` gained a `variant="docked"` that
+fills its column and skips the viewport hole-punch (a docked column sits beside the engine,
+not over it). The bloom controls were lifted into a self-contained
+[`BloomSection.tsx`](web/apps/editor/src/screens/BloomSection.tsx) so the 550-line
+`LightingPanel` stayed focused. `right-dock` migrates the legacy `alo:spawner-visible`
+localStorage key so existing users keep their column. Net **−215 lines** in the touched
+files — the feature mostly *removed* code by reusing the dock machinery. Pure web-layer
+change; no native rebuild.
+
+**Issues encountered and resolutions.** Regenerating the a11y goldens revealed the two
+lanes diverge: the **composition** lane (the documented `157/4` baseline) updated cleanly
+to exactly two surgical golden diffs — `dialog-lighting` (Lighting moved overlay→docked
+`complementary`, the Spawner toggle correctly loses `[pressed]` because Lighting took the
+exclusive slot, and a `group: Bloom` appears) and `menubar-view-open` (one line removed).
+The **legacy UIA** lane (`*.golden.json`), by contrast, is unmaintained — regenerating it
+churned ~25 unrelated surfaces (`emitter-tree`, `property-tabs`, `kbd-*`…), i.e. accumulated
+drift from sessions that only kept the composition lane current. Committing that blanket
+update would mask regressions in noise, so the legacy lane was left untouched (only the
+removed Bloom surface's golden was dropped from both lanes). Captured as **L-052**.
+
+---
+
 ### Ground, background, and skydome view settings restored from the registry in the new-UI host
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

@@ -14,14 +14,15 @@ import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { SpawnerPanel } from "../SpawnerPanel";
 import { makeDefaultEngineState, makeDefaultSpawnerParams } from "@/bridge/mock-state";
 import {
-  useSpawnerVisibility,
-  __resetSpawnerVisibilityForTests,
-} from "@/lib/spawner-visibility";
+  useRightDock,
+  __resetRightDockForTests,
+} from "@/lib/right-dock";
 import { renderHook } from "@testing-library/react";
 
 beforeEach(() => {
+  localStorage.removeItem("alo:right-dock");
   localStorage.removeItem("alo:spawner-visible");
-  __resetSpawnerVisibilityForTests();
+  __resetRightDockForTests();
 });
 
 function makeStubBridge(modeOverride: "manual" | "auto" = "manual"): Bridge & {
@@ -102,18 +103,18 @@ describe("SpawnerPanel", () => {
     });
   });
 
-  it("Close Spawner button toggles the visibility store", async () => {
+  it("Close Spawner button closes the right-dock", async () => {
     const bridge = makeStubBridge("manual");
     render(<SpawnerPanel bridge={bridge} />);
-    const { result } = renderHook(() => useSpawnerVisibility());
-    expect(result.current.visible).toBe(true); // default visible
+    const { result } = renderHook(() => useRightDock());
+    expect(result.current).toBe("spawner"); // default dock = spawner
 
     fireEvent.click(screen.getByRole("button", { name: "Close Spawner" }));
 
-    // After the click, the store flips to false.
+    // After the click, the dock closes (setDock(null)).
     await waitFor(() => {
-      expect(result.current.visible).toBe(false);
+      expect(result.current).toBeNull();
     });
-    expect(localStorage.getItem("alo:spawner-visible")).toBe("false");
+    expect(localStorage.getItem("alo:right-dock")).toBe("none");
   });
 });

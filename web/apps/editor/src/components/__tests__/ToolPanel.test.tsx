@@ -35,16 +35,40 @@ describe("ToolPanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("switching the openToolPanel atom from 'background' to 'lighting' causes background to clear", () => {
+  it("switching the openToolPanel atom from 'background' to 'ground' causes background to clear", () => {
     // The atom enforces single-open semantics: setting one value
-    // replaces the previous one. The App.tsx host renders the matching
-    // panel by reading this atom; the unit-level proof is just that
+    // replaces the previous one. The PanelLayout host renders the matching
+    // overlay by reading this atom; the unit-level proof is just that
     // the atom value transitions and never holds two ids at once.
+    // (Lighting + Bloom left this store in session 11 — they're a docked
+    // pane in lib/right-dock now; only Background + Ground remain here.)
     setOpenToolPanel("background");
     expect(useToolPanelStore.getState().open).toBe("background");
-    setOpenToolPanel("lighting");
-    expect(useToolPanelStore.getState().open).toBe("lighting");
+    setOpenToolPanel("ground");
+    expect(useToolPanelStore.getState().open).toBe("ground");
     setOpenToolPanel(null);
     expect(useToolPanelStore.getState().open).toBeNull();
+  });
+
+  it("variant='docked' fills its column (h-full w-full, not absolute overlay)", () => {
+    render(
+      <ToolPanel title="Lighting" onClose={() => {}} variant="docked">
+        body
+      </ToolPanel>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Lighting" });
+    expect(dialog.className).toContain("h-full");
+    expect(dialog.className).toContain("w-full");
+    expect(dialog.className).not.toContain("absolute");
+  });
+
+  it("default (overlay) variant is absolute-positioned", () => {
+    render(
+      <ToolPanel title="Background" onClose={() => {}}>
+        body
+      </ToolPanel>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Background" });
+    expect(dialog.className).toContain("absolute");
   });
 });

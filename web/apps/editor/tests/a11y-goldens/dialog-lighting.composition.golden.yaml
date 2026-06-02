@@ -17,7 +17,7 @@
 - button "Show ground" [pressed]
 - button "Toggle bloom"
 - button "Leave particles after instance death" [pressed]
-- button "Toggle Spawner panel" [pressed]
+- button "Toggle Spawner panel"
 - button "Ground": "Ground:"
 - button "Background": "Background:"
 - button "Light theme" [pressed]
@@ -107,36 +107,6 @@
   - textbox "Emit offset:" [disabled]: "0.5"
   - text: units
 - separator
-- dialog "Lighting":
-  - text: Lighting
-  - button "Close"
-  - group:
-    - text: Sun Intensity
-    - textbox "Sun intensity": "1.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Azimuth
-    - textbox "Sun azimuth": "0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Altitude
-    - textbox "Sun altitude": "0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Diffuse
-    - button "Sun diffuse colour": "#FFFFFF"
-    - text: Specular
-    - button "Sun specular colour": "#000000"
-  - group: Fill 1
-  - group: Fill 2
-  - text: Ambient Colour
-  - button "Ambient colour": "#000000"
-  - text: Shadow Colour
-  - button "Shadow colour": "#000000"
-  - checkbox "Force Align Fill Lights" [checked]
-  - text: Force Align
-  - button "Mirror Sun" [disabled]
-  - button "Reset"
 - separator
 - text: Curve editor
 - button "Select tool" [pressed]
@@ -178,60 +148,35 @@
 - text: 0 25 50 75 100%
 - separator
 - complementary:
-  - text: Spawner 0
-  - button "Stop spawner" [disabled]
-  - button "Close Spawner"
-  - text: Mode
-  - radiogroup "Spawner mode":
-    - radio "Manual mode"
-    - text: Manual
-    - radio "Auto mode" [checked]
-    - text: Auto
-  - checkbox "Enable spawner"
-  - text: Enabled
-  - group:
-    - text: Burst Burst size
-    - textbox "Burst size": "1"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Spacing
-    - textbox "Burst spacing": "0.000"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Interval
-    - textbox "Burst interval": "10.000"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-  - group:
-    - text: Position X
-    - textbox "Position X": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: "Y"
-    - textbox "Position Y": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Z
-    - textbox "Position Z": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-  - group:
-    - text: Velocity X
-    - textbox "Velocity X": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: "Y"
-    - textbox "Velocity Y": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Z
-    - textbox "Velocity Z": "0.0"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-  - text: Lifetime Max lifetime
-  - textbox "Max lifetime": "5.000"
-  - button "Increment": ▲
-  - button "Decrement": ▼
-  - group: Jitter position
-  - group: Jitter velocity
+  - dialog "Lighting":
+    - text: Lighting
+    - button "Close"
+    - group:
+      - text: Sun Intensity
+      - textbox "Sun intensity": "1.00"
+      - button "Increment": ▲
+      - button "Decrement": ▼
+      - text: Azimuth
+      - textbox "Sun azimuth": "0"
+      - button "Increment": ▲
+      - button "Decrement": ▼
+      - text: Altitude
+      - textbox "Sun altitude": "0"
+      - button "Increment": ▲
+      - button "Decrement": ▼
+      - text: Diffuse
+      - button "Sun diffuse colour": "#FFFFFF"
+      - text: Specular
+      - button "Sun specular colour": "#000000"
+    - group: Fill 1
+    - group: Fill 2
+    - text: Ambient Colour
+    - button "Ambient colour": "#000000"
+    - text: Shadow Colour
+    - button "Shadow colour": "#000000"
+    - group: Bloom
+    - checkbox "Force Align Fill Lights" [checked]
+    - text: Force Align
+    - button "Mirror Sun" [disabled]
+    - button "Reset"
 - contentinfo: FPS — · Emitters — · Particles — · Instances — · Cursor —

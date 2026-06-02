@@ -256,22 +256,29 @@ test("keyboard input via CDP reaches focused React input under composition", asy
   // events normally under composition mode (no DOM-level breakage).
   // The real keyboard-focus assertion is in the 3f manual smoke.
   //
-  // Open the Bloom Settings panel so we have a known input to focus.
+  // Open the Lighting pane so we have a known input to focus. Bloom's
+  // controls now live as a collapsible section inside Lighting (session
+  // 11), so expand that section before reaching the Enable bloom checkbox.
   await page.keyboard.press("Escape").catch(() => {});
   const trigger = page.locator('[role="menubar"] >> text=View').first();
   await trigger.click();
   await page.waitForSelector('[role="menu"]', { timeout: 2000 });
-  const bloomItem = page
-    .locator('[role="menuitem"]:has-text("Bloom Settings")')
+  const lightingItem = page
+    .locator('[role="menuitem"]:has-text("Lighting")')
     .first();
-  if ((await bloomItem.count()) === 0) {
-    test.skip(true, "View → Bloom Settings menu item not present in this build");
+  if ((await lightingItem.count()) === 0) {
+    test.skip(true, "View → Lighting menu item not present in this build");
     return;
   }
-  await bloomItem.click();
-  await page.waitForSelector('[role="dialog"][aria-label="Bloom Settings"]', {
+  await lightingItem.click();
+  await page.waitForSelector('[role="dialog"][aria-label="Lighting"]', {
     timeout: 2000,
   });
+  // Expand the collapsible Bloom section so its checkbox is actionable.
+  await page
+    .locator('[role="dialog"][aria-label="Lighting"] summary:has-text("Bloom")')
+    .first()
+    .click();
 
   // Find the Enable bloom checkbox; toggling via keyboard (Space)
   // should fire engine/set/bloom + the snapshot should reflect it.
@@ -302,7 +309,7 @@ test("keyboard input via CDP reaches focused React input under composition", asy
     await b.request({ kind: "engine/set/bloom", params: { enabled: orig } });
   }, before);
   const closeBtn = page
-    .locator('[role="dialog"][aria-label="Bloom Settings"] button[aria-label="Close"]')
+    .locator('[role="dialog"][aria-label="Lighting"] button[aria-label="Close"]')
     .first();
   if (await closeBtn.count()) {
     await closeBtn.click();
