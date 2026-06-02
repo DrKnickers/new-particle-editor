@@ -558,8 +558,15 @@ export function LightingPanel({ bridge, onClose }: Props) {
       {/* Bloom sits at the very bottom, below the footer (Mirror Sun /
           Reset) per user request — it's a post-process effect unrelated
           to the lights, so it's the last thing in the pane. Collapsed by
-          default; self-contained engine-state subscription. */}
-      <BloomSection bridge={bridge} />
+          default; self-contained engine-state subscription.
+
+          The 9px top margin matches `.panel-section`'s margin-bottom
+          (components.css) — the same gap that separates two collapsed
+          section headers (e.g. Fill 1 → Fill 2) — so the space above
+          Bloom reads consistently with the rest of the pane. */}
+      <div className="mt-[9px]">
+        <BloomSection bridge={bridge} />
+      </div>
     </ToolPanel>
   );
 }
