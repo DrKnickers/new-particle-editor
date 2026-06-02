@@ -1,5 +1,88 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-02 (session 10) — shipped 3 arch-C/new-UI fixes: the **black line** (D3D9Ex→D3D11 shared-surface guard band), **bloom** (registry restore), **emitter drag-reorder** (pointer events). NEXT: ground-settings registry-restore parity gap (same class as bloom), or keep bug-testing the new UI
+
+**`origin/lt-4` = `9585b4e`** (was `d57c3cc` at session start; **3 commits**, all
+FF-pushed). Tree clean, 0 ahead / 0 behind. **No `master` changes.** Verified:
+vitest **392** (was 391; +1 drag click-suppression test, 45 files), native a11y
+**157 passed / 4 splitters** (L-033 artifact), `.sln` Debug+Release x64 clean,
+`dist/` rebuilt. The session was **user-driven bug-testing of the new UI** — the
+user launched the faithful arch-C build, found issues, I root-caused + fixed each.
+
+### The 3 commits (newest first)
+- `9585b4e` **emitter drag-reorder** — HTML5 DnD → **pointer events** (`EmitterTree.tsx`
+  + test). HTML5 DnD never initiates under arch-C composition hosting (WebView2 is a
+  composition visual, no HWND for `DoDragDrop`). Pure `resolveDropIntent` + a parent
+  `startDrag` controller (document pointermove/up, hovered row via `[data-emitter-id]`,
+  same `emitters/drop`). → **L-050**.
+- `9ae4d9e` **bloom** — the new-UI host wasn't restoring bloom settings from the
+  registry (legacy does at `main.cpp:7647-7650`), so `m_bloomStrength` stayed at its
+  `0.00` ctor default and toggling "Enable bloom" added zero. `HostWindow.cpp` (after
+  Engine ctor, ~:1797) now restores `BloomEnabled`/`Strength`/`Cutoff`/`Size` from
+  `HKCU\Software\AloParticleEditor`; **skipped under `--test-host`** so the
+  `dialog-bloom-settings` a11y golden stays deterministic. → **L-049**.
+- `28c1a41` **black line** — the 1px "black" line on the Spawner's viewport edge was the
+  engine bg (`RGB(0x14,0x08,0x34)`) showing through a ~3–4px strip at the scene-rect's
+  **right edge where the D3D9Ex shared RT is incoherent in its D3D11 alias** (D3D9 view
+  = content, D3D11 alias DComp presents = clear colour). Fix: **guard band** in
+  `LayoutBroker::SetSceneRect` — render the engine scene viewport a few px LARGER than
+  the DComp clip (`GBx=max(12,w/64)`, aspect-preserving `GBy=GBx·h/w`) so the incoherent
+  band falls in the clipped-off margin; per-pixel-FoV keeps framing pixel-identical.
+  `Engine::SetSceneViewport` gained a defensive RT clamp. → **L-048**.
+
+New lessons: **L-048** (D3D9Ex→D3D11 shared-surface edge incoherency + the cross-API
+readback ladder), **L-049** (new-UI host must restore the same persisted engine settings
+legacy does; bloom was a missing startup restore, not a broken feature), **L-050** (HTML5
+DnD is dead under arch-C composition hosting; build drag on pointer events).
+
+### How each was verified (this machine; arch-C visuals confirmed by the user)
+- **Black line:** faithful `CopyFromScreen` grabs (L-034) + D3D9/D3D11 texture readbacks
+  pinned it to the shared-surface boundary; line-gone measured at 1264×761 AND 3440×1369,
+  both themes (0 bg-signature pixels down the whole edge). User confirmed on-screen.
+- **Bloom:** driven without the user over the `--test-host` CDP **host-object** bridge
+  (`chromium.connectOverCDP('http://127.0.0.1:9222')` → `window.bridge.request`); a fresh
+  launch now snapshots `bloomStrength=1` (the saved value, was 0). User confirmed glow.
+- **Drag:** 27 EmitterTree vitest specs (reorder + reparent + click-suppression via
+  pointer events) + type-safe build + a11y unchanged. Arch-C confirm: pending the user's
+  on-screen drag (high confidence — clicks already deliver in arch-C, same input channel).
+
+### Tooling notes worth keeping
+- **CDP comes up on `127.0.0.1:9222`, not `localhost`** (binds IPv4; `localhost`→`::1`
+  fails). The a11y harness checks `localhost` and is **intermittently slow** to bring CDP
+  up — re-run on failure (kill stray `--test-host` first).
+- **MSBuild path** on this box: `C:\Program Files\Microsoft Visual Studio\18\Community\
+  MSBuild\Current\Bin\MSBuild.exe` (vswhere `-requires Microsoft.Component.MSBuild`
+  returns nothing on this VS18 install; enumerate instances or use the direct path).
+- **PowerShell traps hit this session:** `"$y:"` in a double-quoted string is a drive-ref
+  parse error — use `("...{0}..." -f $y)`. `git commit -m @'...'@` mis-parsed a message
+  containing a quoted phrase — use `git commit -F <file>`.
+- **Fresh worktree:** `pnpm install` (node_modules absent) + materialise the WebView2
+  NuGet pkg into `packages/` (L-039) + `pnpm build` for `dist/` (L-040).
+
+### ⭐ NEXT TASK options (user-driven; pick with the user)
+1. **Ground-settings registry-restore parity gap** (concrete, same class as bloom).
+   Legacy restores ground slot paths / solid colour / texture from the registry at
+   startup (`src/main.cpp:7636-7644`: `ReadGroundSlotPath` / `ReadGroundSolidColor` /
+   `ReadGroundTexture`); the new-UI `HostWindow` restores **none** of it (only
+   recent-files + last mod). So a user's tuned ground may reset to defaults in the new UI.
+   Fix mirrors the bloom restore (HostWindow after Engine ctor; same `!useTestHost` gate
+   if any a11y golden captures ground values — check `dialog-*` goldens first).
+2. **Keep bug-testing the new UI** — the session's productive loop was: user launches the
+   faithful `--new-ui`, exercises a feature, reports what's off; agent root-causes via
+   host.log + CDP + faithful grabs and fixes. More arch-C parity gaps likely lurk.
+3. **Strategic:** the **LT-4→master cutover** (Phase 4) is still gated on arch-C trust —
+   the user still daily-drives legacy/arch-A (see `memory/project_daily_driving_legacy.md`).
+   These three fixes move that trust forward; not ready to cut over yet.
+
+### Verified baseline (run before changing anything)
+- From `web/`: `pnpm --filter @particle-editor/editor test` → **392 passed** (45 files).
+- `pnpm --filter @particle-editor/editor build` → clean (+`dist/`, needed for `--new-ui`).
+- `.sln` Debug + Release x64 via **PowerShell** (L-046); fresh worktree → NuGet (L-039).
+- `pnpm --filter @particle-editor/editor a11y` → **157 passed / 4 splitters** (L-033).
+  CDP slow/flaky → retry; check `127.0.0.1:9222` not `localhost`.
+
+---
+
 ## 2026-06-02 (session 9) — G11 + G7 + harness scoped-kill + new-UI review polish (role glyph, 3dp precision, link-group brackets/NT-6). NEXT: the **black line** on the Spawner panel's viewport edge (arch-C host-side seam)
 
 **`origin/lt-4` = `f501201`** (was `5d3aad4` at session start; **8 commits**, all
