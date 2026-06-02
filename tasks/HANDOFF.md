@@ -1,5 +1,90 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-02 (session 9) — G11 + G7 + harness scoped-kill + new-UI review polish (role glyph, 3dp precision, link-group brackets/NT-6). NEXT: the **black line** on the Spawner panel's viewport edge (arch-C host-side seam)
+
+**`origin/lt-4` = `f501201`** (was `5d3aad4` at session start; **8 commits**, all
+FF-pushed). Tree clean. **No `master` changes**. Verified: vitest **391** (was 390;
++1 link-group test), native a11y **157 passed / 4 splitters** (L-033 artifact),
+`.sln` Debug+Release x64 clean (the native G11/G7 work). dist rebuilt
+(composition). Long session — the headline for next time is the one thing I could
+**not** fix: the black line.
+
+### The 8 commits (newest first)
+- `f501201` **docs** — NT-6 shipped in ROADMAP + bracket-polish CHANGELOG + lesson L-047.
+- `44f9e81` **link-group bracket polish** — per-member stubs + name-hugging position + dedicated lanes (NT-6). `link-group-colors.ts` (+test) + `EmitterTree.tsx` (+test).
+- `930040d` **role-glyph wrap fix** — `grid-row: 1` pin (the `grid-column` reorder in `9e29d11` made the glyph wrap to row 2; L-047).
+- `d21b5e9` **3-decimal precision** — `decimals={3}` on the 8 `s`-unit fields to match legacy `%.3f`; updated 20 composition goldens by surgical value substitution.
+- `9e29d11` **role glyph between eye + name** — CSS-only (`grid-column`), DOM order preserved so goldens stay put.
+- `8e05c85` **G7** — transactional `AlphaCompositor::Resize` (build-locals-then-swap, rollback on alloc failure).
+- `4027e11` **fix(test)** — scoped the native a11y cleanup to `--test-host` so a parallel legacy editor survives (user runs the 0.2 build alongside; L-045).
+- `b14ca90` **G11** — WebView2 NavigationStarting/NewWindowRequested/PermissionRequested deny + WebMessage `get_Source` check (`HostWindow.cpp`).
+
+New lessons this session: **L-045** (scoped process kill), **L-046** (vitest⊥build
+concurrency + Git-Bash MSBuild), **L-047** (verify CSS reorders on BOTH axes;
+CSS-Grid sparse-placement row-bump).
+
+### ⭐ NEXT TASK — the black line (arch-C compositor seam, host-side)
+**Symptom (user-confirmed in a correct ~258 FPS arch-C launch, light theme):** a 1px
+**black** vertical line along the **Spawner panel's LEFT (viewport-facing) edge**.
+User confirmed it's **only that edge** — NOT all viewport edges, NOT the window edge.
+This is a real seam, NOT an L-033 misrender artifact.
+
+**RULED OUT this session (both fixes built into dist, user relaunched, line PERSISTED → reverted):**
+1. **Rounded-corner wedge.** Added `.panel-flush-left` to square the Spawner `.panel`'s
+   viewport-facing corners (mirrors `.panel-flush-right` on the left panel,
+   `components.css`). REVERTED — the Spawner's left corners sit against the opaque
+   splitter, not engine backing; cosmetic no-op.
+2. **React scene-rect rounding.** `ViewportSlot.tsx` `send()` computed
+   `x=round(left·dpr)` and `w=round(width·dpr)` independently → far edge `x+w` can land
+   1px short. Rewrote to round each EDGE from its absolute coord (`right=round((r.right−border)·dpr)`,
+   `w=right−x`). REVERTED — line persisted (note `SLOT_BORDER_PX=0`). So the host
+   re-derives/clamps the clip; the React dispatch is not the cause.
+
+**Browser-mode DOM inspection (key facts, arch-C-independent):**
+- **No dark DOM element** anywhere near the boundary (a thin-tall-near-right query returned `[]`).
+- Panel border = `rgb(220,220,220)` `#dcdcdc` (light grey, NOT black).
+- The `ce-splitter-v` between viewport (right edge x=578) and Spawner (left x=582) is a
+  4px gutter, `background: var(--bg)` = `#ECECEC` — **already painted opaque by a PRIOR
+  seam fix** (see the `[data-separator].ce-splitter` comment in `components.css:1173`:
+  *"a transparent splitter gutter next to the viewport revealed the black engine
+  backing — stark in light theme. Painting the gutter --bg hides the seam."*). So the
+  splitter is NOT the black line.
+⇒ The black line is **not** CSS/DOM. It's the engine's **black DComp backing** showing
+through a ~1px gap where the engine scene-rect **clip** doesn't meet the opaque DOM —
+**host-side** (arch-C compositing).
+
+**WHERE TO DIG (host-side, the React side is exhausted):**
+- `layout/scene-rect` dispatch path: React `ViewportSlot.tsx` →
+  `BridgeDispatcher` → **`LayoutBroker.cpp:286-288`** (`m_engine->SetSceneViewport(x,y,w,h)`
+  + `m_dcompCompositor->SetEngineVisualTransform(x,y,w,h)`).
+- **`Compositor.cpp:230-261`** `ApplyTransform`: `engineVisual->SetClip(D2D_RECT_F clip)`
+  where `clip = {x, y, x+w, y+h}` (float). Emits `[COMP-engine-transform] clip=(L,T,R,B)
+  (absolute host-client)` to `host.log`. **Prime suspects:** (a) the clip is float
+  `D2D_RECT_F` from integer device-px args — sub-pixel clip-edge behaviour; (b) the clip
+  right edge vs the WebView2 visual's left edge alignment (1px gap → backing shows);
+  (c) what visual sits BEHIND the engine at the seam and why it's black.
+- Also `Compositor.cpp:627-648` (root visual offset + clip) and the backing-color path.
+
+**HOW TO VERIFY (you can't trust agent screenshots — L-033):**
+- Mechanism: read `%LOCALAPPDATA%\AloParticleEditor\host.log` `[COMP-engine-transform]
+  clip=(L,T,R,B)` lines; compute the expected viewport-right device-px from the panel
+  layout and compare — is the clip's R 1px short of / past the panel boundary?
+- L-034 isolation: recolour each candidate layer (engine clear `engine/set/background`,
+  rear backing `host/backing-color`, root/engine visual clip) over CDP and ask the user
+  which recolour the line follows — the layer it follows is the source.
+- **Hand the on-screen confirm to the user** (arch-C, L-033); iterate via host.log +
+  their eyes. Don't claim it fixed from an agent screenshot.
+
+### Verified baseline (run before changing anything)
+- From `web/`: `pnpm --filter @particle-editor/editor test` → **391 passed** (45 files).
+- `pnpm --filter @particle-editor/editor build` → clean (+`dist/`, needed for `--new-ui`; L-040).
+- `.sln` Debug + Release x64 via **PowerShell** (L-046): fresh worktree → NuGet restore (L-039).
+- `pnpm --filter @particle-editor/editor a11y` → **157 passed / 4 splitters** (L-033).
+  (If CDP fails to come up, a stale `--test-host` may hold :9222 — scoped-kill it; the
+  cleanup spares the user's legacy editor.)
+
+---
+
 ## 2026-06-01 (session 8) — audit-P1 closed + verified; ground bugs fixed; G1 import shipped (reviewed); G10/G12; full backlog reconciliation. NEXT: G11 (WebView2 nav policy)
 
 **`origin/lt-4` = `685dbbd`** (was `76ff471` at session start; **9 commits**,
