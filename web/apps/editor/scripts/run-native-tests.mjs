@@ -154,12 +154,25 @@ async function probeCdp() {
 
 function killAny() {
   return new Promise((resolve) => {
-    const p = spawn("taskkill", ["/F", "/IM", "ParticleEditor.exe"], {
+    // Scope the cleanup to ONLY the test-host instances this harness spawns
+    // (ParticleEditor.exe --new-ui --test-host). A blanket
+    // `taskkill /F /IM ParticleEditor.exe` matches by image name, so it would
+    // also kill a legacy editor build the user is daily-driving in parallel —
+    // same exe name, different binary. Filter on the command line instead:
+    // the legacy build is never launched with --test-host, so it survives.
+    // Fails safe — if CommandLine is unreadable the -like is false and the
+    // process is left alone (worst case: a stale test-host, never the user's
+    // editor). PowerShell process management mirrors tests/helpers/uia.ts.
+    const cmd =
+      "Get-CimInstance Win32_Process -Filter \"Name='ParticleEditor.exe'\" | " +
+      "Where-Object { $_.CommandLine -like '*--test-host*' } | " +
+      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }";
+    const p = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", cmd], {
       stdio: "ignore",
       shell: false,
     });
     p.on("exit", () => resolve());
-    p.on("error", () => resolve()); // taskkill missing → nothing to clean
+    p.on("error", () => resolve()); // powershell missing → nothing to clean
   });
 }
 
