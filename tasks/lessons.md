@@ -3305,3 +3305,43 @@ use), so the restore immediately produced visible bloom.
   saved value — cheaper than per-run registry save/clear/restore in the harness.
 - **Parity gap is broader than bloom:** ground settings have the same missing restore.
   Worth a sweep of legacy's startup-restore block vs the host.
+
+---
+
+## L-050 — HTML5 drag-and-drop is silently dead under arch-C composition hosting (no HWND for the OS drag loop); build draggable UI on pointer events, not `draggable`/`onDragStart`
+
+**Rule.** Do NOT build draggable UI in the new editor on HTML5 drag-and-drop
+(`draggable` + `onDragStart`/`onDragOver`/`onDrop`/`dataTransfer`). Under the default
+arch-C path WebView2 is hosted as a **composition visual** (no child HWND), and HTML5
+DnD needs the OS drag loop (`DoDragDrop`) which needs an HWND — so `dragstart` never
+fires and the element "won't pick up at all." The failure is **silent** (no error, no
+console). The same surface works in a normal browser and in arch-A (HWND-hosted), so it
+passes vitest/jsdom and a casual `pnpm dev` check, then dies in the shipped composition
+build. Build drag on **pointer events** (`onPointerDown` + document-level
+`pointermove`/`pointerup`) instead — they deliver like clicks in every hosting mode (and
+on touch), and clicks already work in arch-C (selection), so pointer events do too.
+
+**The pattern that worked (emitter-tree reorder, 2026-06-02).**
+- Lift the validation to a **pure** function (`resolveDropIntent(source, target, …)`);
+  it has no event dependency, so it's unit-testable and reusable for any hovered target.
+- Parent owns a `startDrag(node, e)` controller: on `onPointerDown` it records the source
+  + start point and attaches `document` `pointermove`/`pointerup`/`pointercancel`. Past a
+  small threshold the drag goes "active"; the hovered row is found from the move event's
+  **target** via `closest("[data-emitter-id]")` (works in jsdom — fired events carry a
+  real target; `elementFromPoint` does NOT work in jsdom). On pointerup it dispatches the
+  same bridge call the DnD `onDrop` used.
+- **Swallow the trailing click**: a same-row pointerdown→move→pointerup synthesises a
+  click; a `draggedRef` set at drag-end (and checked+cleared in the row-click handler)
+  stops a drag from also re-selecting. Reset it at the next pointerdown so a stale flag
+  can't eat the next real click.
+- `stopPropagation` pointerdown on inner affordances (visibility toggle, rename input) so
+  a drag doesn't start from them.
+- Tests: jsdom needs the `PointerEvent` polyfill (already in `test-setup.ts`); fire
+  `pointerdown`(source) then `pointermove`/`pointerup`(target) — they bubble to the
+  controller's document listeners. The change is DOM-attribute-only (no ARIA) so a11y
+  goldens are unchanged.
+
+**Cross-reference.** [L-011](#l-011) (CSS effects can't span the engine compositing
+layer) is the same shape: a web capability that silently no-ops specifically under arch-C
+composition hosting. When something "works in the browser but not the new-UI build,"
+suspect a composition-hosting limitation before a logic bug.

@@ -16,6 +16,36 @@ Conventions:
 
 ## Changelog
 
+### Emitter-tree drag-to-reorder works under arch-C (pointer events replace HTML5 DnD)
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Dragging emitter rows in the tree to reorder roots or reparent a child works again in
+the new UI. Previously the row "wouldn't pick up at all" — the drag never started.
+
+**How we tackled it.** The reorder/reparent was built on **HTML5 drag-and-drop**
+(`draggable` + `onDragStart`/`onDragOver`/`onDrop`), which never initiates under arch-C
+composition hosting: HTML5 DnD needs the OS drag loop (`DoDragDrop`), which needs an HWND,
+but in composition hosting WebView2 is a composition *visual* with no HWND, so `dragstart`
+never fires. Rebuilt the drag on **pointer events** ([`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx)),
+which deliver like clicks in every hosting mode (and on touch). The validation/zone/bridge
+logic is unchanged — it was lifted into a pure `resolveDropIntent`; the parent now owns a
+`startDrag` controller that, on pointerdown, attaches `document` pointermove/up listeners,
+finds the hovered row from the move event's target (`[data-emitter-id]`), shows the drop
+indicator, and on pointerup dispatches the same `emitters/drop` (reorder/reparent). A
+`draggedRef` swallows the click synthesised after a same-row pointerup so a drag doesn't
+also re-select.
+
+**Issues encountered and resolutions.** This is the same class of arch-C gap as L-011
+(CSS effects can't span the engine layer) — HTML5-DnD is silently dead in composition
+hosting; the symptom is "nothing happens," not an error. Testing: jsdom's `PointerEvent`
+is polyfilled in `test-setup.ts`, so the specs fire `pointerdown`(source) →
+`pointermove`/`pointerup`(target); the move/up bubble to the controller's document
+listeners (no `elementFromPoint` needed — jsdom doesn't implement it). The change is
+DOM-attribute-only (no ARIA), so the emitter-tree a11y golden is unchanged.
+
+---
+
 ### Bloom settings restored from the registry in the new-UI host
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

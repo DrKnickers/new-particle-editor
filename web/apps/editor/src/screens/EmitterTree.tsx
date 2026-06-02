@@ -146,6 +146,65 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
 // in. `null` means no active drag-over.
 type DropIndicator = { targetId: number; zone: DropZone } | null;
 
+// Validated parameters for the `emitters/drop` bridge call — the output
+// of resolveDropIntent. `null` means the drop is refused.
+type DropParams =
+  | { mode: "reparent"; id: number; targetId: number; slot: "lifetime" | "death" }
+  | { mode: "reorder"; id: number; rootIndex: number };
+
+/** Find the parent node of `id` in the tree (null for a root / not found). */
+function findParentNode(
+  root: EmitterTreeNode,
+  id: number,
+): EmitterTreeNode | null {
+  for (const c of root.children) {
+    if (c.id === id) return root;
+    const hit = findParentNode(c, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Pure drop-intent resolution, shared by the pointer-drag controller.
+ *  Returns the validated `emitters/drop` params, or null when the drop is
+ *  refused:
+ *    - self-drop / cycle (target inside source's subtree) → refused
+ *    - middle third ("onto") → reparent under target (auto-pick slot;
+ *      refuse if both child slots are full or target is already the
+ *      source's parent)
+ *    - upper/lower third → reorder, only when BOTH source and target are
+ *      roots (gap semantics apply to the root list).
+ *  This was Batch B3's inline `resolveDropIntent`; lifted to a pure fn so
+ *  the pointer-drag controller (which replaced HTML5 DnD — dead under
+ *  arch-C composition hosting) can call it for any hovered target row. */
+function resolveDropIntent(
+  source: EmitterTreeNode,
+  target: EmitterTreeNode,
+  targetRootIdx: number,
+  zone: DropZone,
+  tree: EmitterTreeDto | null,
+  rootChildren: EmitterTreeNode[],
+): DropParams | null {
+  if (source.id === target.id) return null;
+  if (isDescendant(source, target.id)) return null;
+  if (zone === "onto") {
+    const slot = resolveReparentSlot(target);
+    if (slot === null) return null;
+    if (tree !== null) {
+      const parent = findParentNode(tree.root, source.id);
+      if (parent !== null && parent.id === target.id) return null;
+    }
+    return { mode: "reparent", id: source.id, targetId: target.id, slot };
+  }
+  const sourceIsRoot = rootChildren.some((c) => c.id === source.id);
+  if (!sourceIsRoot || target.role !== "root" || targetRootIdx === -1) return null;
+  return {
+    mode: "reorder",
+    id: source.id,
+    rootIndex: computeRootGapIndex(targetRootIdx, zone),
+  };
+}
+
 // Inline-rename state (Batch C). `editing.id` is the row currently in
 // rename mode; `editing.value` is the live input value. The original
 // name is captured at edit-start (`original`) so an empty-commit can
@@ -163,14 +222,12 @@ type RowProps = {
   orderedIds: number[];
   onRowClick: (id: number, mods: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => void;
   bridge: Bridge;
-  // Batch B3 — drag/drop wiring threaded from the parent.
+  // [pointer-drag] wiring from the parent. The parent owns the drag
+  // controller (startDrag); the row just initiates on pointerdown and
+  // reads draggingId / indicator for its visual state.
   draggingId: number | null;
-  draggingNode: EmitterTreeNode | null;
   indicator: DropIndicator;
-  setDraggingId: (id: number | null) => void;
-  setIndicator: (i: DropIndicator) => void;
-  rootChildren: EmitterTreeNode[];
-  tree: EmitterTreeDto | null;
+  startDrag: (node: EmitterTreeNode, e: React.PointerEvent) => void;
   // Batch C — inline rename. `editing.id === node.id` means this row
   // renders an `<input>` instead of the label span. `beginEdit` starts
   // a new rename session against this row; `setEditValue` updates the
@@ -214,8 +271,7 @@ function OccludingContextMenuContent({
 
 function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
-  draggingId, draggingNode, indicator, setDraggingId, setIndicator,
-  rootChildren, tree,
+  draggingId, indicator, startDrag,
   editing, beginEdit, setEditValue, commitEdit, cancelEdit,
 }: RowProps) {
   const { node, depth, siblings, indexInSiblings } = row;
@@ -380,153 +436,12 @@ function EmitterRow({
   //   - drop on a root row, upper third  → reorder above target root
   //   - drop on a root row, lower third  → reorder below target root
   //   - drop on any row,  middle third  → reparent under target
-  // Validation runs in onDragOver: we only call preventDefault when the
-  // drop would be valid, so invalid targets get the browser's
-  // native no-drop cursor automatically.
+  // The drag itself is driven by the parent's pointer-drag controller
+  // (startDrag, wired to this row's button below); the row only renders
+  // the drop indicator from `indicator` and initiates on pointerdown.
 
   const isThisRowIndicator = indicator?.targetId === node.id;
   const indicatorZone = isThisRowIndicator ? indicator!.zone : null;
-
-  const handleDragStart = (e: React.DragEvent<HTMLButtonElement>) => {
-    // Use a stable id-only payload — the React side tracks the dragged
-    // node via component state. jsdom strips dataTransfer in some test
-    // environments, so guard the setData call.
-    setDraggingId(node.id);
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      try {
-        e.dataTransfer.setData("text/plain", String(node.id));
-      } catch {
-        // jsdom may throw on setData; silently ignore so handler logic
-        // remains testable.
-      }
-    }
-  };
-
-  /** Resolve drop intent + validate. Returns null when the drop is
-   *  invalid (caller should NOT call preventDefault — browser then
-   *  shows the no-drop cursor). */
-  const resolveDropIntent = (
-    e: React.DragEvent<HTMLButtonElement>,
-  ): { zone: DropZone; valid: boolean } | null => {
-    if (draggingNode === null) return null;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const zone = computeDropZone(y, rect.height);
-
-    // Self-drop is always invalid (drop on the source row).
-    if (draggingNode.id === node.id) {
-      return { zone, valid: false };
-    }
-    // Descendant-of-source target is always invalid (cycle).
-    if (isDescendant(draggingNode, node.id)) {
-      return { zone, valid: false };
-    }
-    if (zone === "onto") {
-      // Reparent: need a free slot on the target. Both filled → refuse.
-      const slot = resolveReparentSlot(node);
-      if (slot === null) return { zone, valid: false };
-      // Refuse same-parent reparent — matches engine's slot-switching
-      // refusal. We check by walking the tree for the source's current
-      // parent and comparing to the target.
-      if (tree !== null) {
-        const findParent = (
-          n: EmitterTreeNode,
-          id: number,
-        ): EmitterTreeNode | null => {
-          for (const c of n.children) {
-            if (c.id === id) return n;
-            const hit = findParent(c, id);
-            if (hit) return hit;
-          }
-          return null;
-        };
-        const parent = findParent(tree.root, draggingNode.id);
-        if (parent !== null && parent.id === node.id) {
-          return { zone, valid: false };
-        }
-      }
-      return { zone, valid: true };
-    }
-    // Reorder: only valid when both source AND target are roots (gap
-    // semantics apply to the root list).
-    const sourceIsRoot = rootChildren.some((c) => c.id === draggingNode.id);
-    const targetIsRoot = node.role === "root";
-    if (!sourceIsRoot || !targetIsRoot) {
-      return { zone, valid: false };
-    }
-    return { zone, valid: true };
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
-    const intent = resolveDropIntent(e);
-    if (intent === null || !intent.valid) {
-      // Clear any indicator we had on this row (invalid drop suppresses
-      // visual feedback).
-      if (isThisRowIndicator) setIndicator(null);
-      return;
-    }
-    // Valid drop — preventDefault to allow drop and announce the move
-    // effect via dataTransfer.
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    if (!isThisRowIndicator || indicator!.zone !== intent.zone) {
-      setIndicator({ targetId: node.id, zone: intent.zone });
-    }
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLButtonElement>) => {
-    // DnD events bubble in strange ways: dragleave fires when the
-    // cursor crosses ANY child element boundary, not just the row's
-    // outer edge. Check `relatedTarget` (the element the cursor moved
-    // to) — if it's still inside this row, ignore. The cast is safe
-    // because relatedTarget is always either an Element or null.
-    const next = e.relatedTarget as Node | null;
-    if (next && e.currentTarget.contains(next)) {
-      return;
-    }
-    if (isThisRowIndicator) setIndicator(null);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    const intent = resolveDropIntent(e);
-    setIndicator(null);
-    setDraggingId(null);
-    if (intent === null || !intent.valid || draggingNode === null) return;
-    if (intent.zone === "onto") {
-      const slot = resolveReparentSlot(node);
-      if (slot === null) return;
-      void bridge.request({
-        kind: "emitters/drop",
-        params: {
-          mode: "reparent",
-          id: draggingNode.id,
-          targetId: node.id,
-          slot,
-        },
-      });
-      return;
-    }
-    // Reorder: compute the root-list gap index from the target's
-    // position in the rendered root list + the zone.
-    const targetRootIdx = rootChildren.findIndex((c) => c.id === node.id);
-    if (targetRootIdx === -1) return;
-    const rootIndex = computeRootGapIndex(targetRootIdx, intent.zone);
-    void bridge.request({
-      kind: "emitters/drop",
-      params: {
-        mode: "reorder",
-        id: draggingNode.id,
-        rootIndex,
-      },
-    });
-  };
-
-  const handleDragEnd = () => {
-    setDraggingId(null);
-    setIndicator(null);
-  };
 
   // Reparent target visual: tint the row + ring.
   const reparentTintClass = indicatorZone === "onto"
@@ -573,12 +488,7 @@ function EmitterRow({
         <ContextMenu.Trigger asChild>
           <button
             type="button"
-            draggable
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onDragEnd={handleDragEnd}
+            onPointerDown={(e) => startDrag(node, e)}
             onClick={(e) =>
               onRowClick(node.id, {
                 ctrlKey: e.ctrlKey,
@@ -634,6 +544,7 @@ function EmitterRow({
               role="button"
               tabIndex={0}
               data-testid={`emitter-vis-${node.id}`}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 void bridge.request({
@@ -692,6 +603,7 @@ function EmitterRow({
                   commitEdit();
                 }}
                 onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
                 className="min-w-0 flex-1 rounded border border-accent bg-bg px-1 py-0 text-sm text-text outline-none"
@@ -1054,6 +966,13 @@ export function EmitterTree({ bridge }: Props) {
   // and so rows can read the dragged node's subtree for cycle checks.
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [indicator, setIndicator] = useState<DropIndicator>(null);
+  // [pointer-drag] Set true when a real drag completes so the synthetic
+  // click that follows pointerup (when down+up land on the same row) does
+  // NOT also fire row selection. Reset on the next pointerdown and in
+  // handleRowClick. (B3's HTML5 DnD is replaced by pointer events because
+  // dragstart never fires under arch-C composition hosting — WebView2 is a
+  // composition visual with no HWND for the OS drag loop.)
+  const draggedRef = useRef(false);
 
   // Batch C — inline rename. Local component state because only the
   // tree owns both the focus target (each row's button) and the input
@@ -1182,6 +1101,9 @@ export function EmitterTree({ bridge }: Props) {
       id: number,
       mods: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
     ) => {
+      // Suppress the synthetic click that follows a pointer-drag's pointerup
+      // (down+up on the same row) so a drag doesn't also re-select the row.
+      if (draggedRef.current) { draggedRef.current = false; return; }
       const sel = useEmitterSelectionStore.getState();
       if (mods.shiftKey) {
         sel.range(id, orderedIds);
@@ -1204,12 +1126,80 @@ export function EmitterTree({ bridge }: Props) {
 
   const rootChildren = tree?.root.children ?? [];
 
-  // Resolve the dragged node from id + flat row list (avoids a second
-  // tree walk per render). null when no drag is in progress.
-  const draggingNode = useMemo(() => {
-    if (draggingId === null) return null;
-    return flatRows.find((r) => r.node.id === draggingId)?.node ?? null;
-  }, [draggingId, flatRows]);
+  // [pointer-drag] Pointer-based drag-to-reorder / -reparent. HTML5 DnD
+  // (Batch B3) never initiates under arch-C composition hosting (WebView2
+  // is a composition visual with no HWND for the OS drag loop), so the
+  // tree drag is driven by pointer events — they deliver like clicks in
+  // every hosting mode (and on touch). On pointerdown we arm a drag and
+  // attach document-level move/up listeners; once the pointer crosses a
+  // small threshold the drag goes "active" (dims the source, shows the
+  // drop indicator). The hovered row is found from the move event's
+  // target (its `[data-emitter-id]`); on pointerup the resolved
+  // `emitters/drop` is dispatched. Closures capture the tree snapshot at
+  // drag-start — safe because the tree doesn't mutate mid-gesture.
+  const startDrag = (source: EmitterTreeNode, e: React.PointerEvent) => {
+    if (e.button !== 0) return;               // primary button only
+    if (editingRef.current !== null) return;  // not while inline-renaming
+    draggedRef.current = false;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const curTree = tree;
+    const curRoots = rootChildren;
+    const curRows = flatRows;
+    let active = false;
+    let lastParams: DropParams | null = null;
+    const THRESHOLD = 4;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!active) {
+        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < THRESHOLD) {
+          return;
+        }
+        active = true;
+        setDraggingId(source.id);
+      }
+      const rowEl =
+        ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
+        null;
+      if (rowEl === null) {
+        lastParams = null;
+        setIndicator(null);
+        return;
+      }
+      const targetId = Number(rowEl.getAttribute("data-emitter-id"));
+      const target = curRows.find((r) => r.node.id === targetId)?.node ?? null;
+      if (target === null) {
+        lastParams = null;
+        setIndicator(null);
+        return;
+      }
+      const rect = rowEl.getBoundingClientRect();
+      const zone = computeDropZone(ev.clientY - rect.top, rect.height);
+      const targetRootIdx = curRoots.findIndex((c) => c.id === targetId);
+      const params = resolveDropIntent(source, target, targetRootIdx, zone, curTree, curRoots);
+      lastParams = params;
+      setIndicator(params !== null ? { targetId, zone } : null);
+    };
+
+    const finish = (commit: boolean) => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (!active) return;
+      setDraggingId(null);
+      setIndicator(null);
+      draggedRef.current = true; // swallow the trailing click
+      if (commit && lastParams !== null) {
+        void bridge.request({ kind: "emitters/drop", params: lastParams });
+      }
+    };
+    const onUp = () => finish(true);
+    const onCancel = () => finish(false);
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+  };
 
   // Bracket descriptors for the link-group gutter. One entry per group
   // with ≥2 members; each carries a dedicated lane + every member row
@@ -1425,12 +1415,8 @@ export function EmitterTree({ bridge }: Props) {
               onRowClick={handleRowClick}
               bridge={bridge}
               draggingId={draggingId}
-              draggingNode={draggingNode}
               indicator={indicator}
-              setDraggingId={setDraggingId}
-              setIndicator={setIndicator}
-              rootChildren={rootChildren}
-              tree={tree}
+              startDrag={startDrag}
               editing={editing}
               beginEdit={beginEdit}
               setEditValue={setEditValue}

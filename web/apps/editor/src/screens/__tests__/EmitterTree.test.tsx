@@ -4,7 +4,7 @@
 // emitters/select with the row's id.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, createEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Bridge, EmitterTreeDto } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
@@ -144,34 +144,25 @@ describe("EmitterTree", () => {
     });
   }
 
-  /** Dispatch a DragEvent on `target` with clientY + a stub
-   *  dataTransfer. Uses `createEvent` so we can attach the
-   *  non-default dataTransfer and reliably set clientY (jsdom's
-   *  DragEvent constructor doesn't always copy MouseEvent props in
-   *  every Node version). */
-  function dispatchDrag(
-    type: "dragStart" | "dragOver" | "drop" | "dragEnd" | "dragLeave",
-    target: HTMLElement,
+  /** Drive a pointer-based drag from `sourceBtn`, releasing over
+   *  `targetBtn` at `clientY` within the target's stubbed rect.
+   *
+   *  The drag is owned by the parent's pointer-drag controller, whose
+   *  move/up listeners live on `document`. pointermove/up dispatched on
+   *  the target bubble there, and the controller reads the move event's
+   *  target (its `[data-emitter-id]`) to find the hovered row. The
+   *  pointerdown is at clientY 0; the first move (clientY≠0) crosses the
+   *  drag threshold and resolves + stores the intent, which pointerup
+   *  commits. (HTML5 DnD was replaced by pointer events because dragstart
+   *  never fires under arch-C composition hosting.) */
+  function pointerDrag(
+    sourceBtn: HTMLElement,
+    targetBtn: HTMLElement,
     clientY: number,
   ) {
-    const ev = createEvent[type](target, { clientY, bubbles: true });
-    // Force clientY in case the synthetic event omits it.
-    Object.defineProperty(ev, "clientY", {
-      value: clientY,
-      configurable: true,
-    });
-    const store = new Map<string, string>();
-    Object.defineProperty(ev, "dataTransfer", {
-      value: {
-        effectAllowed: "none",
-        dropEffect: "none",
-        setData: (t: string, v: string) => { store.set(t, v); },
-        getData: (t: string) => store.get(t) ?? "",
-        types: [] as readonly string[],
-      },
-      configurable: true,
-    });
-    fireEvent(target, ev);
+    fireEvent.pointerDown(sourceBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(targetBtn, { button: 0, clientX: 0, clientY });
+    fireEvent.pointerUp(targetBtn, { button: 0, clientX: 0, clientY });
   }
 
   it("dropping in the upper third of a root fires emitters/drop reorder above", async () => {
@@ -187,9 +178,7 @@ describe("EmitterTree", () => {
     const sparksBtn = screen.getByText("Sparks").closest("button")!;
     stubRect(sparksBtn, 100, 30);  // y range [100, 130), thirds at 10
 
-    dispatchDrag("dragStart", flashBtn, 0);
-    dispatchDrag("dragOver",  sparksBtn, 103);  // y=3 within row → above
-    dispatchDrag("drop",      sparksBtn, 103);
+    pointerDrag(flashBtn, sparksBtn, 103);  // y=3 within row → reorder above
 
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     const dropCall = calls.find((c) => c.kind === "emitters/drop");
@@ -215,9 +204,7 @@ describe("EmitterTree", () => {
     const sparksBtn = screen.getByText("Sparks").closest("button")!;
     stubRect(sparksBtn, 100, 30);  // middle third is [10, 20)
 
-    dispatchDrag("dragStart", flashBtn, 0);
-    dispatchDrag("dragOver",  sparksBtn, 115);  // y=15 within row → onto
-    dispatchDrag("drop",      sparksBtn, 115);
+    pointerDrag(flashBtn, sparksBtn, 115);  // y=15 within row → reparent
 
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     const dropCall = calls.find((c) => c.kind === "emitters/drop");
@@ -228,6 +215,35 @@ describe("EmitterTree", () => {
       targetId: 3,
       slot: "death",
     });
+  });
+
+  it("a completed drag swallows the trailing click so the row isn't re-selected", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Sparks")).toBeInTheDocument();
+    });
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);
+
+    pointerDrag(flashBtn, sparksBtn, 103);  // a real (threshold-crossing) drag
+    (bridge.request as ReturnType<typeof vi.fn>).mockClear();
+
+    // In a browser, pointerup on the same element synthesises a click; that
+    // click must NOT also fire row selection (the draggedRef suppression).
+    fireEvent.click(flashBtn);
+    const selectCalls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .filter((c) => c.kind === "emitters/select");
+    expect(selectCalls).toHaveLength(0);
+
+    // A subsequent plain click selects normally (suppression is one-shot).
+    fireEvent.click(sparksBtn);
+    const selectAfter = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .filter((c) => c.kind === "emitters/select");
+    expect(selectAfter.length).toBeGreaterThan(0);
   });
 
   it("Shift+click on a downstream row selects the range from primary to clicked", async () => {
