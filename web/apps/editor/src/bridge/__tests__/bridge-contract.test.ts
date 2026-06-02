@@ -249,8 +249,9 @@ describe("MockBridge contract", () => {
   it("rejects unimplemented emitters/* requests (mutations) as not implemented", async () => {
     const b = new MockBridge();
     // emitters/list and emitters/select are implemented as of Screen 4
-    // Batch A. The other emitters/* kinds (update, import-from-file)
-    // remain Phase 3+ work.
+    // Batch A; emitters/import-from-file landed with audit-G1 (native
+    // handler + the emitter-import a11y spec). emitters/update remains
+    // Phase 3+ work and is the one asserted unimplemented here.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await expect(b.request({ kind: "emitters/update", params: { id: 0, patch: {} } } as any))
       .rejects.toThrow(/not implemented/);

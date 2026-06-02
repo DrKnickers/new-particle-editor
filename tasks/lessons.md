@@ -3062,3 +3062,34 @@ visual confirm was user-driven — agent can't see arch-C render).
 ("bundled textures apply, solid never switches") → the divergence pointed at the
 solid-specific `CreateSolidColorTexture` lock path, not the React handler (the React
 dispatch was browser-confirmed). One-line fix; user-confirmed working in `--new-ui`.
+
+## L-043 — New `BridgeDispatcher` mutation handlers must sit AFTER the `captureUndo` lambda (defined partway through `DispatchInternal`), not next to the read-only handler they're conceptually near
+
+**Trigger.** Adding an `emitters/*` handler that needs undo, placed next to a related
+read-only handler, fails to compile: `error C3861: 'captureUndo': identifier not
+found`. Yet other handlers in the same giant function call `captureUndo()` fine.
+
+**Why.** `BridgeDispatcher::DispatchInternal` is one ~3000-line function dispatching by
+`kind`. Its helpers are **local lambdas defined inline, not members**:
+`markDirty` is defined early ([BridgeDispatcher.cpp:861](../src/host/BridgeDispatcher.cpp:861)),
+but `captureUndo` is defined much later (~line 2501), right before the cluster of
+mutation handlers. A handler placed *above* the `captureUndo` definition (e.g. next to
+`emitters/preview-from-file` at ~2179) can see `markDirty` but **not** `captureUndo` —
+it's not yet in scope. The compile error is the only signal; there's no member named
+`captureUndo` to fall back on (`grep "void.*captureUndo"` returns nothing — it's a
+lambda, which is why a quick header check misleads).
+
+**How to apply.** Place any new mutation handler that needs `captureUndo` **with the
+other mutation handlers** (after the lambda's definition — near `emitters/duplicate` /
+`emitters/delete`), not next to the read-only sibling its `kind` resembles. When unsure
+whether a dispatcher helper is a member or a position-dependent local lambda, grep for
+`auto <name> = [` — if it's a lambda, ordering within the function matters.
+
+**Two adjacent notes from the same task (G1 import handler).** (1) The host is a
+**single binary** linking both the legacy UI (`src/UI/`, `main.cpp`) and `src/host/`,
+so handler code can call UI-layer helpers like `GenerateDuplicateName` that are already
+`extern`-declared in `BridgeDispatcher.cpp` — but keep *data-layer* methods
+(`ParticleSystem.cpp`) UI-free by injecting such helpers as `std::function` callbacks.
+(2) Response-shape drift: `emitters/list` returns its tree under **`root`** while
+`emitters/preview-from-file` uses **`tree`** — mind the field when writing specs that
+read both. Cross-reference [L-038](#l-038) (native logic gated by `pnpm a11y`).

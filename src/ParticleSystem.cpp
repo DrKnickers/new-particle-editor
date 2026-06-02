@@ -1173,6 +1173,93 @@ void ParticleSystem::ValidateEmitterGraph()
     }
 }
 
+size_t ParticleSystem::ImportEmittersFrom(
+    ParticleSystem& source,
+    const std::vector<size_t>& picks,
+    const std::function<std::string(const std::string&)>& makeUniqueName)
+{
+    if (picks.empty()) return 0;
+
+    // Pass 1: clone each pick as a root in THIS system; build the
+    // source→destination index map for Pass 2. A clone is a deep copy via
+    // the chunk serialiser in copy=true mode (strips runtime / link state).
+    std::map<size_t, size_t> srcToDest;
+    std::vector<Emitter*> destEmitters(picks.size(), NULL);
+    size_t imported = 0;
+    for (size_t i = 0; i < picks.size(); ++i)
+    {
+        size_t srcIdx = picks[i];
+        if (srcIdx >= source.getEmitters().size()) continue;
+        Emitter& srcEmit = source.getEmitter(srcIdx);
+
+        MemoryFile* mf = new MemoryFile;
+        Emitter* placed = NULL;
+        try
+        {
+            ChunkWriter w(mf);
+            srcEmit.copy(w);
+            mf->seek(0);
+            ChunkReader r(mf);
+            // Braced init avoids the most-vexing-parse on `Emitter clone(r);`.
+            Emitter clone{r};
+            clone.name = makeUniqueName(clone.name);
+            placed = addRootEmitter(clone);
+        }
+        catch (...)
+        {
+            placed = NULL;
+        }
+        mf->Release();
+
+        if (placed != NULL)
+        {
+            srcToDest[srcIdx] = placed->index;
+            destEmitters[i]   = placed;
+            ++imported;
+        }
+    }
+
+    // Pass 2: re-map spawn fields. Children whose source-index isn't in the
+    // picks set stay -1 (copy=true already cleared them).
+    for (size_t i = 0; i < picks.size(); ++i)
+    {
+        Emitter* dst = destEmitters[i];
+        if (dst == NULL) continue;
+        const Emitter& src = source.getEmitter(picks[i]);
+        auto rebind = [&](size_t srcChildIdx) -> size_t {
+            if (srcChildIdx == (size_t)-1) return (size_t)-1;
+            auto it = srcToDest.find(srcChildIdx);
+            return (it != srcToDest.end()) ? it->second : (size_t)-1;
+        };
+        dst->spawnDuringLife = rebind(src.spawnDuringLife);
+        dst->spawnOnDeath    = rebind(src.spawnOnDeath);
+    }
+
+    // Rebuild parent pointers + drop any self / duplicate-parent / cyclic link
+    // the re-map could have introduced. Pre-existing emitters revalidate
+    // harmlessly (their links are unchanged and already valid).
+    ValidateEmitterGraph();
+
+    // Pass 3: re-create source link groups. Bucket imports by source
+    // linkGroup; ≥2-member buckets get a fresh destination group. Single-
+    // member buckets arrive unlinked (copy=true stripped linkGroup).
+    std::map<uint32_t, std::vector<Emitter*>> byGroup;
+    for (size_t i = 0; i < picks.size(); ++i)
+    {
+        if (destEmitters[i] == NULL) continue;
+        uint32_t srcGroup = source.getEmitter(picks[i]).linkGroup;
+        if (srcGroup != 0)
+            byGroup[srcGroup].push_back(destEmitters[i]);
+    }
+    for (auto& kv : byGroup)
+    {
+        if (kv.second.size() >= 2)
+            CreateLinkGroup(*this, kv.second);
+    }
+
+    return imported;
+}
+
 ParticleSystem::Emitter* ParticleSystem::addRootEmitter(const ParticleSystem::Emitter& emitter)
 {
     Emitter* pEmitter = new Emitter(emitter);

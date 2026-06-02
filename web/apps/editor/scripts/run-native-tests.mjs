@@ -298,6 +298,7 @@ async function main() {
       "tests/emitter-tree.spec.ts",
       "tests/emitter-mutations.spec.ts",
       "tests/emitter-multi-mutations.spec.ts",
+      "tests/emitter-import.spec.ts",
       "tests/emitter-drag.spec.ts",
       "tests/emitter-keyboard.spec.ts",
       "tests/track-editor.spec.ts",

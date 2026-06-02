@@ -1998,7 +1998,7 @@ has its own checkbox above.
 - [x] Background picker — ✅ design complete (Task 2.3, browser-mode picker against MockBridge); refactored to ToolPanel shell in Batch 2
 - [x] Ground picker — ✅ shipped Batch 2 (Ground toolbar dropdown). **2026-06-01:** fixed the solid-colour picker (wide tile now opens a native `<input type="color">`, mirroring Background) + restored the ground-height field (NT-2 `Spinner` → `engine/set/ground-z`). [`GroundTexturePanel.tsx`](../web/apps/editor/src/screens/GroundTexturePanel.tsx)
 - [x] Bloom settings — ✅ shipped Batch 2 (View → Bloom Settings…)
-- [x] Import Emitters — ⚠️ component shipped Batch 4; **preview works** (`emitters/preview-from-file` IS implemented, [BridgeDispatcher.cpp:2179](../src/host/BridgeDispatcher.cpp:2179) — browse + see the source file's emitter tree), but the **import/OK step is missing**: `emitters/import-from-file` has **0 dispatcher hits** (verified 2026-06-01), so clicking "Import N selected" hits the not-implemented branch → inline error. This is audit **G1**; plan at [`tasks/post-audit-slot-g1-import-from-file.md`](post-audit-slot-g1-import-from-file.md).
+- [x] Import Emitters — ✅ **fully working** (2026-06-01). Preview (`emitters/preview-from-file`) + the import/OK step (`emitters/import-from-file`, audit **G1**) are both implemented; import clones the selected emitters via the shared `ParticleSystem::ImportEmittersFrom` core, atomic single undo. a11y `emitter-import.spec.ts` green.
 - [x] Rescale System — ✅ shipped Batch 1
 - [x] Rescale Emitter — ✅ shipped Screen 4 Batch B1 (right-click context menu → Rescale Emitter…)
 - [x] Increment Index — ✅ shipped Screen 4 Batch B1 (right-click context menu → Increment Index…)

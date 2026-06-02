@@ -326,7 +326,13 @@ These are real observations but too large for ad-hoc PRs; each deserves its own 
 
 A fifth audit (ChatGPT deep research, LT-4-focused) ran the same day. Where the other audits covered legacy C++ in `master`, this one targeted `src/host/` and `web/apps/editor/` — bridge dispatcher contract, WebView2 lifecycle, React keyboard plumbing. Findings below dedup against F1–F17 / N1–N8 above; everything listed here is **net new**. Severity is our local scale, not the audit's.
 
-### G1. `emitters/import-from-file` native handler missing — [lt-4] [P2]
+### G1. `emitters/import-from-file` native handler missing — [lt-4] [P2] — ✅ SHIPPED (2026-06-01, lt-4)
+
+> Implemented: shared data-layer core `ParticleSystem::ImportEmittersFrom` (extracted
+> from the legacy `ImportEmitters_Execute`) + the `emitters/import-from-file` bridge
+> handler ([BridgeDispatcher.cpp:2756](src/host/BridgeDispatcher.cpp:2756)). Test-first
+> via `emitter-import.spec.ts` (a11y); atomic single undo. Plan:
+> [tasks/post-audit-slot-g1-import-from-file.md](post-audit-slot-g1-import-from-file.md).
 
 **Site:** schema declares it ([web/packages/bridge-schema/src/index.ts:516](web/packages/bridge-schema/src/index.ts:516)); ImportEmittersDialog calls it ([web/apps/editor/src/screens/ImportEmittersDialog.tsx:138](web/apps/editor/src/screens/ImportEmittersDialog.tsx:138)); `BridgeDispatcher.cpp` grep for `"emitters/import-from-file"` returns 0 hits.
 

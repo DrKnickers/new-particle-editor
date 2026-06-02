@@ -6,6 +6,7 @@
 #include <set>
 #include <map>
 #include <cstdint>
+#include <functional>
 #include "ChunkFile.h"
 
 #include "files.h"
@@ -284,6 +285,20 @@ public:
     // recurse or double-free. Called from the ParticleSystem(IFile*) loader
     // (which also backs autosave restore) and the import-emitters helper.
     void ValidateEmitterGraph();
+
+    // Clone the picked emitters (indices into `source`) into THIS system as
+    // new roots: deep-copies each via the chunk serialiser (copy=true), re-maps
+    // spawn links among the picked set (links to non-picked emitters drop to
+    // -1), revalidates the merged graph via ValidateEmitterGraph (drops self /
+    // duplicate-parent / cyclic links and rebuilds parents), and recreates
+    // multi-member source link groups. `makeUniqueName` returns a collision-
+    // free name for a clone given its source name — injected so the data layer
+    // stays independent of the UI's GenerateDuplicateName. Returns the count
+    // imported. Shared by the legacy import dialog and the LT-4 bridge handler.
+    size_t ImportEmittersFrom(
+        ParticleSystem& source,
+        const std::vector<size_t>& picks,
+        const std::function<std::string(const std::string&)>& makeUniqueName);
 
     // Insert a copy of `source` directly after `reference` in m_emitters.
     // The new emitter becomes a root (parent=NULL, no spawn-children); existing

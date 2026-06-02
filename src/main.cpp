@@ -7249,85 +7249,16 @@ static void ImportEmitters_Execute(APPLICATION_INFO* info,
     if (info == NULL || info->particleSystem == NULL ||
         source == NULL || picks.empty()) return;
 
-    // Pass 1: clone each pick as a root in the destination. Build the
-    // source→destination index map for Pass 2.
-    map<size_t, size_t> srcToDest;
-    vector<ParticleSystem::Emitter*> destEmitters(picks.size(), NULL);
-    for (size_t i = 0; i < picks.size(); ++i)
-    {
-        size_t srcIdx = picks[i];
-        if (srcIdx >= source->getEmitters().size()) continue;
-        ParticleSystem::Emitter& srcEmit = source->getEmitter(srcIdx);
-
-        MemoryFile* mf = new MemoryFile;
-        ParticleSystem::Emitter* placed = NULL;
-        try
-        {
-            ChunkWriter w(mf);
-            srcEmit.copy(w);
-            mf->seek(0);
-            ChunkReader r(mf);
-            // Braced init avoids the most-vexing-parse on
-            // `Emitter clone(r);` which the parser would otherwise take as
-            // a function declaration of `clone(ChunkReader& r)`.
-            ParticleSystem::Emitter clone{r};
-            clone.name = GenerateDuplicateName(info->particleSystem, clone.name);
-            placed = info->particleSystem->addRootEmitter(clone);
-        }
-        catch (...)
-        {
-            placed = NULL;
-        }
-        mf->Release();
-
-        if (placed != NULL)
-        {
-            srcToDest[srcIdx] = placed->index;
-            destEmitters[i]   = placed;
-        }
-    }
-
-    // Pass 2: re-map spawn fields. Children whose source-index isn't in
-    // the picks set stay -1 (set by Emitter::copy's copy=true mode).
-    for (size_t i = 0; i < picks.size(); ++i)
-    {
-        ParticleSystem::Emitter* dst = destEmitters[i];
-        if (dst == NULL) continue;
-        const ParticleSystem::Emitter& src = source->getEmitter(picks[i]);
-        auto rebind = [&](size_t srcChildIdx) -> size_t {
-            if (srcChildIdx == (size_t)-1) return (size_t)-1;
-            auto it = srcToDest.find(srcChildIdx);
-            return (it != srcToDest.end()) ? it->second : (size_t)-1;
-        };
-        dst->spawnDuringLife = rebind(src.spawnDuringLife);
-        dst->spawnOnDeath    = rebind(src.spawnOnDeath);
-    }
-
-    // Rebuild parent pointers from the re-mapped spawn fields. Delegate to
-    // ValidateEmitterGraph (mirrors the ParticleSystem(IFile*) load path): it
-    // drops any self / duplicate-parent / cyclic spawn link the import could
-    // have introduced, then re-parents the whole system. The imported links
-    // only reference imported emitters, so pre-existing emitters are
-    // revalidated harmlessly (their links are unchanged and already valid).
-    info->particleSystem->ValidateEmitterGraph();
-
-    // Pass 3: re-create source link groups in destination. Bucket imports
-    // by source linkGroup; ≥2-member buckets get a fresh destination group
-    // via CreateLinkGroup. Single-member buckets arrive unlinked (the
-    // copy=true serialiser already stripped linkGroup).
-    map<uint32_t, vector<ParticleSystem::Emitter*>> byGroup;
-    for (size_t i = 0; i < picks.size(); ++i)
-    {
-        if (destEmitters[i] == NULL) continue;
-        uint32_t srcGroup = source->getEmitter(picks[i]).linkGroup;
-        if (srcGroup != 0)
-            byGroup[srcGroup].push_back(destEmitters[i]);
-    }
-    for (auto& kv : byGroup)
-    {
-        if (kv.second.size() >= 2)
-            CreateLinkGroup(*info->particleSystem, kv.second);
-    }
+    // The clone / spawn-rebind / graph-revalidate / link-group-recreate core
+    // now lives on the data layer (ParticleSystem::ImportEmittersFrom), shared
+    // with the LT-4 `emitters/import-from-file` bridge handler. The UI's
+    // unique-name generator is injected so the data layer stays UI-agnostic.
+    // Caller still owns undo + tree refresh.
+    info->particleSystem->ImportEmittersFrom(
+        *source, picks,
+        [info](const std::string& name) {
+            return GenerateDuplicateName(info->particleSystem, name);
+        });
 }
 
 static INT_PTR CALLBACK ImportEmittersDialogProc(HWND hDlg, UINT msg,

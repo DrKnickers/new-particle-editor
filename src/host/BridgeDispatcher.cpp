@@ -2753,6 +2753,67 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // m_instances (a direct copy-construct would shallow-copy that
     // std::set and double-free on later deletion). The duplicate
     // becomes a root via `insertEmitterAfter`.
+    // -------- emitters/import-from-file (audit G1) ------------------
+    //
+    // Clone the `selected` source emitters from another `.alo` into the
+    // live system as new roots, via the shared data-layer core
+    // ParticleSystem::ImportEmittersFrom (the same logic the legacy import
+    // dialog uses). Atomic single undo; emits the tree-changed event.
+    // Placed after the captureUndo lambda (defined above) with the other
+    // emitter-mutation handlers.
+    if (kind == "emitters/import-from-file")
+    {
+        if (!m_pParticleSystem || !*m_pParticleSystem)
+        {
+            sendOk(json{{"ok", false}, {"error", "no particle system bound"}});
+            return res;
+        }
+        std::string path8 = params.value("path", std::string{});
+        if (path8.empty())
+        {
+            sendOk(json{{"ok", false}, {"error", "missing path"}});
+            return res;
+        }
+        std::vector<size_t> picks;
+        if (params.contains("selected") && params["selected"].is_array())
+        {
+            for (const auto& v : params["selected"])
+            {
+                if (!v.is_number()) continue;
+                long long n = v.get<long long>();
+                if (n >= 0) picks.push_back(static_cast<size_t>(n));
+            }
+        }
+        if (picks.empty())
+        {
+            sendOk(json{{"ok", false}, {"error", "no emitters selected"}});
+            return res;
+        }
+        std::wstring path = Utf8ToWide(path8);
+        std::string err;
+        std::unique_ptr<ParticleSystem> tmp = LoadParticleSystem(path, &err);
+        if (!tmp)
+        {
+            sendOk(json{
+                {"ok",    false},
+                {"error", err.empty() ? std::string("could not load file") : err},
+            });
+            return res;
+        }
+        // Snapshot BEFORE mutating so the whole import is one undo unit and a
+        // failed load never leaves a stray undo entry.
+        captureUndo();
+        ParticleSystem* sys = m_pParticleSystem->get();
+        size_t n = sys->ImportEmittersFrom(
+            *tmp, picks,
+            [sys](const std::string& nm) { return GenerateDuplicateName(sys, nm); });
+        sendOk(json{{"ok", true}, {"imported", static_cast<int>(n)}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     if (kind == "emitters/duplicate")
     {
         int id = params.value("id", -1);

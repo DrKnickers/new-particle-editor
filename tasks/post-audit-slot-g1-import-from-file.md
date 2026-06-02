@@ -1,5 +1,13 @@
 # G1 — `emitters/import-from-file` native handler (LT-4)
 
+> **✅ SHIPPED 2026-06-01 (lt-4).** Implemented as planned: shared
+> `ParticleSystem::ImportEmittersFrom` + the bridge handler + legacy delegate, all
+> exactly the "keep legacy behaviour" shape. Test-first via `emitter-import.spec.ts`
+> (a11y, real host) incl. an atomic-undo assertion. Verified: a11y 155 passed (only
+> the 4 splitters L-033 artifacts fail), vitest 386, Debug+Release clean. The plan
+> below is retained as the design record. **Open follow-up:** a `--legacy-ui` import
+> regression spot-check (the refactor delegates to the same tested core, so low risk).
+
 Audit finding **G1** ([post-audit-followups.md](post-audit-followups.md)). Deferred
 from the Slot-5 bridge-contract PR ([post-audit-slot5-lt4-bridge-contract.md](post-audit-slot5-lt4-bridge-contract.md))
 pending the design questions below — all now **answered by the working legacy

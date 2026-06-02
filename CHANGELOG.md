@@ -16,6 +16,44 @@ Conventions:
 
 ## Changelog
 
+### Import Emitters now works in the new UI — the native `emitters/import-from-file` handler (audit G1)
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The `--new-ui` **Import Emitters** dialog's "Import N selected" button now works.
+Previously the dialog could browse a `.alo` and preview its emitter tree, but clicking
+import hit the dispatcher's not-implemented branch and surfaced an inline error (audit
+finding **G1**). Now the selected emitters are cloned into the open system as new
+roots — with parent/child links remapped among the picked set, cyclic / multi-parent
+links dropped, multi-member link groups recreated, the document marked dirty, and the
+whole import reverted by a single undo.
+
+**How we tackled it.** The proven legacy import core (`ImportEmitters_Execute` in
+[`main.cpp`](src/main.cpp:7245)) was extracted to a shared data-layer method
+[`ParticleSystem::ImportEmittersFrom`](src/ParticleSystem.cpp:1176) — deep-copy each
+pick via the chunk serialiser, re-map spawn fields, `ValidateEmitterGraph` (audit-F4),
+recreate link groups. It stays UI-independent by taking the unique-name generator as a
+`std::function` callback (so `ParticleSystem.cpp` never references the UI's
+`GenerateDuplicateName`). Both the legacy dialog and the new
+[`emitters/import-from-file` handler](src/host/BridgeDispatcher.cpp:2756) now call it;
+the handler mirrors `emitters/duplicate` (pre-mutation `captureUndo`, then `markDirty`
++ `EmitEmittersTreeChanged`). Keeps legacy behaviour exactly — imports land as roots,
+links to non-picked emitters drop, IDs renumber on import.
+
+**Issues encountered and resolutions.** Built test-first: a new
+[`emitter-import.spec.ts`](web/apps/editor/tests/emitter-import.spec.ts) a11y spec
+drives the real host over CDP (preview → import every source index → assert the live
+emitter count grows by exactly that many → undo restores it). Two gotchas surfaced
+during the red→green: (1) the `captureUndo` helper is a lambda defined *partway through*
+`DispatchInternal`, so the handler had to sit **after** its definition with the other
+mutation handlers, not next to `preview-from-file` — see [`tasks/lessons.md` L-043](tasks/lessons.md);
+(2) `emitters/list` returns its tree under `root` while `preview-from-file` uses `tree`
+(a pre-existing response-shape inconsistency the test had to account for). Verified:
+a11y 155 passed (only the 4 known `splitters` L-033 artifacts fail), vitest 386,
+Debug+Release clean.
+
+---
+
 ### New-UI ground controls — solid-colour ground works end-to-end, and the ground-height field is back
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
