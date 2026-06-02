@@ -88,6 +88,33 @@ constexpr wchar_t kVirtualHostName[]         = L"app.local";
 constexpr INTERNET_PORT kDevServerPort       = 5174;
 constexpr UINT_PTR    kStatsTimerId          = 0x100;  // 4 Hz stats broadcast
 
+// Post-audit G11: WebView2 origin allow-list. The host must trust only the
+// page it deliberately loads, not "whatever is currently navigated". Three
+// origins are legitimate:
+//   - https://app.local/     prod: the SetVirtualHostNameToFolderMapping
+//                            origin (kVirtualHostName) serving the bundled
+//                            web/apps/editor/dist.
+//   - http://localhost:5174/ dev: the Vite HMR server (kDevServerPort), only
+//                            when --dev-ui is active.
+//   - about:                 WebView2's own about:blank initial navigation.
+// The trailing '/' on the two host prefixes is load-bearing: it stops a
+// lookalike like https://app.local.evil.test/ from slipping through. Scheme
+// and host compare case-insensitively per RFC 3986, hence _wcsnicmp. Used by
+// add_NavigationStarting (cancel off-origin nav) and the WebMessageReceived
+// handler (drop messages from an untrusted document source).
+bool IsApprovedWebViewOrigin(PCWSTR uri, bool devUi)
+{
+    if (!uri) return false;
+    const auto hasPrefix = [uri](PCWSTR prefix) -> bool
+    {
+        return _wcsnicmp(uri, prefix, wcslen(prefix)) == 0;
+    };
+    if (hasPrefix(L"https://app.local/")) return true;
+    if (hasPrefix(L"about:"))             return true;
+    if (devUi && hasPrefix(L"http://localhost:5174/")) return true;
+    return false;
+}
+
 // FPSMeasurer — ring-buffer of the last 32 frame timestamps. Originally
 // ported from the legacy src/main.cpp `FPSMeasurer` (lines 56-99), but
 // FD10 swapped GetTickCount() for QueryPerformanceCounter so the math
@@ -360,6 +387,15 @@ struct HostWindowImpl
     // today by webView.Reset(), but the explicit-unsubscribe pattern
     // mirrors accelKeyTok above and is materially safer.
     EventRegistrationToken          webMessageTok = {};
+    // Post-audit G11: navigation / new-window / permission policy tokens.
+    // Registered alongside webMessageTok in InitWebView2 and removed in
+    // WM_DESTROY (mirroring the G5 webMessageTok lifecycle). The handlers
+    // enforce the IsApprovedWebViewOrigin allow-list (cancel off-origin
+    // top-level navigation), deny all popups, and deny every permission
+    // request — defence-in-depth against a redirected/compromised renderer.
+    EventRegistrationToken          navStartingTok = {};
+    EventRegistrationToken          newWindowTok   = {};
+    EventRegistrationToken          permissionTok  = {};
     // Post-audit F10: TME_LEAVE arming state. WebView2 needs a
     // COREWEBVIEW2_MOUSE_EVENT_KIND_MOUSE_LEAVE input when the pointer
     // exits the host HWND so CSS :hover / cursor state clears. Re-arm
@@ -1220,6 +1256,24 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
             [this](ICoreWebView2*,
                    ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
             {
+                // Post-audit G11: reject messages whose originating document
+                // isn't an approved origin. Belt-and-suspenders with the
+                // NavigationStarting cancel — if a frame ever loaded an
+                // off-origin document, its postMessage must not reach the
+                // native bridge.
+                LPWSTR src = nullptr;
+                if (SUCCEEDED(args->get_Source(&src)) && src)
+                {
+                    const bool approved = IsApprovedWebViewOrigin(src, useDevUi);
+                    if (!approved)
+                    {
+                        Log("[host] G11: dropped WebMessage from untrusted "
+                            "source %ls\n", src);
+                        CoTaskMemFree(src);
+                        return S_OK;
+                    }
+                    CoTaskMemFree(src);
+                }
                 LPWSTR raw = nullptr;
                 HRESULT hr1 = args->TryGetWebMessageAsString(&raw);
                 if (SUCCEEDED(hr1) && raw)
@@ -1251,6 +1305,55 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
                 }
                 return S_OK;
             }).Get(), &webMessageTok);
+
+    // Post-audit G11: navigation / new-window / permission policy. Registered
+    // BEFORE the Navigate() call below so the very first (legitimate) load is
+    // already subject to the allow-list. The app's own target —
+    // https://app.local/index.html (prod) or http://localhost:5174/ (dev) —
+    // is approved by IsApprovedWebViewOrigin, so its initial navigation is
+    // NOT cancelled; only off-origin navigations are.
+    webView->add_NavigationStarting(
+        Callback<ICoreWebView2NavigationStartingEventHandler>(
+            [this](ICoreWebView2*,
+                   ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT
+            {
+                LPWSTR uri = nullptr;
+                if (SUCCEEDED(args->get_Uri(&uri)) && uri)
+                {
+                    if (!IsApprovedWebViewOrigin(uri, useDevUi))
+                    {
+                        Log("[host] G11: cancelled navigation to %ls\n", uri);
+                        args->put_Cancel(TRUE);
+                    }
+                    CoTaskMemFree(uri);
+                }
+                return S_OK;
+            }).Get(), &navStartingTok);
+
+    // Deny all popups: the editor is a single-window app, so any window.open /
+    // target=_blank is unwanted. put_Handled(TRUE) tells WebView2 we took
+    // ownership; by creating no window the request is effectively dropped.
+    webView->add_NewWindowRequested(
+        Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+            [this](ICoreWebView2*,
+                   ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT
+            {
+                Log("[host] G11: denied new-window request\n");
+                args->put_Handled(TRUE);
+                return S_OK;
+            }).Get(), &newWindowTok);
+
+    // Deny every permission request (geolocation, camera, mic, clipboard,
+    // notifications, …): the editor needs none of them.
+    webView->add_PermissionRequested(
+        Callback<ICoreWebView2PermissionRequestedEventHandler>(
+            [this](ICoreWebView2*,
+                   ICoreWebView2PermissionRequestedEventArgs* args) -> HRESULT
+            {
+                Log("[host] G11: denied permission request\n");
+                args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                return S_OK;
+            }).Get(), &permissionTok);
 
     // [MT-11] L-015: The WebResourceRequested route was
     // tried mid-spike and abandoned because
@@ -2020,6 +2123,27 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             webView->remove_WebMessageReceived(webMessageTok);
             webMessageTok = {};
+        }
+        // Post-audit G11: unsubscribe the nav/new-window/permission handlers
+        // before webView teardown, same rationale as the G5 removal above
+        // (the lambdas capture `this`).
+        if (webView)
+        {
+            if (navStartingTok.value != 0)
+            {
+                webView->remove_NavigationStarting(navStartingTok);
+                navStartingTok = {};
+            }
+            if (newWindowTok.value != 0)
+            {
+                webView->remove_NewWindowRequested(newWindowTok);
+                newWindowTok = {};
+            }
+            if (permissionTok.value != 0)
+            {
+                webView->remove_PermissionRequested(permissionTok);
+                permissionTok = {};
+            }
         }
         if (webController)
         {

@@ -39,16 +39,15 @@ loop, session 8) · **`G12`** (NativeBridge leak, session 8) · `NT-5` (link-gro
 demotion) · `F10` (TME_LEAVE/WM_MOUSELEAVE) · `G2` (json::exception catches) ·
 `G4` (JSON error envelope) · `G5` (WebMessageReceived token unsubscribe) ·
 `G6` (MediaQueryList removeEventListener) · `G8` (class-brush cleanup) ·
-`F13` (IFile `Release()` on the FileManager path).
+`F13` (IFile `Release()` on the FileManager path) ·
+**`G11`** (WebView2 nav/new-window/permission policy + WebMessage source check,
+session 9 — `IsApprovedWebViewOrigin` allow-list; a11y 157/4 unchanged).
 
 **◻️ Moot / obsoleted:** `F11` — the env-var dual-toggle it described was retired by
 **MT-12** (single `ALO_HOSTING_MODE` now); the bad combination can't occur.
 `F7` — fixed on `lt-4` long ago; closes on the master merge.
 
 **🔶 Genuinely OPEN on `lt-4`** (verified not-yet-done):
-- **`G11`** — WebView2 has no NavigationStarting / NewWindowRequested / PermissionRequested
-  policy + no WebMessage source check (P3 hardening; ~30–40 LoC; carries app-loading
-  risk → do as a focused change with a11y verification).
 - **`G7`** — `AlphaCompositor::Resize` releases old resources before rebuild, no
   transactional swap/rollback (P3 latent; critical-path restructure).
 - **`F9`** — `ParticleEditor.vcxproj:267` still hardcodes `10.0.26100.0` include paths

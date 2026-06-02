@@ -3131,3 +3131,62 @@ were live correctness bugs, but it caught the silent-failure UX defect and the
 count-blind test. Both fixed + re-verified (a11y 157, vitest 386, builds clean) before
 the change landed. Cross-reference [L-037](#l-037) (chokepoint side effects),
 [L-038](#l-038).
+
+## L-045 — The native test harness's cleanup `taskkill /F /IM ParticleEditor.exe` is image-name-wide; it kills a legacy editor build the user is daily-driving in parallel. Scope process cleanup to the `--test-host` command line, never the bare image name
+
+**Rule.** Any cleanup that kills a process by image name (`taskkill /IM X.exe`,
+`Stop-Process -Name X`) hits **every** process with that name, regardless of
+binary path or how it was launched. The user daily-drives a legacy `0.2`
+`ParticleEditor.exe` (a different binary at
+`C:\Users\…\Downloads\ParticleEditor-v0.2.0-x64\`) while the dev/new-UI work
+proceeds. The a11y harness (`web/apps/editor/scripts/run-native-tests.mjs`,
+`killAny()`) called `taskkill /F /IM ParticleEditor.exe` before launch, after the
+run, on CDP-failure, and on throw — so **every** `pnpm a11y` invocation nuked the
+user's parallel editor.
+
+**Fix.** Filter on the command line, which distinguishes the two binaries: the
+harness always launches with `--new-ui --test-host`, the legacy editor never has
+`--test-host`. `taskkill` can't filter by command line, so use CIM:
+```
+Get-CimInstance Win32_Process -Filter "Name='ParticleEditor.exe'" |
+  Where-Object { $_.CommandLine -like '*--test-host*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+Fails safe: an unreadable `CommandLine` (`-like` false) leaves the process alone,
+so the worst case is a leftover test-host, never the user's editor. The
+PowerShell-process-management pattern already exists in `tests/helpers/uia.ts`.
+
+**Verification that matters here.** A dry-run of the filter against the user's
+*live* legacy editor (it returned empty) plus a controlled launch of a no-arg
+decoy + a `--test-host` instance (decoy survived, test-host killed) — don't
+assert "scoped" from code reading alone; prove it against a real no-arg instance.
+
+**Source incident (2026-06-01, session 8, G11).** User: "is there any way you can
+stop closing the legacy 0.2 editor when testing? i want to work on things in
+parallel." The blanket `taskkill` was the culprit; scoped to `--test-host` and
+proven with the controlled decoy test. Cross-reference [L-031](#l-031)
+(native runs are single-instance + fixed-port) and [L-038](#l-038) (the a11y
+suite is the host-logic gate).
+
+## L-046 — Two Windows-specific test/build-environment gotchas: (1) never run `vitest run` and `vite build` of the same workspace concurrently; (2) drive MSBuild through PowerShell, not Git-Bash
+
+**Both bit during the G11 baseline pass and produced misleading green/failure
+signals; both are environment artifacts, not code.**
+
+**1. vitest ⊥ vite build concurrency.** Running `pnpm …editor test` and
+`pnpm …editor build` as parallel background jobs made them contend on the shared
+`node_modules/.vite` transform cache. The symptom was **31 test files "failing"**
+with bogus Vite transform/parse errors on ordinary imports
+(`import { Square, X } from "lucide-react"`), plus an absurd `environment 86.73s`
+in the timing line. Run alone → 45 files / 390 passed, clean. Lesson: vite-backed
+test and build steps are **not** safely parallel in one workspace; serialise them.
+
+**2. Git-Bash mangles MSBuild `/switch` args.** Invoking
+`MSBuild.exe … /p:Configuration=Debug /m` via the **Bash** tool POSIX-path-
+translates the switches: `/p:Configuration=Debug` → a path, `/nologo` →
+`C:/Program Files/Git/nologo`, so MSBuild dies with `MSB1008: Only one project
+can be specified`. Worse, a `… | tail` pipe masks the failure as **exit 0**.
+Always run MSBuild via the **PowerShell** tool with the `&` call operator
+(`& "…\MSBuild.exe" "…\X.sln" /p:Configuration=Debug /p:Platform=x64 …`); the
+switches pass verbatim. Cross-reference [L-039](#l-039) (fresh-worktree NuGet
+restore) and [L-040](#l-040) (dist build before `--new-ui`).

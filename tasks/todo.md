@@ -1,113 +1,127 @@
-# Fix two ground-control bugs in the new UI (GroundTexturePanel)
+# G11 — WebView2 navigation / new-window / permission policy + WebMessage source check
+
+`[lt-4]` `[P3 hardening]`. Plan source: `tasks/post-audit-slot6-lt4-host-polish.md`
+(G11 was deferred out of slot 6; this is its focused pass). Branch: `lt-4`
+(FF-push on land; **never `master` without explicit OK**).
 
 ## 1. Goal + scope
-Two user-reported bugs in the `--new-ui` ground controls:
-- **Bug 1** — the solid-colour ground option doesn't raise a colour picker.
-- **Bug 2** — there's no ground-height parameter to change.
 
-**Root causes (verified, Phase-1 debugging):**
-- Bug 1 is **not** a React logic bug — the Radix `ColorButton` picker opens
-  fine in browser mode. It's a discoverability defect (the prominent wide
-  "Solid colour" tile only *selects* the slot; the real picker is a small
-  secondary swatch below) **and/or** an arch-C native occlusion of the Radix
-  DOM popover (unverifiable by agent, L-033). `BackgroundPicker` avoids both by
-  using a **native `<input type="color">`** (an OS dialog — always on top, no
-  occlusion) triggered by its wide tile. User confirmed Background works natively.
-- Bug 2: engine `SetGroundZ` + bridge `engine/set/ground-z` + dispatcher handler
-  all exist; the legacy NT-2 (#45) control was **never ported** to React. No
-  component reads/writes `groundZ`.
+**Goal.** The WebView2 host currently trusts whatever page is loaded and whoever
+posts a WebMessage. After this change the host enforces an origin allow-list:
+it cancels any top-level navigation outside the approved set, denies all popups
+and permission requests, and ignores WebMessages whose source origin isn't
+approved. Defence-in-depth against a compromised/redirected renderer.
 
-**In:** mirror Background's solid-colour pattern in `GroundTexturePanelBody`
-(wide tile → native colour input; remove the secondary Radix `ColorButton`);
-add a ground-height `Spinner` to the same panel (user chose "inside the Ground
-dropdown").
-**Out:** native visual verification (user-driven, L-033 — agent can't see arch-C);
-auditing/occlusion-fixing other `ColorButton` usages (Lighting etc. — separate,
-only if confirmed broken natively); ground-Z persistence (legacy is session-only —
-match that).
+**In:**
+- `add_NavigationStarting` → `put_Cancel(TRUE)` for non-approved URIs.
+- `add_NewWindowRequested` → `put_Handled(TRUE)`, create nothing (deny popups).
+- `add_PermissionRequested` → `put_State(..._DENY)`.
+- `get_Source` check inside the existing `add_WebMessageReceived` lambda.
+- 3 new `EventRegistrationToken` members + `remove_*` in WM_DESTROY.
+- A single shared origin helper `IsApprovedWebViewOrigin(uri, devUi)`.
+
+**Out (with reasons):**
+- G7 (`AlphaCompositor::Resize` transactional rebuild) — separate open item.
+- F9 (vcxproj SDK macro-ize) — needs a 2nd-SDK CI matrix, can't verify here.
+- Tightening *sub-resource* loads — `NavigationStarting` only fires for
+  documents/iframes; assets aren't navigations, by design.
+- `master` forward-port — lt-4 work only; reconcile at LT-4→master cutover.
 
 ## 2. What the codebase already gives us
-- `BackgroundPicker.tsx:100-178` — the proven wide-tile→`colorInputRef.click()`→
-  hidden `<input type="color">` pattern. Mirror it verbatim.
-- `Spinner` primitive (`primitives/Spinner.tsx`) — `value/onChange/min/max/step/
-  decimals/disabled/density/aria-label`; commit-on-blur, no bridge spam.
-- `colorref` helpers — `hexToColorref(hex)`, `colorrefToHex(c)` (Background uses
-  the same for encoding; COLORREF channel order proven correct).
-- Bridge handlers already live: `engine/set/ground-solid-color` (BridgeDispatcher
-  :1202), `engine/set/ground-z` (:1184); mock handles both (mock.ts:215,223).
-- Legacy ground-Z spinner spec (main.cpp:2157-2165): float, **−100…100, step 0.1**,
-  default 0, **enabled only when ground shown** (lockstep with the toggle).
 
-## 3. Approach
-Edit `web/apps/editor/src/screens/GroundTexturePanel.tsx` (`GroundTexturePanelBody`):
-- Imports: drop `ColorButton` + `RgbColor` + the `hexToRgbColor/rgbColorToHex`
-  helpers; add `useRef` + `Spinner`.
-- Add `colorInputRef`, `groundZ = snapshot?.groundZ ?? 0`.
-- `handleSolidColorChange(hex: string)` (was RgbColor) → `engine/set/ground-solid-color`
-  with `hexToColorref(hex)`; `handleSolidColorClick()` selects slot + `.click()`s
-  the input; `handleGroundZChange(z)` → `engine/set/ground-z`.
-- JSX: wide tile `onClick={handleSolidColorClick}`; replace the `ColorButton` block
-  with a hidden `<input type="color" ref={colorInputRef} value={solidHex} …>`; add
-  a "Height" `Spinner` row (−100..100, step 0.1, dp 1, `disabled={!groundOn}`) under
-  the Show-ground toggle.
-- Update `GroundTexturePanel.test.tsx`: height field → `engine/set/ground-z`;
-  solid-colour input change → `engine/set/ground-solid-color`; tile click selects
-  slot 4.
+- **G5 pattern to mirror exactly** — `webMessageTok` member at
+  `HostWindow.cpp:362`; stored in `add_WebMessageReceived` at `:1253`;
+  `remove_WebMessageReceived` in WM_DESTROY at `:2019`. The 3 new tokens
+  follow this lifecycle 1:1.
+- **`useDevUi`** is a member (`:539`, set in ctor `:568`) — available in
+  `InitWebView2` where handlers are registered.
+- **`kVirtualHostName = L"app.local"`** (`:87`) — the prod origin host.
+- **Navigate targets** — `https://app.local/index.html` (prod, `:1271`) /
+  `http://localhost:5174/` (dev, `:1267`). Handlers must register BEFORE these.
+- **Existing WebMessage lambda** at `:1218-1253` — the `get_Source` guard
+  drops in at the top of the lambda body.
+
+## 3. Architecture / implementation approach
+
+```cpp
+// File-scope helper (near kVirtualHostName / other host constants).
+// about: covers WebView2's own about:blank init nav. localhost only in dev.
+static bool IsApprovedWebViewOrigin(PCWSTR uri, bool devUi);
+```
+- `https://app.local/` prefix → allowed always (prod, virtual-host mapped dist).
+- `http://localhost:5174/` prefix → allowed only when `devUi`.
+- `about:` prefix → allowed (init may navigate `about:blank`).
+- anything else → rejected.
+
+Three handlers registered adjacent to `add_WebMessageReceived` (~`:1218`),
+storing into 3 new members `navStartingTok`, `newWindowTok`, `permissionTok`
+(beside `webMessageTok` at `:362`). `remove_*` each in WM_DESTROY beside the
+G5 removal (~`:2019`). WebMessage lambda gains a `get_Source` → helper check
+that logs + early-returns `S_OK` on a non-approved source.
 
 ## 4. Risks + mitigations
-1. **Losing the rich palette picker (basic/custom/hex/sliders).** Replacing the
-   Radix `ColorButton` with the native OS picker is a feature downgrade. *Mitigation:*
-   accepted — it matches Background (consistency), is the only mechanism *proven* to
-   work in the native host, and fixes the bug under both hypotheses. Flagged for the
-   user to veto on review.
-2. **Native occlusion unconfirmed.** If the Radix popover *did* work natively, this
-   is "merely" a consistency/discoverability change. *Mitigation:* native input is
-   strictly safer regardless; no downside to converging.
-3. **jsdom can't open a real OS picker.** *Mitigation:* test the observable contract
-   (onChange → bridge dispatch, slot-select on tile click), not the OS dialog.
+
+1. **Over-tight allow-list cancels the app's OWN initial navigation** → editor
+   never loads → every a11y spec goes dark. *Mitigation:* the a11y suite is the
+   gate. The harness launches `--test-host` with `useDevUi=false` → it loads the
+   **prod** `https://app.local` origin (verified: `--test-host` sets CDP/DevTools
+   only, orthogonal to `--dev-ui`). So a11y directly exercises the `app.local`
+   branch. Build Debug, run `pnpm a11y`; native-behaviour specs must stay green
+   (baseline: 157 pass, 4 `splitters` fail = L-033 artifact, not mine).
+2. **`about:blank` init nav cancelled** → blank WebView. *Mitigation:* helper
+   explicitly allows `about:`.
+3. **`get_Source` check is the least-tested piece** — under `--test-host` the
+   bridge also uses `AddHostObjectToScript` (`:1102`), so a11y may not drive the
+   postMessage path. *Mitigation:* it's correct-by-construction defence-in-depth;
+   documented as such in the handoff, not claimed as a11y-verified.
+4. **localhost dev branch is a11y-uncovered** (only hit under manual `--dev-ui`).
+   *Mitigation:* note in handoff; logic is a simple prefix-match symmetric with
+   the prod branch.
 
 ## 5. Testing & verification
-- **vitest:** new specs (height→ground-z, solid input change→ground-solid-color,
-  tile click→ground-texture slot 4); full `editor` suite stays green (was 384).
-- **Browser repro (preview):** click wide "Solid colour" tile → native picker
-  fires (input present + click wired); Height spinner change → `engine/set/ground-z`
-  in the bridge log; Height disabled when ground off.
-- **Build:** `pnpm --filter @particle-editor/editor build` clean.
-- **Native (user-driven, L-033):** in `--new-ui`, click the Ground "Solid colour"
-  tile → OS colour dialog appears; adjust Height → ground plane moves. Deferred to
-  the user; agent can't see arch-C.
 
----
+- [ ] **Baseline first** (before any edit): vitest 390 · `pnpm build` (+dist) ·
+      `.sln` Debug+Release x64 clean (L-039 NuGet restore done) · a11y 157 pass
+      / 4 splitters fail.
+- [ ] Build Debug + Release x64 clean after the change (no new warnings beyond
+      the pre-existing LNK4098 LIBCMTD).
+- [ ] `pnpm a11y` after the change → still 157 pass / 4 splitters fail. Any
+      `bridge-native` / `emitter-mutations` / golden regression = allow-list too
+      tight → loosen.
+- [ ] Static walk: handlers registered before `Navigate`; `about:` allowed;
+      tokens removed in WM_DESTROY (no stale `this`-capturing lambda after
+      teardown); helper rejects an off-origin URI and accepts both navigate
+      targets.
+- [ ] Couldn't verify autonomously (hand to user): popup-deny and
+      permission-deny behaviour (needs a page that calls `window.open` /
+      `getUserMedia`); the `get_Source` rejection path (test-host uses the host
+      object, not postMessage).
 
-## Review (2026-06-01, session 8)
+## Review section
 
-**Both bugs fixed in one file** (`web/apps/editor/src/screens/GroundTexturePanel.tsx`),
-consistent with the goal.
+**What landed.** Two files.
 
-- **Bug 1 (solid-colour picker).** Replaced the split "wide tile selects / small Radix
-  swatch picks" with Background's pattern: the wide "Solid colour" tile now selects
-  slot 4 **and** triggers a hidden native `<input type="color">`. Removed the Radix
-  `ColorButton` + its `RgbColor`/hex helpers. Fixes the bug under both live hypotheses
-  (discoverability **and** arch-C occlusion of a DOM popover) by using the OS dialog.
-- **Bug 2 (ground height).** Added a "Height" `Spinner` (−100…100, step 0.1, dp 1) under
-  the Show-ground toggle, `disabled` in lockstep with it (legacy `main.cpp:1662`
-  parity), wired to the pre-existing `engine/set/ground-z`. Session-only (matches legacy).
+| Change | File | Detail |
+|---|---|---|
+| G11 origin helper | `src/host/HostWindow.cpp` | `IsApprovedWebViewOrigin(uri, devUi)` in the anon namespace — prefix-match `https://app.local/` (always), `http://localhost:5174/` (dev only), `about:`. Trailing `/` blocks `app.local.evil.test`. |
+| G11 nav policy | `src/host/HostWindow.cpp` | `add_NavigationStarting` (cancel off-origin), `add_NewWindowRequested` (deny popups), `add_PermissionRequested` (deny) — registered before `Navigate`; 3 tokens removed in WM_DESTROY (mirrors G5). |
+| G11 message source check | `src/host/HostWindow.cpp` | `get_Source` guard at the top of the existing `WebMessageReceived` lambda — drops messages from non-approved documents. |
+| Harness fix (out-of-band) | `web/apps/editor/scripts/run-native-tests.mjs` | `killAny()` scoped from blanket `taskkill /IM` to a `--test-host` CIM filter so a user's parallel legacy editor survives (→ L-045). |
 
-**Verification.**
-- vitest: **386 passed** (44 files; +2 new ground specs; `GroundDropdown.test.tsx`
-  still green). Build (`tsc -b && vite build`): **clean**.
-- Browser (preview, mock bridge): Height `0.0→0.1` on increment (round-trips via
-  `engine/set/ground-z` + mock broadcast); Height **disables** when ground hidden;
-  clicking the wide "Solid colour" tile fires the native colour input **and** selects
-  slot 4; no render/console errors.
-- **Deferred to user (L-033):** in `--new-ui`, confirm the OS colour dialog actually
-  paints over the arch-C viewport and the ground plane visibly moves with Height.
+**Verification (all run).**
+- Baseline (pre-edit): vitest 45/390 · `pnpm build` clean (+dist) · Debug+Release x64 clean · a11y 157 pass / 4 splitters (L-033).
+- Post-edit: Debug+Release x64 clean (only pre-existing LNK4098). a11y **157 pass / 4 splitters** — unchanged ⇒ the allow-list does NOT cancel the app's own `app.local` load and the bridge still works.
+- All WebView2 APIs confirmed against the SDK 1.0.3967.48 header before coding.
+- Harness fix proven: dry-run filter empty against the live legacy editor; controlled decoy(no-arg)+target(`--test-host`) test → decoy survived, test-host killed.
 
-**Decision flagged:** dropped the rich Radix palette picker (basic/custom/hex/sliders)
-for the native OS picker — accepted for consistency with Background + proven native
-visibility. Veto-able on review.
+**Couldn't verify autonomously (hand to user).** Popup-deny and permission-deny
+runtime behaviour (needs a page calling `window.open`/`getUserMedia`); the
+`get_Source` rejection path (under `--test-host` the bridge also uses
+`AddHostObjectToScript`, so a11y exercises the nav policy but not necessarily the
+message-source drop). Both are correct-by-construction.
 
-**Process notes →** new lesson **L-041** (browser-mode repro sidesteps L-033;
-native-input vs Radix popover over the arch-C viewport; `preview_click` pointer-event
-gotcha). Root-caused via the systematic-debugging skill (4 phases; the browser repro
-*refuted* the nested-popover-logic hypothesis before any code changed).
+**Lessons captured.** L-045 (scoped process kill), L-046 (vitest⊥build
+concurrency + Git-Bash MSBuild switch mangling).
+
+**Not yet done (awaiting user OK):** CHANGELOG entry · post-audit reconciliation
+block G11 ✅ · commit + FF-push to `lt-4`.

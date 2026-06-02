@@ -16,6 +16,50 @@ Conventions:
 
 ## Changelog
 
+### WebView2 navigation / new-window / permission policy + message-source check (audit G11)
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The WebView2 host now enforces an **origin allow-list** instead of trusting whatever
+page happens to be loaded. Off-origin top-level navigations are cancelled, popups
+(`window.open` / `target=_blank`) and every permission request (camera, mic,
+geolocation, clipboard, notifications, …) are denied, and a `WebMessage` whose
+originating document isn't an approved origin is dropped before it reaches the native
+bridge. Approved origins: `https://app.local/` (prod — the virtual-host-mapped
+`web/apps/editor/dist`), `http://localhost:5174/` (dev, only under `--dev-ui`), and
+`about:` (WebView2's own `about:blank` init navigation). Defence-in-depth against a
+redirected or compromised renderer following an off-origin link.
+
+**How we tackled it.** A shared `IsApprovedWebViewOrigin(uri, devUi)` prefix-matcher
+in the host anonymous namespace ([`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:90)),
+plus three handlers — `add_NavigationStarting` (cancel off-origin), `add_NewWindowRequested`
+(deny), `add_PermissionRequested` (deny) — registered next to the existing
+`add_WebMessageReceived` ([`src/host/HostWindow.cpp:1315`](src/host/HostWindow.cpp:1315))
+and *before* the `Navigate()` call, so the very first legitimate load is already subject
+to the policy. The three `EventRegistrationToken`s are stored as members and removed in
+`WM_DESTROY`, mirroring the G5 `webMessageTok` lifecycle. The trailing `/` on the two
+host prefixes is load-bearing — it blocks a `https://app.local.evil.test/` lookalike.
+Verification leans on the a11y suite (L-038): the native harness loads the **prod**
+`app.local` origin under `--test-host`, so a green **157 pass / 4 splitters** run (the 4
+are the L-033 window-size artifact, unchanged from baseline) proves the allow-list does
+*not* cancel the app's own load or break the bridge. All WebView2 method/enum signatures
+were confirmed against the SDK 1.0.3967.48 header before coding.
+
+**Issues encountered and resolutions.** Verifying G11 surfaced an unrelated test-harness
+footgun (fixed in a separate commit): the native a11y runner's cleanup
+([`web/apps/editor/scripts/run-native-tests.mjs`](web/apps/editor/scripts/run-native-tests.mjs:155))
+ran a blanket `taskkill /F /IM ParticleEditor.exe`, which matches by image name and so
+killed a **legacy `0.2` editor build the user daily-drives in parallel** (same exe name,
+different binary). Scoped the cleanup to a `--test-host` command-line filter via
+`Get-CimInstance Win32_Process` so the legacy editor — never launched with `--test-host`
+— survives; proven with a controlled no-arg-decoy + `--test-host`-target test (→ L-045).
+The runtime popup-deny / permission-deny / message-drop paths are correct-by-construction
+but not exercised by a11y (no spec calls `window.open` / a permission prompt / an
+off-origin `postMessage`); left for a manual `--dev-ui` poke if hard confirmation is
+ever wanted.
+
+---
+
 ### `NativeBridge` no longer leaks pending requests on send-failure or page teardown (audit G12)
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
