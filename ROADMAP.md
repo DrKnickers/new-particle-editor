@@ -30,7 +30,16 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-5] Engine-side single-member link-group enforcement
+### 1.1 [NT-5] ~~Engine-side single-member link-group enforcement~~ ✅ Shipped on lt-4 (`5d4a9ba`, 2026-05-25)
+
+> **Shipped on `lt-4`** — `BridgeDispatcher::EnforceSingleMemberLinkGroups()`
+> ([src/host/BridgeDispatcher.cpp:4305](src/host/BridgeDispatcher.cpp:4305)) wired into
+> `emitters/delete`, `linkGroups/set-membership`, and file-open bind; contract test at
+> `emitter-mutations.spec.ts` ("NT-5: leaving a 2-member link group demotes the
+> survivor"). Left in §1 with a strikethrough rather than moved to §5 because §5 tracks
+> *master*-landed items and this is lt-4-only; it takes its §5 slot at the LT-4→master
+> integration (same as the [MT-11]/[MT-12] lt-4 entries already shown in §5 with
+> `#TODO`). The `[NT-5]` tag is retired.
 
 *Estimate: small.*
 

@@ -16,6 +16,26 @@ Conventions:
 
 ## Changelog
 
+### Fix an infinite loop in the XML attribute parser (audit G10)
+
+*2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+`XMLNode`'s attribute loop ([`src/xml.cpp:15`](src/xml.cpp:15)) read `atts[0]`/`atts[1]`
+but never advanced `atts`, so **any XML element carrying ≥1 attribute spun forever at
+100% CPU** during parse. Latent in practice — the only XML the editor parses is
+`Data\MegaFiles.xml`, whose canonical schema is attribute-less, so well-formed game
+data never triggered it — but a malformed or mod-supplied attribute-bearing XML would
+hang startup. Fixed by advancing the Expat `[name0, val0, name1, val1, …]` array by
+pairs (`atts += 2`), with an `atts[1]` guard that also tolerates a malformed
+odd-length array.
+
+**How we tackled it.** One-line root cause; the fix is the standard pair-advance.
+Verified by Release build (the parser is legacy startup code with no test harness;
+the fix is self-evident by inspection). `[both]` — shipped on `lt-4`; forward-ports
+to `master` at integration.
+
+---
+
 ### Import Emitters now works in the new UI — the native `emitters/import-from-file` handler (audit G1)
 
 *2026-06-01 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

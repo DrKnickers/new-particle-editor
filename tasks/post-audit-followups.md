@@ -427,7 +427,7 @@ A fifth audit (ChatGPT deep research, LT-4-focused) ran the same day. Where the 
 
 ---
 
-### G10. `XMLNode` attribute loop never advances `atts` → infinite loop — [both] [P3, latent DoS]
+### G10. `XMLNode` attribute loop never advances `atts` → infinite loop — [both] [P3, latent DoS] — ✅ SHIPPED on lt-4 (2026-06-01, [xml.cpp:15](src/xml.cpp:15)); master port pending (forward-ports at integration)
 
 **Source:** ChatGPT deep-research re-run (2026-06-01), finding PAR-003. Net new.
 
