@@ -1,97 +1,87 @@
-# New-UI review polish — 3 items from the 2026-06-02 user launch
+# Plan — Link-group bracket polish (3 parts) + deferred items
 
-`[lt-4]`. All web/ (React/CSS). Branch `lt-4`. Verify in browser mode (L-041)
-where possible; arch-C visuals confirmed by the user on relaunch (L-033).
+`[lt-4]`, web/. From the 2026-06-02 review. **Plan-first per user request — no code
+until confirmed.**
 
-## Item 1 — black line along the Spawner panel's viewport-facing edge
+## Deferred from this review (not lost)
+- **Black line** along the Spawner's viewport edge — arch-C compositor seam. Ruled
+  OUT: rounded corners (flush-left, reverted) and React scene-rect rounding
+  (ViewportSlot, reverted — both relaunched, line persisted). **Next dig is
+  host-side**: the DComp clip / scene-rect stamp — `LayoutBroker.cpp` →
+  `Compositor::SetEngineVisualTransform` (DComp clip) and `AlphaCompositor`
+  scene-rect. Arch-C-verification-gated (L-033) → iterative with the user.
 
-**Diagnosis.** `.panel` ([components.css:275](web/apps/editor/src/styles/components.css:275))
-has `border-radius: 8px` on all corners. The LEFT panel squares its
-viewport-facing (right) corners via `.panel-flush-right`
-([PanelLayout.tsx:262](web/apps/editor/src/components/PanelLayout.tsx:262)) —
-its comment: *"square the corners that face the engine viewport so the rounded
-corner doesn't leave a wedge of (clipped) engine backing showing."* The Spawner
-panel ([SpawnerPanel.tsx:167](web/apps/editor/src/screens/SpawnerPanel.tsx:167))
-is a bare `.panel` with rounded LEFT corners facing the viewport and no mirror —
-so its rounded corner exposes the black engine backing.
+## Context — what exists today
+- `computeLinkGroupBrackets` ([link-group-colors.ts:51](web/apps/editor/src/lib/link-group-colors.ts:51))
+  returns per group: `{groupId, color, firstRowIndex, lastRowIndex, lane}`. Groups
+  with `<2` members are skipped. **lane = greedy first-fit (aggressive REUSE)** —
+  non-overlapping groups share a lane; a group's lane can move between renders.
+- Render ([EmitterTree.tsx:1399](web/apps/editor/src/screens/EmitterTree.tsx:1399)):
+  a 2px vertical bar per bracket (first→last row) + a 4px **top cap** and **bottom
+  cap** only. Gutter is a `shrink-0` flex column AFTER `<ul flex-1>`, so the rows
+  fill the panel width and shove the gutter to the **far right** (the big gap you saw).
+- `ROADMAP NT-6` already flags "dedicated/stable lanes" as a parked option.
 
-**Fix.** Add `.panel-flush-left` (square top-left + bottom-left radius) to
-components.css; apply it to the SpawnerPanel root `.panel`.
-**Verify:** arch-C visual → user confirms on relaunch (browser mode has no
-engine backing, so it can't show this; L-033).
+## Part 1 — per-member stubs  (clear)
+Each member of a group gets a short horizontal stub off the bracket (today only the
+first + last rows get caps). *Why:* signifies membership at every row, not just the
+ends.
+- `computeLinkGroupBrackets`: also collect `memberRowIndices: number[]` per group
+  (every row where `linkGroup === g`).
+- Render: draw a stub (≈4×2px, group colour) at each member row's centre-y, replacing
+  the first/last-only caps. (Test: extend `link-group-colors` unit test for the new
+  field; `EmitterTree.test.tsx` already asserts bracket testids.)
 
-## Item 2 — move the role glyph between the visibility icon and the label
+## Part 2 — move bracket closer to the names  (DESIGN CHOICE — needs your pick)
+The gutter is pinned to the panel's right edge because `<ul>` is `flex-1`. To bring
+brackets near the names, options:
+- **(A) Fixed gutter right after a fixed name column.** Change the row grid to give
+  the name a fixed/`minmax` width and place the bracket gutter immediately right of
+  it. Predictable; long names truncate sooner.
+- **(B) Absolute overlay at a fixed offset.** Keep rows full-width; absolutely
+  position the bracket layer at a fixed x close to the name start (e.g. ~8px past the
+  glyph column). Simplest; long names could pass under the bracket.
+- **(C) Right-align the bracket to the longest visible name** (measure widest row).
+  Truest "hugs the names", but needs a measure pass (ResizeObserver) — most code.
+I lean **(A)** (deterministic, no measuring, matches a fixed-tree-column feel). Your call.
 
-**Diagnosis.** Row grid is `"18px 1fr 18px"` = [eye | label | role-glyph]
-([EmitterTree.tsx:622](web/apps/editor/src/screens/EmitterTree.tsx:622)); the
-role glyph (↻ / ✕) renders in the right column. User wants it between the eye
-and the label.
+## Part 3 — dedicated lanes (NT-6)  (clear once "dedicated" is confirmed)
+Today lanes are REUSED across non-overlapping groups. "Dedicated" = each group keeps
+its **own** stable lane.
+- Replace pass-3 greedy first-fit with a stable assignment: one lane per group,
+  ordered by `groupId` (lane = index of the group in the sorted active-group list).
+  Gutter widens to `#groups × LANE_WIDTH`. No bouncing; each group has a fixed column.
+- (Alt, NT-6's literal form: `lane = (groupId-1) % maxLanes` — caps width but can
+  collide. I recommend the one-lane-per-group form unless you want a hard width cap.)
 
-**Constraint.** The row is captured in `emitter-tree*.golden.*` as
-`text: "default ↻"` + accessible name `"Hide emitter default lifetime child"`.
-A DOM reorder changes both → breaks the golden, which L-033 says not to
-regenerate here.
+## Verify (when built)
+- Browser mode, **check x AND y** (lesson from the glyph-wrap miss): stubs align to
+  each member row; bracket sits near the names; each group in its own lane.
+- vitest (link-group-colors + EmitterTree); a11y stays 157/4 (bracket gutter is
+  `aria-hidden`, so goldens shouldn't move — confirm).
 
-**Fix (golden-safe).** Keep DOM order [eye, label, role] unchanged; reorder
-*visually* with CSS grid placement — grid `"18px 18px 1fr"`, role glyph
-`grid-column: 2`, label/input `grid-column: 3`, eye stays column 1. DOM order
-and accessible names are untouched → goldens stable. Update the one vitest
-assertion (`gridTemplateColumns` in EmitterTree.test.tsx:468) + its comment.
-Minor a11y note: visual order (eye·glyph·label) now differs from reading order
-(eye·label·glyph) — accepted to preserve goldens.
-**Verify:** vitest green; browser-mode preview shows glyph between eye + label.
-
-## Item 3 — burst-delay field drops the 2nd decimal (legacy allows 0.01) — DECISION NEEDED
-
-**Diagnosis.** GENERATION "Burst delay" Spinner uses `step={0.1}`
-([EmitterPropertyTabs.tsx:496](web/apps/editor/src/screens/EmitterPropertyTabs.tsx:496)).
-Spinner derives `dp = -floor(log10(step))` → 1 decimal, and `commit` does
-`toFixed(dp)`, so a typed `0.01` truncates to `0.0`. Legacy displays burst delay
-as `%.3f` ([EmitterList.cpp:2511](src/UI/EmitterList.cpp:2511)) and clamps to
-`max(0.01f, …)` ([EmitterInstance.cpp:665](src/EmitterInstance.cpp:665)) → 3
-decimals is the faithful legacy match.
-
-**The fork.** Any precision change alters the displayed default `1.0` → `1.000`
-(or `1.00`), and that value is baked into **~18 a11y goldens** (9 surfaces ×
-json+yaml: spinner-focused, property-tabs, dialogs, kbd-*, curve-editor). Fixing
-the field forces a golden refresh, which **L-033 says not to do on this machine**
-(UIA non-determinism + flake risk). Options for the user:
-- (a) Make the code change here + `pnpm a11y:update` to regen goldens (the
-  DOM/composition goldens are deterministic on this box — they pass 157/4 — so
-  regen risk is mostly the UIA-json variant).
-- (b) Make the code change; hand golden regen to the user/CI.
-- (c) Hold item 3 until a golden-regen-safe moment.
-Also confirm precision: **3dp** (legacy-faithful `1.000`) vs 2dp (`1.00`).
-
-## Testing & verification
-
-- [ ] vitest green (45 files; EmitterTree.test.tsx gridTemplateColumns updated).
-- [ ] Browser-mode preview: role glyph sits between eye + label; spawner panel
-      left corners square (no rounded wedge in DOM — engine backing N/A here).
-- [ ] Rebuild dist so the user can relaunch for the arch-C visual review
-      (item 1 black line; item 2 reorder in the real compositor).
-- [ ] a11y unaffected by items 1+2 (no DOM-order / value changes). Item 3
-      deferred pending the decision above.
+## Decisions (locked 2026-06-02)
+1. **Part 2 positioning**: **C — hug the longest name (measure pass)**. Bracket layer
+   absolute within the scroll container at `left = max(name-text right) + gap`;
+   re-measure on tree change + ResizeObserver + font load. Name text width via
+   `Range.selectNodeContents(span).getBoundingClientRect()` (the 1fr name column fills,
+   so the column edge ≠ text edge — must measure the text node).
+2. **Part 3**: **one lane per group**, stable, ordered by `groupId` (lane = index in
+   sorted active-group list). No reuse. Gutter width = `#groups × LANE_WIDTH`.
+3. Order: all 3 together.
 
 ## Review section
 
-**What landed (all web/).**
-| Item | Files | Change |
+**Implemented (all 3, web/).**
+| Part | Files | Change |
 |---|---|---|
-| 1 — black line | **(reverted)** | Hypothesised `.panel-flush-left` (rounded-corner wedge) — **WRONG**. Browser DOM inspection proved the line isn't a DOM element (no dark element; border is `#dcdcdc`; splitter already opaque `var(--bg)`). It's an **arch-C compositor seam** at the viewport↔Spawner boundary — engine black backing through a ~1px scene-rect/edge gap (L-034 family). Host-side; needs user verification (L-033). **Deferred to its own investigation.** flush-left reverted (cosmetic no-op; corners sit against the opaque splitter). |
-| 2 — role glyph | `screens/EmitterTree.tsx` (+ its test) | grid `18px 18px 1fr`; role glyph `grid-column:2`, label/input `grid-column:3`. Visual order eye·glyph·label; **DOM order unchanged** → a11y goldens stable. |
-| 3 — precision | `screens/EmitterPropertyTabs.tsx`, `screens/SpawnerPanel.tsx`, 20 `*.composition.golden.yaml` | `decimals={3}` on all 8 `s`-unit fields (initialDelay, skipTime, freezeTime, burstDelay, lifetime, spacing, interval, maxLifetime) — matches legacy `%.3f`. Goldens updated by surgical value substitution (no full regen, per L-033). |
+| 1 — per-member stubs | `lib/link-group-colors.ts` (+test), `screens/EmitterTree.tsx` | `computeLinkGroupBrackets` now returns `memberRowIndices`; renderer draws a stub at every member row (was top/bottom caps only). |
+| 2 — hug the names | `screens/EmitterTree.tsx` | Bracket layer is `absolute` at `left = measured longest-name right + 8px` (Range-measured per name, capped at the truncation edge; re-measured on tree change / ResizeObserver / font load; jsdom-guarded). Replaced the fixed flex gutter. |
+| 3 — dedicated lanes | `lib/link-group-colors.ts` (+test) | One lane per group, stable by `groupId` (no greedy reuse → no bouncing). Closes NT-6's intent. |
 
-**Verification.**
-- vitest **390/45** green (EmitterTree grid assertion updated; no value-format assertions existed for item 3).
-- Item 2 browser-verified (preview, 1728px): rows render `eye → ↻/✕ → label`, labels aligned, DOM order preserved.
-- Item 3: a11y **157 pass / 4 splitters** (L-033) after the golden substitution — was ~24 failing pre-substitution, confirming the 20 goldens now match.
-- dist rebuilt (composition) with all 3.
+**Verified.**
+- vitest **391/45** (link-group-colors 11 tests incl. memberRowIndices + dedicated-lane; EmitterTree bracket/stub/hug tests). build/tsc clean.
+- Browser (1728px, **x AND y**): group 1 (Smoke row0 + Sparks row3) → gutter `left=163` = longest-name right (155) + 8; stubs at cy 128 & 200 (match member row centres); bar `data-lane=0` spanning rows 0→3. Brackets sit beside the names, not at the panel edge (301).
+- a11y **157/4** (splitters L-033) — bracket layer is `aria-hidden`, goldens unaffected.
 
-**Couldn't self-verify (hand to user).** Item 1 (black line) is arch-C compositing —
-browser mode has no engine backing, so it can't show the wedge (L-033). Needs a
-user relaunch to confirm the line is gone. Items 2 & 3 also worth an eyeball in
-the real compositor.
-
-**Not yet committed** — holding the FF-push until the user confirms item 1 on
-relaunch (don't push an unverified arch-C fix).
+**Not yet committed** — holding for the user's visual confirmation on relaunch (design feel: stub length, gap, lane spacing).

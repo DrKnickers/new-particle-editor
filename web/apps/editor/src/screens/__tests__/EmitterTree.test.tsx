@@ -266,21 +266,30 @@ describe("EmitterTree", () => {
     // No bracket for group 0 (unlinked) or any other group.
     expect(screen.queryByTestId("link-group-bracket-0")).toBeNull();
     expect(screen.queryByTestId("link-group-bracket-2")).toBeNull();
+    // Per-member stubs: group 1 spans Smoke (flat row 0) + Sparks (flat
+    // row 3); a stub is drawn at EACH member row, not just the ends.
+    expect(screen.getByTestId("link-group-stub-1-0")).toBeInTheDocument();
+    expect(screen.getByTestId("link-group-stub-1-3")).toBeInTheDocument();
+    // No stub on a non-member row (Smoke embers at flat row 1).
+    expect(screen.queryByTestId("link-group-stub-1-1")).toBeNull();
   });
 
-  it("gutter container width tracks the number of lanes in use", async () => {
+  it("bracket layer is absolutely positioned to hug the names (no fixed gutter width)", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
 
-    // The fixture tree puts Smoke (id 0) and Sparks (id 3) both in
-    // link group 1. That's a single 2-lane bracket. laneCount = 1
-    // → gutterPx = 1 * 10 + 4 = 14.
+    // The gutter no longer reserves a fixed flex-column width; it's an
+    // absolute layer positioned at (measured longest-name right + gap).
+    // jsdom returns 0-size rects, so the measured right is 0 and left
+    // collapses to the gap constant (BRACKET_NAME_GAP_PX = 8px).
     const gutter = screen.getByTestId("link-group-bracket-gutter");
     expect(gutter).toBeInTheDocument();
-    expect((gutter as HTMLElement).style.width).toBe("14px");
+    expect(gutter.className).toContain("absolute");
+    expect(gutter.style.width).toBe("");      // no fixed width anymore
+    expect(gutter.style.left).toBe("8px");    // hug position (gap only in jsdom)
   });
 
   it("rendered brackets carry a data-lane attribute matching their assigned lane", async () => {

@@ -45,10 +45,12 @@ describe("link-group-colors", () => {
     const g1 = brackets.find((b) => b.groupId === 1)!;
     expect(g1.firstRowIndex).toBe(1);
     expect(g1.lastRowIndex).toBe(3);
+    expect(g1.memberRowIndices).toEqual([1, 3]);  // every member, not just ends
     expect(g1.color).toBe(colorForGroup(1));
     const g2 = brackets.find((b) => b.groupId === 2)!;
     expect(g2.firstRowIndex).toBe(4);
     expect(g2.lastRowIndex).toBe(5);
+    expect(g2.memberRowIndices).toEqual([4, 5]);
     expect(g2.color).toBe(colorForGroup(2));
     expect(brackets.find((b) => b.groupId === 3)).toBeUndefined();
   });
@@ -75,7 +77,7 @@ describe("link-group-colors", () => {
     expect(brackets[0].lane).toBe(0);
   });
 
-  it("assigns lane 0 to non-overlapping groups (reuse)", () => {
+  it("gives each non-overlapping group its OWN dedicated lane (no reuse), ordered by groupId", () => {
     const rows = [
       { linkGroup: 1 }, { linkGroup: 1 }, // group 1: rows 0-1
       { linkGroup: 0 },
@@ -85,68 +87,68 @@ describe("link-group-colors", () => {
     ];
     const brackets = computeLinkGroupBrackets(rows);
     expect(brackets).toHaveLength(3);
-    // All three pack into lane 0 because none overlap each other vertically.
+    // Dedicated lanes: even though none overlap, each group keeps its own
+    // lane so the gutter never bounces (one lane per group, by groupId).
     expect(brackets.find((b) => b.groupId === 1)!.lane).toBe(0);
-    expect(brackets.find((b) => b.groupId === 2)!.lane).toBe(0);
-    expect(brackets.find((b) => b.groupId === 3)!.lane).toBe(0);
+    expect(brackets.find((b) => b.groupId === 2)!.lane).toBe(1);
+    expect(brackets.find((b) => b.groupId === 3)!.lane).toBe(2);
   });
 
-  it("assigns lanes 0 and 1 to two overlapping groups", () => {
+  it("orders lanes by groupId regardless of row order", () => {
     const rows = [
-      { linkGroup: 1 }, // group 1 starts at row 0
-      { linkGroup: 2 }, // group 2 starts at row 1
-      { linkGroup: 1 }, // group 1 extends to row 2
-      { linkGroup: 2 }, // group 2 extends to row 3
+      { linkGroup: 2 }, // group 2 starts FIRST in row order
+      { linkGroup: 1 },
+      { linkGroup: 2 },
+      { linkGroup: 1 },
     ];
     const brackets = computeLinkGroupBrackets(rows);
     expect(brackets).toHaveLength(2);
-    const g1 = brackets.find((b) => b.groupId === 1)!;
-    const g2 = brackets.find((b) => b.groupId === 2)!;
-    expect(g1.lane).toBe(0);  // first by firstRowIndex → claims lane 0
-    expect(g2.lane).toBe(1);  // overlaps g1 → next lane
-  });
-
-  it("reuses lane 0 after a long bracket ends (busy interleave case)", () => {
-    // Sky:    rows 0-5 (long, lane 0)
-    // Pink:   rows 2-3 (stub-ish in middle, lane 1)
-    // Yellow: rows 7-8 (after sky ends, lane 0 reused)
-    const rows = [
-      { linkGroup: 1 }, // 0 sky
-      { linkGroup: 1 }, // 1 sky
-      { linkGroup: 2 }, // 2 pink
-      { linkGroup: 2 }, // 3 pink
-      { linkGroup: 1 }, // 4 sky
-      { linkGroup: 1 }, // 5 sky
-      { linkGroup: 0 }, // 6 gap
-      { linkGroup: 3 }, // 7 yellow
-      { linkGroup: 3 }, // 8 yellow
-    ];
-    const brackets = computeLinkGroupBrackets(rows);
-    expect(brackets).toHaveLength(3);
+    // Lane follows groupId, not first-appearance: group 1 → lane 0.
     expect(brackets.find((b) => b.groupId === 1)!.lane).toBe(0);
     expect(brackets.find((b) => b.groupId === 2)!.lane).toBe(1);
-    expect(brackets.find((b) => b.groupId === 3)!.lane).toBe(0);  // reused
+  });
+
+  it("collects every member row index per group (for per-member stubs)", () => {
+    const rows = [
+      { linkGroup: 1 }, // 0
+      { linkGroup: 0 }, // 1 gap inside the group's span
+      { linkGroup: 1 }, // 2
+      { linkGroup: 1 }, // 3
+    ];
+    const brackets = computeLinkGroupBrackets(rows);
+    expect(brackets).toHaveLength(1);
+    expect(brackets[0].memberRowIndices).toEqual([0, 2, 3]);
+    expect(brackets[0].firstRowIndex).toBe(0);
+    expect(brackets[0].lastRowIndex).toBe(3);
   });
 
   it("laneCount returns 0 for an empty bracket array", () => {
     expect(laneCount([])).toBe(0);
   });
 
-  it("laneCount returns 1 for a single-lane bracket set", () => {
+  it("laneCount returns 1 for a single group", () => {
     const rows = [
       { linkGroup: 1 }, { linkGroup: 1 },
       { linkGroup: 0 },
-      { linkGroup: 2 }, { linkGroup: 2 },
     ];
     expect(laneCount(computeLinkGroupBrackets(rows))).toBe(1);
+  });
+
+  it("laneCount equals the number of groups (one dedicated lane each)", () => {
+    const rows = [
+      { linkGroup: 1 }, { linkGroup: 1 },
+      { linkGroup: 0 },
+      { linkGroup: 2 }, { linkGroup: 2 }, // non-overlapping, but its own lane now
+    ];
+    expect(laneCount(computeLinkGroupBrackets(rows))).toBe(2);
   });
 
   it("laneCount returns 3 for a 3-lane bracket set", () => {
     // Build a bracket array directly with known lanes.
     const brackets: LinkGroupBracket[] = [
-      { groupId: 1, color: "#000", firstRowIndex: 0, lastRowIndex: 5, lane: 0 },
-      { groupId: 2, color: "#000", firstRowIndex: 1, lastRowIndex: 4, lane: 1 },
-      { groupId: 3, color: "#000", firstRowIndex: 2, lastRowIndex: 3, lane: 2 },
+      { groupId: 1, color: "#000", firstRowIndex: 0, lastRowIndex: 5, memberRowIndices: [0, 5], lane: 0 },
+      { groupId: 2, color: "#000", firstRowIndex: 1, lastRowIndex: 4, memberRowIndices: [1, 4], lane: 1 },
+      { groupId: 3, color: "#000", firstRowIndex: 2, lastRowIndex: 3, memberRowIndices: [2, 3], lane: 2 },
     ];
     expect(laneCount(brackets)).toBe(3);
   });

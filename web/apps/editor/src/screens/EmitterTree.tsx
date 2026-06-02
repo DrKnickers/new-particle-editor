@@ -60,6 +60,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -88,7 +89,7 @@ import {
   resolveReparentSlot,
   type DropZone,
 } from "@/lib/drop-zone";
-import { computeLinkGroupBrackets, laneCount } from "@/lib/link-group-colors";
+import { computeLinkGroupBrackets } from "@/lib/link-group-colors";
 
 type Props = {
   bridge: Bridge;
@@ -698,6 +699,7 @@ function EmitterRow({
             ) : (
               <span
                 className="truncate"
+                data-emitter-name
                 style={{ gridColumn: 3, gridRow: 1 }}
                 onDoubleClick={(e) => {
                   // Double-click on the label starts inline rename. The
@@ -816,13 +818,11 @@ function EmitterRow({
 // tree theme changes this constant moves with it).
 const ROW_HEIGHT_PX     = 24;
 const LANE_WIDTH_PX     = 10;  // 2px bracket + 8px gap to next lane
-const GUTTER_LEFT_PAD_PX = 4;
-const GUTTER_MIN_PX     = 4;   // when no link groups exist (constant minimum to avoid layout shift)
-// F5: small fixed gap between the rows and the bracket gutter. The gutter
-// is now a real flex column (reserves its own width), so the old
-// `marginRight: gutterPx` was redundant double-spacing that pushed the
-// brackets ~18px off the names. A 2px gap hugs the rows like legacy 0.2.
-const GUTTER_GAP_PX     = 2;
+// Gap between the longest emitter name's right edge and the first bracket
+// lane. The bracket layer is absolutely positioned at (measured longest-name
+// right + this gap) so the brackets hug the names instead of sitting at the
+// panel's far-right edge. See the measure effect in EmitterTree.
+const BRACKET_NAME_GAP_PX = 8;
 
 // ─── Panel-header toolbar ────────────────────────────────────────────
 // FD10 (Group A polish): restore the legacy panel toolbar from
@@ -1211,20 +1211,58 @@ export function EmitterTree({ bridge }: Props) {
     return flatRows.find((r) => r.node.id === draggingId)?.node ?? null;
   }, [draggingId, flatRows]);
 
-  // Bracket descriptors for the right gutter. One entry per non-zero
-  // linkGroup; the renderer absolute-positions each as a vertical bar
-  // + top/bottom horizontal caps.
+  // Bracket descriptors for the link-group gutter. One entry per group
+  // with ≥2 members; each carries a dedicated lane + every member row
+  // index. The renderer absolute-positions the layer so the brackets
+  // hug the names (measure effect below) and draws a stub at each member.
   const brackets = useMemo(
     () => computeLinkGroupBrackets(flatRows.map((r) => r.node)),
     [flatRows],
   );
 
-  // Gutter width derived from the number of bracket lanes in use. The
-  // 4px minimum keeps the gutter from collapsing to 0 when no groups
-  // exist — avoids a layout shift the first time a group appears.
-  const lanes = laneCount(brackets);
-  const gutterPx =
-    lanes === 0 ? GUTTER_MIN_PX : lanes * LANE_WIDTH_PX + GUTTER_LEFT_PAD_PX;
+  // [link-group polish] "Hug the longest name": position the bracket
+  // layer at (longest visible name's right edge + gap) instead of the
+  // panel's far-right edge. The 1fr name column FILLS the row, so the
+  // column edge ≠ the text edge — measure each name's text node (Range),
+  // cap at the column edge for truncated names, take the max. Re-measure
+  // on tree change, container resize, and after web fonts settle.
+  const treeScrollRef = useRef<HTMLDivElement | null>(null);
+  const [bracketLeft, setBracketLeft] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const container = treeScrollRef.current;
+    if (container === null) return;
+    const measure = () => {
+      const names = container.querySelectorAll<HTMLElement>("[data-emitter-name]");
+      if (names.length === 0) {
+        setBracketLeft(null);
+        return;
+      }
+      const cRect = container.getBoundingClientRect();
+      const range = document.createRange();
+      // jsdom (vitest) doesn't implement Range.getBoundingClientRect; fall
+      // back to the element rect there so the effect degrades gracefully
+      // instead of throwing. Real browsers measure the text node.
+      const canMeasureText = typeof range.getBoundingClientRect === "function";
+      let maxRight = 0;
+      names.forEach((el) => {
+        let right = el.getBoundingClientRect().right;
+        if (canMeasureText) {
+          range.selectNodeContents(el);
+          // Cap at the column's right edge so a truncated (overflowing)
+          // name doesn't push the bracket past the visible text.
+          right = Math.min(range.getBoundingClientRect().right, right);
+        }
+        const rel = right - cRect.left + container.scrollLeft;
+        if (rel > maxRight) maxRight = rel;
+      });
+      setBracketLeft(Math.round(maxRight) + BRACKET_NAME_GAP_PX);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
+    void document.fonts?.ready?.then(measure).catch(() => {});
+    return () => ro.disconnect();
+  }, [flatRows]);
 
   // ── Batch C — keyboard handler ─────────────────────────────────
   //
@@ -1368,12 +1406,14 @@ export function EmitterTree({ bridge }: Props) {
         // `flex-1 min-h-0 overflow-y-auto` so long emitter lists scroll
         // inside it while EmitterTreeToolbar (sibling below) stays
         // pinned at the pane's bottom.
-        <div className="emitter-tree-scroll relative flex flex-1 min-h-0 overflow-y-auto">
+        <div
+          ref={treeScrollRef}
+          className="emitter-tree-scroll relative flex flex-1 min-h-0 overflow-y-auto"
+        >
           <ul
             role="tree"
             aria-label="Emitters"
             className="m-0 flex-1 list-none p-0"
-            style={{ marginRight: GUTTER_GAP_PX }}
           >
           {flatRows.map((row) => (
             <EmitterRow
@@ -1399,66 +1439,54 @@ export function EmitterTree({ bridge }: Props) {
             />
           ))}
           </ul>
-          {/* Bracket gutter — multi-lane. Each non-zero linkGroup gets
-              a vertical bar spanning its first → last row in the flat
-              order, plus 4px-wide horizontal caps at top + bottom.
-              Overlapping group ranges are spread across lanes by the
-              greedy first-fit pass in computeLinkGroupBrackets; the
-              gutter widens dynamically to accommodate `laneCount`
-              lanes. Absolute-positioned within the relative wrapper. */}
-          <div
-            data-testid="link-group-bracket-gutter"
-            aria-hidden
-            className="pointer-events-none relative shrink-0"
-            style={{ width: gutterPx }}
-          >
-            {brackets.map((b) => {
-              const top    = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
-              const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
-              const left   = GUTTER_LEFT_PAD_PX + b.lane * LANE_WIDTH_PX;
-              return (
-                <div
-                  key={b.groupId}
-                  data-testid={`link-group-bracket-${b.groupId}`}
-                  data-link-group={b.groupId}
-                  data-lane={b.lane}
-                  className="absolute"
-                  style={{
-                    top,
-                    left,
-                    width: 2,
-                    height,
-                    background: b.color,
-                  }}
-                >
-                  {/* Top cap */}
+          {/* Link-group bracket layer. Absolutely positioned at the
+              measured longest-name right edge (bracketLeft) so the
+              brackets HUG the names rather than sitting at the panel's
+              far-right edge. Each group has its own DEDICATED lane (one
+              per group, by groupId); a STUB is drawn at every member row
+              (including first + last), not just top/bottom caps. The
+              layer scrolls with the rows (absolute inside the relative
+              scroll container) and is pointer-events-none + aria-hidden. */}
+          {bracketLeft !== null && brackets.length > 0 && (
+            <div
+              data-testid="link-group-bracket-gutter"
+              aria-hidden
+              className="pointer-events-none absolute top-0"
+              style={{ left: bracketLeft }}
+            >
+              {brackets.map((b) => {
+                const top    = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
+                const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
+                const left   = b.lane * LANE_WIDTH_PX;
+                return (
                   <div
-                    aria-hidden
+                    key={b.groupId}
+                    data-testid={`link-group-bracket-${b.groupId}`}
+                    data-link-group={b.groupId}
+                    data-lane={b.lane}
                     className="absolute"
-                    style={{
-                      top: 0,
-                      left: -2,
-                      width: 4,
-                      height: 2,
-                      background: b.color,
-                    }}
-                  />
-                  {/* Bottom cap */}
-                  <div
-                    aria-hidden
-                    className="absolute"
-                    style={{
-                      bottom: 0,
-                      left: -2,
-                      width: 4,
-                      height: 2,
-                      background: b.color,
-                    }}
-                  />
-                </div>
-              );
-            })}
-          </div>
+                    style={{ top, left, width: 2, height, background: b.color }}
+                  >
+                    {b.memberRowIndices.map((rowIdx) => (
+                      <div
+                        key={rowIdx}
+                        aria-hidden
+                        data-testid={`link-group-stub-${b.groupId}-${rowIdx}`}
+                        className="absolute"
+                        style={{
+                          top: (rowIdx - b.firstRowIndex) * ROW_HEIGHT_PX - 1,
+                          left: -4,
+                          width: 5,
+                          height: 2,
+                          background: b.color,
+                        }}
+                      />
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />

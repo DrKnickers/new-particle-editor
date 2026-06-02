@@ -37,80 +37,57 @@ export function colorForGroup(group: number): string | null {
 }
 
 /** A bracket descriptor produced by `computeLinkGroupBrackets`.
- *  `lane` is 0-based and assigned by the greedy first-fit pass at
- *  the end of that function — bracket renderers use `lane` to
- *  compute the horizontal offset within the gutter. */
+ *  `lane` is 0-based — one DEDICATED lane per group (stable, ordered
+ *  by groupId), so the renderer's horizontal offset for a group never
+ *  changes between renders. `memberRowIndices` lists EVERY row in the
+ *  group (ascending render order) so the renderer can draw a stub at
+ *  each member, not just the first/last caps. */
 export type LinkGroupBracket = {
   groupId: number;
   color: string;
   firstRowIndex: number;
   lastRowIndex: number;
+  memberRowIndices: number[];
   lane: number;
 };
 
 export function computeLinkGroupBrackets<T extends { linkGroup: number }>(
   rows: ReadonlyArray<T>,
 ): LinkGroupBracket[] {
-  // Pass 1: collect ranges + member counts per group.
-  const ranges = new Map<number, { first: number; last: number; count: number }>();
+  // Pass 1: collect EVERY member row index per group, in render order.
+  const members = new Map<number, number[]>();
   rows.forEach((row, idx) => {
     const g = row.linkGroup;
     if (g <= 0) return;
-    const existing = ranges.get(g);
-    if (existing === undefined) {
-      ranges.set(g, { first: idx, last: idx, count: 1 });
-    } else {
-      existing.last = idx;
-      existing.count += 1;
-    }
+    const arr = members.get(g);
+    if (arr === undefined) members.set(g, [idx]);
+    else arr.push(idx);
   });
 
-  // Pass 2: emit descriptors for groups with ≥ 2 members.
+  // Pass 2: emit descriptors for groups with ≥ 2 members. firstRow /
+  // lastRow come from the (ascending) member list; memberRowIndices
+  // carries the full set so the renderer can stub each member.
   const descriptors: Omit<LinkGroupBracket, "lane">[] = [];
-  ranges.forEach((range, groupId) => {
-    if (range.count < 2) return;
+  members.forEach((indices, groupId) => {
+    if (indices.length < 2) return;
     const color = colorForGroup(groupId);
     if (color === null) return;
     descriptors.push({
       groupId,
       color,
-      firstRowIndex: range.first,
-      lastRowIndex: range.last,
+      firstRowIndex: indices[0]!,
+      lastRowIndex: indices[indices.length - 1]!,
+      memberRowIndices: indices,
     });
   });
 
-  // Pass 3: greedy first-fit lane assignment (aggressive reuse).
-  // Sort by firstRowIndex (ties broken by lastRowIndex) so earlier-
-  // starting brackets claim lanes first. `laneLastEnd[i]` tracks the
-  // lastRowIndex of the most recent bracket assigned to lane i.
-  const sorted = [...descriptors].sort(
-    (a, b) =>
-      a.firstRowIndex - b.firstRowIndex ||
-      a.lastRowIndex  - b.lastRowIndex,
-  );
-  const laneLastEnd: number[] = [];
-  const withLanes: LinkGroupBracket[] = sorted.map((d) => {
-    let lane = -1;
-    for (let i = 0; i < laneLastEnd.length; i++) {
-      if (laneLastEnd[i] < d.firstRowIndex) {
-        lane = i;
-        break;
-      }
-    }
-    if (lane === -1) {
-      lane = laneLastEnd.length;
-      laneLastEnd.push(d.lastRowIndex);
-    } else {
-      laneLastEnd[lane] = d.lastRowIndex;
-    }
-    return { ...d, lane };
-  });
-
-  // Stable ordering by groupId so two renders with the same input
-  // produce the same draw order (lane assignments still match —
-  // they're attached to each bracket descriptor).
-  withLanes.sort((a, b) => a.groupId - b.groupId);
-  return withLanes;
+  // Pass 3: ONE dedicated lane per group, stable by groupId (ascending).
+  // No reuse across non-overlapping groups — each group keeps its own
+  // column, so a group's lane never changes between renders (the
+  // "bouncing gutter" ROADMAP NT-6 called out). Gutter width grows with
+  // the number of groups (laneCount === #groups).
+  descriptors.sort((a, b) => a.groupId - b.groupId);
+  return descriptors.map((d, lane) => ({ ...d, lane }));
 }
 
 /** Number of lanes used by the given bracket set. The gutter
