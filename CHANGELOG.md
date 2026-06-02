@@ -16,6 +16,50 @@ Conventions:
 
 ## Changelog
 
+### Viewport "black line" on the Spawner edge — D3D9Ex→D3D11 shared-surface guard band
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The thin near-black vertical line that ran along the Spawner panel's left (viewport-facing)
+edge in arch-C (composition) mode is gone. It was a real ~3–4px artifact at the viewport's
+right edge — visible against bright scenes as a 1px black line — now the rendered viewport
+content reaches the panel boundary cleanly at every window size.
+
+**How we tackled it.** The line was the engine's near-black background
+(`RGB(0x14,0x08,0x34)`) showing through a strip at the scene-rect's right edge where the
+engine's **D3D9Ex shared render target is incoherent in its D3D11 alias** — the D3D9 side
+renders correct pixels there, but the D3D11 alias that DComp presents reads back the clear
+colour (proven by reading the *same* shared texture through both APIs:
+[`AlphaCompositor`](src/host/AlphaCompositor.cpp:148)'s `CreateTexture(... &sharedHandle)`
+D3D9 view = content, the D3D11 alias in [`Compositor::CompositeEngineFrame`](src/host/Compositor.cpp:1076)
+= background). The textbook cure (a keyed-mutex shared resource) isn't available with a
+D3D9Ex *producer*. The fix is a **guard band**: [`LayoutBroker::SetSceneRect`](src/host/LayoutBroker.cpp:284)
+now renders the engine scene viewport a few px *larger* than the DComp clip (which still
+carries the true scene rect), so the incoherent band lands in the clipped-off margin and
+the clip shows only coherent interior pixels. The band is **proportional** to the rendered
+width (`GBx = max(12, w/64)`; the incoherency measured ~0.5% of width) and
+**aspect-preserving** (`GBy = GBx·h/w`), so under the engine's per-pixel-FoV projection
+([`Engine::SetSceneViewport`](src/engine.cpp:1583)) both per-pixel angles stay constant and
+the visible framing is pixel-identical. A defensive RT clamp in `SetSceneViewport` keeps the
+band in-bounds on degenerate layouts (the surrounding chrome guarantees margin in practice).
+
+**Issues encountered and resolutions.** The whole prior framing was wrong and had to be
+discarded: the seam is not a DComp clip seam, not the rear backing (which is provably
+`#ECECEC`, not black), and not a DOM element — earlier sessions reverted fixes resting on
+those assumptions. Localising it required reading pixels at every pipeline stage with
+faithful `CopyFromScreen` grabs + D3D9/D3D11 texture readbacks (L-034 "measure, don't
+eyeball"): scene texture ✓, engine composite ✓, then the D3D11 alias of the same surface ✗
+— pinpointing the D3D9Ex→D3D11 boundary. The cross-device flush (`WaitEndFrameQuery`,
+`D3DGETDATA_FLUSH`) was already correctly ordered before the read, ruling out a missing
+flush. A first fixed-`8px` band cleared the line at 1264-wide but left ~2px at maximized —
+the incoherency **scales with width**, so the band had to become proportional. The overscan
+is symmetric *and* aspect-preserving because an equal-px band on all four sides changes the
+aspect ~1% and visibly shifts edge content. Verified line-gone at 1264×761 and 3440×1369;
+the engine-RT path is unchanged for non-composition (canvas-jpeg / arch-A) transports, which
+never set a scene viewport.
+
+---
+
 ### Link-group brackets — per-member stubs, name-hugging position, dedicated lanes (NT-6)
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

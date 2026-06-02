@@ -3218,3 +3218,51 @@ correct, but the glyph had wrapped to row 2 (the user caught it on relaunch:
 "now in the next line"). The re-verify checked `cy` + `btnHeight` (24px = single row)
 and confirmed the `grid-row: 1` fix. Cross-reference [L-033](#l-033) (arch-C visuals
 need the user; but DOM-layout reorders ARE browser-verifiable — just check both axes).
+
+---
+
+## L-048 — A D3D9Ex shared render target can be INCOHERENT in its D3D11 alias at the rendered region's right edge; localise cross-API bugs by reading the SAME surface through both APIs, then fix with a proportional guard band
+
+**Rule.** When the engine's pixels are correct on the D3D9 side but wrong on screen in
+arch-C, suspect the **D3D9Ex→D3D11 shared-surface boundary** before any compositor
+theory. A legacy shared-handle RT (`IDirect3DDevice9Ex::CreateTexture(... pSharedHandle)`
+opened in D3D11 via `OpenSharedResource`) can read back **different pixels** in the D3D11
+alias than in the D3D9 view at the rendered region's **right edge** — a band whose width
+**scales with the rendered width** (~0.5%: ~4px at w≈666, ~10px at w≈1820). The D3D11
+alias (what DComp presents) shows the stale clear colour there; the D3D9 view has correct
+content. A correctly-ordered cross-device flush (`IDirect3DQuery9` event +
+`GetData(D3DGETDATA_FLUSH)`) does NOT fix it, and the proper cure (an `IDXGIKeyedMutex`
+shared resource) is **unavailable when the producer is D3D9Ex** (only D3D10/11 can create/
+acquire keyed-mutex shares).
+
+**How to localise (the readback ladder that worked).** Read pixels at EVERY stage with
+faithful measurements (L-034), not eyes:
+1. Recolour the engine clear (`engine/set/background`) — if the on-screen line ignores it,
+   the bg you see is NOT being sampled live there (it's stale).
+2. Dump the engine's pre-composite RT (`D3DXSaveTextureToFile` on `m_pSceneTexture`) and
+   the post-composite RT (the AlphaComp/shared surface) — both D3D9 views.
+3. Read the **same shared surface through D3D11** (`ID3D11Texture2D` staging copy + `Map`)
+   AND the swapchain backbuffer. When D3D9-view = content but D3D11-view = clear colour at
+   the same (x,y), the break is exactly the shared-surface boundary. (fmt 87 =
+   `B8G8R8A8`; bytes are B,G,R,A.)
+4. Confirm the flush is ordered render → `IssueEndFrameQuery` → `WaitEndFrameQuery` →
+   `CompositeEngineFrame` (it is) to rule out a missing flush.
+
+**The fix — guard band / overscan (not a mask).** Render the engine scene viewport a few
+px LARGER than the DComp clip so the incoherent band falls in the clipped-off margin; the
+clip (true scene rect) shows only coherent interior pixels. In `LayoutBroker::SetSceneRect`,
+pass the overscanned rect to `Engine::SetSceneViewport` and the TRUE rect to
+`Compositor::SetEngineVisualTransform`. Make the band **proportional** (`GBx = max(12, w/64)`
+— the incoherency scales with width; a fixed 8px cleared 1264-wide but left ~2px at
+maximized) and **aspect-preserving** (`GBy = GBx·h/w`) so the engine's per-pixel-FoV
+projection keeps both per-pixel angles constant ⇒ visible framing is pixel-identical (verify:
+viewport centre byte-identical pre/post). Clamp defensively to the RT in `SetSceneViewport`.
+
+**Why this took multiple sessions.** The handoff asserted a "compositor clip seam / black
+DComp backing through a 1px gap." That mechanism never survived the log (the backing is
+recoloured `#ECECEC`, so a gap would read grey, not black) — but it anchored two prior
+sessions on DOM/clip/backing fixes that were reverted. The L-022 trap: a confident handoff
+mechanism is a hypothesis, not a fact. The decisive move was the cross-API readback, which
+no amount of compositor-side reasoning would have reached. Cross-reference [L-033](#l-033)
+(faithful grabs for arch-C), [L-034](#l-034) (recolour each layer; measure, don't eyeball),
+[L-022](#l-022) (verify handoff claims against code/logs before acting).

@@ -283,7 +283,33 @@ void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
         // the fresh engine pixels.
         if (m_engine)
         {
-            m_engine->SetSceneViewport(x, y, w, h);
+            // [black-line fix, session 10] Guard band. The engine RT is a
+            // D3D9Ex shared surface; its D3D11 alias (what DComp actually
+            // presents) is INCOHERENT in the rightmost ~3-4px of the rendered
+            // scene-rect region — the D3D9 side renders correct content there,
+            // but the D3D11 alias reads back the engine clear colour, painting
+            // a near-black 1px line at the viewport's right (Spawner-facing)
+            // edge. (Keyed-mutex sync, the textbook cure, isn't available with
+            // a D3D9Ex producer.) Render the engine viewport a few px LARGER
+            // than the DComp clip so the incoherent band falls OUTSIDE the
+            // clip; the clip (set to the true rect below) then shows only
+            // coherent interior pixels. Symmetric overscan + the engine's
+            // per-pixel-FoV projection ⇒ the visible framing is unchanged
+            // (each pixel keeps its angular extent; the band renders a hair
+            // more world that gets clipped off). The engine defensively
+            // clamps to its RT; chrome margin keeps the band in-bounds.
+            //
+            // The incoherent band scales with the rendered width (~0.5% of
+            // w, measured: ~4px at w=666, ~10px at w=1820), so the guard
+            // band is PROPORTIONAL: GBx = w/64 (~1.6%, ~3x margin) with a
+            // 12px floor for small viewports. Overscan is ASPECT-PRESERVING:
+            // GBy = GBx*h/w, so (w+2GBx)/(h+2GBy) == w/h. Under per-pixel-FoV
+            // that keeps BOTH per-pixel angles exactly constant ⇒ the clipped
+            // (visible) framing is pixel-identical to no overscan (an equal-px
+            // band would change the aspect ~1% and shift edge content).
+            const int GBx = (w / 64 > 12) ? (w / 64) : 12;
+            const int GBy = (w > 0) ? (GBx * h + w / 2) / w : GBx;
+            m_engine->SetSceneViewport(x - GBx, y - GBy, w + 2 * GBx, h + 2 * GBy);
         }
         m_dcompCompositor->SetEngineVisualTransform(x, y, w, h);
     }

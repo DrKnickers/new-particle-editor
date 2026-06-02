@@ -1619,6 +1619,26 @@ void Engine::SetSceneViewport(int x, int y, int w, int h)
 		return;
 	}
 
+	// [black-line fix, session 10] Defensive clamp to the engine RT. The
+	// caller (LayoutBroker) guard-bands the scene viewport a few px beyond the
+	// DComp clip so the D3D9Ex->D3D11 shared-surface edge incoherency lands
+	// outside the clip. The surrounding chrome guarantees margin so the band
+	// stays in-bounds in practice, but never let SetViewport fail on a
+	// degenerate (collapsed-panel) layout.
+	if (m_presentationParameters.BackBufferWidth > 0)
+	{
+		if (x < 0) { w += x; x = 0; }
+		if (x + w > static_cast<int>(m_presentationParameters.BackBufferWidth))
+			w = static_cast<int>(m_presentationParameters.BackBufferWidth) - x;
+	}
+	if (m_presentationParameters.BackBufferHeight > 0)
+	{
+		if (y < 0) { h += y; y = 0; }
+		if (y + h > static_cast<int>(m_presentationParameters.BackBufferHeight))
+			h = static_cast<int>(m_presentationParameters.BackBufferHeight) - y;
+	}
+	if (w <= 0 || h <= 0) return;  // fully clamped away — nothing to render
+
 	// Idempotent — same rect, no-op (silent — 60+ Hz pane-drag
 	// dispatches don't flood logs).
 	if (m_sceneViewportActive &&
