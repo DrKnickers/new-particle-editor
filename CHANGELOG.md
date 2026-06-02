@@ -16,6 +16,43 @@ Conventions:
 
 ## Changelog
 
+### Link-group brackets — per-member stubs, name-hugging position, dedicated lanes (NT-6)
+
+*2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Three improvements to the emitter tree's link-group bracket gutter. **(1)** Every member
+of a group now shows a short coloured stub off the bracket bar (previously only the first
+and last rows had caps), so membership reads at every row. **(2)** The bracket now sits
+right beside the names — ~8px past the longest visible emitter name — instead of pinned
+to the panel's far-right edge, and follows the names as they change. **(3)** Each link
+group keeps its own dedicated lane (stable, ordered by group id) instead of reusing lanes
+across non-overlapping groups, so the gutter no longer "bounces" between renders — this
+realises ROADMAP **NT-6**.
+
+**How we tackled it.** All in the tree's render + bracket-data layer.
+[`computeLinkGroupBrackets`](web/apps/editor/src/lib/link-group-colors.ts) now returns
+`memberRowIndices` (every member's flat-row index) and assigns one lane per group by
+`groupId` (replacing greedy first-fit). The "hug the names" position is a measure pass in
+[`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx): the bracket layer is
+absolutely positioned at `left = max(name text right edge) + gap`. The name lives in a
+`1fr` grid column that fills the row, so the *column* edge ≠ the *text* edge — each name's
+text node is measured with `Range.getBoundingClientRect()` (capped at the column edge for
+truncated names), re-run on tree change, `ResizeObserver`, and `document.fonts.ready`. The
+layer is `aria-hidden` + `pointer-events-none`, so it stays out of the accessibility tree
+(and the a11y goldens).
+
+**Issues encountered and resolutions.** Two worth recording. First, an earlier pass moved
+the role glyph between the eye and the name via `grid-column`, which **wrapped the glyph to
+a second row** — CSS Grid's sparse auto-placement increments the row when a definite column
+is less than the previously-placed one; pinning the placed cells to `grid-row: 1` fixed it.
+The miss slipped through because the first browser check sorted children by x only; the
+verification now checks **both axes** (centre-y alignment + row height). Second, jsdom
+doesn't implement `Range.getBoundingClientRect`, which threw in vitest — the measure now
+feature-detects it and falls back to the element rect there (real browsers measure the
+text node).
+
+---
+
 ### New-UI review polish — emitter role glyph placement + legacy-precision time fields
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

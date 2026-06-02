@@ -62,7 +62,20 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.2 [NT-6] Visual-stability lane assignment for bracket gutter (option)
+### 1.2 [NT-6] ~~Visual-stability lane assignment for bracket gutter~~ ✅ Shipped on lt-4 (`44f9e81`, 2026-06-02)
+
+> **Shipped on `lt-4`** — `computeLinkGroupBrackets`' greedy first-fit lane
+> assignment ([link-group-colors.ts](web/apps/editor/src/lib/link-group-colors.ts))
+> is replaced by one **dedicated lane per group**, stable by `groupId`. This is
+> stronger than the originally-sketched `(groupId - 1) % maxLanes` — no modulus
+> collisions; the gutter simply widens with the group count. Landed in the same
+> pass as two non-roadmap bracket-polish items (per-member stubs + name-hugging
+> brackets). Tests in `link-group-colors.test.ts`. Left in §1 with a
+> strikethrough rather than moved to §5 (lt-4-only; it takes its §5 slot at the
+> LT-4→master integration, per the NT-5 precedent above). The `[NT-6]` tag is
+> retired.
+>
+> *Actual: small (~1 sitting, bundled with the stub + name-hug work).*
 
 *Estimate: small.*
 

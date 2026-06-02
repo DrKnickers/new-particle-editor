@@ -3190,3 +3190,31 @@ Always run MSBuild via the **PowerShell** tool with the `&` call operator
 (`& "…\MSBuild.exe" "…\X.sln" /p:Configuration=Debug /p:Platform=x64 …`); the
 switches pass verbatim. Cross-reference [L-039](#l-039) (fresh-worktree NuGet
 restore) and [L-040](#l-040) (dist build before `--new-ui`).
+
+## L-047 — When verifying a CSS layout reorder, measure BOTH axes (a child can be horizontally correct but wrapped onto a new row); and beware CSS-Grid sparse auto-placement bumping a definite-column item to the next row
+
+**Rule.** A "move element X next to element Y" reorder is only verified when you've
+confirmed X and Y share the **same row** (centre-y within ~2px AND the parent's row
+height didn't grow), not just that X's **x** is between its neighbours. An x-only
+check passes for a wrapped element that's horizontally in the right column but on the
+line below.
+
+**The grid trap that caused it.** Moving the emitter role glyph between the eye and
+the name via `grid-column: 2` (while the glyph stayed LAST in DOM order, to keep the
+a11y goldens stable) made the glyph render on a second row. CSS Grid's **sparse**
+auto-placement (the default) increments the row position when an item's definite
+column is **less than the previously-placed item's column** — the glyph (col 2, placed
+after the label at col 3) got bumped to row 2. Fix: pin the explicitly-column-placed
+cells to `grid-row: 1` (the eye auto-fills row 1 col 1) so none can wrap.
+
+**How to apply.** For any reorder verified in browser mode (Preview `eval`), assert
+geometry on both axes: e.g. `Math.abs(a.cy - b.cy) <= 2` for same-row, and the row
+container's height stayed at its single-row value (a wrapped child doubles it). Don't
+sort children by one axis and call it done.
+
+**Source incident (2026-06-02).** The first browser check of the role-glyph reorder
+sorted the eye/glyph/label by `x` only → reported "eye → glyph → label" and looked
+correct, but the glyph had wrapped to row 2 (the user caught it on relaunch:
+"now in the next line"). The re-verify checked `cy` + `btnHeight` (24px = single row)
+and confirmed the `grid-row: 1` fix. Cross-reference [L-033](#l-033) (arch-C visuals
+need the user; but DOM-layout reorders ARE browser-verifiable — just check both axes).
