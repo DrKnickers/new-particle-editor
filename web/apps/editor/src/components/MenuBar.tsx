@@ -25,10 +25,19 @@ import { Check, ChevronRight } from "lucide-react";
 import type {
   Bridge,
   EngineStateDto,
+  EmitterTreeNode,
   ModDescriptor,
 } from "@particle-editor/bridge-schema";
 import { promptSaveChanges, useFileState } from "@/lib/file-state";
-import { useEmitterSelectionPrimary } from "@/lib/emitter-selection";
+import {
+  useEmitterSelectionPrimary,
+  useEmitterSelectionIds,
+  getEmitterSelectionSnapshot,
+} from "@/lib/emitter-selection";
+import {
+  markEmittersCopied,
+  useEmitterClipboardHasContent,
+} from "@/lib/emitter-clipboard";
 import { useTreeContextStore } from "@/lib/tree-context";
 import { requestEmitterRename } from "@/lib/tree-action";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
@@ -127,8 +136,18 @@ function CheckSlot({ active }: { active: boolean }) {
   );
 }
 
-const todo = (label: string) => () =>
-  console.log(`[Menu] ${label} — TODO (Phase 4.1 follow-up)`);
+// Depth-first search for a node by id in the emitter tree returned by
+// `emitters/list`. Used by Emitters → Toggle Visibility to read the
+// primary emitter's current `visible` flag at click time (one-shot, so the
+// menu doesn't hold a standing tree subscription).
+function findTreeNode(node: EmitterTreeNode, id: number): EmitterTreeNode | null {
+  if (node.id === id) return node;
+  for (const child of node.children) {
+    const found = findTreeNode(child, id);
+    if (found !== null) return found;
+  }
+  return null;
+}
 
 /** Extract the basename from a full path for the Recent Files submenu
  *  labels. Splits on the last `/` or `\\`; falls back to the whole
@@ -220,6 +239,13 @@ export function MenuBar({
   // the prompt-save-changes helper.
   const { recentFiles } = useFileState();
 
+  // Edit-menu clipboard + delete (MNU-1) act on the current emitter
+  // selection — the same actions the tree's Ctrl+C/X/V/Del use. Paste gates
+  // on whether anything has been copied this session.
+  const selectedIds = useEmitterSelectionIds();
+  const hasSelection = selectedIds.length > 0;
+  const hasClipboard = useEmitterClipboardHasContent();
+
   const send =
     (req: Parameters<Bridge["request"]>[0]) =>
     () => {
@@ -301,6 +327,56 @@ export function MenuBar({
   const handleRescaleEmitter = () => {
     if (primaryEmitterId === null) return;
     useTreeContextStore.getState().openDialog("rescale", primaryEmitterId);
+  };
+
+  // ── Edit-menu clipboard / delete (MNU-1) ─────────────────────────
+  // Snapshot the selection at click time (not the render-time `selectedIds`)
+  // so the action always uses the live set.
+  const handleCopy = () => {
+    const ids = getEmitterSelectionSnapshot().ids;
+    if (ids.length === 0) return;
+    void bridge.request({ kind: "emitters/copy", params: { ids } });
+    markEmittersCopied();
+  };
+  const handleCut = () => {
+    const ids = getEmitterSelectionSnapshot().ids;
+    if (ids.length === 0) return;
+    void bridge.request({ kind: "emitters/cut", params: { ids } });
+    markEmittersCopied();
+  };
+  const handlePaste = () => {
+    void bridge.request({ kind: "emitters/paste", params: {} });
+  };
+  const handleDeleteSelection = () => {
+    const ids = getEmitterSelectionSnapshot().ids;
+    if (ids.length === 0) return;
+    // Descending id order — matches the tree's batch delete + the host
+    // contract (deleting ascending would invalidate higher ids mid-loop).
+    for (const id of [...ids].sort((a, b) => b - a)) {
+      void bridge.request({ kind: "emitters/delete", params: { id } });
+    }
+  };
+
+  // ── Emitters-menu visibility (MNU-3) ─────────────────────────────
+  const handleShowAll = () => {
+    void bridge.request({ kind: "emitters/set-all-visible", params: { visible: true } });
+  };
+  const handleHideAll = () => {
+    void bridge.request({ kind: "emitters/set-all-visible", params: { visible: false } });
+  };
+  const handleToggleVisibility = async () => {
+    if (primaryEmitterId === null) return;
+    try {
+      const t = await bridge.request({ kind: "emitters/list", params: {} });
+      const node = findTreeNode(t.root, primaryEmitterId);
+      if (node === null) return;
+      void bridge.request({
+        kind: "emitters/set-visible",
+        params: { id: primaryEmitterId, visible: !node.visible },
+      });
+    } catch (err) {
+      console.warn("[MenuBar] toggle-visibility failed:", err);
+    }
   };
 
   return (
@@ -409,16 +485,32 @@ export function MenuBar({
               Redo<Hint>Ctrl+Shift+Z</Hint>
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            <Menubar.Item className={ITEM} disabled>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasSelection}
+              onSelect={handleCut}
+            >
               Cut<Hint>Ctrl+X</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} disabled>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasSelection}
+              onSelect={handleCopy}
+            >
               Copy<Hint>Ctrl+C</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} disabled>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasClipboard}
+              onSelect={handlePaste}
+            >
               Paste<Hint>Ctrl+V</Hint>
             </Menubar.Item>
-            <Menubar.Item className={ITEM} disabled>
+            <Menubar.Item
+              className={ITEM}
+              disabled={!hasSelection}
+              onSelect={handleDeleteSelection}
+            >
               Delete<Hint>Del</Hint>
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
@@ -495,28 +587,21 @@ export function MenuBar({
               Rescale Emitter…
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />
-            {/* TODO (Phase 4.1 follow-up): per-row eye-icon visibility
-                affordance + bridge wiring. Items render disabled to
-                signal the surface is locked but inert. */}
+            {/* MNU-3: Toggle Visibility acts on the primary selection (reads
+                its current `visible` via a one-shot list); Show/Hide All use
+                set-all-visible. The per-row eye affordance covers per-row
+                toggling; these mirror the legacy Emitters-menu commands. */}
             <Menubar.Item
               className={ITEM}
-              disabled
-              onSelect={todo("Toggle Visibility")}
+              disabled={!hasPrimary}
+              onSelect={handleToggleVisibility}
             >
               Toggle Visibility
             </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              disabled
-              onSelect={todo("Show All Emitters")}
-            >
+            <Menubar.Item className={ITEM} onSelect={handleShowAll}>
               Show All Emitters
             </Menubar.Item>
-            <Menubar.Item
-              className={ITEM}
-              disabled
-              onSelect={todo("Hide All Emitters")}
-            >
+            <Menubar.Item className={ITEM} onSelect={handleHideAll}>
               Hide All Emitters
             </Menubar.Item>
             <Menubar.Separator className={SEPARATOR} />

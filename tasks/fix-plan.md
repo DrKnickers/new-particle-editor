@@ -107,6 +107,23 @@ off-machine.
   - Golden re-baseline expectation: `disabled` attrs flip on Edit/Emitters items + new
     context-menu nodes. Aggregate-diff to confirm only-intended (L-053).
 
+- **P4b ✅ CODE DONE** (commit pending golden). Implemented:
+  - Edit menu Cut/Copy/Paste/Delete enabled + wired to `emitters/copy|cut|paste|delete`
+    on the live selection (MNU-1); Paste gates on new `lib/emitter-clipboard.ts`
+    session flag (set by both menu + tree copy/cut).
+  - Emitters menu Show All / Hide All → `set-all-visible`; Toggle Visibility → one-shot
+    `emitters/list` + `set-visible` (MNU-3). Removed the dead `todo()` helper.
+  - Context menu: New Root Emitter (SEL-6) + Cut/Copy/Paste (SEL-5).
+  - **GAP flagged:** "Paste As ▸ Child" NOT added — `emitters/paste` has no
+    paste-into-slot param; needs a host command (follow-up).
+  - Build clean; 422 tests green; TS happy.
+  - **Golden re-baseline PENDING native build:** the a11y harness launches
+    `x64\Debug\ParticleEditor.exe`, which isn't built in this fresh worktree (empty
+    `packages/`). Confirmed change: `menubar-emitters-open` (Show/Hide All lose
+    `[disabled]`). NOTE: **P1 may also have left `property-tabs-appearance` drift** —
+    deferred from P1; the a11y:update will catch both. Requires NuGet restore
+    (WebView2 1.0.3967.48) + MSBuild Debug x64 (L-039/L-046).
+
 ### a11y golden status
 P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
 DOM unchanged). Full `pnpm a11y` run deferred to a batch checkpoint before FF to lt-4.

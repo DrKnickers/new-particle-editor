@@ -82,6 +82,7 @@ import {
   useEmitterSelectionPrimary,
   useEmitterSelectionStore,
 } from "@/lib/emitter-selection";
+import { markEmittersCopied, useEmitterClipboardHasContent } from "@/lib/emitter-clipboard";
 import {
   computeDropZone,
   computeRootGapIndex,
@@ -279,6 +280,8 @@ function EmitterRow({
   const isSelected = selectedIds.includes(node.id);
   const isLinked = node.linkGroup !== 0;
   const isEditing = editing !== null && editing.id === node.id;
+  // Context-menu Paste gates on session clipboard content (SEL-5).
+  const hasClipboard = useEmitterClipboardHasContent();
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Auto-focus + select-all on the input the moment editing toggles to
@@ -379,6 +382,24 @@ function EmitterRow({
   const handleRescale = () => {
     resolveTargetIds();
     openTreeContextDialog("rescale", node.id);
+  };
+  // Context-menu clipboard (SEL-5) + New Root (SEL-6) — reuse the same
+  // bridge calls as the tree's Ctrl+C/X/V so behaviour stays identical.
+  const handleNewRoot = () => {
+    void bridge.request({ kind: "emitters/add-root", params: {} });
+  };
+  const handleContextCopy = () => {
+    const ids = resolveTargetIds();
+    void bridge.request({ kind: "emitters/copy", params: { ids } });
+    markEmittersCopied();
+  };
+  const handleContextCut = () => {
+    const ids = resolveTargetIds();
+    void bridge.request({ kind: "emitters/cut", params: { ids } });
+    markEmittersCopied();
+  };
+  const handleContextPaste = () => {
+    void bridge.request({ kind: "emitters/paste", params: {} });
   };
   const handleLinkGroupSettings = () => {
     resolveTargetIds();
@@ -658,6 +679,20 @@ function EmitterRow({
               Delete
             </ContextMenu.Item>
             <ContextMenu.Separator className={separatorClass} />
+            <ContextMenu.Item onSelect={handleContextCut} className={menuItemClass}>
+              Cut
+            </ContextMenu.Item>
+            <ContextMenu.Item onSelect={handleContextCopy} className={menuItemClass}>
+              Copy
+            </ContextMenu.Item>
+            <ContextMenu.Item
+              onSelect={handleContextPaste}
+              disabled={!hasClipboard}
+              className={menuItemClass}
+            >
+              Paste
+            </ContextMenu.Item>
+            <ContextMenu.Separator className={separatorClass} />
             <ContextMenu.Item onSelect={handleIncrement} className={menuItemClass}>
               Increment Index…
             </ContextMenu.Item>
@@ -666,6 +701,9 @@ function EmitterRow({
             </ContextMenu.Item>
             {/* ─── Batch B2 additions ───────────────────────────── */}
             <ContextMenu.Separator className={separatorClass} />
+            <ContextMenu.Item onSelect={handleNewRoot} className={menuItemClass}>
+              New Root Emitter
+            </ContextMenu.Item>
             <ContextMenu.Item
               onSelect={handleAddLifetimeChild}
               disabled={hasLifetimeChild}
@@ -1355,6 +1393,7 @@ export function EmitterTree({ bridge }: Props) {
         if (cur.length === 0) return;
         e.preventDefault();
         void bridge.request({ kind: "emitters/copy", params: { ids: cur } });
+        markEmittersCopied();
         return;
       }
       if (mod && (e.key === "x" || e.key === "X")) {
@@ -1362,6 +1401,7 @@ export function EmitterTree({ bridge }: Props) {
         if (cur.length === 0) return;
         e.preventDefault();
         void bridge.request({ kind: "emitters/cut", params: { ids: cur } });
+        markEmittersCopied();
         return;
       }
       if (mod && (e.key === "v" || e.key === "V")) {
