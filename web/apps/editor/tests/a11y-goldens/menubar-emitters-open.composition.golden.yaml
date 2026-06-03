@@ -155,7 +155,7 @@
   - menuitem "Rescale Emitter…" [disabled]
   - separator
   - menuitem "Toggle Visibility" [disabled]
-  - menuitem "Show All Emitters" [disabled]
-  - menuitem "Hide All Emitters" [disabled]
+  - menuitem "Show All Emitters"
+  - menuitem "Hide All Emitters"
   - separator
   - menuitem "Spawner F7"
