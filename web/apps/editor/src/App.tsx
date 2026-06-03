@@ -19,6 +19,7 @@ import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
 import { BridgeContext } from "@/lib/bridge-context";
 import { useBackingColorSync } from "@/lib/backing-color-sync";
+import { useAppAccelerators } from "@/lib/use-app-accelerators";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -114,38 +115,11 @@ function AppShell() {
     }
   }, [currentFilePath, dirty]);
 
-  // TODO Phase 3: remove this debug block once real per-screen shortcut
-  // handlers are wired in. Until then it proves the round-trip works:
-  //   1. React registers combos with the host on mount.
-  //   2. Host fires AcceleratorKeyPressed → matches → emits accelerator/pressed.
-  //   3. React logs the payload here; DevTools console shows "[accel] Ctrl+S".
-  useEffect(() => {
-    bridge
-      .request({
-        kind: "register-accelerators",
-        params: { combos: ["Ctrl+S", "Ctrl+Z", "Ctrl+Shift+Z", "Delete", "F5"] },
-      })
-      .catch((err) => console.warn("[accel] register-accelerators failed:", err));
-
-    const off = bridge.on("accelerator/pressed", (e) => {
-      console.log("[accel]", e.payload.combo);
-      // TODO Phase 3: real per-screen handlers. For now, route undo/redo
-      // through the bridge so the surface is reachable end-to-end. Until
-      // captures are wired in, `applied` will always come back false.
-      if (e.payload.combo === "Ctrl+Z") {
-        void bridge.request({
-          kind: "undo/perform",
-          params: { direction: "undo" },
-        });
-      } else if (e.payload.combo === "Ctrl+Shift+Z") {
-        void bridge.request({
-          kind: "undo/perform",
-          params: { direction: "redo" },
-        });
-      }
-    });
-    return off;
-  }, [bridge]);
+  // MNU-2 / VPT-1 / SEL-14: wire the legacy global keyboard accelerators to
+  // the new UI's existing actions. The host (AcceleratorBridge) translates
+  // the registered combos and emits `accelerator/pressed`; the hook routes
+  // each to the same bridge call the matching menu item uses.
+  useAppAccelerators(bridge);
 
   // Task 2.1 verification hook: log the initial engine snapshot at mount.
   // Confirms the bridge round-trip is producing a real EngineStateDto,

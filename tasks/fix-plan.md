@@ -69,7 +69,20 @@ labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-de
   legacy's allowance was incidental, load still preserves; removing gives no benefit.
   Remaining P3 (status bar VPT-6/7/8, Import "Clear" MNU-12) touch a11y goldens →
   batched with P4.
-- P4: next (menus / clipboard / accelerators — first golden-cascade phase).
+- **P4a ✅ DONE** (global accelerators — MNU-2, VPT-1, SEL-14). New
+  `lib/use-app-accelerators.ts` wires every legacy accelerator to its existing
+  action: file (Ctrl+N/O/S), clear (Ctrl+Del), undo/redo (Ctrl+Z / **Ctrl+Y** /
+  Ctrl+Shift+Z), emitter move (**Alt+Up/Down**), spawner trigger (Ctrl+Space),
+  view toggles reading live engine state (Ctrl+G/H, F8), step (F9/F10), spawner
+  dock (F7), reset camera (Ctrl+Home), reload (F5/F6). Replaced the old debug block
+  in App.tsx. **Verified the host `AcceleratorBridge` parser supports all combos**
+  (AcceleratorBridge.cpp:14-51) → no gaps. Deliberately excluded bare Delete/F2
+  (tree-scoped, avoids firing mid-edit). 6 new tests; suite 422 green; build clean;
+  no DOM/golden change. Native key→action needs the native build + user (every link
+  verified to connect).
+- **P4b: next** — enable the disabled Edit (Cut/Copy/Paste/Delete) + Emitters
+  (Toggle-Vis/Show-All/Hide-All) menu items, context-menu clipboard/Paste-As/New-Root
+  (MNU-1/3/4, SEL-5/6). **First golden-cascade phase** → native a11y re-baseline.
 
 ### a11y golden status
 P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
