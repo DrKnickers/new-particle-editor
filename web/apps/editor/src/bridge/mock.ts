@@ -1149,12 +1149,23 @@ export class MockBridge implements Bridge {
 
       // ---------------- settings: cross-mode registry ----------------
       //
-      // Force Align Fill Lights round-trips through the registry in the
-      // native host; browser mode keeps the flag in `lightingForceAlign`.
-      // No event is emitted — the constraint is enforced UI-side in
-      // LightingPanel, and the flag isn't part of EngineStateDto.
-      case "settings/lighting-force-align":
-        return { enabled: this.lightingForceAlign };
+      // `settings/lighting` returns the raw lighting split (the native
+      // host reads it from the registry; browser mode returns the
+      // canonical defaults from src/main.cpp:6180-6195, with the live
+      // in-memory `lightingForceAlign` flag). `…/set` writes just the
+      // flag. No event is emitted — the constraint is enforced UI-side
+      // in LightingPanel, and lighting isn't part of EngineStateDto.
+      case "settings/lighting": {
+        const rgb = (r: number, g: number, b: number) => r | (g << 8) | (b << 16);
+        return {
+          sun:   { intensity: 0.5, az: 0,   alt: 45,  diffuse: rgb(180, 180, 190), specular: rgb(190, 190, 200) },
+          fill1: { intensity: 0.5, az: 120, alt: -10, diffuse: rgb(60, 80, 160),   specular: 0 },
+          fill2: { intensity: 0.5, az: 210, alt: -10, diffuse: rgb(60, 80, 160),   specular: 0 },
+          ambient: rgb(40, 40, 50),
+          shadow:  rgb(100, 100, 110),
+          forceAlign: this.lightingForceAlign,
+        };
+      }
 
       case "settings/lighting-force-align/set":
         this.lightingForceAlign = req.params.enabled;

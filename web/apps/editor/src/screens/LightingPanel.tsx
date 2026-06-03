@@ -48,8 +48,9 @@ const FORCE_ALIGN_FILL_ALT        = -10;
 import { useEffect, useState } from "react";
 import type {
   Bridge,
-  EngineStateDto,
+  Color,
   LightDto,
+  LightSettingsDto,
   LightWhich,
   Vec4,
 } from "@particle-editor/bridge-schema";
@@ -57,7 +58,6 @@ import { Spinner } from "@/primitives/Spinner";
 import { ColorButton } from "@/primitives/ColorButton";
 import { ToolPanel } from "@/components/ToolPanel";
 import { BloomSection } from "@/screens/BloomSection";
-import { vec4ToColorref } from "@/lib/colorref";
 import type { RgbColor } from "@/primitives/palette-store";
 
 type Props = {
@@ -73,17 +73,6 @@ function directionFromAzAlt(zDeg: number, tiltDeg: number): Vec4 {
   const t = (tiltDeg * Math.PI) / 180;
   const c = Math.cos(t);
   return [c * Math.cos(z), c * Math.sin(z), Math.sin(t), 0] as const;
-}
-
-/** Recover (azimuth, altitude) in degrees from a direction Vec4 by
- *  inverting `directionFromAzAlt`. Used to seed the spinners from the
- *  engine snapshot. Position[3] is unused; the engine reads only the
- *  first three components. */
-function azAltFromDirection(p: Vec4): { az: number; alt: number } {
-  const [x, y, z] = p;
-  const alt = (Math.asin(Math.max(-1, Math.min(1, z))) * 180) / Math.PI;
-  const az = (Math.atan2(y, x) * 180) / Math.PI;
-  return { az, alt };
 }
 
 /** Build a `LightDto` from user-facing inputs, folding `intensity`
@@ -147,8 +136,10 @@ function rgbToColorButtonValue(rgb: RgbColor): RgbColor {
   return rgb;
 }
 
-function vec4ToRgb(v: Vec4): RgbColor {
-  const c = vec4ToColorref(v);
+/** Unpack a packed COLORREF (`Color`, low byte = R) into an RgbColor.
+ *  The `settings/lighting` DTO carries colours in this form (the raw
+ *  registry value), unlike the engine snapshot's pre-multiplied Vec4. */
+function colorrefToRgb(c: Color): RgbColor {
   return {
     r: c & 0xff,
     g: (c >> 8) & 0xff,
@@ -156,89 +147,67 @@ function vec4ToRgb(v: Vec4): RgbColor {
   };
 }
 
-/** Seed the per-light form state from the engine snapshot. Intensity
- *  is assumed 1.0 on first read (the snapshot only carries the
- *  post-multiplied Vec4); the user can adjust thereafter and the
- *  multiplier compounds correctly on the next push. */
-function seedFromSnapshot(light: LightDto): LightFormState {
-  const { az, alt } = azAltFromDirection(light.position);
-  return {
-    intensity: 1,
-    az,
-    alt,
-    diffuse: vec4ToRgb(light.diffuse),
-    specular: vec4ToRgb(light.specular),
-  };
-}
-
 export function LightingPanel({ bridge, onClose }: Props) {
-  const [snapshot, setSnapshot] = useState<EngineStateDto | null>(null);
   const [sun, setSun] = useState<LightFormState>(SUN_DEFAULTS);
   const [fill1, setFill1] = useState<LightFormState>(FILL1_DEFAULTS);
   const [fill2, setFill2] = useState<LightFormState>(FILL2_DEFAULTS);
   const [ambient, setAmbient] = useState<RgbColor>(AMBIENT_DEFAULT);
   const [shadow, setShadow] = useState<RgbColor>(SHADOW_DEFAULT);
-  // Once we've seeded form state from the snapshot, subsequent
-  // snapshots are ignored so the user's intensity edits don't get
-  // wiped — the engine has no notion of "intensity vs colour", only
-  // the multiplied Vec4, so re-seeding would clobber the split.
-  const [seeded, setSeeded] = useState(false);
   // FD10 Group D: Force Align Fill Lights. Default ON to match legacy
-  // (kLightForceAlignDefault = true at src/main.cpp:6187). The flag now
-  // round-trips through the registry (`LightingForceFillAlignment`
-  // REG_DWORD) via the bridge so it stays in sync with the legacy UI —
-  // replaces the old localStorage-only persistence. Initialised to the
-  // default synchronously (so the checkbox renders deterministically on
-  // first paint), then reconciled from the host on mount; the toggle
-  // handler writes back. Under `--test-host` the host returns the
-  // default and no-ops the write, keeping the dialog-lighting a11y
-  // golden deterministic.
+  // (kLightForceAlignDefault = true, src/main.cpp:6187). Seeded from the
+  // registry below (it rides in the `settings/lighting` DTO); the toggle
+  // handler writes it back via `settings/lighting-force-align/set`.
   const [forceAlign, setForceAlign] = useState<boolean>(true);
 
+  // Seed the displayed controls from the RAW lighting settings the host
+  // reads from the registry (`settings/lighting`) — intensity and colour
+  // are the user's true saved split, not the lossy `intensity × colour`
+  // Vec4 recovered from the engine snapshot. Mirrors legacy LightingDlgProc,
+  // which reads the registry on every open (src/main.cpp:6479). The host
+  // already restored the engine from the same registry at startup, so the
+  // displayed values and the rendered scene agree.
+  //
+  // The pane unmounts when toggled closed, so this re-seeds on reopen
+  // (first open + no-edit reopen both show the true saved values;
+  // persisting in-session edits across reopen is the deferred lighting
+  // write-back item). Under `--test-host` the host returns canonical
+  // defaults — not the live registry — so the dialog-lighting a11y golden
+  // stays deterministic.
   useEffect(() => {
     let cancelled = false;
     bridge
-      .request({ kind: "settings/lighting-force-align", params: {} })
-      .then((r) => {
-        // Guard against a non-boolean reply (e.g. a stub bridge that
-        // returns `{}`): only adopt a real boolean so the synchronous
-        // default stands otherwise.
-        if (!cancelled && typeof r?.enabled === "boolean") setForceAlign(r.enabled);
+      .request({ kind: "settings/lighting", params: {} })
+      .then((s) => {
+        // Guard a stub / degraded bridge that returns `{}` — keep defaults.
+        if (cancelled || !s || !s.sun) return;
+        const seed = (l: LightSettingsDto): LightFormState => ({
+          intensity: l.intensity,
+          az: l.az,
+          alt: l.alt,
+          diffuse: colorrefToRgb(l.diffuse),
+          specular: colorrefToRgb(l.specular),
+        });
+        const nextSun = seed(s.sun);
+        let nextFill1 = seed(s.fill1);
+        let nextFill2 = seed(s.fill2);
+        // With Force Align on, the fill spinners SHOW the computed angles
+        // (sun.az + offset @ FORCE_ALIGN_FILL_ALT) — matching the
+        // disabled-spinner display in legacy (src/main.cpp:6499-6502) and
+        // the angles the host pushed to the engine.
+        if (s.forceAlign) {
+          nextFill1 = { ...nextFill1, az: nextSun.az + FORCE_ALIGN_FILL1_AZ_OFFSET, alt: FORCE_ALIGN_FILL_ALT };
+          nextFill2 = { ...nextFill2, az: nextSun.az + FORCE_ALIGN_FILL2_AZ_OFFSET, alt: FORCE_ALIGN_FILL_ALT };
+        }
+        setSun(nextSun);
+        setFill1(nextFill1);
+        setFill2(nextFill2);
+        setAmbient(colorrefToRgb(s.ambient));
+        setShadow(colorrefToRgb(s.shadow));
+        setForceAlign(s.forceAlign);
       })
-      .catch((err) => console.warn("[LightingPanel] force-align read failed:", err));
+      .catch((err) => console.warn("[LightingPanel] settings/lighting failed:", err));
     return () => { cancelled = true; };
   }, [bridge]);
-
-  useEffect(() => {
-    let cancelled = false;
-    bridge
-      .request({ kind: "engine/state/snapshot", params: {} })
-      .then((s) => {
-        if (cancelled) return;
-        setSnapshot(s);
-        if (!seeded) {
-          setSun(seedFromSnapshot(s.lights.sun));
-          setFill1(seedFromSnapshot(s.lights.fill1));
-          setFill2(seedFromSnapshot(s.lights.fill2));
-          setAmbient(vec4ToRgb(s.ambient));
-          setShadow(vec4ToRgb(s.shadow));
-          setSeeded(true);
-        }
-      })
-      .catch((err) => console.warn("[LightingPanel] snapshot failed:", err));
-    const off = bridge.on("engine/state/changed", (e) => {
-      setSnapshot(e.payload);
-    });
-    return () => {
-      cancelled = true;
-      off();
-    };
-    // `seeded` is intentionally omitted from deps so the post-seed
-    // listener stays attached without re-firing the seed branch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge]);
-
-  void snapshot; // currently unused after seeding — kept for future Force Align wiring.
 
   const pushLight = (which: LightWhich, s: LightFormState) => {
     void bridge.request({

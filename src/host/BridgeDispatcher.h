@@ -276,6 +276,15 @@ private:
     // settings handlers to deterministic defaults (see ctor comment + L-051).
     bool               m_testHost = false;
 
+    // Test seam: set from the ALO_SETTINGS_LIVE env var at construction.
+    // When true it LIFTS the `--test-host` settings gate, so the
+    // `settings/*` handlers hit the real registry even under `--test-host`
+    // — letting a CDP test drive the genuine read/write round-trip without
+    // disturbing the a11y harness (which never sets the env var, so its
+    // plain `--test-host` launch stays deterministic). Read once; default
+    // false.
+    bool               m_settingsLive = false;
+
     // [MT-11 T9] When true, EmitStatsTick is a no-op and React's
     // StatusBar receives a stats/frozen-changed event so it clears
     // its local stats+cursor state and renders `—` placeholders.

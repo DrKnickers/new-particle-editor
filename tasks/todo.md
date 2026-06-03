@@ -160,3 +160,29 @@ React (`LightingPanel.tsx`): remove `alo:lighting:force-align` localStorage; ini
 **Deferred (per design Out list):** panel raw-value display parity (panel shows `intensity=1` + folded colours;
 render is correct), and new-UI writing lighting *values* back on edit. **One user verification step:** the Force
 Align *write* path (toggle in new UI → registry flips → seen by legacy) can't be agent-driven on a faithful launch.
+
+---
+
+## Follow-up (same session) — resolve the two deferred items the user asked about
+
+User asked to (1) test the Force Align write path with no participation, and (2) fix the panel raw-value display.
+Both shipped:
+
+- **Test seam (`ALO_SETTINGS_LIVE`):** the `--test-host` settings gate is now `m_testHost && !m_settingsLive`;
+  the env var lifts it so a CDP launch drives the real registry while the a11y harness (never sets it) stays
+  deterministic. Committed [`scripts/verify-force-align.mjs`](web/apps/editor/scripts/verify-force-align.mjs)
+  launches `--test-host` + the env, drives the real Lighting checkbox over CDP, asserts the registry write +
+  raw display, restores the registry in a `finally`. **5/5 checks pass, no user.** → **L-054**.
+- **Raw display fix:** the force-align get became a unified `settings/lighting` get returning the raw lighting
+  split (intensity/colour separate, angles in degrees) from the registry; `LightingPanel` seeds its displayed
+  controls from it (dropping `azAltFromDirection`). Engine render unchanged (host restore drives it); both read
+  the same registry so they agree. **Caveat:** the pane re-seeds from the registry on reopen (unmount-on-close),
+  so in-session edits aren't reflected on reopen until lighting-value write-back lands — a strict improvement for
+  the common cases, not a regression.
+
+**Verification:** vitest **406** (contract test split 1→2); `.sln` Debug+Release x64 clean; `verify-force-align.mjs`
+5/5; `dialog-lighting` a11y golden regenerated — flipped from the folded values (`1.00`, `#FFFFFF`, `#000000`) to
+the true defaults (`0.50`, `#B4B4BE`, `#282832`); **only that golden changed**, 0 legacy `.golden.json` touched.
+
+**Still deferred:** new-UI lighting-VALUE write-back (registry on edit) + reopen-after-edit persistence — a
+separate parity item. Force Align flag write-back IS done.

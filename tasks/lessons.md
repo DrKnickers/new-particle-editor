@@ -3460,3 +3460,44 @@ fanned out. (Confirm the cascade cheaply: `grep -l "Toggle Spawner panel"
 [L-052](#l-052) (two-lane discipline), [L-033](#l-033) (flake vs. real), and
 [L-051](#l-051) (the gated-restore in the same session was verified via host.log, since
 its `dialog-lighting` golden change was only the toolbar button, not anything lighting).
+
+## L-054 — When a `--test-host` determinism gate also blocks the only CDP channel that could test a registry round-trip, add an env-var that LIFTS the gate (e.g. `ALO_SETTINGS_LIVE`) — the a11y harness stays deterministic (never sets it) while an opt-in CDP launch drives the real registry; and seed a panel's DISPLAY from the registry raw values, not the engine snapshot (which is lossy)
+
+**Two coupled lessons from making `settings/*` cross-mode + testable.**
+
+**1. The gate-vs-testability bind, and the env-var seam that breaks it.** A registry
+read/write handler must be gated under `--test-host` so the a11y goldens see canonical
+defaults (L-051). But that same gate is what makes the write path *untestable*: a
+faithful launch has no CDP (port 9222 only opens with `--test-host`), and `--test-host`
+no-ops the write. The handler looks like it can only be verified by the user toggling in
+a real launch. **Resolution:** gate on `m_testHost && !m_settingsLive`, where
+`m_settingsLive` is read once from an env var (`ALO_SETTINGS_LIVE=1`) at construction. The
+a11y harness launches plain `--test-host` → gate ON → deterministic; a dedicated CDP test
+launches `--test-host` WITH the env var → gate OFF → the genuine registry round-trip runs
+over CDP. One gate, both masters, no mock. The test (a committed on-demand
+`scripts/verify-*.mjs`, mirroring `run-native-tests.mjs`) drives the real UI over CDP and
+reads the registry via `reg query`, saving + restoring the original value in a `finally`.
+Generalises to any "needs the real side-effect but a11y needs determinism" handler.
+
+**2. Seed a panel's display from the registry raw values, not the engine snapshot.** The
+engine stores only the *folded* `intensity × colour` Vec4 — the intensity/colour split is
+unrecoverable from it (`seedFromSnapshot` hard-codes `intensity = 1` and shows the folded
+colour, so the panel displayed e.g. white-at-intensity-1 instead of the saved
+`RGB(180,180,190)` at 0.5). The raw split + raw angles live in the **registry**. Add a
+`settings/lighting` get that returns the raw DTO and seed the panel's *displayed controls*
+from it; the engine restore (host-side) still drives the *render*, and both come from the
+same registry so they agree. Bonus: registry angles are stored as z-angle/tilt directly,
+so the lossy `azAltFromDirection` direction-inversion drops out. **Caveat to document:** a
+conditionally-rendered (unmount-on-close) panel re-seeds from the registry on reopen, so
+in-session edits aren't reflected on reopen until lighting-value *write-back* lands — a
+strict improvement over the old folded display for the common cases (first open + no-edit
+reopen), not a regression.
+
+**Source incident (2026-06-03, session 12, raw-lighting get-bridge + test seam).**
+`verify-force-align.mjs` proved the write path (`LightingForceFillAlignment → 0`) AND the
+raw display (Sun intensity `0.50` not `1`) in 5/5 CDP checks, no user. The
+`dialog-lighting` golden flipped from the folded values (`1.00`, `#FFFFFF`, `#000000`…) to
+the true defaults (`0.50`, `#B4B4BE`, `#282832`…) — i.e. the golden had been encoding the
+bug. Cross-reference [L-051](#l-051) (gated-restore verify channel), [L-049](#l-049)
+(parity-restore pattern), [L-033](#l-033) (engine pixels still need the user; DOM/registry
+are agent-verifiable).

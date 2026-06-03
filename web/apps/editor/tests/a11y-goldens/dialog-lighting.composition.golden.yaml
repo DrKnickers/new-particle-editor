@@ -154,7 +154,7 @@
     - button "Close"
     - group:
       - text: Sun Intensity
-      - textbox "Sun intensity": "1.00"
+      - textbox "Sun intensity": "0.50"
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Azimuth
@@ -162,20 +162,20 @@
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Altitude
-      - textbox "Sun altitude": "0"
+      - textbox "Sun altitude": "45"
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Diffuse
-      - button "Sun diffuse colour": "#FFFFFF"
+      - button "Sun diffuse colour": "#B4B4BE"
       - text: Specular
-      - button "Sun specular colour": "#000000"
+      - button "Sun specular colour": "#BEBEC8"
     - group: Fill 1
     - group: Fill 2
     - checkbox "Force Align Fill Lights" [checked]
     - text: Force Align Fill Lights Ambient Colour
-    - button "Ambient colour": "#000000"
+    - button "Ambient colour": "#282832"
     - text: Shadow Colour
-    - button "Shadow colour": "#000000"
+    - button "Shadow colour": "#64646E"
     - button "Mirror Sun" [disabled]
     - button "Reset"
     - group: Bloom

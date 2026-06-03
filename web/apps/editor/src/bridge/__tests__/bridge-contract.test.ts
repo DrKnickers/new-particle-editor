@@ -1255,24 +1255,37 @@ describe("MockBridge contract", () => {
     expect(after.properties.nParticlesPerSecond).toBe(before.properties.nParticlesPerSecond);
   });
 
-  // ─── Settings — cross-mode registry (Force Align) ────────────────
+  // ─── Settings — cross-mode registry (raw lighting + Force Align) ──
   //
-  // The flag defaults to the legacy `kLightForceAlignDefault = true`, and
-  // the set→get round-trip persists within a MockBridge instance (the
-  // native host persists to the `LightingForceFillAlignment` REG_DWORD).
-  it("settings/lighting-force-align defaults to true and round-trips a set", async () => {
+  // `settings/lighting` returns the raw lighting split (intensity/colour
+  // kept separate, angles in degrees) the panel seeds from; the native
+  // host reads it from the registry. The `forceAlign` field reflects the
+  // live flag, and `…/set` round-trips it within a MockBridge instance.
+  it("settings/lighting returns the raw split and forceAlign defaults to true", async () => {
     const b = new MockBridge();
-    const initial = await b.request({ kind: "settings/lighting-force-align", params: {} });
-    expect(initial).toEqual({ enabled: true });
+    const s = await b.request({ kind: "settings/lighting", params: {} });
+    expect(s.forceAlign).toBe(true);
+    // Raw split: intensity kept separate from colour (not folded).
+    expect(s.sun.intensity).toBe(0.5);
+    expect(s.sun.az).toBe(0);
+    expect(s.sun.alt).toBe(45);
+    expect(s.fill1.az).toBe(120);
+    expect(s.fill2.az).toBe(210);
+    // Colours are packed COLORREFs (low byte = R).
+    expect(s.sun.diffuse & 0xff).toBe(180);
+    expect(s).toHaveProperty("ambient");
+    expect(s).toHaveProperty("shadow");
+  });
 
+  it("settings/lighting-force-align/set flips the forceAlign field on the next get", async () => {
+    const b = new MockBridge();
     const setRes = await b.request({
       kind: "settings/lighting-force-align/set",
       params: { enabled: false },
     });
     expect(setRes).toEqual({});
-
-    const after = await b.request({ kind: "settings/lighting-force-align", params: {} });
-    expect(after).toEqual({ enabled: false });
+    const after = await b.request({ kind: "settings/lighting", params: {} });
+    expect(after.forceAlign).toBe(false);
   });
 
   it("on() returns a working unsubscribe", async () => {

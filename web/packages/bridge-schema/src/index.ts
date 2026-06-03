@@ -47,6 +47,38 @@ export type LightDto = {
  *  so JSON readers don't have to memorise an enum. */
 export type LightWhich = "sun" | "fill1" | "fill2";
 
+/** One light's RAW persisted settings, as the registry stores them —
+ *  intensity and base colour are kept SEPARATE here (the engine only
+ *  stores the post-multiplied `intensity × colour` Vec4, which is lossy).
+ *  `az`/`alt` are the z-angle / tilt in degrees (stored directly, so no
+ *  direction-vector inversion is needed). `diffuse`/`specular` are packed
+ *  COLORREFs (`Color`). Fills carry `specular` for shape-compat but it's
+ *  unused (fills are diffuse-only). Used by `settings/lighting` so the
+ *  LightingPanel can display the user's true intensity/colour split rather
+ *  than the folded value recovered from the engine snapshot. */
+export type LightSettingsDto = {
+  intensity: number;
+  az: number;
+  alt: number;
+  diffuse: Color;
+  specular: Color;
+};
+
+/** The full raw lighting settings read from the registry — the source the
+ *  LightingPanel seeds its displayed controls from. Mirrors legacy
+ *  `PushLightingToEngine`'s registry reads (src/main.cpp:6376). `forceAlign`
+ *  is the `LightingForceFillAlignment` flag. The host returns canonical
+ *  defaults (not the live registry) under `--test-host` so the
+ *  dialog-lighting a11y golden stays deterministic. */
+export type LightingSettingsDto = {
+  sun: LightSettingsDto;
+  fill1: LightSettingsDto;
+  fill2: LightSettingsDto;
+  ambient: Color;
+  shadow: Color;
+  forceAlign: boolean;
+};
+
 // ─── Spawner DTO (Phase 3 Screen 8 Batch 4) ──────────────────────────
 //
 // Mirrors `SpawnerConfig` at [src/SpawnerDriver.h:18]. Defaults match
@@ -548,14 +580,20 @@ export type Request =
   | { kind: "engine/query/skydome-slot-empty"; params: { slot: number } }
   | { kind: "engine/query/bloom-available";    params: Record<string, never> }
 
-  // Settings (cross-mode registry persistence). The Force Align Fill
-  // Lights flag is a UI-side constraint with no engine state, but legacy
-  // persists it as the REG_DWORD `LightingForceFillAlignment`. These two
-  // kinds let the new UI read it on mount and write it on toggle so the
-  // flag round-trips between the legacy and new UIs. Host returns the
-  // default (true) / no-ops the write under `--test-host` so the
-  // dialog-lighting a11y golden stays deterministic.
-  | { kind: "settings/lighting-force-align";     params: Record<string, never> }
+  // Settings (cross-mode registry persistence). Legacy persists lighting
+  // under HKCU\Software\AloParticleEditor; the new UI reads it back so
+  // settings round-trip between the two UIs.
+  //   - `settings/lighting` (get) returns the full raw lighting split
+  //     (intensity/colour kept separate, angles in degrees) the panel
+  //     seeds its displayed controls from — incl. the Force Align flag.
+  //   - `settings/lighting-force-align/set` writes just the
+  //     `LightingForceFillAlignment` REG_DWORD on toggle (the one flag the
+  //     new UI persists back; lighting-value write-back is a separate item).
+  // Host returns canonical defaults (get) / no-ops the write (set) under
+  // `--test-host` so the dialog-lighting a11y golden stays deterministic —
+  // unless ALO_SETTINGS_LIVE is set (the test seam that drives the real
+  // registry over CDP without disturbing the a11y harness).
+  | { kind: "settings/lighting";                 params: Record<string, never> }
   | { kind: "settings/lighting-force-align/set"; params: { enabled: boolean } }
 
   // Emitters (Phase 3+)
@@ -867,7 +905,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/query/bloom-available" }     ? boolean :
 
   // Settings (cross-mode registry persistence)
-  R extends { kind: "settings/lighting-force-align" }     ? { enabled: boolean } :
+  R extends { kind: "settings/lighting" }                 ? LightingSettingsDto :
   R extends { kind: "settings/lighting-force-align/set" } ? Record<string, never> :
 
   // Emitters

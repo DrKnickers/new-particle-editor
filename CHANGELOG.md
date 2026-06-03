@@ -20,12 +20,14 @@ Conventions:
 
 *2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
 
-Three lighting-parity improvements to the new (`--new-ui`) editor. First, the
+Lighting-parity improvements to the new (`--new-ui`) editor. First, the
 viewport now **opens with your saved lighting**: the sun / fill 1 / fill 2 angles,
 colours and intensities, plus ambient and shadow, are restored from the registry at
 startup exactly as the legacy editor does — previously the new UI ignored them and
-started from engine defaults, so tuned lights only showed up in the old editor.
-Second, **Force Align Fill Lights now round-trips through the registry**
+started from engine defaults, so tuned lights only showed up in the old editor. The
+**Lighting panel also displays those true saved values** (intensity, base colour,
+angles) rather than the folded approximation it used to recover from the engine
+snapshot. Second, **Force Align Fill Lights now round-trips through the registry**
 (`LightingForceFillAlignment`): toggling it in the new UI is seen by the legacy
 editor and vice-versa, replacing the new UI's old session-only (localStorage)
 behaviour. Third, the **toolbar gained a Lighting button** (lightbulb icon, next to
@@ -42,16 +44,21 @@ field-for-field — same registry value names/types (floats `REG_BINARY`, colour
 building `Engine::Light`s directly and pushing them via `SetLight`/`SetAmbient`/`SetShadow`.
 A permanent `[lighting-restore]` `host.log` line is the standing no-user verification
 channel (it is the only one — the restore is gated off under `--test-host`, so the CDP
-bridge can't observe it). Force Align's *flag* sync needed a tiny bridge surface: two
-new schema kinds (`settings/lighting-force-align` get + `…/set`) read/write the
-`REG_DWORD` in [`BridgeDispatcher`](src/host/BridgeDispatcher.cpp), with `useTestHost`
-plumbed into the dispatcher so the get returns the default and the set no-ops under
-`--test-host` (keeping the `dialog-lighting` a11y golden deterministic). The React
-[`LightingPanel`](web/apps/editor/src/screens/LightingPanel.tsx) drops its localStorage
-key, seeds the checkbox to the default synchronously, then reconciles from the bridge on
-mount and writes back on toggle. The [`Toolbar`](web/apps/editor/src/components/Toolbar.tsx)
-button is a ~10-line mirror of the existing Spawner button reusing `toggleDock("lighting")`
-from [`lib/right-dock.ts`](web/apps/editor/src/lib/right-dock.ts).
+bridge can't observe it). The panel display + flag sync share one bridge surface: a
+`settings/lighting` get returns the **raw** lighting split read from the registry
+(intensity/colour kept separate, angles in degrees, plus the Force Align flag), and a
+`settings/lighting-force-align/set` writes just the `REG_DWORD` on toggle — both in
+[`BridgeDispatcher`](src/host/BridgeDispatcher.cpp). The React
+[`LightingPanel`](web/apps/editor/src/screens/LightingPanel.tsx) seeds its displayed
+controls from that DTO (dropping the lossy `azAltFromDirection` recovery and its
+localStorage key) and writes the flag back on toggle. Determinism is handled by a gate
+in the dispatcher: under `--test-host` the get returns canonical defaults and the set
+no-ops (keeping the `dialog-lighting` a11y golden stable), **unless** the
+`ALO_SETTINGS_LIVE` env var lifts the gate — a test seam that lets a CDP script drive
+the real registry round-trip without disturbing the a11y harness. The
+[`Toolbar`](web/apps/editor/src/components/Toolbar.tsx) button is a ~10-line mirror of
+the existing Spawner button reusing `toggleDock("lighting")` from
+[`lib/right-dock.ts`](web/apps/editor/src/lib/right-dock.ts).
 
 **Issues encountered and resolutions.** (1) **The toolbar lives inside every chrome
 snapshot.** Adding one toolbar button changed **19** composition a11y goldens, not the
@@ -61,13 +68,18 @@ the toolbar subtree. The diff stayed fully attributable (each file gained exactl
 because the Lighting pane is open there), so `a11y:update` (composition lane only) was
 the right call; the legacy `*.golden.json` lane was left untouched per the two-lane rule.
 (2) **A `!useTestHost`-gated restore can't be verified over the `--test-host` CDP bridge**
-(the gate disables the very thing). It was verified from two faithful non-test-host
-launches reading `host.log`: with Force Align on, the fills came out computed
-(`fill1Z=120 fill2Z=210`); flipping the registry flag off, they came out at the persisted
-saved angles (`fill1Z=129 fill2Z=301`) — distinct from both the ctor defaults and the
-computed values, proving the restore reads saved registry data. The Force Align *write*
-path (toggle in the new UI → registry flips → legacy picks it up) is the one user-facing
-verification step, since it can't be agent-driven on a faithful launch.
+(the gate disables the very thing). The engine restore was verified from two faithful
+non-test-host launches reading `host.log`: with Force Align on, the fills came out
+computed (`fill1Z=120 fill2Z=210`); flipping the registry flag off, they came out at the
+persisted saved angles (`fill1Z=129 fill2Z=301`) — distinct from both the ctor defaults
+and the computed values, proving the restore reads saved registry data. (3) **The Force
+Align write path looked un-automatable** for the same reason — gated under `--test-host`,
+no CDP on a faithful launch. The `ALO_SETTINGS_LIVE` seam resolves it: a committed
+on-demand script ([`scripts/verify-force-align.mjs`](web/apps/editor/scripts/verify-force-align.mjs))
+launches `--test-host` with the env var, drives the real Lighting checkbox over CDP, and
+asserts both the registry write (`LightingForceFillAlignment → 0`) and the raw panel
+display (Sun intensity shows `0.50`, not the folded `1`), restoring the registry in a
+`finally`. 5/5 checks pass with no user participation.
 
 ---
 

@@ -683,6 +683,15 @@ BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
     : m_engine(engine), m_layout(layout), m_accel(accel), m_emit(std::move(emit))
     , m_testHost(useTestHost)
 {
+    // Test seam (ALO_SETTINGS_LIVE=1): lift the --test-host settings gate so
+    // a CDP test can exercise the real registry round-trip. The a11y harness
+    // never sets this, so its plain --test-host launch stays deterministic.
+    {
+        wchar_t buf[8] = {};
+        DWORD n = GetEnvironmentVariableW(L"ALO_SETTINGS_LIVE", buf, 8);
+        m_settingsLive = (n > 0 && n < 8 && buf[0] == L'1');
+    }
+
     // Seed the recent-files list from the registry at construction so
     // the first React-side `file/recent/list` request already has data
     // (avoids the React menu rendering "(none)" momentarily on first
@@ -1537,46 +1546,102 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
-    // -------- settings/lighting-force-align (get) --------------------
+    // -------- settings/lighting (get) --------------------------------
     //
-    // Cross-mode read of the Force Align Fill Lights flag — the same
-    // REG_DWORD `LightingForceFillAlignment` (default true) that legacy
-    // main.cpp persists (ReadLightingBool, src/main.cpp:6312). Returns
-    // `{ enabled }` so the React LightingPanel checkbox reflects whatever
-    // the user last set in EITHER UI. Under --test-host we skip the
-    // registry read and return the default so the dialog-lighting a11y
-    // golden stays deterministic (L-051).
-    if (kind == "settings/lighting-force-align")
+    // Cross-mode read of the RAW lighting split the LightingPanel seeds
+    // its displayed controls from — intensity/colour kept SEPARATE (the
+    // engine snapshot only carries the lossy folded Vec4). Mirrors legacy
+    // LightingDlgProc's registry reads (src/main.cpp:6479) field-for-field;
+    // same value names/types (floats REG_BINARY, colours + the flag
+    // REG_DWORD). Colours go on the wire as packed COLORREF ints (`Color`).
+    //
+    // Gated under --test-host (returns the canonical defaults, NOT the live
+    // registry) so the dialog-lighting a11y golden stays deterministic —
+    // UNLESS ALO_SETTINGS_LIVE lifts the gate (the CDP test seam).
+    if (kind == "settings/lighting")
     {
-        bool enabled = true;  // kLightForceAlignDefault
-        if (!m_testHost)
+        // Canonical defaults (src/main.cpp:6180-6195).
+        float sunI = 0.50f, sunZ = 0.0f, sunT = 45.0f;
+        DWORD sunDiff = RGB(180, 180, 190), sunSpec = RGB(190, 190, 200);
+        DWORD ambient = RGB(40, 40, 50), shadow = RGB(100, 100, 110);
+        float f1I = 0.50f, f1Z = 120.0f, f1T = -10.0f; DWORD f1Diff = RGB(60, 80, 160);
+        float f2I = 0.50f, f2Z = 210.0f, f2T = -10.0f; DWORD f2Diff = RGB(60, 80, 160);
+        bool  forceAlign = true;  // kLightForceAlignDefault
+
+        const bool gated = m_testHost && !m_settingsLive;
+        if (!gated)
         {
             HKEY hKey = nullptr;
             if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0,
                               KEY_READ, &hKey) == ERROR_SUCCESS)
             {
-                DWORD v = 0, type = 0, size = sizeof(v);
-                if (RegQueryValueExW(hKey, L"LightingForceFillAlignment", nullptr,
-                                     &type, reinterpret_cast<LPBYTE>(&v), &size) == ERROR_SUCCESS
-                    && type == REG_DWORD)
-                    enabled = (v != 0);
+                auto readF = [&](const wchar_t* name, float& out) {
+                    float v = 0.0f; DWORD t = 0, s = sizeof(v);
+                    if (RegQueryValueExW(hKey, name, nullptr, &t,
+                                         reinterpret_cast<LPBYTE>(&v), &s) == ERROR_SUCCESS
+                        && t == REG_BINARY && s == sizeof(v) && v == v && (v - v) == 0.0f)
+                        out = v;
+                };
+                auto readDw = [&](const wchar_t* name, DWORD& out) {
+                    DWORD v = 0, t = 0, s = sizeof(v);
+                    if (RegQueryValueExW(hKey, name, nullptr, &t,
+                                         reinterpret_cast<LPBYTE>(&v), &s) == ERROR_SUCCESS
+                        && t == REG_DWORD)
+                        out = v;
+                };
+                readF(L"LightSunIntensity", sunI);
+                readF(L"LightSunZAngle",    sunZ);
+                readF(L"LightSunTilt",      sunT);
+                readDw(L"LightSunDiffuseColor",  sunDiff);
+                readDw(L"LightSunSpecularColor", sunSpec);
+                readDw(L"LightSunAmbientColor",  ambient);
+                readDw(L"LightSunShadowColor",   shadow);
+                readF(L"LightFill1Intensity", f1I);
+                readF(L"LightFill1ZAngle",    f1Z);
+                readF(L"LightFill1Tilt",      f1T);
+                readDw(L"LightFill1DiffuseColor", f1Diff);
+                readF(L"LightFill2Intensity", f2I);
+                readF(L"LightFill2ZAngle",    f2Z);
+                readF(L"LightFill2Tilt",      f2T);
+                readDw(L"LightFill2DiffuseColor", f2Diff);
+                DWORD fa = 1;
+                readDw(L"LightingForceFillAlignment", fa);
+                forceAlign = (fa != 0);
                 RegCloseKey(hKey);
             }
         }
-        sendOk(json{{"enabled", enabled}});
+
+        auto lightJson = [](float intensity, float az, float alt,
+                            DWORD diffuse, DWORD specular) {
+            return json{
+                {"intensity", intensity}, {"az", az}, {"alt", alt},
+                {"diffuse",  static_cast<int>(diffuse)},
+                {"specular", static_cast<int>(specular)},
+            };
+        };
+        sendOk(json{
+            {"sun",   lightJson(sunI, sunZ, sunT, sunDiff, sunSpec)},
+            {"fill1", lightJson(f1I, f1Z, f1T, f1Diff, 0)},
+            {"fill2", lightJson(f2I, f2Z, f2T, f2Diff, 0)},
+            {"ambient",    static_cast<int>(ambient)},
+            {"shadow",     static_cast<int>(shadow)},
+            {"forceAlign", forceAlign},
+        });
         return res;
     }
 
     // -------- settings/lighting-force-align/set ----------------------
     //
-    // Cross-mode write of the same REG_DWORD (WriteLightingBool,
-    // src/main.cpp:6328) so a toggle in the new UI is seen by legacy.
-    // No-op under --test-host so the a11y harness never mutates the dev
-    // box's registry.
+    // Cross-mode write of the `LightingForceFillAlignment` REG_DWORD
+    // (WriteLightingBool, src/main.cpp:6328) so a toggle in the new UI is
+    // seen by legacy. No-op under --test-host (so the a11y harness never
+    // mutates the dev box's registry) UNLESS ALO_SETTINGS_LIVE lifts the
+    // gate for the CDP test seam.
     if (kind == "settings/lighting-force-align/set")
     {
         const bool enabled = params.value("enabled", true);
-        if (!m_testHost)
+        const bool gated = m_testHost && !m_settingsLive;
+        if (!gated)
         {
             HKEY hKey = nullptr;
             if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0, nullptr,
