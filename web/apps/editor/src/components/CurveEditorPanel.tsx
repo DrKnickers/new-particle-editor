@@ -653,7 +653,11 @@ export function CurveEditorPanel({ bridge }: Props) {
       // only shifts the rendered POSITION via dragRef, not the
       // logical time). Sticky-optimistic is cleared so it can't
       // pull stale spinner values over the incoming live-drag data.
-      setSelectedKeyTimes(new Set([keyTime]));
+      // CRV-1: keep a multi-selection intact when the grabbed key is one of
+      // its members — that's the start of a group drag, not a re-select.
+      setSelectedKeyTimes((prev) =>
+        prev.has(keyTime) && prev.size > 1 ? prev : new Set([keyTime]),
+      );
       setOptimisticSelected(null);
     },
     [],
@@ -829,8 +833,12 @@ export function CurveEditorPanel({ bridge }: Props) {
             params: {
               id: selectedId,
               track: focusedChannel.trackName,
+              // Commit the float32 (engineTime) value, NOT the raw double
+              // wireTime, so the time the engine stores + returns on refetch
+              // is EXACTLY what we put in selectedKeyTimes — otherwise the
+              // moved keys lose their selected highlight (CRV-1 polish).
               oldTime: m.oldTime,
-              newTime: m.wireTime,
+              newTime: m.engineTime,
               newValue: m.newValue,
             },
           })
@@ -838,6 +846,16 @@ export function CurveEditorPanel({ bridge }: Props) {
       }
     },
     [bridge, selectedId, focusedTrack, focusedChannel.trackName, selectedKeyTimes, borderKeyTimes],
+  );
+
+  // CRV-1: a multi-key canvas drag commits as a single group shift, reusing
+  // the same path the Time/Value spinners use for multi-selections.
+  const handleGroupDragEnd = useCallback(
+    (dTime: number, dValue: number) => {
+      if (dTime === 0 && dValue === 0) return;
+      applyGroupShift(dTime, dValue);
+    },
+    [applyGroupShift],
   );
 
   // Spinner display values + enablement. Single-key wins; otherwise the
@@ -1317,6 +1335,7 @@ export function CurveEditorPanel({ bridge }: Props) {
                   onKeyDragStart={handleKeyDragStart}
                   onKeyDragMove={handleKeyDragMove}
                   onKeyDragCancel={handleKeyDragCancel}
+                  onGroupDragEnd={handleGroupDragEnd}
                   onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
                 />
               </CanvasWithAxisLabels>

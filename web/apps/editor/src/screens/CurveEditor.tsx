@@ -178,6 +178,9 @@ type Props = {
    *  capturing surface). The parent uses this to roll back any
    *  live-drag visualisation. */
   onKeyDragCancel?: () => void;
+  /** CRV-1 group-drag commit: a drag of one key within a multi-selection
+   *  shifts the whole selection by (dTime, dValue). */
+  onGroupDragEnd?: (dTime: number, dValue: number) => void;
   /** Marquee-select handler (Phase 4.1 Fix dispatch 5). Fires at
    *  pointer-up when a Select-mode rubber-band drag has covered at
    *  least one key. `times` is the set of key TIMES inside the
@@ -390,6 +393,7 @@ export function CurveEditor({
   onKeyDragStart,
   onKeyDragMove,
   onKeyDragCancel,
+  onGroupDragEnd,
   onCanvasMarqueeSelect,
 }: Props) {
   // Multi-channel overlay branch. Triggered when the caller provides
@@ -421,6 +425,7 @@ export function CurveEditor({
         onKeyDragStart={onKeyDragStart}
         onKeyDragMove={onKeyDragMove}
         onKeyDragCancel={onKeyDragCancel}
+        onGroupDragEnd={onGroupDragEnd}
         onCanvasMarqueeSelect={onCanvasMarqueeSelect}
       />
     );
@@ -1057,6 +1062,9 @@ type MultiProps = {
   onKeyDragStart?: (keyTime: number) => void;
   onKeyDragMove?: (keyTime: number, currentTime: number, currentValue: number) => void;
   onKeyDragCancel?: () => void;
+  /** CRV-1: a drag of one key within a multi-selection shifts the whole
+   *  selection by (dTime, dValue). The parent applies it via applyGroupShift. */
+  onGroupDragEnd?: (dTime: number, dValue: number) => void;
   onCanvasMarqueeSelect?: (times: number[], shift: boolean) => void;
 };
 
@@ -1081,6 +1089,7 @@ function MultiChannelCurves({
   onKeyDragStart,
   onKeyDragMove,
   onKeyDragCancel,
+  onGroupDragEnd,
   onCanvasMarqueeSelect,
 }: MultiProps) {
   // Live-measured SVG dimensions. We can't simply pass a fixed 600×300
@@ -1179,6 +1188,11 @@ function MultiChannelCurves({
     moved: boolean;
     pointerId: number;
     target: Element | null;
+    // CRV-1 group-drag: when the grabbed key is part of a multi-selection,
+    // the whole selection shifts by (groupDTime, groupDValue).
+    isGroup: boolean;
+    groupDTime: number;
+    groupDValue: number;
   } | null>(null);
   const [, setDragTick] = useState(0);
 
@@ -1241,6 +1255,11 @@ function MultiChannelCurves({
     if (!focusEnabled) return;
     if (event.button !== 0) return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    // Group drag when the grabbed key is one of several selected keys —
+    // captured from the current selection BEFORE onKeyDragStart (which
+    // would otherwise collapse it).
+    const isGroup =
+      (selectedKeyTimes?.size ?? 0) > 1 && (selectedKeyTimes?.has(keyTime) ?? false);
     dragRef.current = {
       keyTime,
       startTime: keyTime,
@@ -1252,6 +1271,9 @@ function MultiChannelCurves({
       moved: false,
       pointerId: event.pointerId,
       target: event.currentTarget,
+      isGroup,
+      groupDTime: 0,
+      groupDValue: 0,
     };
     const t = event.currentTarget;
     if (typeof t.setPointerCapture === "function") {
@@ -1291,6 +1313,42 @@ function MultiChannelCurves({
     const svg = event.currentTarget;
     const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    // ── Group-drag branch (CRV-1): shift the whole selection by the
+    // grabbed key's cursor delta. Border selected keys stay fixed in time;
+    // the time-shift is clamped so interior selected keys never cross the
+    // global endpoints. The per-key value clamp happens on commit
+    // (applyGroupShift) and in the render preview below.
+    if (drag.isGroup && selectedKeyTimes) {
+      const rawTime = unproject(x, timeMin, timeMax, width);
+      const rawValue = Math.max(
+        focusVMin,
+        Math.min(focusVMax, unproject(height - y, canvasVMin, canvasVMax, height)),
+      );
+      let dTime = rawTime - drag.startTime;
+      const allKeys = focusLayer.track.keys;
+      const firstT = allKeys[0]!.time;
+      const lastT = allKeys[allKeys.length - 1]!.time;
+      const eps = 1e-4;
+      let minSel = Infinity;
+      let maxSel = -Infinity;
+      for (const t of selectedKeyTimes) {
+        if (focusBorderTimes.has(t)) continue;
+        if (t < minSel) minSel = t;
+        if (t > maxSel) maxSel = t;
+      }
+      if (minSel === Infinity) {
+        dTime = 0; // all-border selection — no time shift
+      } else {
+        dTime = Math.max((firstT + eps) - minSel, Math.min((lastT - eps) - maxSel, dTime));
+      }
+      drag.groupDTime = dTime;
+      drag.groupDValue = rawValue - drag.startValue;
+      const gdx = event.clientX - drag.startClientX;
+      const gdy = event.clientY - drag.startClientY;
+      if (Math.abs(gdx) > DRAG_SLOP || Math.abs(gdy) > DRAG_SLOP) drag.moved = true;
+      setDragTick((n) => n + 1);
+      return;
+    }
     let nextTime = unproject(x, timeMin, timeMax, width);
     // Pointer Y maps through the CANVAS range (so the cursor follows
     // the curve visually); the value is then clamped to the focus
@@ -1364,7 +1422,7 @@ function MultiChannelCurves({
     const drag = dragRef.current;
     if (drag === null) return;
     if (event.pointerId !== drag.pointerId) return;
-    const { keyTime, currentTime, currentValue, moved, target } = drag;
+    const { keyTime, currentTime, currentValue, moved, target, isGroup, groupDTime, groupDValue } = drag;
     dragRef.current = null;
     if (target !== null) {
       const el = target as Element & { releasePointerCapture?: (id: number) => void };
@@ -1373,7 +1431,16 @@ function MultiChannelCurves({
       }
     }
     setDragTick((n) => n + 1);
-    if (moved && onKeyDragEnd) {
+    if (isGroup) {
+      // CRV-1: commit the whole-selection shift (or treat a no-move as a
+      // plain key click so it falls back to single-select).
+      if (moved && onGroupDragEnd) {
+        dragConsumedClickRef.current = true;
+        onGroupDragEnd(groupDTime, groupDValue);
+      } else if (!moved && onKeyClick) {
+        onKeyClick(keyTime, event);
+      }
+    } else if (moved && onKeyDragEnd) {
       // Suppress the trailing synthetic click — see
       // `dragConsumedClickRef`'s comment. Without this the backdrop
       // would clear the selection we set in handleKeyDragEnd.
@@ -1455,7 +1522,21 @@ function MultiChannelCurves({
   // key's projected position so the circle tracks the cursor.
   const drag = dragRef.current;
   const focusRenderPoints = focusLayer === null ? [] : focusLayer.points.map((p) => {
-    if (drag !== null && p.time === drag.keyTime) {
+    // CRV-1 group-drag preview: every selected key shifts by the group
+    // delta (border keys keep their time), clamped to the canvas bounds.
+    if (drag !== null && drag.isGroup && (selectedKeyTimes?.has(p.time) ?? false)) {
+      const isBorder = focusBorderTimes.has(p.time);
+      const nt = isBorder
+        ? p.time
+        : Math.max(timeMin, Math.min(timeMax, p.time + drag.groupDTime));
+      const nv = Math.max(focusVMin, Math.min(focusVMax, p.value + drag.groupDValue));
+      return {
+        ...p,
+        x: project(nt, timeMin, timeMax, width),
+        y: height - project(nv, canvasVMin, canvasVMax, height),
+      };
+    }
+    if (drag !== null && !drag.isGroup && p.time === drag.keyTime) {
       const dx = project(drag.currentTime, timeMin, timeMax, width);
       // Drag preview projects the in-flight value through the CANVAS
       // range so the dragged circle tracks the cursor even when the

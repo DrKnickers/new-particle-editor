@@ -34,8 +34,23 @@ user at phase boundaries.
   rows; Esc restores prior. Build clean; 428 tests.
   - **Deferred polish:** SEL-12 drag autoscroll past the viewport edge; SEL-13
     Esc/right-click cancel of the *reorder* drag (distinct from marquee).
-- **P6 — Curve editor (CRV-1/2/7/8/14).** Multi-key canvas drag; key copy/cut/paste;
-  right-click deselect; time decimals.
+- **P6 — Curve editor (CRV-1/2/7/8/14).** Key copy/cut/paste; right-click deselect;
+  time decimals.
+  - **CRV-1 ✅ DONE (user-surfaced during testing).** Multi-key canvas drag: grabbing
+    a key that's part of a multi-selection now shifts the WHOLE selection by the same
+    delta (was: only the grabbed key moved). Root cause: `handleKeyDragStart` collapsed
+    the selection on grab. Fix: keep a multi-selection intact on grab; CurveEditor
+    computes a group delta (border keys pinned in time, interior clamped to the global
+    endpoints) and previews all selected keys moving; commit reuses the proven
+    `applyGroupShift`. Committed the `fround`ed engineTime so moved keys keep their
+    selected highlight (float-precision drift fix). Live-verified: 30/60 → 40/70 as a
+    group, borders fixed, selection persists. Build clean; 428 tests.
+  - **#2 marquee-from-axis-margin (user request): DEFERRED.** The plot SVG occupies
+    only the center grid cell of `CanvasWithAxisLabels`; the axis margins (36px Y-label
+    col, 22px X-label row) are outside the interactive SVG. Starting a marquee there
+    needs the curve canvas's coordinate/layout system reworked to fold the margins into
+    the SVG (e.g. a margin-inclusive viewBox) — a larger, riskier change to do
+    carefully on its own, not alongside the bug fix.
 - **P7 — Link groups (LNK-1/2/6/8/10).** `[L<n>]` prefix; per-row dot (or drop dead
   comment); interactive bracket (click-select-group + hover); Dissolve action;
   join/disagreement confirmation.
