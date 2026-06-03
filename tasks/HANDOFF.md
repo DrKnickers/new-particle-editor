@@ -1,5 +1,121 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-03 (session 12) — shipped **4** new-UI commits: **full lighting registry restore + Force Align cross-mode sync + Lighting toolbar toggle** → **raw-lighting panel display + `ALO_SETTINGS_LIVE` CDP test seam** → **property-tab chevron animation fix** → **app-wide 2dp numeric display**. NEXT: keep user-driven new-UI bug-testing (no concrete known gap left)
+
+**`origin/lt-4` = `4d9496d`** (was `96e1f82` at session start; **4 commits**). Tree
+clean, 0 ahead / 0 behind. **No `master` changes.** Verified at session end: vitest
+**406** (was 403; +3 net), composition a11y **155 passed / 4 splitters** (the L-033
+geometry artifact, NOT a regression), `.sln` Debug+Release x64 clean (commits 1-2 touched
+native; 3-4 were web-only), `dist/` rebuilt (composition). All four items were
+**user-driven**: the user launched the faithful arch-C `--new-ui`, reported what was off,
+I root-caused (host.log + CDP DOM + browser-preview) and fixed + verified each.
+
+### The 4 commits (newest first)
+- `4d9496d` **app-wide 2dp numeric display** — Spinner display precision was derived from
+  each field's `step` (so `45`, `0.5`, `0.50`, `1.000` coexisted). Now defaults to
+  `decimals ?? 2`; **display precision decoupled from wheel/step granularity** (wheel base
+  still `step >= 1 ? 1 : 0.1`, exactly the old `dp === 0`), so angles show `45.00` yet
+  scroll by 1°. Integer/percent fields keep whole numbers via `decimals={0}`. The audit
+  found integer fields that were integer only *by accident* of step-derived 0dp and added
+  the marker: 4 R/G/B/A colour channels (`EmitterPropertyTabs`), increment-index + 2
+  rescale `%` dialogs, CurveEditor `index` track + key-time. Dropped 8 `decimals={3}`→2.
+  Web-only. 1 curve unit test updated (`40.0`→`40.00`); **19** composition goldens
+  re-baselined (value-format only). → **L-056**.
+- `1e1023a` **property-tab chevron animation fix** — the left inspector's Basic/Appearance/
+  Physics section chevrons never rotated, unlike the Spawner's. Both *already* share
+  `ChevronDown` + `.chev`; the bug was one CSS selector: `.panel-section:not([open]) .chev`
+  (meant for native `<details>`) also matched `Section.tsx`'s controlled `<div>` (a div
+  can never carry `[open]`), pinning it at -90° in every state. Fix: scope that arm to
+  `details.panel-section:not([open])` so the div rotates off `[data-open]`. CSS-only, no
+  golden/native impact. → **L-055**.
+- `031e5fa` **raw-lighting panel display + test seam** — the Lighting panel showed
+  `intensity=1` + folded colours (the engine snapshot only carries the lossy
+  `intensity × colour` Vec4). Replaced the force-align get with a unified
+  `settings/lighting` get returning the **raw** registry split (intensity/colour separate,
+  angles in degrees, + the flag); panel seeds displayed controls from it (dropped
+  `azAltFromDirection`). Added the `ALO_SETTINGS_LIVE` env var that LIFTS the `--test-host`
+  settings gate so a CDP test drives the real registry while a11y stays deterministic;
+  committed `web/apps/editor/scripts/verify-force-align.mjs` (5/5 checks, no user).
+  `dialog-lighting` golden flipped folded→true defaults. → **L-054**.
+- `8ea203c` **lighting restore + Force Align sync + toolbar toggle** — host `!useTestHost`
+  block now restores sun/fill1/fill2 angles+colours+intensities + ambient + shadow from
+  the registry (mirrors legacy `PushLightingToEngine`, incl. the force-align fill calc);
+  permanent `[lighting-restore]` host.log line (L-051 verify channel). Force Align flag
+  round-trips via `settings/lighting-force-align/set` → `LightingForceFillAlignment`
+  REG_DWORD (`useTestHost` plumbed into `BridgeDispatcher`). New toolbar Lighting button
+  (Lightbulb) sharing the Spawner's exclusive dock slot. **19** composition goldens gained
+  the toolbar button node. → **L-051/L-052/L-053**.
+
+### New lessons this session
+- **L-051** gated-restore can't be verified over `--test-host` CDP (gate disables it) →
+  faithful launch + host.log. **L-052** two a11y lanes diverge — composition maintained,
+  legacy UIA not; never blanket-regen legacy. **L-053** a Toolbar/chrome change cascades
+  into ~19 composition goldens (every menubar/dialog/keyboard/property-tab snapshot embeds
+  the toolbar) — budget for it; aggregate-diff to prove it's the same node. **L-054**
+  env-liftable `--test-host` gate as a CDP test seam + seed panel DISPLAY from the registry
+  raw values (engine snapshot is lossy). **L-055** `.cls:not([open])` silently matches
+  non-`<details>` siblings; scope to `details`. Headless preview can't advance CSS
+  transitions — `getComputedStyle` reads the start frame; verify end-states a different way.
+  **L-056** when changing a derived default, audit "correct-by-accident" call sites; keep
+  display precision separate from interaction (wheel/step) granularity.
+
+### How each was verified (arch-C — host.log/CDP-DOM/browser-preview + the user, NOT agent screenshots, L-033)
+- **Lighting engine restore:** two faithful non-`--test-host` launches → host.log. Force
+  Align ON → `[lighting-restore] fill1Z=120 fill2Z=210` (computed); flag flipped OFF →
+  `fill1Z=129 fill2Z=301` (persisted saved values, distinct from defaults AND computed),
+  proving it reads saved registry data (L-051). **User confirmed on-screen** ("looks good").
+- **Force Align write path + raw display:** `node web/apps/editor/scripts/verify-force-align.mjs`
+  (launches `--test-host` + `ALO_SETTINGS_LIVE=1`, drives the real checkbox over CDP) →
+  5/5: registry flips to 0 on toggle, Sun intensity spinner shows raw `0.50` not folded `1`.
+- **Chevron fix:** browser preview (`pnpm dev`) — open property-tab chev `transform: none`
+  (0°), collapsed `matrix(0,-1,1,0,0,0)` (-90°) via the `transition:none` probe (headless
+  won't animate, L-055). **User confirmed** ("looks good").
+- **2dp display:** a11y golden diff is the authoritative check — every changed value is a
+  float field at 2dp, integer fields unchanged (aggregate-grep audit). **User confirmed**
+  ("this is good").
+
+### Tooling notes worth keeping
+- **`verify-force-align.mjs`** is the reusable pattern for testing a registry round-trip
+  with no user: launch `--test-host` + `ALO_SETTINGS_LIVE=1`, `connectOverCDP('http://127.0.0.1:9222')`,
+  drive the real UI, read/write the registry via `reg`, restore in a `finally`.
+- **CSS-transition verification in the headless preview is impossible** — it doesn't
+  advance transitions, so `getComputedStyle` after a toggle reads the start frame forever.
+  Measure an element that's in the target state *initially*, or inject `transition: none`.
+- **The editor is single-instance** — a running faithful `--new-ui` blocks the a11y
+  harness's `--test-host` launch (CDP never comes up). Kill all `ParticleEditor.exe` before
+  running `pnpm a11y` if a test window is open.
+- **MSBuild** (only if touching native): `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`,
+  via **PowerShell** (L-046). Fresh worktree → materialise WebView2 NuGet into `packages/` (L-039).
+
+### ⭐ NEXT TASK options (user-driven; pick with the user)
+1. **Keep bug-testing / refining the new UI** — the productive loop all session. No
+   concrete known parity gap remains (ground/background/skydome/bloom/lighting all restored
+   + displayed correctly; chevrons consistent; numbers 2dp). Next item comes from the user.
+2. **Adjacent polish surfaced but not requested:** new-UI lighting *value* write-back
+   (the new UI restores lighting on launch + writes the Force-Align flag, but does NOT
+   persist lighting VALUE edits back to the registry — so a value edited in-session is lost
+   on app restart, and the docked Lighting pane re-seeds from the registry on reopen, not
+   from in-session edits). A `settings/lighting/set` (or per-field write) would close this
+   + give full cross-mode value sync. Deferred this session.
+3. **Reuse follow-up:** the two collapsible-section components (`Section.tsx` controlled-div
+   for property tabs, `ToolPanel.Section` native-`<details>` for Spawner/Lighting) remain
+   distinct (Section.tsx is a div so it's jsdom-toggleable in unit tests; native `<details>`
+   doesn't toggle in jsdom). They now share identical chevron behaviour, but a single
+   shared primitive would need reworking the property-tab tests around `<details>`.
+4. **Strategic:** the LT-4→master cutover (Phase 4) is still gated on arch-C trust — the
+   user still daily-drives legacy/arch-A (`memory/project_daily_driving_legacy.md`). These
+   commits build that trust; not ready to cut over yet.
+
+### Verified baseline (run before changing anything)
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **406 passed** (46 files).
+- `pnpm --filter @particle-editor/editor build` → clean (+`dist/`, composition mode).
+- `pnpm --filter @particle-editor/editor a11y` → **~155 passed / 4 splitters** (L-033;
+  CDP flaky → retry, kill stray `ParticleEditor.exe` first; `127.0.0.1:9222` not localhost).
+- `.sln` Debug + Release x64 only if touching native (this session's Release exe is current).
+
+---
+
 ## 2026-06-02 (session 11) — shipped **4** new-UI parity/UX commits: **ground/background/skydome registry-restore** + **Lighting docked pane (shares Spawner slot) with Bloom folded in** + menu/reorder cleanup + 9px gap. NEXT: keep user-driven new-UI bug-testing (no concrete known gap left)
 
 **`origin/lt-4` = `61fddd6`** (was `e2caeed` at session start; **4 commits**). Tree
