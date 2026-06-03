@@ -471,6 +471,47 @@ export function CurveEditorPanel({ bridge }: Props) {
     return tracks.find((t) => t.name === focusedChannel.trackName) ?? null;
   }, [tracks, focusedChannel]);
 
+  // CRV-1 robustness: after a tree/changed refetch the engine's float32 key
+  // times can land an ULP away from the times we optimistically put in
+  // `selectedKeyTimes` (e.g. a group move commits N keys; the real engine
+  // rounds each to float32). Without this, every moved key EXCEPT the
+  // dragged one falls out of the `selectedKeyTimes.has(p.time)` membership
+  // test and loses its highlight. Snap each selected time onto the nearest
+  // actual key time within a tiny tolerance (float32 drift is ~1e-5; key
+  // spacing is ≥ ~1, so this never grabs a different key).
+  useEffect(() => {
+    if (focusedTrack === null) return;
+    const SNAP_EPS = 1e-3;
+    setSelectedKeyTimes((prev) => {
+      if (prev.size === 0) return prev;
+      const keyTimes = focusedTrack.keys.map((k) => k.time);
+      let changed = false;
+      const next = new Set<number>();
+      for (const t of prev) {
+        if (keyTimes.includes(t)) {
+          next.add(t);
+          continue;
+        }
+        let best = t;
+        let bestD = Infinity;
+        for (const kt of keyTimes) {
+          const d = Math.abs(kt - t);
+          if (d < bestD) {
+            bestD = d;
+            best = kt;
+          }
+        }
+        if (bestD > 0 && bestD <= SNAP_EPS) {
+          next.add(best);
+          changed = true;
+        } else {
+          next.add(t);
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [focusedTrack]);
+
   // Unified Y-axis range across all VISIBLE channels' tracks. When
   // multiple channels are visible the canvas extends to encompass
   // the most extreme keys on any of them — so turning on Scale-at-20

@@ -1848,6 +1848,16 @@ function MultiChannelCurves({
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
+                      // CRV-1: suppress the synthetic click that the browser
+                      // fires after a drag. Without this, a group drag ends
+                      // with this (the grabbed) key's trailing click calling
+                      // onKeyClick, which collapses the multi-selection down
+                      // to just this one key. The backdrop already guards on
+                      // dragConsumedClickRef; the key circle must too.
+                      if (dragConsumedClickRef.current) {
+                        dragConsumedClickRef.current = false;
+                        return;
+                      }
                       if (dragRef.current === null) {
                         onKeyClick?.(p.time, e);
                       }
