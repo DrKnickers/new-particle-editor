@@ -4,11 +4,14 @@
 //   - Up/down arrow buttons: always visible (matches legacy Win32
 //     UDS_ALIGNRIGHT spin button), increment/decrement by `step`.
 //   - Scroll-wheel adjust (F7): wheel-up increments, wheel-down
-//     decrements. Step is a flat 0.1 on decimal fields and 1 on integer
-//     fields (dp === 0), matching legacy. Shift = ×10 (coarse).
+//     decrements. Base step = the field's `step` (legacy Increment).
+//     Shift = ×10 (coarse); Ctrl = ×0.1 (fine) on decimal fields, ignored
+//     on whole-number fields so it never yields a fraction (Spinner.cpp:107-117).
 //   - Drag-to-adjust (F6): vertical mouse-Y drag on the ARROW COLUMN
 //     (not the text input — dragging the input selects text). Shift =
-//     fine (step/10), Ctrl = coarse (step*10).
+//     coarse (×10), Ctrl = fine — matching the wheel and keyboard arrows.
+//   - Hold-to-repeat: pressing and holding an arrow button auto-repeats the
+//     step after a short delay (legacy Spinner.cpp:438-455).
 //   - Scientific notation parse: "1e-3", "2.5E4", etc.
 //   - Range clamp: clamp to [min, max] on blur/commit; NOT on keystroke.
 //   - Unit suffix: greyed-out text after the number.
@@ -29,6 +32,12 @@ const ROW_HEIGHT: Record<SpinnerDensity, string> = {
 // F6: pixels of vertical movement on the arrow column before a press is
 // treated as a value-scrub rather than a click.
 const DRAG_THRESHOLD_PX = 3;
+
+// Hold-to-repeat on the arrow buttons: initial delay before auto-repeat
+// kicks in, then the interval between repeats (≈20/s). Mirrors the legacy
+// keyboard-repeat cadence (Spinner.cpp:558-559).
+const HOLD_DELAY_MS = 350;
+const HOLD_REPEAT_MS = 50;
 
 export type SpinnerProps = {
   value: number;
@@ -92,6 +101,13 @@ export function Spinner({
   const inputRef = useRef<HTMLInputElement>(null);
   const dragStartY = useRef(0);
   const dragStartValue = useRef(0);
+  // Hold-to-repeat timers + a "currently held/scrubbing" guard so the
+  // external-value resync effect doesn't clobber an in-flight ramp.
+  const holdDelayTimer = useRef<number | undefined>(undefined);
+  const holdRepeatTimer = useRef<number | undefined>(undefined);
+  const repeatedRef = useRef(false);
+  const holdingRef = useRef(false);
+  const heldValue = useRef(0);
 
   // Keep displayed text in sync when value prop changes from outside
   // (but NOT during active text editing — we track that with isFocused).
@@ -166,13 +182,15 @@ export function Spinner({
       if (d.disabled) return;
       e.preventDefault();
       e.stopPropagation();
-      // F7: legacy stepped a flat 0.1 per wheel notch. Integer-grained
-      // fields (whole-number step, e.g. Index / particle counts / angles)
-      // step by 1 so the wheel never produces fractional values. Shift =
-      // ×10 (coarse). Keyed on `step` so display precision (now 2dp by
-      // default) doesn't change the nudge granularity.
-      const base = d.stepIsWhole ? 1 : 0.1;
-      const s = e.shiftKey ? base * 10 : base;
+      // F7/SPN-6: base step = the field's actual `step` (legacy Increment),
+      // so a step=5 field nudges by 5 and a step=0.25 field by 0.25.
+      // Shift = ×10 (coarse). Ctrl = ×0.1 (fine) on decimal fields only;
+      // whole-number fields ignore Ctrl so the wheel never yields a fraction
+      // (Spinner.cpp:107-117). Display precision (2dp default) is decoupled
+      // from this nudge granularity.
+      const base = d.step;
+      const fine = d.stepIsWhole ? base : base / 10;
+      const s = e.shiftKey ? base * 10 : e.ctrlKey ? fine : base;
       const delta = e.deltaY < 0 ? s : -s;
       // Round to kill float drift from repeated 0.1 additions
       // (0.1+0.1+0.1 = 0.30000000000000004).
@@ -193,24 +211,72 @@ export function Spinner({
   // match the keyboard arrows. `scrubbedRef` suppresses the trailing
   // click so a drag that ends on the button doesn't also step.
   const scrubbedRef = useRef(false);
+  const clearHoldTimers = useCallback(() => {
+    if (holdDelayTimer.current !== undefined) {
+      clearTimeout(holdDelayTimer.current);
+      holdDelayTimer.current = undefined;
+    }
+    if (holdRepeatTimer.current !== undefined) {
+      clearInterval(holdRepeatTimer.current);
+      holdRepeatTimer.current = undefined;
+    }
+  }, []);
+
+  // Single unified press handler on the arrow COLUMN. A press can resolve to
+  // one of three gestures: a quick click (one ±step on release), a hold
+  // (auto-repeat after a delay), or a vertical scrub (drag past threshold).
   const handleArrowsMouseDown = (e: React.MouseEvent) => {
     if (disabled || e.button !== 0) return;
     // Keep the input's focus/caret (don't blur on arrow mousedown) and
     // suppress text selection while scrubbing.
     e.preventDefault();
+
+    // Direction: the button under the pointer, falling back to the pressed
+    // half of the column (top = up).
+    const targetBtn = (e.target as HTMLElement).closest("button");
+    const aria = targetBtn?.getAttribute("aria-label");
+    let dir = aria === "Decrement" ? -1 : aria === "Increment" ? 1 : 0;
+    if (dir === 0) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      dir = e.clientY < rect.top + rect.height / 2 ? 1 : -1;
+    }
+
     dragStartY.current = e.clientY;
     dragStartValue.current = value;
+    heldValue.current = value;
     scrubbedRef.current = false;
+    repeatedRef.current = false;
+    holdingRef.current = true;
+
+    // Arm hold-to-repeat. The interval ramps from a local accumulator so it
+    // keeps stepping even before the controlled value prop echoes back.
+    holdDelayTimer.current = window.setTimeout(() => {
+      repeatedRef.current = true;
+      holdRepeatTimer.current = window.setInterval(() => {
+        const next = clamp(heldValue.current + dir * step, min, max);
+        heldValue.current = next;
+        setText(fmt(next));
+        onChange(next);
+      }, HOLD_REPEAT_MS);
+    }, HOLD_DELAY_MS);
 
     const onMove = (me: MouseEvent) => {
       const dy = dragStartY.current - me.clientY; // up = positive = increase
       if (!scrubbedRef.current) {
         if (Math.abs(dy) < DRAG_THRESHOLD_PX) return;
         scrubbedRef.current = true;
+        clearHoldTimers(); // a drag cancels the hold-repeat
         setDragging(true);
       }
-      const s = me.shiftKey ? step / 10 : me.ctrlKey ? step * 10 : step;
-      const next = clamp(dragStartValue.current + dy * s, min, max);
+      // Shift = coarse (×10), Ctrl = fine — matching the wheel/keyboard.
+      // Whole-number fields ignore Ctrl so a scrub never yields a fraction.
+      const fine = stepIsWhole ? step : step / 10;
+      const s = me.shiftKey ? step * 10 : me.ctrlKey ? fine : step;
+      const next = clamp(
+        Math.round((dragStartValue.current + dy * s) * 1e6) / 1e6,
+        min,
+        max,
+      );
       setText(fmt(next));
       // Fire onChange during drag (each px move fires); drag-release will
       // fire again on the final value. Callers that debounce are fine.
@@ -220,12 +286,21 @@ export function Spinner({
     const onUp = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      clearHoldTimers();
+      holdingRef.current = false;
       setDragging(false);
+      // Quick click: neither a scrub nor a hold-repeat fired → one step.
+      if (!scrubbedRef.current && !repeatedRef.current) {
+        adjustBy(dir * step);
+      }
     };
 
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   };
+
+  // Clear any pending hold timers on unmount.
+  useEffect(() => clearHoldTimers, [clearHoldTimers]);
 
   // Keep text in sync when prop changes from outside (not while editing).
   // Effect runs post-commit so the displayed value reflects external
@@ -236,7 +311,7 @@ export function Spinner({
   // dp, dragging) so the effect doesn't run on every render and clobber
   // in-flight `setText` from `onChange`.
   useEffect(() => {
-    if (isFocused.current || dragging) return;
+    if (isFocused.current || dragging || holdingRef.current) return;
     const expected = value.toFixed(dp);
     setText((prev) => (prev === expected ? prev : expected));
   }, [value, dp, dragging]);
@@ -296,7 +371,6 @@ export function Spinner({
           tabIndex={-1}
           disabled={disabled}
           aria-label="Increment"
-          onClick={() => { if (!scrubbedRef.current) adjustBy(step); }}
           className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
           style={{ fontSize: "7px", lineHeight: 1 }}
         >
@@ -307,7 +381,6 @@ export function Spinner({
           tabIndex={-1}
           disabled={disabled}
           aria-label="Decrement"
-          onClick={() => { if (!scrubbedRef.current) adjustBy(-step); }}
           className="flex flex-1 items-center justify-center text-text-3 hover:bg-panel-2 hover:text-text disabled:cursor-not-allowed"
           style={{ fontSize: "7px", lineHeight: 1 }}
         >

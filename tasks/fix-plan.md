@@ -56,4 +56,15 @@ labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-de
   full suite 410 green; build clean. Web-only, no golden/native impact. Live-drive of
   the field itself was blocked by post-hot-reload preview selection flakiness (env
   artifact); transform is deterministically unit-proven.
-- P2: next.
+- **P2 ✅ DONE** (spinner bugs SPN-4/5/6/7). `primitives/Spinner.tsx`: drag modifier
+  fixed to Shift=coarse/Ctrl=fine (matches wheel+keyboard) + scrub now rounds;
+  wheel base = field `step` (was flat 0.1/1) + Ctrl=fine on decimals; unified
+  arrow-column press handler adds hold-to-repeat (350ms delay, 50ms interval) with a
+  local ramp accumulator + holdingRef resync guard. 6 new Spinner tests; suite 416
+  green; build clean. DOM/a11y tree unchanged (no golden impact). Input-math behaviors
+  are deterministically unit-tested.
+- P3: next.
+
+### a11y golden status
+P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
+DOM unchanged). Full `pnpm a11y` run deferred to a batch checkpoint before FF to lt-4.

@@ -107,4 +107,67 @@ describe("Spinner", () => {
     fireEvent.click(incr);
     expect(onChange).toHaveBeenLastCalledWith(6);
   });
+
+  // SPN-6: the wheel honors the field's actual step magnitude, not a flat
+  // 0.1/1. Legacy wheel stepped by the spinner's Increment (Spinner.cpp:107).
+  it("scroll-wheel steps by the field's step magnitude", () => {
+    const onChange = vi.fn();
+    render(<Spinner value={5} onChange={onChange} step={5} aria-label="s" />);
+    fireEvent.wheel(screen.getByRole("textbox"), { deltaY: -100 });
+    expect(onChange).toHaveBeenCalledWith(10);
+  });
+
+  // SPN-7: wheel Ctrl = fine (×0.1) on a decimal field (Spinner.cpp:109);
+  // ignored on whole-number fields so it never produces fractions.
+  it("scroll-wheel with Ctrl steps fine on a decimal field", () => {
+    const onChange = vi.fn();
+    render(<Spinner value={5} onChange={onChange} step={0.1} aria-label="s" />);
+    fireEvent.wheel(screen.getByRole("textbox"), { deltaY: -100, ctrlKey: true });
+    expect(onChange).toHaveBeenCalledWith(5.01);
+  });
+  it("scroll-wheel with Ctrl stays whole on an integer field", () => {
+    const onChange = vi.fn();
+    render(<Spinner value={5} onChange={onChange} step={1} aria-label="s" />);
+    fireEvent.wheel(screen.getByRole("textbox"), { deltaY: -100, ctrlKey: true });
+    expect(onChange).toHaveBeenCalledWith(6);
+  });
+
+  // SPN-4: drag Shift = coarse (×10) and Ctrl = fine, matching the wheel and
+  // keyboard arrows (the old drag had these inverted).
+  it("drag with Shift scrubs coarse (×10)", () => {
+    const onChange = vi.fn();
+    render(<Spinner value={5} onChange={onChange} step={1} aria-label="s" />);
+    const column = screen.getByLabelText("Increment").parentElement as HTMLElement;
+    fireEvent.mouseDown(column, { clientY: 100, button: 0 });
+    fireEvent.mouseMove(document, { clientY: 80, shiftKey: true }); // dy=20 → ×10
+    fireEvent.mouseUp(document);
+    expect(onChange).toHaveBeenLastCalledWith(205);
+  });
+  it("drag with Ctrl scrubs fine on a decimal field", () => {
+    const onChange = vi.fn();
+    render(<Spinner value={5} onChange={onChange} step={0.1} aria-label="s" />);
+    const column = screen.getByLabelText("Increment").parentElement as HTMLElement;
+    fireEvent.mouseDown(column, { clientY: 100, button: 0 });
+    fireEvent.mouseMove(document, { clientY: 80, ctrlKey: true }); // dy=20 → ×0.01
+    fireEvent.mouseUp(document);
+    expect(onChange).toHaveBeenLastCalledWith(5.2);
+  });
+
+  // SPN-5: holding an arrow button auto-repeats the step (legacy
+  // hold-to-repeat, Spinner.cpp:438-455).
+  it("holding the increment arrow auto-repeats", () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      render(<Spinner value={5} onChange={onChange} step={1} aria-label="s" />);
+      const incr = screen.getByLabelText("Increment");
+      fireEvent.mouseDown(incr, { clientY: 100, button: 0 });
+      vi.advanceTimersByTime(350 + 50 * 3); // past initial delay + 3 repeats
+      fireEvent.mouseUp(incr);
+      expect(onChange.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(onChange).toHaveBeenLastCalledWith(8); // 5 → 6, 7, 8
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
