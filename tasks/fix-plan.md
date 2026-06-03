@@ -80,9 +80,32 @@ labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-de
   (tree-scoped, avoids firing mid-edit). 6 new tests; suite 422 green; build clean;
   no DOM/golden change. Native key→action needs the native build + user (every link
   verified to connect).
-- **P4b: next** — enable the disabled Edit (Cut/Copy/Paste/Delete) + Emitters
+### ✅ Backed up to lt-4
+`origin/lt-4` fast-forwarded `a1e8120 → 4f66541` (P1, P2, P3-partial, P4a + audit
+report). Local `lt-4` synced. 0/0. The CRITICAL rotation fix + accelerators are
+off-machine.
+
+- **P4b: NEXT** — enable disabled Edit (Cut/Copy/Paste/Delete) + Emitters
   (Toggle-Vis/Show-All/Hide-All) menu items, context-menu clipboard/Paste-As/New-Root
-  (MNU-1/3/4, SEL-5/6). **First golden-cascade phase** → native a11y re-baseline.
+  (MNU-1/3/4, SEL-5/6). **First golden-cascade phase** → `pnpm a11y:update` re-baseline
+  (web-only; uses existing native host, NO MSBuild) + diff review.
+  **Design notes (gathered, ready to implement):**
+  - Commands exist: `emitters/copy {ids}`, `cut {ids}`, `paste {afterId?}`,
+    `set-all-visible {visible}`, `set-visible {id,visible}`, `delete`. Reuse the
+    EmitterTree's existing calls (EmitterTree.tsx:1336-1371) as the single source.
+  - Edit menu: enable Cut/Copy/Delete when selection non-empty (read
+    `getEmitterSelectionSnapshot()`); Paste needs a `hasClipboard` signal (track a
+    flag or always-enable). Wire to the same `emitters/*` calls.
+  - Emitters menu: Show All / Hide All → `set-all-visible {visible:true/false}` (no
+    state). **Toggle Visibility** needs the primary node's current `visible` → MenuBar
+    must subscribe to `emitters/tree/changed` to find it (moderate); or defer (per-row
+    eye already covers it).
+  - **GAP to flag:** "Paste As ▸ Child (Lifetime/Death)" — `emitters/paste` only
+    splices at root level; no paste-into-slot param exists. Per "wire what exists,
+    flag gaps," list Paste-As as a follow-up unless a host paste-as-child command is
+    added.
+  - Golden re-baseline expectation: `disabled` attrs flip on Edit/Emitters items + new
+    context-menu nodes. Aggregate-diff to confirm only-intended (L-053).
 
 ### a11y golden status
 P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
