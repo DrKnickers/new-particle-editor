@@ -60,6 +60,7 @@ export function IncrementIndexDialog({ bridge }: Props) {
               min={1}
               max={999}
               step={1}
+              decimals={0}
               aria-label="Increment by"
             />
           </div>

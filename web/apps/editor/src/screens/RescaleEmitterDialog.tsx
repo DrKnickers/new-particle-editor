@@ -69,6 +69,7 @@ export function RescaleEmitterDialog({ bridge }: Props) {
               min={1}
               max={1000}
               step={1}
+              decimals={0}
               unit="%"
               aria-label="Duration scale"
             />
@@ -84,6 +85,7 @@ export function RescaleEmitterDialog({ bridge }: Props) {
               min={1}
               max={1000}
               step={1}
+              decimals={0}
               unit="%"
               aria-label="Size scale"
             />

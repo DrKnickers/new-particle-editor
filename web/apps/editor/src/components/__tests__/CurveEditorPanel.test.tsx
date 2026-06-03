@@ -875,9 +875,10 @@ describe("CurveEditorPanel — F8 multi-key average edit", () => {
     expect(
       (screen.getByLabelText("Selected key time") as HTMLInputElement).value,
     ).toBe("50");
+    // Scale track (step 0.1) now renders at the app-wide 2dp default.
     expect(
       (screen.getByLabelText("Selected key value") as HTMLInputElement).value,
-    ).toBe("40.0");
+    ).toBe("40.00");
   });
 
   it("editing the Value average shifts every selected key by the delta", async () => {

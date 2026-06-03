@@ -56,15 +56,15 @@
   - textbox "Name": default
   - button "Emitter Timing" [expanded]
   - text: "Initial spawn delay:"
-  - textbox "Initial spawn delay:": "0.000"
+  - textbox "Initial spawn delay:": "0.00"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Skip time:"
-  - textbox "Skip time:": "0.000"
+  - textbox "Skip time:": "0.00"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Freeze time:"
-  - textbox "Freeze time:": "0.000"
+  - textbox "Freeze time:": "0.00"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: s
@@ -74,7 +74,7 @@
     - text: "Bursts:"
     - textbox "Bursts:" [disabled]: "0"
     - text: "Burst delay:"
-    - textbox "Burst delay:" [disabled]: "1.000"
+    - textbox "Burst delay:" [disabled]: "1.00"
     - text: "s Particles/burst:"
     - textbox "Particles/burst:" [disabled]: "1"
     - radio "Continuous stream" [checked]
@@ -86,12 +86,12 @@
     - text: "Particles:"
     - textbox "Particles:" [disabled]: "1"
     - text: "Distance from camera:"
-    - textbox "Distance from camera:" [disabled]: "0.0"
+    - textbox "Distance from camera:" [disabled]: "0.00"
     - text: "units Cube size:"
-    - textbox "Cube size:" [disabled]: "500.0"
+    - textbox "Cube size:" [disabled]: "500.00"
     - text: units
   - text: "Maximum lifetime:"
-  - textbox "Maximum lifetime:": "1.000"
+  - textbox "Maximum lifetime:": "1.00"
   - button "Increment": ▲
   - button "Decrement": ▼
   - text: "s Minimum lifetime:"
@@ -105,7 +105,7 @@
   - text: "Emit mode:"
   - combobox "Emit mode:": Disable
   - text: "Emit offset:"
-  - textbox "Emit offset:" [disabled]: "0.5"
+  - textbox "Emit offset:" [disabled]: "0.50"
   - text: units
 - separator
 - separator
@@ -158,11 +158,11 @@
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Azimuth
-      - textbox "Sun azimuth": "0"
+      - textbox "Sun azimuth": "0.00"
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Altitude
-      - textbox "Sun altitude": "45"
+      - textbox "Sun altitude": "45.00"
       - button "Increment": ▲
       - button "Decrement": ▼
       - text: Diffuse

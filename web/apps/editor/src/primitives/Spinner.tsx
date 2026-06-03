@@ -70,9 +70,21 @@ export function Spinner({
   "aria-label": ariaLabel,
 }: SpinnerProps) {
   const height = ROW_HEIGHT[density];
-  // Determine display decimal places from step if not explicit.
-  const dp = decimals ?? Math.max(0, -Math.floor(Math.log10(Math.abs(step))));
+  // Display decimal places. Default is 2 so every decimal-bearing field
+  // renders consistently (e.g. "0.50", "45.00") regardless of its `step`.
+  // Integer fields (particle counts, Index, colour channels, inverted
+  // percents) opt out by passing `decimals={0}`. NOTE: display precision
+  // is deliberately DECOUPLED from the wheel/step granularity below — a
+  // field can show 2dp yet still nudge by whole units (e.g. angles step
+  // 1° but display 45.00).
+  const dp = decimals ?? 2;
   const fmt = (v: number) => v.toFixed(dp);
+  // Wheel/keyboard "is this an integer-grained field?" test, derived from
+  // `step` (NOT from `dp`). A whole-number step (≥1) nudges by 1 per wheel
+  // notch; a fractional step nudges by 0.1. This matches the legacy
+  // behaviour exactly (previously keyed on the step-derived `dp === 0`,
+  // which is equivalent to `step >= 1`) while letting `dp` default to 2.
+  const stepIsWhole = step >= 1;
 
   const [text, setText] = useState<string>(fmt(value));
   const [dragging, setDragging] = useState(false);
@@ -144,8 +156,8 @@ export function Spinner({
   // The latest value/min/max/step/disabled are stashed in a ref so
   // the listener doesn't need to be re-bound on every render.
   const wrapRef = useRef<HTMLDivElement>(null);
-  const wheelDepsRef = useRef({ value, min, max, step, dp, disabled, onChange, fmt });
-  wheelDepsRef.current = { value, min, max, step, dp, disabled, onChange, fmt };
+  const wheelDepsRef = useRef({ value, min, max, step, stepIsWhole, disabled, onChange, fmt });
+  wheelDepsRef.current = { value, min, max, step, stepIsWhole, disabled, onChange, fmt };
   useEffect(() => {
     const el = wrapRef.current;
     if (el === null) return;
@@ -154,10 +166,12 @@ export function Spinner({
       if (d.disabled) return;
       e.preventDefault();
       e.stopPropagation();
-      // F7: legacy stepped a flat 0.1 per wheel notch. Integer fields
-      // (dp === 0, e.g. Index / particle counts) step by 1 so the wheel
-      // never produces fractional integers. Shift = ×10 (coarse).
-      const base = d.dp === 0 ? 1 : 0.1;
+      // F7: legacy stepped a flat 0.1 per wheel notch. Integer-grained
+      // fields (whole-number step, e.g. Index / particle counts / angles)
+      // step by 1 so the wheel never produces fractional values. Shift =
+      // ×10 (coarse). Keyed on `step` so display precision (now 2dp by
+      // default) doesn't change the nudge granularity.
+      const base = d.stepIsWhole ? 1 : 0.1;
       const s = e.shiftKey ? base * 10 : base;
       const delta = e.deltaY < 0 ? s : -s;
       // Round to kill float drift from repeated 0.1 additions

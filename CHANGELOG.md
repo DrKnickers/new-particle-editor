@@ -16,6 +16,40 @@ Conventions:
 
 ## Changelog
 
+### Decimal numeric fields now display a consistent 2 decimal places
+
+*2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Spinner fields that hold fractional values render uniformly at 2 decimal places
+(e.g. Sun azimuth `0.00`, Position `0.00`, Burst interval `10.00`). Previously the
+precision was derived from each field's `step`, so it varied across the app —
+`45`, `0.5`, `0.50`, `1.000` all coexisted. Genuinely integer fields keep their
+whole-number display: particle counts, Index, colour channels, and percentage
+fields (burst size, texture elements, R/G/B/A, random-lifetime %, rescale %,
+increment-by) are unchanged.
+
+**How we tackled it.** The policy is centralized in the
+[`Spinner`](web/apps/editor/src/primitives/Spinner.tsx) primitive: the display
+precision now defaults to **2** (`decimals ?? 2`) instead of being computed from
+`step`. Crucially, display precision is **decoupled** from the wheel/keyboard nudge
+granularity — that still derives from `step` (`step >= 1` → ±1 per notch, else
+±0.1), so an angle can show `45.00` yet still scroll in whole degrees. Integer
+fields opt out by passing `decimals={0}`. Call sites that previously forced higher
+precision (`decimals={3}` on positions/timing) were dropped to 2; integer fields
+that had been relying on the old `step`-derived 0dp (colour channels, the
+increment-index and rescale `%` dialogs, the CurveEditor `index` track + key time)
+were given explicit `decimals={0}` so they stay whole.
+
+**Issues encountered and resolutions.** The audit surfaced several integer fields
+that were only integer *by accident* — they had no `decimals={0}` and relied on
+`step={1}` deriving 0dp. Defaulting to 2dp would have shown them as `1.00` / `100.00`
+(caught in the a11y golden diff: "Increment by", "Duration/Size scale"). Each was
+given `decimals={0}`. The change re-baselined 19 composition a11y goldens (spinner
+values are captured in the accessibility tree) — every diff is a value-format change,
+no structural change, and the legacy UIA lane was left untouched. → **L-056**.
+
+---
+
 ### Left-panel (property tabs) section chevrons now animate like the Spawner's
 
 *2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

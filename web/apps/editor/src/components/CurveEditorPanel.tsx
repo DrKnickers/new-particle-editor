@@ -1175,6 +1175,7 @@ export function CurveEditorPanel({ bridge }: Props) {
               min={0}
               max={100}
               step={1}
+              decimals={0}
               unit="%"
               disabled={timeSpinnerDisabled}
               density="tight"
@@ -1193,6 +1194,10 @@ export function CurveEditorPanel({ bridge }: Props) {
                   min={sb.min}
                   max={sb.max}
                   step={sb.step}
+                  // Integer-grained tracks (Index, step 1) display as whole
+                  // numbers; fractional tracks (colour 0.01, scale/rotation
+                  // 0.1) inherit the 2dp default.
+                  decimals={sb.step >= 1 ? 0 : undefined}
                   disabled={spinnersDisabled}
                   density="tight"
                 />

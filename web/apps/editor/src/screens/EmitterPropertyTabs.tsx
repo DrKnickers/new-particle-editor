@@ -442,7 +442,7 @@ export function BasicTab({
           value={properties.initialDelay}
           min={0}
           step={0.1}
-          decimals={3}
+          decimals={2}
           unit="s"
           onCommit={(v) => onCommit({ initialDelay: v })}
         />
@@ -451,7 +451,7 @@ export function BasicTab({
           value={properties.skipTime}
           min={0}
           step={0.1}
-          decimals={3}
+          decimals={2}
           unit="s"
           onCommit={(v) => onCommit({ skipTime: v })}
         />
@@ -460,7 +460,7 @@ export function BasicTab({
           value={properties.freezeTime}
           min={0}
           step={0.1}
-          decimals={3}
+          decimals={2}
           unit="s"
           onCommit={(v) => onCommit({ freezeTime: v })}
         />
@@ -497,7 +497,7 @@ export function BasicTab({
             value={properties.burstDelay}
             min={0}
             step={0.1}
-            decimals={3}
+            decimals={2}
             unit="s"
             disabled={!burstsEnabled}
             onCommit={(v) => onCommit({ burstDelay: v })}
@@ -580,7 +580,7 @@ export function BasicTab({
           value={properties.lifetime}
           min={0}
           step={0.1}
-          decimals={3}
+          decimals={2}
           unit="s"
           onCommit={(v) => onCommit({ lifetime: v })}
         />
@@ -1109,6 +1109,7 @@ export function AppearanceTab({
                 min={0}
                 max={100}
                 step={1}
+                decimals={0}
                 unit="%"
                 onChange={(v) => updateRandomColors(0, v)}
                 aria-label="Red"
@@ -1121,6 +1122,7 @@ export function AppearanceTab({
                 min={0}
                 max={100}
                 step={1}
+                decimals={0}
                 unit="%"
                 onChange={(v) => updateRandomColors(1, v)}
                 aria-label="Green"
@@ -1133,6 +1135,7 @@ export function AppearanceTab({
                 min={0}
                 max={100}
                 step={1}
+                decimals={0}
                 unit="%"
                 onChange={(v) => updateRandomColors(2, v)}
                 aria-label="Blue"
@@ -1145,6 +1148,7 @@ export function AppearanceTab({
                 min={0}
                 max={100}
                 step={1}
+                decimals={0}
                 unit="%"
                 onChange={(v) => updateRandomColors(3, v)}
                 aria-label="Alpha"

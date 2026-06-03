@@ -3545,3 +3545,40 @@ defect was purely the `:not([open])` arm. One-line CSS scope fix; verified the e
 golden impact (transforms aren't in the a11y tree), no native rebuild. Cross-reference
 [L-041](#l-041) (browser-mode for React UI bugs) and [L-047](#l-047) (measure rendered
 geometry, both axes).
+
+## L-056 — When centralizing a display-format policy in a shared primitive, audit for call sites that were correct only BY ACCIDENT of the old derived default; and decouple display precision from interaction (wheel/step) granularity — they're different concerns
+
+**Context.** The `Spinner` derived display decimals from `step`
+(`dp = decimals ?? -floor(log10(step))`), so precision varied app-wide (`45`, `0.5`,
+`0.50`, `1.000`). The fix: default display to 2dp (`decimals ?? 2`); integer fields opt
+out with `decimals={0}`.
+
+**1. The "correct by accident" audit.** Many fields displayed as integers NOT because
+they declared `decimals={0}`, but because their `step={1}` happened to derive 0dp under
+the old formula. Flipping the default to 2dp turned those into `1.00` / `100.00`. Some
+were genuinely fractional (angles, positions — *should* become 2dp) but others were
+genuinely integer/percent and had simply never needed an explicit marker: colour
+channels (0–100 %), the increment-index delta, the rescale `%` dialogs, the CurveEditor
+`index` track + key time. **Before changing a derived default, enumerate every consumer
+that relied on the derived value and decide per-field whether the old result was
+intentional or incidental.** The a11y golden diff is the safety net here — spinner values
+live in the accessibility tree, so a stray `"1" → "1.00"` shows up immediately; scan the
+*added* lines for integer fields that shouldn't have moved (`git diff … | grep '^+' |
+grep -oE '"[A-Z][^"]*": "[0-9.]+"' | sort -u`).
+
+**2. Display precision ≠ interaction granularity.** The old code conflated them: one
+`dp` value drove BOTH the rendered decimals AND the wheel-nudge size (`dp === 0 ? 1 :
+0.1`). Naively defaulting display to 2dp would have made angles (step 1°) scroll by 0.1°.
+Keep them separate: display = `decimals ?? 2`; wheel/step base derived from `step`
+(`step >= 1 ? 1 : 0.1`, which is exactly equivalent to the old `dp === 0` since
+step-derived dp is 0 iff step ≥ 1). A field can legitimately show `45.00` while nudging
+by whole units.
+
+**Source incident (2026-06-03, session 12, 2dp consistency).** User: "make all decimal
+bearing number values show 2 decimal places — it's inconsistent." Centralized in Spinner
+(default 2dp, `step`-decoupled wheel base); audited every call site (added `decimals={0}`
+to 4 colour channels, 3 rescale/increment dialogs, CurveEditor index+time; dropped 8
+`decimals={3}` to 2). One unit test updated (`"40.0" → "40.00"`), 19 composition goldens
+re-baselined (value-format only), 0 legacy goldens, vitest 406. Cross-reference
+[L-052](#l-052) (composition-lane only) and [L-053](#l-053) (a Spinner/chrome change fans
+out across many goldens — budget for it).
