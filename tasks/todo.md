@@ -1,159 +1,222 @@
-# UI Delta Audit — Legacy native UI vs. New React UI
+# P6-rest — Curve-editor parity fixes (CRV-2 / CRV-7 / CRV-8)
 
 **Status:** PLAN — awaiting scope confirmation before execution.
-**Deliverable:** a single rigorous report of every behavioral / parameter /
-structural delta between the legacy Win32 UI (`src/`, esp. `src/UI/*` + `main.cpp`)
-and the new React UI (`web/apps/editor/src/`). **No code changes** — findings are
-flagged and discussed before anything is implemented.
+**Branch:** `claude/elastic-dirac-a978aa` (FF into `lt-4` at session end).
+**Baseline verified:** git clean (HEAD = origin/lt-4 = ad4ceca), vitest 428/49,
+`pnpm build` clean.
 
 ---
 
 ## 1. Goal + scope
 
-**Goal.** When this ships, the user has a complete, source-grounded map of where the
-new UI diverges from the legacy UI it is meant to replace — every interaction
-behavior, every exposed parameter, every structural/visual element — each finding
-classified by severity + confidence + how-verified, with file:line refs on both
-sides. This is the gating artifact for arch-C trust toward the eventual LT-4→master
-cutover.
+**Goal.** Close the three remaining P6 curve-editor deltas so the new curve
+editor matches the legacy `CurveEditor.cpp` interaction contract for key
+clipboard, right-click, and time granularity.
 
-**In scope (the 10 audit dimensions):**
-1. Selection & marquee (emitter tree)
-2. Spinners / numeric entry (click-drag, wheel, modifiers, edit/commit)
-3. Link groups (appearance, coloring, set/leave flow, dialogs)
-4. Parameter completeness (every emitter/particle field, tab grouping, labels, units)
-5. Color & texture pickers + random params
-6. Curve / track editor
-7. Menus / toolbar / keyboard accelerators / enable-disable logic
-8. Dialogs (rescale, increment-index, import, mod-nickname, about, save-changes)
-9. Viewport input & docking / layout / splitters
-10. Undo/redo, autosave, status bar, and any misc behavior not covered above
+**In:**
+- **CRV-2 (HIGH)** — Copy / Cut / Paste of selected curve keys via Ctrl+C / X / V,
+  matching legacy `CopyKeys`/`PasteKeys` ([src/UI/CurveEditor.cpp:414-470](src/UI/CurveEditor.cpp:414)).
+- **CRV-7 (MED)** — Right-click on the empty curve canvas in **Select** mode clears
+  the selection (legacy `WM_RBUTTONDOWN` → `CM_SELECT` branch,
+  [src/UI/CurveEditor.cpp:563-582](src/UI/CurveEditor.cpp:563)). Insert-mode
+  right-click keeps dropping to Select mode (already correct).
+- **CRV-8 (LOW)** — Time spinner step `1`→`0.1` so the wheel/arrows nudge in tenths
+  of a percent (legacy granularity); display picks up the app-wide 2 dp default
+  (L-056) for consistency with the sibling Value spinner.
 
-**Out of scope (named so a future reader knows it was deliberate):**
-- *Implementing* any fix — separate follow-up after discussion (user: "do not
-  implement changes before discussing").
-- Engine/render-pixel fidelity beyond UI chrome (particle look, bloom, lighting
-  *rendering*) — separate arch-C visual-parity track, needs the user (L-033); this
-  audit covers UI *behavior/structure*, flagging pixel items as user-needed open
-  questions.
-- Performance/timing parity — out of scope unless a behavior depends on it.
-- Legacy MFC-era code paths already removed pre-rewrite.
-
-## 2. What the codebase already gives us
-
-Clean 1:1 component map (legacy `src/UI/*.cpp` ↔ new counterpart):
-
-| Dimension | Legacy | New |
-|---|---|---|
-| Tree + marquee | `src/UI/EmitterList.cpp` (4955) | `screens/EmitterTree.tsx`, `lib/emitter-selection.ts` |
-| Spinners | `src/UI/Spinner.cpp` (583) | `primitives/Spinner.tsx` |
-| Link groups | `src/LinkGroup.cpp`, EmitterList ctx-menu | `screens/{LinkGroupSettings,SetLinkGroup}Dialog.tsx`, `lib/link-group-colors.ts` |
-| Parameters | `src/UI/Emitter.cpp` (873) | `screens/EmitterPropertyTabs.tsx` |
-| Color button | `src/UI/ColorButton.cpp` | `primitives/ColorButton.tsx` |
-| Texture palette | `src/UI/TexturePalette.cpp` (1019) | `primitives/TexturePalette.tsx`, `screens/TexturePalettePopover.tsx` |
-| Random param | `src/UI/RandomParam.cpp` | `primitives/RandomParam.tsx` |
-| Curve/track | `src/UI/CurveEditor.cpp` (1044), `TrackEditor.cpp` (483) | `screens/CurveEditor.tsx`, `components/CurveEditorPanel.tsx` |
-| Menus/accel/toolbar | `src/main.cpp` (8274) menu + accel tables | `components/{MenuBar,Toolbar,StatusBar}.tsx` |
-| Dialogs | `src/main.cpp` dialog procs | `screens/*Dialog.tsx` |
-| Viewport/docking | `src/host/*`, `main.cpp` layout | `components/PanelLayout.tsx`, `lib/viewport-input.ts`, `lib/right-dock.ts` |
-
-Already-confirmed candidate finding (proves the method): legacy marquee rubber-band
-select (`EmitterList.cpp:392-410`, MT-8/MT-9) has **no** new-UI counterpart in the
-emitter tree (`emitter-selection.ts` does click/ctrl/shift only).
-
-## 3. Methodology / approach
-
-**Three-column extraction per surface:**
-1. **Legacy contract** — read the C++ message handler(s); enumerate EVERY interaction:
-   mouse down/move/up, double-click, wheel, drag (+ thresholds/axes/sensitivity),
-   right-click/context menu, keyboard, modifiers (Ctrl/Shift/Alt), hit-testing,
-   clamps, edge cases.
-2. **New contract** — read the TSX/lib; enumerate the same.
-3. **Delta** — classify each difference.
-
-**Severity rubric:** `MISSING` (legacy-only) · `DIVERGENT` (both, behaves
-differently) · `EXTRA` (new-only enhancement) · `COSMETIC` (appearance/layout) ·
-`PARAM-GAP` (field absent/renamed) · `UNVERIFIED` (needs user/live test).
-Plus **Confidence** (High/Med/Low) and **How-verified** (source-only / live-CDP /
-user-needed).
-
-**Verification matrix (per project rules):**
-- Legacy *logic* → C++ source authoritative. Legacy *feel/pixels* → user (daily-
-  drives legacy; L-033 — never trust agent arch-C screenshots).
-- New *logic* → TSX source authoritative; **live-drive** new UI over CDP/browser-
-  preview (L-041) for high-impact / ambiguous interaction findings (marquee, spinner
-  drag) + render-only divergences. Headless preview can't advance CSS transitions
-  (L-055).
-- Registry round-trips, if relevant → `verify-force-align.mjs` pattern.
-
-**Execution:** parallel read-only **Explore** subagents, one per dimension, each
-given the legacy + new file refs, the extraction template, and the rubric; each
-returns a structured findings list. I synthesize, de-dup, live-verify the
-highest-impact/ambiguous items myself, and assemble the report. (No Workflow-tool
-orchestration unless the user opts in.)
-
-**Report structure (`tasks/ui-delta-report.md`):**
-- Executive summary — counts by severity, top risks.
-- Methodology + sources + confidence legend.
-- Per-dimension finding tables: ID · area · legacy behavior (file:line) · new
-  behavior (file:line) · delta · severity · confidence · how-verified.
-- "Open questions for the user" — legacy-feel/pixel confirmations I won't guess.
-- Appendix: component map + file index.
-
-## 4. Risks + mitigations
-
-1. **Source-only misread of legacy behavior.** C++ handlers are dense
-   (`EmitterList.cpp` is 4955 LOC); a misread produces a false delta. *Mitigation:*
-   every legacy claim carries a file:line ref; ambiguous ones are flagged Low-
-   confidence + routed to the user rather than asserted.
-2. **New-UI source ≠ rendered behavior.** A handler may exist but be wired wrong.
-   *Mitigation:* live-CDP / browser-preview spot-checks on high-impact findings, not
-   source-only for those.
-3. **Audit fatigue → shallow coverage of the long tail** (parameters, menu items).
-   *Mitigation:* parameter & menu dimensions get an *exhaustive enumerated* pass
-   (every field/item listed, present-or-absent), not a sampled one.
-4. **Scope creep into implementation.** *Mitigation:* hard rule — report only, no
-   edits; fixes discussed after.
-5. **Arch-C screenshot trap (L-033).** *Mitigation:* no agent screenshots of the
-   faithful build as evidence; pixel items → user.
-
-## 5. Testing & verification (of the audit itself)
-
-- [ ] Component map complete — every `src/UI/*.cpp` and every
-      `web/.../screens|primitives|components` file is accounted for in a dimension.
-- [ ] Each finding has both-side file:line refs.
-- [ ] Each finding has severity + confidence + how-verified.
-- [ ] High-impact interaction findings (marquee, spinner drag) live-verified on the
-      new side (CDP or browser-preview), not source-only.
-- [ ] Parameter dimension is an exhaustive enumerated list (no sampling).
-- [ ] Legacy-feel/pixel items collected into "Open questions for the user", not
-      guessed.
-- [ ] No code changed; `git status` clean except the report + this todo.
+**Out (deferred, with reasons):**
+- Curve **marquee-from-the-axis-margins** (separate deferred-polish item — needs the
+  canvas viewBox reworked; not a P6 defect).
+- P7 link-groups / P8 color-texture — next plan after P6-rest lands + is confirmed.
+- A host-side / cross-process curve-key clipboard — the legacy used a Win32
+  `RegisterClipboardFormat`; in the web app we keep an **in-app module store**
+  (mirrors `emitter-clipboard.ts`). Cross-*application* paste was never a real
+  workflow here; cross-*track* and cross-*emitter* paste within the editor session
+  is preserved.
+- Right-click **on a key** stays the existing Delete context menu (CRV-5, an
+  intentional new-only feature on the KEEP list) — untouched.
+- Moving the window-scoped **Delete** handler — it works and isn't in scope;
+  leaving it avoids churn (surgical-changes principle).
 
 ---
 
-## Review
+## 2. What the codebase already gives us
 
-**Executed 2026-06-03.** Deliverable: [ui-delta-report.md](ui-delta-report.md)
-(~95 findings across all 10 dimensions). Method: 8 parallel read-only
-source-extraction subagents → live-driving the new UI (browser preview / MockBridge)
-for headline interactions → three-layer source reads for the sharpest bugs →
-cross-agent reconciliation.
+- **`CurveEditorPanel.tsx`** owns selection (`selectedKeyTimes` by TIME), the
+  Time/Value spinners, the focus channel, `focusedTrack`, `borderKeyTimes`, the
+  window-scoped **Delete** keydown effect ([CurveEditorPanel.tsx:990](web/apps/editor/src/components/CurveEditorPanel.tsx:990)),
+  `handleDelete` (border-filtered), and `handleCanvasAdd` (adds a key + auto-selects
+  the returned time). These are the exact primitives Copy/Cut/Paste compose from.
+- **`emitters/add-track-key`** dedupes by epsilon (bumps +0.001 until the time is
+  unique) and **returns the actual inserted `{time, value}`**
+  ([bridge-schema index.ts:647](web/packages/bridge-schema/src/index.ts:647),
+  mock `addTrackKeyInOverlay` [mock-state.ts:1371](web/apps/editor/src/bridge/mock-state.ts:1371)).
+  → paste-at-original-time is **safe even into the same track**; we select the
+  returned times.
+- **`TrackKey = { time, value }`** ([bridge-schema index.ts:329](web/packages/bridge-schema/src/index.ts:329)) —
+  interpolation is **per-track**, not per-key, so the clipboard only needs
+  `{time, value}[]`.
+- **`emitter-clipboard.ts`** is the prior-art pattern: a tiny zustand store +
+  imperative setter + reactive `hasContent` hook. We add a sibling
+  **`curve-key-clipboard.ts`** that actually stores the keys (not just a flag),
+  since there is no host buffer for curve keys.
+- **`onCanvasContextMenu`** is already wired (`() => setMode("select")`,
+  [CurveEditorPanel.tsx:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371))
+  and the renderer already calls it + `preventDefault`s the native menu on the
+  empty backdrop ([CurveEditor.tsx:1607](web/apps/editor/src/screens/CurveEditor.tsx:1607)).
+  CRV-7 only needs the callback to branch on `mode`.
+- **Tree clipboard scoping precedent:** the emitter tree's Ctrl+C/X/V live on the
+  tree container's `onKeyDown` (focus-scoped, [EmitterTree.tsx:1474](web/apps/editor/src/screens/EmitterTree.tsx:1474)).
+  The curve panel's Delete is **window-scoped** on purpose — clicking an SVG key
+  doesn't move DOM focus into the panel, so a focus-scoped handler would never fire.
 
-Verification checklist:
-- [x] Component map complete — every `src/UI/*.cpp` + new `screens|primitives|components` accounted for.
-- [x] Each finding has both-side file:line refs.
-- [x] Each finding has severity + confidence + how-verified tag.
-- [x] High-impact interaction findings live-verified (marquee absence 🔴; spinner display/wheel/commit 🔴).
-- [x] Parameter dimension is an exhaustive enumerated list (50-field inventory, no sampling).
-- [x] Legacy-feel/pixel items collected into "Open questions for you", not guessed.
-- [x] No code changed (audit only) — `git status` clean except the report + this todo.
+---
 
-**Headline outcomes:**
-- 2 CRITICAL: PRM-4/PRM-5 rotation scaling (🟣 triple-confirmed data-fidelity bug —
-  writes wrong values to `.alo`); VPT-2 inert undo.
-- Cross-agent catch: spawn-volume editor IS ported (`GroupBody` 1:1) — the
-  "unported" alarm was a false positive (gallery-only `primitives/RandomParam.tsx`).
-- Largest theme: keyboard/accelerator layer mostly stubbed (MNU-2).
+## 3. Architecture / implementation approach
 
-**Next:** discuss findings with the user; no implementation until prioritized.
+### CRV-8 (smallest — do first)
+`CurveEditorPanel.tsx` Time spinner ([:1229](web/apps/editor/src/components/CurveEditorPanel.tsx:1229)):
+`step={1}` → `step={0.1}`; drop `decimals={0}` so it inherits the Spinner's 2 dp
+default (matches the Value spinner's `decimals={sb.step >= 1 ? 0 : undefined}`
+idiom). `min/max/unit` unchanged. **Touches a composition golden** (toolbar Time
+spinner now reads e.g. `45.00` not `45`).
+
+### CRV-7
+Change the `onCanvasContextMenu` prop ([:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371)) to branch on the
+panel's `mode`:
+```ts
+onCanvasContextMenu={() => {
+  if (mode === "insert") { setMode("select"); return; }   // legacy CM_INSERT branch
+  // legacy CM_SELECT branch — clear the selection
+  setOptimisticSelected(null);
+  setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
+}}
+```
+No renderer change (it already calls the callback + suppresses the native menu).
+
+### CRV-2 — new `lib/curve-key-clipboard.ts`
+```ts
+// Module store of copied curve keys (in-app; no host buffer exists for keys).
+type CopiedKey = { time: number; value: number };
+useCurveKeyClipboardStore: zustand<{ keys: CopiedKey[]; setKeys(k): void }>
+export function setCurveKeysClipboard(keys: CopiedKey[]): void
+export function getCurveKeysClipboard(): CopiedKey[]
+export function useCurveKeyClipboardHasContent(): boolean   // for future menu gating
+```
+Then in `CurveEditorPanel.tsx`, a **window-scoped** keydown effect (sibling to the
+Delete effect) handling Ctrl/Cmd + C / X / V:
+- **Guards (bail early):** target inside a `TYPING_TAGS` element (existing pattern);
+  **target inside the emitter tree** (`(e.target as HTMLElement).closest('[data-testid="emitter-tree"]')`)
+  — the tree owns its own clipboard, so this prevents a double-fire when the tree
+  is focused. This is the central collision mitigation.
+- **Copy (`c`):** if `selectedKeyTimes.size === 0` bail; gather
+  `focusedTrack.keys.filter(k => selectedKeyTimes.has(k.time))` → `setCurveKeysClipboard`.
+  Copies ALL selected keys incl. borders (legacy copies the whole selection).
+- **Cut (`x`):** Copy (above); if nothing copied, bail; then `handleDelete()`
+  (border-filtered server-side, matching legacy WM_CLEAR).
+- **Paste (`v`):** bail if clipboard empty, `selectedId === null`, or `focusLocked`;
+  for each clipboard key fire `emitters/add-track-key {time, value}` on the focus
+  track; collect the returned `{time}`; `setSelectedKeyTimes(new Set(returnedTimes))`
+  (mirrors `handleCanvasAdd`'s auto-select-returned-time path, incl. its no-fround
+  convention). Clears `optimisticSelected` first.
+
+`useCallback` handlers `handleCopyKeys` / `handleCutKeys` / `handlePasteKeys`; the
+effect depends on them + `selectedKeyTimes` (same shape as the Delete effect).
+
+---
+
+## 4. Risks named up front + mitigations
+
+1. **Clipboard collision with the emitter tree (Ctrl+C/V double-fire).** The curve
+   handler is window-scoped (must be — SVG clicks don't focus the panel) while the
+   tree handler is focus-scoped but still bubbles to window. With a tree emitter AND
+   curve keys both selected, one Ctrl+C could set both clipboards.
+   **Mitigation:** the curve handler bails when `e.target.closest('[data-testid="emitter-tree"]')`
+   is non-null — the tree, when focused, owns the gesture. Copy/Cut additionally
+   require `selectedKeyTimes.size > 0`. Tested with a synthetic tree-origin target.
+2. **Paste at a colliding time corrupts the multiset / breaks selection-by-time.**
+   **Mitigation:** none needed — `add-track-key` already dedupes by epsilon and
+   returns the real time; we select the returned times, never the requested ones.
+   This is the same guarantee `handleCanvasAdd` relies on.
+3. **Paste into a locked channel writes to a read-only alias.**
+   **Mitigation:** Paste bails on `focusLocked` (same guard the Delete/Insert
+   affordances already use).
+4. **CRV-8 silently breaks a composition a11y golden.** The toolbar Time spinner's
+   rendered text changes (`45` → `45.00`).
+   **Mitigation:** expected + planned — re-baseline the composition lane only
+   (`pnpm a11y:update`, L-052), legacy `.json` untouched. Diff the golden to confirm
+   ONLY the Time-spinner value-format changed.
+5. **float32 drift on pasted-key selection (L-057).** Native paste returns float32;
+   selecting the requested double would miss the highlight.
+   **Mitigation:** select the **returned** time from the bridge response (not the
+   requested), exactly as `handleCanvasAdd` does. Hand final native paste-highlight
+   verification to the user (preview stores exact doubles — L-057 caveat).
+
+---
+
+## 5. Testing & verification
+
+**Web (vitest — `CurveEditorPanel.test.tsx`, mirrors the Delete-handler tests):**
+- [ ] Ctrl+C with 2 keys selected → `curve-key-clipboard` holds those 2 `{time,value}`.
+- [ ] Ctrl+V → fires `add-track-key` once per clipboard key on the focus track;
+      selection becomes the returned times.
+- [ ] Ctrl+X → copies then fires `delete-track-keys` (border filtered).
+- [ ] Copy with empty selection → no clipboard write, no throw.
+- [ ] Paste with empty clipboard / no emitter / locked focus → no `add-track-key`.
+- [ ] Ctrl+C fired from inside an `<input>` (TYPING_TAGS) → no clipboard write.
+- [ ] Ctrl+C fired from a target inside `[data-testid="emitter-tree"]` → no curve
+      clipboard write (collision guard).
+- [ ] Cross-track paste: copy on Red, switch focus to Green, paste → keys land on Green.
+- [ ] **CRV-7:** right-click empty canvas in Select mode with a selection →
+      `selectedKeyTimes` cleared; in Insert mode → mode flips to select, selection
+      untouched. (Renderer-level: `onCanvasContextMenu` fires + `preventDefault`.)
+- [ ] **CRV-8:** Time spinner renders `step="0.1"`; displayed value shows 2 dp.
+
+**Composition a11y:** re-baseline curve-panel golden(s) touched by CRV-8; diff to
+confirm only the Time-spinner format changed. (L-052: composition lane only.)
+
+**Build/full suite:** `pnpm build` clean; `pnpm test` green (428 + new).
+
+**Native (hand to user — L-057):** launch faithful `--new-ui`; select an emitter,
+marquee a few curve keys, Ctrl+C, click empty, Ctrl+V → pasted keys appear + are
+selected; Ctrl+X removes selected non-border keys; right-click empty in Select mode
+clears the selection; Time spinner nudges in 0.1 steps.
+
+---
+
+## 6. Review
+
+**Shipped — all three items, TDD (red→green per item):**
+- **CRV-8** — Time spinner `step={1} decimals={0}` → `step={0.1}` + inherit 2dp
+  default ([CurveEditorPanel.tsx:1234](web/apps/editor/src/components/CurveEditorPanel.tsx:1234)).
+  2 new tests (2dp display + 0.1 ArrowUp nudge); updated the existing F8 line-877
+  assertion (`"50"` → `"50.00"`).
+- **CRV-7** — `onCanvasContextMenu` branches on `mode`
+  ([CurveEditorPanel.tsx:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371)):
+  Insert → drop to Select; Select → clear selection. 2 new tests.
+- **CRV-2** — new [lib/curve-key-clipboard.ts](web/apps/editor/src/lib/curve-key-clipboard.ts)
+  (in-app zustand store, `{time,value}[]`) + window-scoped Ctrl/Cmd+C/X/V effect +
+  `handleCopyKeys`/`handleCutKeys`/`handlePasteKeys`. 8 new tests (copy, paste,
+  cut, empty-selection, empty-clipboard, TYPING_TAGS guard, tree-origin guard,
+  cross-track paste).
+
+**Verification (web lane — green):**
+- vitest **440** (was 428; +12). `pnpm build` clean. `pnpm lint` (`tsc --noEmit`) exit 0.
+- Composition a11y golden `curve-editor-focused.composition.golden.yaml:122` updated
+  by hand (`"0"` → `"0.00"`) — the one deterministic line CRV-8 touches. Legacy `.json`
+  provably unaffected (Edit nodes carry `children: []`; no spinner value captured).
+  CRV-7/CRV-2 add no rendered DOM, so no other golden drifts.
+
+**Could NOT verify here (handed to user — L-033/L-057):**
+- Native a11y CDP harness + engine-pixel / drag-feel / keyboard-in-WebView checks.
+  This is a FRESH worktree: no `packages/` (NuGet), no `x64/Debug/ParticleEditor.exe`
+  — the handoff's "already built" was the prior worktree's (binaries aren't committed).
+  Standing up the native toolchain for one deterministic golden line is
+  disproportionate; native verification is the user's lane. → see new lesson L-058.
+
+**User native checklist:** select an emitter → marquee/Ctrl-click several curve keys →
+Ctrl+C, click empty, Ctrl+V (pasted keys appear + selected) → Ctrl+X (removes selected
+non-border keys, keeps them on the clipboard) → right-click empty in Select mode (clears
+selection) → right-click empty in Insert mode (drops to Select, keeps selection) → Time
+spinner nudges by 0.1 and reads 2 dp. Cross-track: copy on one channel, focus another,
+paste.

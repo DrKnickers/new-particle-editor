@@ -12,7 +12,7 @@
 //   - Toggling a channel checkbox flips the SVG layer's presence
 //     (visibleChannels prop wired correctly).
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   Bridge,
@@ -21,6 +21,10 @@ import type {
 import { TRACK_NAMES } from "@particle-editor/bridge-schema";
 import { CurveEditorPanel, CHANNELS } from "../CurveEditorPanel";
 import { makeDefaultEngineState } from "@/bridge/mock-state";
+import {
+  getCurveKeysClipboard,
+  setCurveKeysClipboard,
+} from "@/lib/curve-key-clipboard";
 
 function fixtureTracks(): TrackDto[] {
   return TRACK_NAMES.map((name) => ({
@@ -872,9 +876,10 @@ describe("CurveEditorPanel — F8 multi-key average edit", () => {
     const { bridge } = makeStubBridgeMultiInterior(0);
     await selectScaleInterior(bridge);
     // avg time = (25+50+75)/3 = 50; avg value = (20+40+60)/3 = 40.
+    // Time spinner (step 0.1, CRV-8) renders at the app-wide 2dp default.
     expect(
       (screen.getByLabelText("Selected key time") as HTMLInputElement).value,
-    ).toBe("50");
+    ).toBe("50.00");
     // Scale track (step 0.1) now renders at the app-wide 2dp default.
     expect(
       (screen.getByLabelText("Selected key value") as HTMLInputElement).value,
@@ -925,5 +930,231 @@ describe("CurveEditorPanel — F8 multi-key average edit", () => {
     expect(
       (screen.getByLabelText("Selected key value") as HTMLInputElement).disabled,
     ).toBe(false);
+  });
+});
+
+// CRV-8: the curve Time spinner uses a 0.1 step (legacy granularity) and
+// displays at the app-wide 2dp default (decoupled from step, per L-056).
+describe("CurveEditorPanel — CRV-8 decimal-grained time", () => {
+  it("Time spinner displays the selected key time at 2 decimal places", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    selectChannel("scale");
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-scale")).toBeInTheDocument();
+    });
+    const middle = Array.from(
+      document.querySelectorAll("[data-testid='curve-key']"),
+    ).find((c) => c.getAttribute("data-key-time") === "50")!;
+    fireEvent.click(middle);
+    await waitFor(() => {
+      const timeInput = screen.getByLabelText("Selected key time") as HTMLInputElement;
+      expect(timeInput.disabled).toBe(false);
+      expect(timeInput.value).toBe("50.00");
+    });
+  });
+
+  it("ArrowUp on the Time spinner nudges by 0.1 (not 1)", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    selectChannel("scale");
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-scale")).toBeInTheDocument();
+    });
+    const middle = Array.from(
+      document.querySelectorAll("[data-testid='curve-key']"),
+    ).find((c) => c.getAttribute("data-key-time") === "50")!;
+    fireEvent.click(middle);
+    const timeInput = screen.getByLabelText("Selected key time") as HTMLInputElement;
+    await waitFor(() => expect(timeInput.disabled).toBe(false));
+    fireEvent.keyDown(timeInput, { key: "ArrowUp" });
+    await waitFor(() => {
+      const move = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[0] as { kind: string; params: { newTime: number } })
+        .find((c) => c.kind === "emitters/set-track-key");
+      expect(move).toBeDefined();
+      expect(move!.params.newTime).toBeCloseTo(50.1, 3);
+    });
+  });
+});
+
+// CRV-7: right-click on the empty curve canvas. In Select mode it clears
+// the selection (legacy WM_RBUTTONDOWN → CM_SELECT); in Insert mode it
+// drops back to Select mode without deselecting (legacy CM_INSERT branch).
+describe("CurveEditorPanel — CRV-7 right-click deselect", () => {
+  async function focusScaleWithSelection() {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    selectChannel("scale");
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-scale")).toBeInTheDocument();
+    });
+    const middle = Array.from(
+      document.querySelectorAll("[data-testid='curve-key']"),
+    ).find((c) => c.getAttribute("data-key-time") === "50")!;
+    fireEvent.click(middle);
+    const panel = screen.getByTestId("curve-editor-panel");
+    await waitFor(() => expect(panel.getAttribute("data-selected-key-count")).toBe("1"));
+    return { bridge, panel };
+  }
+
+  it("Select mode: right-click on empty canvas clears the selection", async () => {
+    const { panel } = await focusScaleWithSelection();
+    expect(panel.getAttribute("data-mode")).toBe("select");
+    fireEvent.contextMenu(screen.getByTestId("curve-canvas-backdrop"));
+    await waitFor(() => expect(panel.getAttribute("data-selected-key-count")).toBe("0"));
+    // Mode stays Select.
+    expect(panel.getAttribute("data-mode")).toBe("select");
+  });
+
+  it("Insert mode: right-click drops back to Select mode WITHOUT deselecting", async () => {
+    const { panel } = await focusScaleWithSelection();
+    fireEvent.click(screen.getByTestId("ce-tool-insert"));
+    expect(panel.getAttribute("data-mode")).toBe("insert");
+    fireEvent.contextMenu(screen.getByTestId("curve-canvas-backdrop"));
+    await waitFor(() => expect(panel.getAttribute("data-mode")).toBe("select"));
+    // Selection is preserved (legacy CM_INSERT branch doesn't deselect).
+    expect(panel.getAttribute("data-selected-key-count")).toBe("1");
+  });
+});
+
+// CRV-2: Copy / Cut / Paste of selected curve keys via Ctrl+C / X / V,
+// matching legacy CurveEditor.cpp CopyKeys / PasteKeys. Window-scoped (SVG
+// clicks don't move DOM focus into the panel), with a TYPING_TAGS guard and
+// an emitter-tree-origin guard so the two clipboards never both fire.
+describe("CurveEditorPanel — CRV-2 key copy/cut/paste", () => {
+  beforeEach(() => setCurveKeysClipboard([]));
+
+  function clickKeyByTime(time: number, additive = false) {
+    const el = Array.from(
+      document.querySelectorAll("[data-testid='curve-key']"),
+    ).find((c) => c.getAttribute("data-key-time") === String(time));
+    if (el === undefined) throw new Error(`no curve-key at time ${time}`);
+    fireEvent.click(el, additive ? { ctrlKey: true } : {});
+  }
+
+  function addTrackKeyCalls(bridge: { request: ReturnType<typeof vi.fn> }) {
+    return bridge.request.mock.calls
+      .map((c) => c[0] as { kind: string; params: { track: string; time: number; value: number } })
+      .filter((c) => c.kind === "emitters/add-track-key");
+  }
+
+  async function focusScale(bridge: Bridge) {
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument());
+    selectChannel("scale");
+    await waitFor(() => expect(screen.getByTestId("curve-layer-scale")).toBeInTheDocument());
+  }
+
+  it("Ctrl+C copies the selected keys' {time,value} to the clipboard", async () => {
+    const { bridge } = makeStubBridgeMultiInterior(0);
+    await focusScale(bridge);
+    clickKeyByTime(25);
+    clickKeyByTime(50, true);
+    fireEvent.keyDown(document.body, { key: "c", ctrlKey: true });
+    await waitFor(() => expect(getCurveKeysClipboard()).toHaveLength(2));
+    const byTime = new Map(getCurveKeysClipboard().map((k) => [k.time, k.value]));
+    expect(byTime.get(25)).toBe(20);
+    expect(byTime.get(50)).toBe(40);
+  });
+
+  it("Ctrl+V adds one key per clipboard entry on the focus track + selects the results", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    clickKeyByTime(50);
+    fireEvent.keyDown(document.body, { key: "c", ctrlKey: true });
+    await waitFor(() => expect(getCurveKeysClipboard()).toHaveLength(1));
+    fireEvent.keyDown(document.body, { key: "v", ctrlKey: true });
+    await waitFor(() => {
+      const adds = addTrackKeyCalls(bridge);
+      expect(adds).toHaveLength(1);
+      expect(adds[0]!.params).toMatchObject({ track: "scale", time: 50, value: 50 });
+    });
+    const panel = screen.getByTestId("curve-editor-panel");
+    await waitFor(() => expect(panel.getAttribute("data-selected-key-count")).toBe("1"));
+  });
+
+  it("Ctrl+X copies the selection then deletes the non-border keys", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    clickKeyByTime(50);
+    fireEvent.keyDown(document.body, { key: "x", ctrlKey: true });
+    await waitFor(() => {
+      const del = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[0] as { kind: string; params: { times: number[] } })
+        .find((c) => c.kind === "emitters/delete-track-keys");
+      expect(del).toBeDefined();
+      expect(del!.params.times).toEqual([50]);
+    });
+    expect(getCurveKeysClipboard()).toHaveLength(1);
+    expect(getCurveKeysClipboard()[0]).toMatchObject({ time: 50, value: 50 });
+  });
+
+  it("Ctrl+C with no selection does not write the clipboard", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    fireEvent.keyDown(document.body, { key: "c", ctrlKey: true });
+    expect(getCurveKeysClipboard()).toHaveLength(0);
+  });
+
+  it("Ctrl+V with an empty clipboard fires no add-track-key", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    fireEvent.keyDown(document.body, { key: "v", ctrlKey: true });
+    expect(addTrackKeyCalls(bridge)).toHaveLength(0);
+  });
+
+  it("Ctrl+C fired inside a text input does not write the clipboard (TYPING_TAGS guard)", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    clickKeyByTime(50);
+    const valueInput = screen
+      .getByTestId("ce-spinner-value-wrapper")
+      .querySelector("input") as HTMLInputElement;
+    valueInput.focus();
+    fireEvent.keyDown(valueInput, { key: "c", ctrlKey: true });
+    expect(getCurveKeysClipboard()).toHaveLength(0);
+  });
+
+  it("Ctrl+C originating inside the emitter tree does not write the curve clipboard", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    clickKeyByTime(50);
+    const tree = document.createElement("div");
+    tree.setAttribute("data-testid", "emitter-tree");
+    const child = document.createElement("div");
+    tree.appendChild(child);
+    document.body.appendChild(tree);
+    try {
+      fireEvent.keyDown(child, { key: "c", ctrlKey: true });
+      expect(getCurveKeysClipboard()).toHaveLength(0);
+    } finally {
+      document.body.removeChild(tree);
+    }
+  });
+
+  it("cross-track paste: copy on Scale, switch focus to Red, paste lands on Red", async () => {
+    const { bridge } = makeStubBridgeWithFocusInteriorKey(0);
+    await focusScale(bridge);
+    clickKeyByTime(50);
+    fireEvent.keyDown(document.body, { key: "c", ctrlKey: true });
+    await waitFor(() => expect(getCurveKeysClipboard()).toHaveLength(1));
+    selectChannel("red");
+    await waitFor(() => expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument());
+    fireEvent.keyDown(document.body, { key: "v", ctrlKey: true });
+    await waitFor(() => {
+      const adds = addTrackKeyCalls(bridge);
+      expect(adds).toHaveLength(1);
+      expect(adds[0]!.params.track).toBe("red");
+    });
   });
 });

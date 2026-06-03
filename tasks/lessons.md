@@ -3632,3 +3632,40 @@ key `onClick` on `dragConsumedClickRef`, snap `selectedKeyTimes` to the refetche
 times after `tree/changed`, and commit the `fround`ed time. Re-verified WITH a trailing
 `click` dispatched. Cross-reference [L-033](#l-033) (native arch-C verification truth) and
 [L-041] (browser-preview as the React-behaviour surface).
+
+---
+
+## L-058 — A per-session git worktree starts EMPTY of all uncommitted build products (`node_modules`, NuGet `packages/`, `x64/Debug/*.exe`); a handoff that says "the native exe is already built this worktree" refers to a DIFFERENT, now-gone worktree — verify a binary exists before relying on it, never trust the doc
+
+**Rule.** The desktop app provisions a fresh `claude/<random>` worktree per session. A
+worktree is a clean checkout of tracked files only — everything `.gitignore`d
+(`node_modules/`, the NuGet `packages/` restore, `x64/Debug/ParticleEditor.exe`, `dist/`)
+is **absent on first checkout**, regardless of what a prior session built. So a handoff
+line like "Debug x64 built; `packages/` has WebView2 — already built this worktree" is
+true *only of the worktree that session ran in*, which no longer exists. Treat any claim
+about a present binary/artifact as STALE until `Test-Path` says otherwise.
+
+**Why it matters.** The session-13 handoff stated the native a11y harness was runnable
+("`x64\Debug\ParticleEditor.exe` built … already built this worktree"). Running
+`pnpm a11y` spawned that path and got `ENOENT`; `packages/` and `x64/` didn't exist at
+all. Acting on the doc (assuming the harness was ready) wasted a run and risked reporting
+"a11y verified" when the harness never executed. This is the same family as
+[L-022](#l-022) (docs say X, reality ships Y) and [L-057](#l-057) (preview PASS ≠ native
+PASS) — the unifying rule is *trust nothing that claims a build state; verify presence*.
+
+**How to apply.** At session start, before relying on any binary/artifact: `Test-Path`
+it. `node_modules` absent → `pnpm install`. Native harness needed → confirm `packages/`
++ `x64/Debug/*.exe` exist; if not, either run the full `nuget restore` + MSBuild bring-up
+(L-039/L-046) or, when the change is web-only and the affected golden change is
+deterministic, update the golden by reasoning and hand the native/CDP confirmation to the
+user (their lane per L-033) — but say plainly that the harness did not run, never imply it
+did. Don't let a from-scratch native bring-up become the price of verifying one
+deterministic golden line.
+
+**Source incident (2026-06-03, session 14, P6-rest).** CRV-8 changed the curve Time
+spinner to 2 dp, drifting one composition-golden line (`"0"` → `"0.00"`). Tried
+`pnpm a11y` to confirm → `ENOENT` on `x64\Debug\ParticleEditor.exe`; `packages/` + `x64/`
+absent in the fresh worktree. Updated the single golden line by reasoning (the Value
+spinner one row below already rendered `"0.00"` from the identical `decimals ?? 2` path;
+legacy `.json` carries `children: []` so it can't capture the value), and handed native
+a11y + engine verification to the user.

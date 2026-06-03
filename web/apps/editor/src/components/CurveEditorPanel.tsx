@@ -52,6 +52,10 @@ import type {
 } from "@particle-editor/bridge-schema";
 import { CurveEditor, type ChannelDef } from "@/screens/CurveEditor";
 import { Spinner } from "@/primitives/Spinner";
+import {
+  getCurveKeysClipboard,
+  setCurveKeysClipboard,
+} from "@/lib/curve-key-clipboard";
 
 /** Channel registry. Order matches the design's left-column list. The
  *  `trackName` field bridges the UI-facing id (e.g. "rotation") to the
@@ -1059,6 +1063,89 @@ export function CurveEditorPanel({ bridge }: Props) {
   // currently locked to another channel (read-only).
   const interpDisabled = selectedId === null || focusedTrack === null || focusLocked;
 
+  // ── Key clipboard (CRV-2) ─────────────────────────────────────────
+  // Copy the selected keys' {time,value} (borders included — legacy
+  // CopyKeys copies the whole selection). Returns whether anything was
+  // copied so Cut can bail before deleting.
+  const handleCopyKeys = useCallback((): boolean => {
+    if (focusedTrack === null || selectedKeyTimes.size === 0) return false;
+    const keys = focusedTrack.keys
+      .filter((k) => selectedKeyTimes.has(k.time))
+      .map((k) => ({ time: k.time, value: k.value }));
+    if (keys.length === 0) return false;
+    setCurveKeysClipboard(keys);
+    return true;
+  }, [focusedTrack, selectedKeyTimes]);
+
+  // Cut = Copy then Delete (border keys are filtered server-side by
+  // delete-track-keys, matching legacy WM_CUT → WM_CLEAR).
+  const handleCutKeys = useCallback(() => {
+    if (!handleCopyKeys()) return;
+    handleDelete();
+  }, [handleCopyKeys, handleDelete]);
+
+  // Paste re-adds each clipboard key on the FOCUS track via add-track-key
+  // (host dedupes by epsilon + returns the real inserted time). We select
+  // the returned times so the pasted keys highlight — same auto-select-
+  // the-returned-time path handleCanvasAdd uses (and the same reason it
+  // survives float32 drift natively, L-057). Blocked on a locked focus.
+  const handlePasteKeys = useCallback(() => {
+    if (selectedId === null || focusLocked) return;
+    const clip = getCurveKeysClipboard();
+    if (clip.length === 0) return;
+    const track = focusedChannel.trackName;
+    setOptimisticSelected(null);
+    void Promise.all(
+      clip.map((k) =>
+        bridge
+          .request({
+            kind: "emitters/add-track-key",
+            params: { id: selectedId, track, time: k.time, value: k.value },
+          })
+          .then((res) => (res as { time?: number }).time ?? k.time)
+          .catch(() => null),
+      ),
+    ).then((times) => {
+      const valid = times.filter((t): t is number => t !== null);
+      if (valid.length > 0) setSelectedKeyTimes(new Set(valid));
+    });
+  }, [bridge, selectedId, focusLocked, focusedChannel.trackName]);
+
+  // Window-scoped Ctrl/Cmd + C / X / V. Window-scoped (not panel-focus-
+  // scoped) because clicking an SVG key never moves DOM focus into the
+  // panel — same reason the Delete handler above is window-scoped. Two
+  // guards keep it from colliding with the emitter tree's own clipboard:
+  // a TYPING_TAGS guard, and a tree-origin guard (the tree owns its
+  // focus-scoped Ctrl+C/X/V — when the keydown comes from inside it, we
+  // stand down).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key !== "c" && key !== "x" && key !== "v") return;
+      const target = e.target as HTMLElement | null;
+      if (target !== null) {
+        if (TYPING_TAGS.has(target.tagName)) return;
+        if (target.closest('[data-testid="emitter-tree"]')) return;
+      }
+      if (key === "c") {
+        if (selectedKeyTimes.size === 0) return;
+        e.preventDefault();
+        handleCopyKeys();
+      } else if (key === "x") {
+        if (selectedKeyTimes.size === 0) return;
+        e.preventDefault();
+        handleCutKeys();
+      } else {
+        if (getCurveKeysClipboard().length === 0) return;
+        e.preventDefault();
+        handlePasteKeys();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); };
+  }, [handleCopyKeys, handleCutKeys, handlePasteKeys, selectedKeyTimes]);
+
   return (
     <div
       data-testid="curve-editor-panel"
@@ -1233,8 +1320,11 @@ export function CurveEditorPanel({ bridge }: Props) {
               onChange={handleTimeSpinner}
               min={0}
               max={100}
-              step={1}
-              decimals={0}
+              // CRV-8: legacy used a 0.1 time step; wheel/arrows nudge in
+              // tenths of a percent. Display picks up the app-wide 2dp
+              // default (L-056) — decoupled from step — so the Time field
+              // reads consistently with the Value spinner beside it.
+              step={0.1}
               unit="%"
               disabled={timeSpinnerDisabled}
               density="tight"
@@ -1368,7 +1458,17 @@ export function CurveEditorPanel({ bridge }: Props) {
                   onCanvasClick={handleCanvasClick}
                   insertMode={mode === "insert"}
                   onCanvasAdd={handleCanvasAdd}
-                  onCanvasContextMenu={() => setMode("select")}
+                  onCanvasContextMenu={() => {
+                    // CRV-7: mirror legacy WM_RBUTTONDOWN. In Insert mode a
+                    // right-click drops back to Select mode without
+                    // deselecting; in Select mode it clears the selection.
+                    if (mode === "insert") {
+                      setMode("select");
+                      return;
+                    }
+                    setOptimisticSelected(null);
+                    setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
+                  }}
                   onKeyContextMenu={(time, isBorder, x, y) =>
                     setKeyContextMenu({ time, isBorder, x, y })
                   }
