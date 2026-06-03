@@ -1255,6 +1255,26 @@ describe("MockBridge contract", () => {
     expect(after.properties.nParticlesPerSecond).toBe(before.properties.nParticlesPerSecond);
   });
 
+  // ─── Settings — cross-mode registry (Force Align) ────────────────
+  //
+  // The flag defaults to the legacy `kLightForceAlignDefault = true`, and
+  // the set→get round-trip persists within a MockBridge instance (the
+  // native host persists to the `LightingForceFillAlignment` REG_DWORD).
+  it("settings/lighting-force-align defaults to true and round-trips a set", async () => {
+    const b = new MockBridge();
+    const initial = await b.request({ kind: "settings/lighting-force-align", params: {} });
+    expect(initial).toEqual({ enabled: true });
+
+    const setRes = await b.request({
+      kind: "settings/lighting-force-align/set",
+      params: { enabled: false },
+    });
+    expect(setRes).toEqual({});
+
+    const after = await b.request({ kind: "settings/lighting-force-align", params: {} });
+    expect(after).toEqual({ enabled: false });
+  });
+
   it("on() returns a working unsubscribe", async () => {
     const b = new MockBridge();
     const seen: Event[] = [];

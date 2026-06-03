@@ -184,24 +184,30 @@ export function LightingPanel({ bridge, onClose }: Props) {
   // the multiplied Vec4, so re-seeding would clobber the split.
   const [seeded, setSeeded] = useState(false);
   // FD10 Group D: Force Align Fill Lights. Default ON to match legacy
-  // (kLightForceAlignDefault = true at src/main.cpp:6225). Persisted
-  // to localStorage so the flag survives editor restart — legacy
-  // stores it as a REG_DWORD under LightingForceFillAlignment, but
-  // a host-side registry bridge would cost a new request kind +
-  // C++ wiring; localStorage is enough for new-UI standalone use.
-  // Cross-mode sync with legacy is a deferred polish.
-  const FORCE_ALIGN_LS_KEY = "alo:lighting:force-align";
-  const [forceAlign, setForceAlign] = useState<boolean>(() => {
-    try {
-      const stored = window.localStorage.getItem(FORCE_ALIGN_LS_KEY);
-      if (stored === "false") return false;
-      if (stored === "true")  return true;
-    } catch {
-      // localStorage can throw (private mode, exhausted quota, etc.) —
-      // fall through to the legacy default.
-    }
-    return true;
-  });
+  // (kLightForceAlignDefault = true at src/main.cpp:6187). The flag now
+  // round-trips through the registry (`LightingForceFillAlignment`
+  // REG_DWORD) via the bridge so it stays in sync with the legacy UI —
+  // replaces the old localStorage-only persistence. Initialised to the
+  // default synchronously (so the checkbox renders deterministically on
+  // first paint), then reconciled from the host on mount; the toggle
+  // handler writes back. Under `--test-host` the host returns the
+  // default and no-ops the write, keeping the dialog-lighting a11y
+  // golden deterministic.
+  const [forceAlign, setForceAlign] = useState<boolean>(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    bridge
+      .request({ kind: "settings/lighting-force-align", params: {} })
+      .then((r) => {
+        // Guard against a non-boolean reply (e.g. a stub bridge that
+        // returns `{}`): only adopt a real boolean so the synchronous
+        // default stands otherwise.
+        if (!cancelled && typeof r?.enabled === "boolean") setForceAlign(r.enabled);
+      })
+      .catch((err) => console.warn("[LightingPanel] force-align read failed:", err));
+    return () => { cancelled = true; };
+  }, [bridge]);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,12 +294,13 @@ export function LightingPanel({ bridge, onClose }: Props) {
 
   const handleForceAlignToggle = (enabled: boolean) => {
     setForceAlign(enabled);
-    try {
-      window.localStorage.setItem(FORCE_ALIGN_LS_KEY, enabled ? "true" : "false");
-    } catch {
-      // Persistence is best-effort; the in-memory state is the
-      // source of truth for the rest of the session.
-    }
+    // Persist to the registry so the flag syncs with the legacy UI.
+    // Fire-and-forget; the in-memory state is the source of truth for
+    // the rest of the session. (Host no-ops the write under --test-host.)
+    void bridge.request({
+      kind: "settings/lighting-force-align/set",
+      params: { enabled },
+    });
     // Engaging the constraint snaps the fills immediately so the
     // visible state matches the disabled spinners. Disengaging is
     // non-destructive — fills keep whatever values force-align last

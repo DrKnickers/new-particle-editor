@@ -77,6 +77,25 @@ describe("Toolbar — Particle Editor 2026 layout", () => {
     expect(localStorage.getItem("alo:right-dock")).toBe("none");
   });
 
+  it("Lighting toggle opens the lighting dock and is exclusive with the Spawner", async () => {
+    const b = makeBridge();
+    render(<Toolbar bridge={b} />);
+    const spawnerBtn = await screen.findByRole("button", { name: "Toggle Spawner panel" });
+    const lightingBtn = screen.getByRole("button", { name: "Toggle Lighting panel" });
+    // Default dock = spawner → Spawner pressed, Lighting not.
+    expect(spawnerBtn).toHaveAttribute("aria-pressed", "true");
+    expect(lightingBtn).toHaveAttribute("aria-pressed", "false");
+    // Opening Lighting swaps the shared slot: Lighting pressed, Spawner not.
+    fireEvent.click(lightingBtn);
+    expect(lightingBtn).toHaveAttribute("aria-pressed", "true");
+    expect(spawnerBtn).toHaveAttribute("aria-pressed", "false");
+    expect(localStorage.getItem("alo:right-dock")).toBe("lighting");
+    // Clicking Lighting again closes the column entirely.
+    fireEvent.click(lightingBtn);
+    expect(lightingBtn).toHaveAttribute("aria-pressed", "false");
+    expect(localStorage.getItem("alo:right-dock")).toBe("none");
+  });
+
   // ── Viewport engine toggles (moved here from the deleted ViewportPill) ──
 
   it("renders the three viewport toggles with their aria-labels", async () => {

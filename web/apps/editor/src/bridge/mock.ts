@@ -134,6 +134,12 @@ export class MockBridge implements Bridge {
    *  the mock counter is just a hook for UI badge testing. */
   private spawnerActiveCount = 0;
 
+  /** Cross-mode Force Align flag. The native host persists this as the
+   *  REG_DWORD `LightingForceFillAlignment`; browser mode keeps it in
+   *  memory, defaulting to the legacy `kLightForceAlignDefault = true`.
+   *  Read by `settings/lighting-force-align`, written by `…/set`. */
+  private lightingForceAlign = true;
+
   async request<R extends Request>(req: R): Promise<ResponseFor<R>> {
     const result = this.handle(req);
     // After the handler completes, mark dirty for any engine mutation.
@@ -1140,6 +1146,19 @@ export class MockBridge implements Bridge {
         });
         return {};
       }
+
+      // ---------------- settings: cross-mode registry ----------------
+      //
+      // Force Align Fill Lights round-trips through the registry in the
+      // native host; browser mode keeps the flag in `lightingForceAlign`.
+      // No event is emitted — the constraint is enforced UI-side in
+      // LightingPanel, and the flag isn't part of EngineStateDto.
+      case "settings/lighting-force-align":
+        return { enabled: this.lightingForceAlign };
+
+      case "settings/lighting-force-align/set":
+        this.lightingForceAlign = req.params.enabled;
+        return {};
 
       // ---------------- emitters / undo: Phase 3+ ----------------
       case "emitters/update":

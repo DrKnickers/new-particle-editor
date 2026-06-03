@@ -3421,3 +3421,42 @@ removed Bloom surface; `a11y:update:legacy --rebuild` then churned ~25 `*.golden
 files, so the legacy lane was reverted wholesale and left as-is. Cross-reference
 [L-033](#l-033) (arch-C verification truth) and the L-022 "trust-but-verify the tooling"
 theme — a green `a11y` proves the *composition* lane only.
+
+## L-053 — A single Toolbar change cascades into ~19 composition a11y goldens (every menubar / dialog / keyboard / property-tab snapshot embeds the toolbar subtree); budget for the fan-out and diff-review that it's the SAME node in each, not a per-surface regression
+
+**The trap.** "Add one button to the Toolbar → only `toolbar.composition.golden.yaml`
+changes" is wrong. The composition a11y snapshots capture the **whole window chrome**
+(`page.accessibility.snapshot()` from the app root), and the toolbar lives inside that
+chrome — so the toolbar subtree appears verbatim in *every* surface snapshot:
+`menubar-*` (7), `dialog-lighting`, `emitter-tree`, `property-tabs-*` (3),
+`curve-editor-focused`, `spinner-focused`, `kbd-*` (4), plus `toolbar` itself = **19**.
+A read-only `pnpm a11y` after the change therefore shows ~19 "failures" (plus the 4
+splitter artifacts, L-033), which *looks* like a broad regression but is one button
+fanned out. (Confirm the cascade cheaply: `grep -l "Toggle Spawner panel"
+*.composition.golden.yaml` lists exactly the surfaces that embed the toolbar.)
+
+**How to apply.**
+1. **Predict the fan-out before running a11y.** Any Toolbar / MenuBar / global-chrome
+   edit touches every chrome snapshot, not one. Plan for N goldens, not 1.
+2. **A reproducible (identical across reruns) wall of failures is the cascade, not
+   flake.** L-033 flake *varies* run to run and drags the pass count well below the
+   ~155 baseline; the cascade is the *same* surfaces every run. Two identical runs ⇒
+   stop retrying and regenerate.
+3. **`pnpm a11y:update` (composition lane only — never `:legacy`, L-052), then aggregate-
+   diff to prove attribution:** `git diff <goldens> | grep -E "^[+-]" | grep -vE
+   "^(\+\+\+|---)" | sort | uniq -c`. A clean change is **+N identical node lines, 0
+   deletions** (here: 18× `+- button "Toggle Lighting panel"` + 1× the `[pressed]`
+   variant in the surface where that dock is open). Any *other* added/removed line, or
+   any deletion, means something beyond your one node moved — investigate before
+   committing.
+4. The `[pressed]`/state variant landing only in the expected surface (e.g. the dialog
+   that opens that pane) doubles as **real-host DOM proof** the toggle's `aria-pressed`
+   binding + exclusivity work end-to-end, not just in the unit-test MockBridge.
+
+**Source incident (2026-06-03, session 12, Lighting toolbar toggle).** Adding the
+"Toggle Lighting panel" button failed 23 composition specs across two identical runs
+(19 chrome surfaces + 4 splitters); the aggregate-diff after `a11y:update` was a clean
+`19 files, +19 insertions, 0 deletions`, every line the one button node. Cross-reference
+[L-052](#l-052) (two-lane discipline), [L-033](#l-033) (flake vs. real), and
+[L-051](#l-051) (the gated-restore in the same session was verified via host.log, since
+its `dialog-lighting` golden change was only the toolbar button, not anything lighting).

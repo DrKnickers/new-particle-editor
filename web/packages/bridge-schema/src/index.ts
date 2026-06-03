@@ -548,6 +548,16 @@ export type Request =
   | { kind: "engine/query/skydome-slot-empty"; params: { slot: number } }
   | { kind: "engine/query/bloom-available";    params: Record<string, never> }
 
+  // Settings (cross-mode registry persistence). The Force Align Fill
+  // Lights flag is a UI-side constraint with no engine state, but legacy
+  // persists it as the REG_DWORD `LightingForceFillAlignment`. These two
+  // kinds let the new UI read it on mount and write it on toggle so the
+  // flag round-trips between the legacy and new UIs. Host returns the
+  // default (true) / no-ops the write under `--test-host` so the
+  // dialog-lighting a11y golden stays deterministic.
+  | { kind: "settings/lighting-force-align";     params: Record<string, never> }
+  | { kind: "settings/lighting-force-align/set"; params: { enabled: boolean } }
+
   // Emitters (Phase 3+)
   | { kind: "emitters/list";              params: Record<string, never> }
   | { kind: "emitters/select";            params: { id: number | null } }
@@ -855,6 +865,10 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "engine/query/ground-slot-empty" }   ? boolean :
   R extends { kind: "engine/query/skydome-slot-empty" }  ? boolean :
   R extends { kind: "engine/query/bloom-available" }     ? boolean :
+
+  // Settings (cross-mode registry persistence)
+  R extends { kind: "settings/lighting-force-align" }     ? { enabled: boolean } :
+  R extends { kind: "settings/lighting-force-align/set" } ? Record<string, never> :
 
   // Emitters
   R extends { kind: "emitters/list" }             ? EmitterTreeDto :

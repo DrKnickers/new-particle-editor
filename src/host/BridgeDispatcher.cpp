@@ -678,8 +678,10 @@ json BuildEngineStateSnapshot(Engine* engine,
 } // namespace
 
 BridgeDispatcher::BridgeDispatcher(Engine* engine, LayoutBroker& layout,
-                                    AcceleratorBridge& accel, EmitFn emit)
+                                    AcceleratorBridge& accel, EmitFn emit,
+                                    bool useTestHost)
     : m_engine(engine), m_layout(layout), m_accel(accel), m_emit(std::move(emit))
+    , m_testHost(useTestHost)
 {
     // Seed the recent-files list from the registry at construction so
     // the first React-side `file/recent/list` request already has data
@@ -1532,6 +1534,62 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     {
         if (!requireEngine(kind.c_str())) return res;
         sendOk(json(m_engine->IsBloomAvailable()));
+        return res;
+    }
+
+    // -------- settings/lighting-force-align (get) --------------------
+    //
+    // Cross-mode read of the Force Align Fill Lights flag — the same
+    // REG_DWORD `LightingForceFillAlignment` (default true) that legacy
+    // main.cpp persists (ReadLightingBool, src/main.cpp:6312). Returns
+    // `{ enabled }` so the React LightingPanel checkbox reflects whatever
+    // the user last set in EITHER UI. Under --test-host we skip the
+    // registry read and return the default so the dialog-lighting a11y
+    // golden stays deterministic (L-051).
+    if (kind == "settings/lighting-force-align")
+    {
+        bool enabled = true;  // kLightForceAlignDefault
+        if (!m_testHost)
+        {
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0,
+                              KEY_READ, &hKey) == ERROR_SUCCESS)
+            {
+                DWORD v = 0, type = 0, size = sizeof(v);
+                if (RegQueryValueExW(hKey, L"LightingForceFillAlignment", nullptr,
+                                     &type, reinterpret_cast<LPBYTE>(&v), &size) == ERROR_SUCCESS
+                    && type == REG_DWORD)
+                    enabled = (v != 0);
+                RegCloseKey(hKey);
+            }
+        }
+        sendOk(json{{"enabled", enabled}});
+        return res;
+    }
+
+    // -------- settings/lighting-force-align/set ----------------------
+    //
+    // Cross-mode write of the same REG_DWORD (WriteLightingBool,
+    // src/main.cpp:6328) so a toggle in the new UI is seen by legacy.
+    // No-op under --test-host so the a11y harness never mutates the dev
+    // box's registry.
+    if (kind == "settings/lighting-force-align/set")
+    {
+        const bool enabled = params.value("enabled", true);
+        if (!m_testHost)
+        {
+            HKEY hKey = nullptr;
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryKeyPath, 0, nullptr,
+                                REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr,
+                                &hKey, nullptr) == ERROR_SUCCESS)
+            {
+                DWORD v = enabled ? 1 : 0;
+                RegSetValueExW(hKey, L"LightingForceFillAlignment", 0, REG_DWORD,
+                               reinterpret_cast<const BYTE*>(&v), sizeof(v));
+                RegCloseKey(hKey);
+            }
+        }
+        sendOk(json::object());
         return res;
     }
 

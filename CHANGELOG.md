@@ -16,6 +16,61 @@ Conventions:
 
 ## Changelog
 
+### New UI restores saved lighting from the registry, syncs Force Align with the legacy editor, and gains a Lighting toolbar toggle
+
+*2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Three lighting-parity improvements to the new (`--new-ui`) editor. First, the
+viewport now **opens with your saved lighting**: the sun / fill 1 / fill 2 angles,
+colours and intensities, plus ambient and shadow, are restored from the registry at
+startup exactly as the legacy editor does — previously the new UI ignored them and
+started from engine defaults, so tuned lights only showed up in the old editor.
+Second, **Force Align Fill Lights now round-trips through the registry**
+(`LightingForceFillAlignment`): toggling it in the new UI is seen by the legacy
+editor and vice-versa, replacing the new UI's old session-only (localStorage)
+behaviour. Third, the **toolbar gained a Lighting button** (lightbulb icon, next to
+the Spawner button) that opens/closes the docked Lighting pane; because Lighting and
+the Spawner share one exclusive right-dock slot, their two toolbar buttons are
+mutually-exclusive (opening one un-presses the other).
+
+**How we tackled it.** The lighting *render* restore is host-side: a new block in the
+`!useTestHost` startup section of [`HostWindow.cpp`](src/host/HostWindow.cpp:1907)
+mirrors legacy `PushLightingToEngine` ([`src/main.cpp`](src/main.cpp:6376))
+field-for-field — same registry value names/types (floats `REG_BINARY`, colours
+`REG_DWORD`), same `MakeLight` intensity-fold, same Force-Align fill-angle computation
+(`sun.z + 120°/210°` at `−10°` tilt when on; persisted free-edit angles when off) —
+building `Engine::Light`s directly and pushing them via `SetLight`/`SetAmbient`/`SetShadow`.
+A permanent `[lighting-restore]` `host.log` line is the standing no-user verification
+channel (it is the only one — the restore is gated off under `--test-host`, so the CDP
+bridge can't observe it). Force Align's *flag* sync needed a tiny bridge surface: two
+new schema kinds (`settings/lighting-force-align` get + `…/set`) read/write the
+`REG_DWORD` in [`BridgeDispatcher`](src/host/BridgeDispatcher.cpp), with `useTestHost`
+plumbed into the dispatcher so the get returns the default and the set no-ops under
+`--test-host` (keeping the `dialog-lighting` a11y golden deterministic). The React
+[`LightingPanel`](web/apps/editor/src/screens/LightingPanel.tsx) drops its localStorage
+key, seeds the checkbox to the default synchronously, then reconciles from the bridge on
+mount and writes back on toggle. The [`Toolbar`](web/apps/editor/src/components/Toolbar.tsx)
+button is a ~10-line mirror of the existing Spawner button reusing `toggleDock("lighting")`
+from [`lib/right-dock.ts`](web/apps/editor/src/lib/right-dock.ts).
+
+**Issues encountered and resolutions.** (1) **The toolbar lives inside every chrome
+snapshot.** Adding one toolbar button changed **19** composition a11y goldens, not the
+one the plan predicted — every menubar / dialog / keyboard / property-tab surface embeds
+the toolbar subtree. The diff stayed fully attributable (each file gained exactly one
+`button "Toggle Lighting panel"` node; `dialog-lighting` got the `[pressed]` variant
+because the Lighting pane is open there), so `a11y:update` (composition lane only) was
+the right call; the legacy `*.golden.json` lane was left untouched per the two-lane rule.
+(2) **A `!useTestHost`-gated restore can't be verified over the `--test-host` CDP bridge**
+(the gate disables the very thing). It was verified from two faithful non-test-host
+launches reading `host.log`: with Force Align on, the fills came out computed
+(`fill1Z=120 fill2Z=210`); flipping the registry flag off, they came out at the persisted
+saved angles (`fill1Z=129 fill2Z=301`) — distinct from both the ctor defaults and the
+computed values, proving the restore reads saved registry data. The Force Align *write*
+path (toggle in the new UI → registry flips → legacy picks it up) is the one user-facing
+verification step, since it can't be agent-driven on a faithful launch.
+
+---
+
 ### Lighting is now a docked pane (sharing the Spawner's slot) with Bloom settings folded in
 
 *2026-06-02 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

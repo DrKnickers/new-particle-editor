@@ -20,7 +20,7 @@ import { useEffect, useState } from "react";
 import {
   FilePlus, FolderOpen, Save, SaveAll,
   Play, Pause, ChevronRight, ChevronsRight,
-  Grid2x2, Sun, Sparkles, CirclePlus,
+  Grid2x2, Sun, Sparkles, CirclePlus, Lightbulb,
 } from "lucide-react";
 import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -51,7 +51,9 @@ export function Toolbar({ bridge }: Props) {
   const ground = state?.ground ?? false;
   const bloom = state?.bloom ?? false;
   const leaveParticles = state?.leaveParticles ?? true;
-  const spawnerVisible = useRightDock() === "spawner";
+  const dock = useRightDock();
+  const spawnerVisible = dock === "spawner";
+  const lightingVisible = dock === "lighting";
 
   return (
     <div data-testid="toolbar" className="toolbar">
@@ -181,7 +183,9 @@ export function Toolbar({ bridge }: Props) {
 
       <span className="tb-divider" />
 
-      {/* Group 4: Spawner toggle */}
+      {/* Group 4: right-dock panel toggles. Spawner + Lighting share one
+          exclusive slot (opening one closes the other — see lib/right-dock.ts),
+          so their aria-pressed states are mutually exclusive. */}
       <div className="tb-group">
         <button
           type="button"
@@ -192,6 +196,16 @@ export function Toolbar({ bridge }: Props) {
           onClick={() => toggleDock("spawner")}
         >
           <CirclePlus {...ICON} />
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          aria-label="Toggle Lighting panel"
+          title="Toggle Lighting panel"
+          aria-pressed={lightingVisible}
+          onClick={() => toggleDock("lighting")}
+        >
+          <Lightbulb {...ICON} />
         </button>
       </div>
 

@@ -56,7 +56,14 @@ class BridgeDispatcher
 public:
     using EmitFn = std::function<void(const std::string& json)>;
 
-    BridgeDispatcher(Engine* engine, LayoutBroker& layout, AcceleratorBridge& accel, EmitFn emit);
+    // `useTestHost` mirrors HostWindow's `--test-host` flag. When true,
+    // settings handlers that would otherwise touch the registry return
+    // deterministic defaults / no-op their writes, so the a11y goldens
+    // (e.g. dialog-lighting's Force Align checkbox) see ctor defaults
+    // regardless of the dev box's saved registry — the same determinism
+    // gate the HostWindow registry-restore block uses (see L-051).
+    BridgeDispatcher(Engine* engine, LayoutBroker& layout, AcceleratorBridge& accel,
+                     EmitFn emit, bool useTestHost = false);
 
     // Sets / replaces the live Engine pointer. The host can install this
     // before or after the Engine is constructed; null is treated as
@@ -264,6 +271,10 @@ private:
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;
     EmitFn             m_emit;
+
+    // Mirrors HostWindow's `--test-host` flag — gates the registry-backed
+    // settings handlers to deterministic defaults (see ctor comment + L-051).
+    bool               m_testHost = false;
 
     // [MT-11 T9] When true, EmitStatsTick is a no-op and React's
     // StatusBar receives a stats/frozen-changed event so it clears

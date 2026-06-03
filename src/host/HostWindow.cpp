@@ -1905,6 +1905,90 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         && static_cast<int>(dw) < Engine::kSkydomeSlotCount)
                         engine->SetSkydomeSlot(static_cast<int>(dw));
 
+                    // [lighting-restore, session 12] Restore the persisted
+                    // lighting (sun / fill1 / fill2 angles + colours +
+                    // intensities, ambient, shadow) so the new-UI viewport
+                    // opens with the user's saved lights instead of engine
+                    // ctor defaults. Mirrors legacy PushLightingToEngine
+                    // (src/main.cpp:6376-6410) field-for-field, including the
+                    // Force-Align fill-angle computation: when the
+                    // LightingForceFillAlignment flag is ON the fill azimuths
+                    // are derived from the sun (sun.z + 120° / + 210°, both at
+                    // -10° tilt); when OFF the persisted free-edit angles feed
+                    // the engine directly. Floats are REG_BINARY (readF),
+                    // colours + the flag are REG_DWORD. Same !useTestHost gate
+                    // as the rest of this block (the engine snapshot the
+                    // dialog-lighting a11y golden seeds from must show ctor
+                    // defaults under --test-host). Intensity is folded into the
+                    // diffuse/specular channels exactly as legacy MakeLight
+                    // (src/main.cpp:6222); fills pass specular=black.
+                    auto readColor = [&](const wchar_t* name, COLORREF def) -> COLORREF {
+                        DWORD v = 0;
+                        return readDword(name, v) ? static_cast<COLORREF>(v) : def;
+                    };
+                    auto makeLight = [](float zDeg, float tiltDeg, COLORREF diffuse,
+                                        COLORREF specular, float intensity) -> Engine::Light {
+                        Engine::Light L = {};
+                        const float zr = D3DXToRadian(zDeg);
+                        const float tr = D3DXToRadian(tiltDeg);
+                        const float c  = cosf(tr);
+                        L.Position  = D3DXVECTOR4(c * cosf(zr), c * sinf(zr), sinf(tr), 0.0f);
+                        L.Direction = D3DXVECTOR4(0, 0, 0, 0);
+                        L.Diffuse   = D3DXVECTOR4(GetRValue(diffuse)  / 255.0f * intensity,
+                                                  GetGValue(diffuse)  / 255.0f * intensity,
+                                                  GetBValue(diffuse)  / 255.0f * intensity, 1.0f);
+                        L.Specular  = D3DXVECTOR4(GetRValue(specular) / 255.0f * intensity,
+                                                  GetGValue(specular) / 255.0f * intensity,
+                                                  GetBValue(specular) / 255.0f * intensity, 1.0f);
+                        return L;
+                    };
+                    auto colorToVec4 = [](COLORREF c) -> D3DXVECTOR4 {
+                        return D3DXVECTOR4(GetRValue(c) / 255.0f, GetGValue(c) / 255.0f,
+                                           GetBValue(c) / 255.0f, 0.0f);
+                    };
+
+                    const float    sunIntensity = readF(L"LightSunIntensity", 0.50f);
+                    const float    sunZ         = readF(L"LightSunZAngle",    0.0f);
+                    const float    sunTilt      = readF(L"LightSunTilt",      45.0f);
+                    const COLORREF sunAmbient   = readColor(L"LightSunAmbientColor",  RGB(40, 40, 50));
+                    const COLORREF sunSpecular  = readColor(L"LightSunSpecularColor", RGB(190, 190, 200));
+                    const COLORREF sunDiffuse   = readColor(L"LightSunDiffuseColor",  RGB(180, 180, 190));
+                    const COLORREF sunShadow    = readColor(L"LightSunShadowColor",   RGB(100, 100, 110));
+                    DWORD faDw = 0;
+                    const bool forceAlign = readDword(L"LightingForceFillAlignment", faDw)
+                                                ? (faDw != 0) : true;  // kLightForceAlignDefault
+                    const float    fill1Intensity = readF(L"LightFill1Intensity", 0.50f);
+                    const float    fill1Zp        = readF(L"LightFill1ZAngle",    120.0f);
+                    const float    fill1Tiltp     = readF(L"LightFill1Tilt",      -10.0f);
+                    const COLORREF fill1Diffuse   = readColor(L"LightFill1DiffuseColor", RGB(60, 80, 160));
+                    const float    fill2Intensity = readF(L"LightFill2Intensity", 0.50f);
+                    const float    fill2Zp        = readF(L"LightFill2ZAngle",    210.0f);
+                    const float    fill2Tiltp     = readF(L"LightFill2Tilt",      -10.0f);
+                    const COLORREF fill2Diffuse   = readColor(L"LightFill2DiffuseColor", RGB(60, 80, 160));
+
+                    // Force-align fill angles (verbatim src/main.cpp:6400-6403).
+                    const float fill1Z    = forceAlign ? (sunZ + 120.0f) : fill1Zp;
+                    const float fill1Tilt = forceAlign ? -10.0f          : fill1Tiltp;
+                    const float fill2Z    = forceAlign ? (sunZ + 210.0f) : fill2Zp;
+                    const float fill2Tilt = forceAlign ? -10.0f          : fill2Tiltp;
+
+                    engine->SetLight(Engine::LT_SUN,
+                        makeLight(sunZ, sunTilt, sunDiffuse, sunSpecular, sunIntensity));
+                    engine->SetLight(Engine::LT_FILL1,
+                        makeLight(fill1Z, fill1Tilt, fill1Diffuse, RGB(0, 0, 0), fill1Intensity));
+                    engine->SetLight(Engine::LT_FILL2,
+                        makeLight(fill2Z, fill2Tilt, fill2Diffuse, RGB(0, 0, 0), fill2Intensity));
+                    engine->SetAmbient(colorToVec4(sunAmbient));
+                    engine->SetShadow (colorToVec4(sunShadow));
+
+                    // The standing no-user verification channel for the
+                    // lighting restore (L-051) — distinct from [view-restore]
+                    // above. Prints the inputs that drove the engine writes.
+                    Log("[lighting-restore] sunZ=%.1f sunTilt=%.1f forceAlign=%d "
+                        "fill1Z=%.1f fill2Z=%.1f sunDiffuse=0x%06X\n",
+                        sunZ, sunTilt, forceAlign ? 1 : 0, fill1Z, fill2Z,
+                        static_cast<unsigned>(sunDiffuse));
+
                     // Dump restored view-settings to host.log. This is the
                     // ONLY no-user verification channel for this restore: the
                     // --test-host CDP bridge can't observe it (the whole block
@@ -3032,7 +3116,8 @@ int HostWindowImpl::Run(int nCmdShow)
         std::wstring w = Utf8ToUtf16(js);
         webView->PostWebMessageAsJson(w.c_str());
     };
-    dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, accelerator, emitFn);
+    dispatcher = std::make_unique<BridgeDispatcher>(/*engine*/nullptr, layout, accelerator, emitFn,
+                                                    /*useTestHost*/useTestHost);
     dispatcher->SetUndoStack(&undoStack);
     dispatcher->SetHostHwnd(hMain);
     // LT-4 D6: ModManager is already discovered + restored in the impl
