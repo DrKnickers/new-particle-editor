@@ -24,8 +24,16 @@ user at phase boundaries.
   Cut/Copy/Paste/Paste-As + New Root (SEL-5/6); wire global accelerators —
   Ctrl+S/N/O/Del/G/H/Home, F5/6/7/8/9/10, Ctrl+Space, Alt+Up/Down, Ctrl+Y
   (MNU-2/VPT-1/SEL-14). Cascades into goldens.
-- **P5 — Marquee + tree drag (SEL-1, SEL-12/13).** Rubber-band select on EmitterTree;
-  drag autoscroll; Esc/right-click cancel drag.
+- **P5 — Marquee (SEL-1) ✅ DONE.** Rubber-band select on EmitterTree: drag on empty
+  space sweeps a rectangle; intersecting rows become the selection; Ctrl/Cmd = additive
+  (union with prior); Esc cancels + restores the pre-marquee selection. New
+  `lib/marquee.ts` (pure geometry, 6 unit tests) + pointer handling on the scroll
+  container + an overlay rect that renders only mid-drag → NO static DOM / NO golden
+  change. **Bug caught + fixed in review:** Esc-restore target = the prior selection,
+  separate from the (empty-for-fresh-sweep) merge-base. Live-verified: correct spatial
+  rows; Esc restores prior. Build clean; 428 tests.
+  - **Deferred polish:** SEL-12 drag autoscroll past the viewport edge; SEL-13
+    Esc/right-click cancel of the *reorder* drag (distinct from marquee).
 - **P6 — Curve editor (CRV-1/2/7/8/14).** Multi-key canvas drag; key copy/cut/paste;
   right-click deselect; time decimals.
 - **P7 — Link groups (LNK-1/2/6/8/10).** `[L<n>]` prefix; per-row dot (or drop dead

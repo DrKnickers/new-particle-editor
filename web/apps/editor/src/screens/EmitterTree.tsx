@@ -83,6 +83,7 @@ import {
   useEmitterSelectionStore,
 } from "@/lib/emitter-selection";
 import { markEmittersCopied, useEmitterClipboardHasContent } from "@/lib/emitter-clipboard";
+import { rectFromPoints, emittersInMarquee, mergeMarqueeSelection } from "@/lib/marquee";
 import {
   computeDropZone,
   computeRootGapIndex,
@@ -1292,6 +1293,89 @@ export function EmitterTree({ bridge }: Props) {
     return () => ro.disconnect();
   }, [flatRows]);
 
+  // ── Marquee (rubber-band) selection (SEL-1) ──────────────────────
+  // A primary-button drag starting on EMPTY space inside the scroll
+  // viewport (not on a row) sweeps a rectangle; every emitter row it
+  // intersects becomes the selection. Ctrl/Cmd makes it additive (union
+  // with the prior selection); Esc cancels and restores. Mirrors the
+  // legacy EmitterList marquee (MT-8); uses live intersection rather than
+  // the legacy sticky-hit accumulation (the more predictable behaviour).
+  // Document-level move/up listeners (no pointer capture needed) so a drag
+  // that leaves the viewport still tracks.
+  const [marqueeBox, setMarqueeBox] = useState<
+    { left: number; top: number; width: number; height: number } | null
+  >(null);
+  // `mergeBase` is what swept rows union with (the prior selection only when
+  // additive); `prior` is always the pre-marquee selection, restored on Esc.
+  const marqueeRef = useRef<
+    { mergeBase: number[]; prior: number[]; startX: number; startY: number } | null
+  >(null);
+
+  const handleScrollPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      // A press on a row (or any interactive control) belongs to that row's
+      // click-select / drag-reorder, not the marquee.
+      if (target.closest("[data-emitter-id]") !== null) return;
+      if (target.closest("input,button,[role='button']") !== null) return;
+      e.preventDefault();
+      const prior = [...useEmitterSelectionStore.getState().ids];
+      const additive = e.ctrlKey || e.metaKey;
+      const mergeBase = additive ? prior : [];
+      marqueeRef.current = { mergeBase, prior, startX: e.clientX, startY: e.clientY };
+
+      const onMove = (ev: PointerEvent) => {
+        const m = marqueeRef.current;
+        if (m === null) return;
+        const mq = rectFromPoints(m.startX, m.startY, ev.clientX, ev.clientY);
+        const rows = [...document.querySelectorAll("[data-emitter-id]")].map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            id: Number((el as HTMLElement).dataset.emitterId),
+            rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+          };
+        });
+        const swept = emittersInMarquee(rows, mq);
+        const { ids, primary } = mergeMarqueeSelection(m.mergeBase, swept);
+        useEmitterSelectionStore.getState().setIds(ids, primary);
+        const sc = treeScrollRef.current;
+        if (sc !== null) {
+          const cr = sc.getBoundingClientRect();
+          setMarqueeBox({
+            left: mq.left - cr.left + sc.scrollLeft,
+            top: mq.top - cr.top + sc.scrollTop,
+            width: mq.right - mq.left,
+            height: mq.bottom - mq.top,
+          });
+        }
+      };
+      const cleanup = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("keydown", onKey, true);
+        marqueeRef.current = null;
+        setMarqueeBox(null);
+      };
+      const onUp = () => cleanup();
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape") return;
+        const m = marqueeRef.current;
+        if (m !== null) {
+          const primary = m.prior.length > 0 ? m.prior[m.prior.length - 1]! : null;
+          useEmitterSelectionStore.getState().setIds(m.prior, primary);
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        cleanup();
+      };
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("keydown", onKey, true);
+    },
+    [],
+  );
+
   // ── Batch C — keyboard handler ─────────────────────────────────
   //
   // Routes via the focused row's `data-emitter-id`. The tree container
@@ -1438,6 +1522,7 @@ export function EmitterTree({ bridge }: Props) {
         // pinned at the pane's bottom.
         <div
           ref={treeScrollRef}
+          onPointerDown={handleScrollPointerDown}
           className="emitter-tree-scroll relative flex flex-1 min-h-0 overflow-y-auto"
         >
           <ul
@@ -1512,6 +1597,20 @@ export function EmitterTree({ bridge }: Props) {
                 );
               })}
             </div>
+          )}
+          {/* Marquee (rubber-band) selection rectangle (SEL-1). */}
+          {marqueeBox !== null && (
+            <div
+              data-testid="emitter-marquee"
+              aria-hidden
+              className="pointer-events-none absolute border border-accent bg-accent/15"
+              style={{
+                left: marqueeBox.left,
+                top: marqueeBox.top,
+                width: marqueeBox.width,
+                height: marqueeBox.height,
+              }}
+            />
           )}
         </div>
       )}
