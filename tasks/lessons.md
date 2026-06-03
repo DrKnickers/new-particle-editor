@@ -3501,3 +3501,47 @@ the true defaults (`0.50`, `#B4B4BE`, `#282832`…) — i.e. the golden had been
 bug. Cross-reference [L-051](#l-051) (gated-restore verify channel), [L-049](#l-049)
 (parity-restore pattern), [L-033](#l-033) (engine pixels still need the user; DOM/registry
 are agent-verifiable).
+
+## L-055 — A `.cls:not([open])` selector silently matches NON-`<details>` elements that share the class (a `<div>` can never carry `[open]`), so it applies in EVERY state; scope it to `details`. And: headless preview browsers don't advance CSS transitions, so `getComputedStyle` on an interactively-toggled element reads the START frame forever — verify end-states a different way
+
+**Two coupled lessons from a "chevrons differ between panels" bug.**
+
+**1. The `:not([attr])` cross-element footgun.** Two collapsible-section components share
+`.panel-section` + `.chev` CSS: `ToolPanel.Section` (native `<details>`, open state via the
+`open` attribute) and `Section.tsx` (controlled `<div>`, open state via `data-open`). The
+shared rotation rule tried to serve both:
+```css
+.panel-section[data-open="false"] .chev,
+.panel-section:not([open]) .chev { transform: rotate(-90deg); }
+```
+The 2nd arm was meant for the `<details>` (closed = no `open` attr). But `:not([open])` also
+matches the `<div>` — a `<div>` can NEVER have an `open` attribute — so it matched the
+controlled div in BOTH open and closed states, pinning the property-tab chevrons at -90°
+permanently (they never rotated, while the spawner's animated correctly). Fix: scope the
+details arm to the element type — `details.panel-section:not([open]) .chev` — so the `<div>`
+rotates solely off `[data-open]`. **Rule of thumb:** when one CSS rule serves two element
+types via different state attributes, an `:not([x])`/`[x]` arm meant for one type usually
+ALSO matches the other (which simply lacks `x`); always qualify such arms with the tag
+(`details…`) or a discriminating class.
+
+**2. Headless preview can't verify CSS transitions.** The chevron rotation is animated by
+`transition: transform 0.12s`. In the preview/headless browser the compositor doesn't
+advance transitions, so after interactively toggling a section, `getComputedStyle(chev)
+.transform` returned the START frame (identity) *forever* — even sampled over 1 s — making a
+correct fix look broken. Worse, inline `transform … !important` also "failed" for the same
+reason (it starts a transition that never advances). **How to verify a transitioned
+end-state without a real browser:** (a) measure an element that's in that state on INITIAL
+render (no transition fired) — e.g. a section that's `defaultOpen={false}`; or (b) inject
+`transition: none !important` (without overriding the property under test) and let the real
+rule settle instantly; or (c) hand the actual animation to the user. Don't toggle-then-poll
+`getComputedStyle` and trust it.
+
+**Source incident (2026-06-03, session 12, property-tab chevrons).** User noticed the
+left-panel (Basic/Appearance/Physics) section chevrons didn't change orientation while the
+Spawner's did. Both already reuse `<ChevronDown class="chev">` + `.panel-section` — the
+defect was purely the `:not([open])` arm. One-line CSS scope fix; verified the end-states
+(0° open, -90° closed) by killing the transition (the `transition:none` probe returned
+`matrix(0,-1,1,0,0,0)`), since the headless preview wouldn't animate. CSS-only, no a11y
+golden impact (transforms aren't in the a11y tree), no native rebuild. Cross-reference
+[L-041](#l-041) (browser-mode for React UI bugs) and [L-047](#l-047) (measure rendered
+geometry, both axes).

@@ -512,9 +512,14 @@
 }
 /* Collapsed state: chevron points right. Two selectors bridge the two
  * consumer state shapes — `[data-open="false"]` for the controlled
- * <div> in Section.tsx; `:not([open])` for native <details>. */
+ * <div> in Section.tsx; `details…:not([open])` for native <details>
+ * (ToolPanel.Section). The details arm MUST be scoped to `details`:
+ * a bare `.panel-section:not([open])` also matches Section.tsx's
+ * <div> (a div can never carry an `open` attribute), which pinned the
+ * property-tab chevrons at -90° in BOTH states so they never animated.
+ * Scoping to `details` lets the <div> rotate solely off `data-open`. */
 .panel-section[data-open="false"] .chev,
-.panel-section:not([open]) .chev {
+details.panel-section:not([open]) .chev {
   transform: rotate(-90deg);
 }
 

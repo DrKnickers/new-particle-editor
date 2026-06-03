@@ -16,6 +16,38 @@ Conventions:
 
 ## Changelog
 
+### Left-panel (property tabs) section chevrons now animate like the Spawner's
+
+*2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The collapse/expand chevrons on the left inspector's Basic / Appearance / Physics
+sections were stuck pointing one direction and never rotated, unlike the Spawner /
+Lighting panel chevrons (which rotate down→left with a 0.12 s transition). They now
+behave identically.
+
+**How we tackled it.** The two are *already* the same chevron (`ChevronDown` +
+`.chev`) and share the `.panel-section` styling — the defect was a single CSS selector.
+The rotation rule served both consumers at once:
+[`components.css`](web/apps/editor/src/styles/components.css) had
+`.panel-section[data-open="false"] .chev, .panel-section:not([open]) .chev`. The second
+arm is for the native-`<details>` consumer (`ToolPanel.Section` — Spawner/Lighting);
+the first is for the controlled-`<div>` consumer (`Section.tsx` — property tabs). But a
+`<div>` can never carry an `open` attribute, so `:not([open])` matched the property-tab
+div in *every* state, pinning its chevron at -90°. Scoping that arm to
+`details.panel-section:not([open])` lets the div rotate solely off its `data-open`
+state — so it now reads 0° open / -90° closed, animated by the shared `.chev` transition.
+
+**Issues encountered and resolutions.** Verifying this in the headless preview browser
+was misleading: it doesn't advance CSS transitions, so `getComputedStyle` on an
+interactively-toggled chevron reported the start frame (identity) indefinitely, making
+the fix look broken. The end-states were confirmed by disabling the transition
+(`transition: none`) and reading the settled value (`matrix(0,-1,1,0,0,0)` = -90° when
+collapsed), plus measuring a section that renders collapsed initially. CSS-only change —
+no a11y golden impact (transforms aren't in the accessibility tree) and no native
+rebuild. → **L-055**.
+
+---
+
 ### New UI restores saved lighting from the registry, syncs Force Align with the legacy editor, and gains a Lighting toolbar toggle
 
 *2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
