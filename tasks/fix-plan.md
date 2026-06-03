@@ -1,0 +1,59 @@
+# Fix plan — UI delta remediation (defects only)
+
+Source: [ui-delta-report.md](ui-delta-report.md). User decisions (2026-06-03):
+**defects only** (keep intentional new-UI redesigns + new-only extras); **undo +
+autosave on a separate track** (after the web-side defects).
+
+Each phase: implement (TDD where infra exists) → `pnpm --filter @particle-editor/editor test`
+→ `build` → re-baseline a11y composition goldens if chrome changed (L-053) → native
+`.sln` build only if host code touched (L-039/L-046) → commit on `lt-4`. Check in with
+user at phase boundaries.
+
+## Phases (web-side first)
+
+- **P1 — CRITICAL rotation scaling (PRM-4/5).** `FieldSpinner` gains a `displayScale`
+  transform; rotation average ×360 (−180..180°), variance ×100 (0..100). Web-only.
+- **P2 — Spinner bugs (SPN-4/5/6/7).** `primitives/Spinner.tsx`: fix drag-modifier to
+  match keyboard/wheel (Shift=coarse, Ctrl=fine) + fix comment; add up/down
+  hold-to-repeat; wheel honors `step` magnitude; wheel Ctrl=fine. Web-only.
+- **P3 — Low-risk grab-bag.** Status bar shift-hint (VPT-6) + PAUSED (VPT-7) + cursor
+  2dp (VPT-8); relax bounciness/weather clamps for round-trip (PRM-6/10); Import
+  dialog "Clear" button (MNU-12); stale curve comment (CRV-14).
+- **P4 — Menus, clipboard, accelerators.** Enable + wire Edit Cut/Copy/Paste/Delete
+  (MNU-1); wire Emitters Toggle-Vis/Show-All/Hide-All (MNU-3); context-menu
+  Cut/Copy/Paste/Paste-As + New Root (SEL-5/6); wire global accelerators —
+  Ctrl+S/N/O/Del/G/H/Home, F5/6/7/8/9/10, Ctrl+Space, Alt+Up/Down, Ctrl+Y
+  (MNU-2/VPT-1/SEL-14). Cascades into goldens.
+- **P5 — Marquee + tree drag (SEL-1, SEL-12/13).** Rubber-band select on EmitterTree;
+  drag autoscroll; Esc/right-click cancel drag.
+- **P6 — Curve editor (CRV-1/2/7/8/14).** Multi-key canvas drag; key copy/cut/paste;
+  right-click deselect; time decimals.
+- **P7 — Link groups (LNK-1/2/6/8/10).** `[L<n>]` prefix; per-row dot (or drop dead
+  comment); interactive bracket (click-select-group + hover); Dissolve action;
+  join/disagreement confirmation.
+- **P8 — Color/texture (PAL-2/3/14).** Color live-drag preview; cancel/revert;
+  broken-vs-missing thumbnail distinction.
+
+## Separate track (after P1–P8, native/host)
+- **Undo capture wiring (VPT-2).** Wire `Capture()` into every new-UI host mutation.
+- **Autosave port (VPT-3).** Port the 30s/5min tiers + orphan recovery to `src/host`.
+- **Verify Reset-Camera vectors (MNU-7)** against legacy engine default.
+
+## Explicitly KEEPING (intentional — not defects)
+Docking/splitters (VPT-9/10), multi-channel curve overlay + solo + shift-append +
+ctrl-click (CRV-4/5/10/11), single-click texture apply (PAL-9), popover texture
+palette (PAL-8), custom color picker (PAL-1), dark link palette + lane layout
+(LNK-3/4/5), spinner scrub-on-arrows-only (SPN-2), commit-on-blur (SPN-9), toolbar
+Duplicate / Save-As / Ground-Background dropdowns (SEL-19, MNU-9/10), RGBA short
+labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-delete
+(SEL-17), Recent Files submenu, reset-layout. Custom-color registry persistence
+(PAL-4) folds into the native track.
+
+## Progress log
+- **P1 ✅ DONE** (rotation scaling PRM-4/5). `FieldSpinner` gained `displayScale`
+  (×360 average / ×100 variance, display-space clamps −180..180 / 0..100, commit
+  ÷scale). New test `EmitterPropertyTabs.rotationScale.test.tsx` (4 cases, red→green);
+  full suite 410 green; build clean. Web-only, no golden/native impact. Live-drive of
+  the field itself was blocked by post-hot-reload preview selection flakiness (env
+  artifact); transform is deterministically unit-proven.
+- P2: next.

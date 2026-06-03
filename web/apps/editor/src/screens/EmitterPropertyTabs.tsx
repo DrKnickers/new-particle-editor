@@ -785,6 +785,7 @@ export function FieldSpinner({
   unit,
   disabled,
   displayInvertedPercent,
+  displayScale,
   widthBoost,
   testId,
   onCommit,
@@ -802,6 +803,14 @@ export function FieldSpinner({
    *  `randomLifetimePerc` and `randomScalePerc` per legacy IDC_SPINNER13/14
    *  inverted convention (see Emitter.cpp:487, 492). */
   displayInvertedPercent?: boolean;
+  /** When set, displays `value * displayScale` and commits `typed /
+   *  displayScale`. The engine stores these as a normalised ratio; the
+   *  legacy panel applied this scale purely as a display transform. Pass
+   *  `min`/`max`/`step`/`decimals` in DISPLAY space. Used for
+   *  `randomRotationAverage` (×360, -180..180°) and `randomRotationVariance`
+   *  (×100, 0..100) per legacy IDC_SPINNER16/17 (see Emitter.cpp:498-499,
+   *  828-829). Mutually exclusive with `displayInvertedPercent`. */
+  displayScale?: number;
   /** Optional input-column boost for spinners whose values exceed the
    *  default 58 px width (e.g. "Tail length:" running up to 4-digit
    *  multipliers). "mid" = +25 % (~73 px), "wide" = +50 % (~87 px),
@@ -816,10 +825,14 @@ export function FieldSpinner({
 }) {
   const displayValue = displayInvertedPercent
     ? Math.round(100 - value * 100)
-    : value;
+    : displayScale != null
+      ? value * displayScale
+      : value;
   const handleCommit = (next: number) => {
     if (displayInvertedPercent) {
       onCommit((100 - next) / 100);
+    } else if (displayScale != null) {
+      onCommit(next / displayScale);
     } else {
       onCommit(next);
     }
@@ -1198,10 +1211,19 @@ export function AppearanceTab({
           checked={properties.randomRotation}
           onCheckedChange={(v) => onCommit({ randomRotation: v })}
         />
+        {/* PRM-4/PRM-5: the engine stores these as a normalised ratio; the
+            legacy panel displayed average as ×360 (integer −180..180°) and
+            variance as ×100 (integer 0..100), committing typed/360 and
+            typed/100 (Emitter.cpp:498-499, 828-829). The host serialises the
+            raw ratio, so the scale transform lives here. */}
         <FieldSpinner
           label="Rotation average:"
           value={properties.randomRotationAverage}
-          step={0.1}
+          displayScale={360}
+          min={-180}
+          max={180}
+          step={1}
+          decimals={0}
           unit="°"
           disabled={!rotationEnabled}
           onCommit={(v) => onCommit({ randomRotationAverage: v })}
@@ -1209,7 +1231,11 @@ export function AppearanceTab({
         <FieldSpinner
           label="Rotation variance:"
           value={properties.randomRotationVariance}
-          step={0.1}
+          displayScale={100}
+          min={0}
+          max={100}
+          step={1}
+          decimals={0}
           unit="± °"
           disabled={!rotationEnabled}
           onCommit={(v) => onCommit({ randomRotationVariance: v })}
