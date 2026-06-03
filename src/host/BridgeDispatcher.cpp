@@ -3177,6 +3177,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         if (removed > 0)
         {
             propagateLinkGroup(target); // F4: sync link-group siblings
+            // Re-seat live particle track cursors — the erase(s) above
+            // invalidated any cursor pointing at a removed key (see the
+            // set-track-key handler for the full rationale).
+            if (m_engine != nullptr) m_engine->OnParticleSystemChanged(trackIdx);
             markDirty();
             EmitEmittersTreeChanged();
             EmitEngineStateChanged();
@@ -3324,6 +3328,12 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         target->tracks[channelIdx] = desired;
 
         propagateLinkGroup(target); // F4: sync link-group siblings
+        // Re-seat live particle track cursors for this channel. The lock
+        // repointed tracks[channelIdx] at a DIFFERENT KeyMap, so existing
+        // cursors (iterators into the old container) would be compared
+        // against the new container's end() next frame — undefined
+        // behavior. Reloading re-seats them into the now-current container.
+        if (m_engine != nullptr) m_engine->OnParticleSystemChanged(channelIdx);
         sendOk(json::object());
         markDirty();
         EmitEmittersTreeChanged();
@@ -3399,6 +3409,14 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         track->keys.insert(ParticleSystem::Emitter::Track::Key(newTime, newValue));
 
         propagateLinkGroup(target); // F4: sync link-group siblings
+        // Re-seat the live per-particle track cursors. EmitterInstance
+        // caches multiset iterators (prev/next) into tracks[trackIdx]->keys
+        // for every live particle; the erase above invalidated any cursor
+        // pointing at the moved key, so the next Engine::Update would
+        // dereference a singular iterator (xtree assert). OnParticleSystemChanged
+        // with the specific track index reloads those cursors — mirrors the
+        // legacy editor's per-edit call at src/main.cpp:2695.
+        if (m_engine != nullptr) m_engine->OnParticleSystemChanged(trackIdx);
         sendOk(json::object());
         markDirty();
         EmitEmittersTreeChanged();
@@ -3458,6 +3476,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         track->keys.insert(ParticleSystem::Emitter::Track::Key(time, value));
 
         propagateLinkGroup(target); // F4: sync link-group siblings
+        // Re-seat live particle track cursors. insert() doesn't invalidate
+        // existing iterators, but a key added BETWEEN a particle's prev/next
+        // cursors would be skipped (stale interpolation) until the cursors
+        // reload — so re-seat here too, matching the legacy per-edit call.
+        if (m_engine != nullptr) m_engine->OnParticleSystemChanged(trackIdx);
         sendOk(json{{"time", time}, {"value", value}});
         markDirty();
         EmitEmittersTreeChanged();

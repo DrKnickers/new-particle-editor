@@ -741,20 +741,32 @@ void EmitterInstance::onParticleSystemChanged(const Engine& engine, int track)
 	{
 		TimeF currentTime = GetTimeF();
 
-		// Reload track cursors on all particles
+		// Reload track cursors on all particles. We must reseat not only the
+		// edited `track` but EVERY channel whose `tracks[j]` aliases the same
+		// `keys` container — i.e. lock-group members (a channel locked to an
+		// earlier one shares its multiset, ParticleSystem.h slot aliasing).
+		// An erase on the edited track orphans the cursors of all aliasing
+		// channels at once; reseating only `track` would leave the aliased
+		// channels' cursors dangling and crash on the next UpdateTrackCursors.
 		for (Particle* particle = m_particleList; particle != NULL; particle = particle->m_next)
 		{
 			float relTime = (float)(currentTime - particle->m_spawnTime) * 100 / (float)(particle->m_deathTime - particle->m_spawnTime);
-			
-			Particle::TrackCursor& cursor = particle->m_cursors[track];
-			cursor.prev = cursor.next = m_emitter.tracks[track]->keys.begin();
-			while (cursor.next->time < relTime)
+
+			for (int t = 0; t < ParticleSystem::NUM_TRACKS; t++)
 			{
-				cursor.prev = cursor.next;
-				if (++cursor.next == m_emitter.tracks[track]->keys.end())
+				// Process the edited track itself + any channel aliasing it.
+				if (t != track && m_emitter.tracks[t] != m_emitter.tracks[track]) continue;
+
+				Particle::TrackCursor& cursor = particle->m_cursors[t];
+				cursor.prev = cursor.next = m_emitter.tracks[t]->keys.begin();
+				while (cursor.next->time < relTime)
 				{
-					cursor.next = cursor.prev;
-					break;
+					cursor.prev = cursor.next;
+					if (++cursor.next == m_emitter.tracks[t]->keys.end())
+					{
+						cursor.next = cursor.prev;
+						break;
+					}
 				}
 			}
 		}

@@ -3669,3 +3669,61 @@ absent in the fresh worktree. Updated the single golden line by reasoning (the V
 spinner one row below already rendered `"0.00"` from the identical `decimals ?? 2` path;
 legacy `.json` carries `children: []` so it can't capture the value), and handed native
 a11y + engine verification to the user.
+
+---
+
+## L-059 — Editing a track multiset invalidates the running simulation's cached per-particle cursor iterators; the bridge must call `OnParticleSystemChanged(track)` after EVERY key mutation, AND that reseat must cover lock-aliased channels — also: MSVC's "cannot dereference value-initialized map/set iterator" can mean ORPHANED (erase-invalidated), not only default-constructed
+
+**The bug.** `EmitterInstance` caches `std::multiset<Track::Key>::const_iterator` cursors
+(`prev`/`next`) per live particle, per track, and dereferences them every frame in
+`UpdateTrackCursors` ([src/EmitterInstance.cpp]). The legacy Win32 editor reseated those
+cursors after every track edit via `Engine::OnParticleSystemChanged(track)`
+([src/main.cpp:2695]); the arch-C `BridgeDispatcher` key-mutation handlers
+(`set-track-key`, `delete-track-keys`, `add-track-key`) **dropped that call**, so an
+`erase` (drag/spinner/delete) orphaned any cursor pointing at the moved key and the next
+`Engine::Update` dereferenced a dangling iterator → debug assert, UB in Release.
+
+**Why the first fix was incomplete.** Adding `OnParticleSystemChanged(trackIdx)` to the
+handlers fixed single-channel edits but **still crashed**, because the engine's reseat
+(`EmitterInstance::onParticleSystemChanged`, `track>=0` branch) reseated only
+`m_cursors[trackIdx]`. With a **lock group** (green/blue/alpha locked to red), several
+channels' `tracks[j]` alias ONE shared `keys` container (pointer aliasing per
+ParticleSystem.h). Editing red erases a node that the red cursor AND the aliased green
+cursor both point into — orphaning both — but reseating only index 0 (red) left index 1
+(green) dangling. Fix: reseat the edited track **and every channel whose `tracks[j]`
+equals `tracks[track]`**. Both halves are required (bridge must trigger; engine reseat
+must be alias-aware).
+
+**The MSVC wording trap.** `_STL_VERIFY(... "cannot dereference value-initialized map/set
+iterator")` at `xtree:181` does NOT only fire for a default-constructed (`_Ptr==nullptr`)
+iterator — in this toolset (VC 14.44) it ALSO fires for an **orphaned** iterator whose
+container-proxy was nulled by `erase`/`clear` (`_Myproxy==nullptr`, `_Ptr` still pointing
+at the freed node). I burned two wrong fixes assuming "value-initialized ⇒ never
+initialized" and chased an init-ordering hole that didn't exist. Confirm the mechanism by
+reading the iterator internals, don't trust the message text.
+
+**The debugging technique (reusable for this GUI app).** No `cdb`/WinDbg installed and the
+assert is a modal dialog, so: (1) install a `_CrtSetReportHook2`/`_CrtSetReportHookW2`
+hook that, on `_CRT_ASSERT`, captures a **symbolized backtrace** via DbgHelp
+(`RtlCaptureStackBackTrace` resolved at runtime from `ntdll` — its prototype isn't visible
+under `_WIN32_WINNT=0x0501`) and writes it to a file under `%LOCALAPPDATA%` (NOT stdout —
+Debug `WinMain` redirects stdout to an `AllocConsole` window you can't read); (2) capture
+crash context into globals updated per-iteration with no I/O, dumped by the hook; (3) to
+tell default-constructed from orphaned, read the debug iterator's raw layout
+`[_Myproxy, _Mynextiter, _Ptr]` via `reinterpret_cast<void**>(&it)` — `null/null` =
+default, `null-proxy / non-null-ptr` = orphaned. This nailed it in one repro after
+reasoning had stalled. Strip ALL of it before committing (it lived under `#ifndef NDEBUG`).
+
+**How to apply.** Any NEW arch-C bridge handler that mutates an engine-owned container the
+simulation reads live MUST replicate the legacy post-edit notification
+(`OnParticleSystemChanged`), and that notification's downstream reseat must account for
+pointer-aliasing (lock groups). When an STL iterator-debug assert fires in the simulation
+after an edit, suspect a cached iterator the editor invalidated — and verify default vs
+orphaned before theorizing.
+
+**Source incident (2026-06-03, session 14).** User dragged curve keys (green locked to
+red) with a live particle → `xtree:181` assert in `UpdateTrackCursors`. Root cause: arch-C
+key handlers never reseated cursors; reseat wasn't alias-aware. Fixed both; verified by
+the user (crash gone) after a stack-trace hook + raw-iterator capture pinpointed
+`track=1 aliasOfTrack=0, _Myproxy=NULL` (orphaned green cursor). Cross-reference
+[L-057](#l-057) (native-only bugs invisible to the web lane) and [L-033](#l-033).
