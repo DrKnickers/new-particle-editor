@@ -51,6 +51,19 @@ user at phase boundaries.
     needs the curve canvas's coordinate/layout system reworked to fold the margins into
     the SVG (e.g. a margin-inclusive viewBox) — a larger, riskier change to do
     carefully on its own, not alongside the bug fix.
+  - **CRV-2/7/8 ✅ DONE (session 14, `e5bd7e3`).** Key Copy/Cut/Paste (Ctrl+C/X/V via a
+    new in-app `lib/curve-key-clipboard.ts`; window-scoped with TYPING_TAGS + emitter-tree
+    origin guards); right-click empty canvas clears selection in Select mode / drops to
+    Select in Insert mode (CRV-7); Time spinner step 1→0.1 + 2dp display (CRV-8). vitest
+    440 (+12); 1 composition golden re-baselined (Time spinner `"0"`→`"0.00"`). TDD.
+    User-verified in the faithful `--new-ui`.
+  - **🐛 Engine crash fix (session 14, `5ba2bd5`) — surfaced while testing P6-rest.**
+    Editing a track with a lock group + live particles asserted in
+    `EmitterInstance::UpdateTrackCursors` (orphaned cached cursor iterator). Arch-C bridge
+    handlers never reseated cursors after key edits (legacy did via
+    `OnParticleSystemChanged`), and the reseat wasn't lock-alias-aware. Fixed both halves;
+    user-verified crash-gone. See **L-059** (incl. the MSVC "value-initialized" ==
+    orphaned-iterator wording trap + the assert-hook/DbgHelp debugging technique).
 - **P7 — Link groups (LNK-1/2/6/8/10).** `[L<n>]` prefix; per-row dot (or drop dead
   comment); interactive bracket (click-select-group + hover); Dissolve action;
   join/disagreement confirmation.
