@@ -1,5 +1,119 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-03 (session 14) — **P6-rest curve-editor parity (CRV-2/7/8)** shipped, then root-caused + fixed a **native engine crash** (orphaned particle-cursor iterators on curve-key edits, lock-alias-aware). NEXT: **P7 link-groups** (LNK-1/2/6/8/10), then P8 color/texture, deferred polish, native track (VPT-2/3)
+
+**`origin/lt-4` = `8f4ec58`** (was `ad4ceca` at session start; **3 commits**, FF-pushed).
+Tree clean, 0 ahead / 0 behind. **No `master` changes.** User-driven loop throughout: the
+user launched the faithful `--new-ui`, exercised features, reported, I root-caused +
+fixed + the user re-verified on-screen.
+
+### The 3 commits (newest first)
+- `8f4ec58` **docs** — fix-plan P6-rest marked done + crash-fix recorded; **L-059** added.
+- `5ba2bd5` **🐛 engine crash fix** — see deep-dive below. `src/host/BridgeDispatcher.cpp`
+  + `src/EmitterInstance.cpp`. Native-only (web suite unaffected).
+- `e5bd7e3` **P6-rest (CRV-2/7/8)** — TDD, web-only + 1 composition golden line.
+  - **CRV-2** Copy/Cut/Paste of curve keys via Ctrl/Cmd+C/X/V. New
+    [src/lib/curve-key-clipboard.ts](web/apps/editor/src/lib/curve-key-clipboard.ts)
+    (in-app zustand store of `{time,value}[]` — no host buffer for keys); window-scoped
+    keydown effect in [CurveEditorPanel.tsx](web/apps/editor/src/components/CurveEditorPanel.tsx)
+    with a **TYPING_TAGS guard** + an **emitter-tree-origin guard**
+    (`closest('[data-testid="emitter-tree"]')`) so the curve + tree clipboards never both
+    fire. Window-scoped is deliberate — clicking an SVG key never moves DOM focus into the
+    panel, so a focus-scoped handler would never fire (same reason the Delete handler is
+    window-scoped). Paste re-adds via `add-track-key` (host dedupes by epsilon, returns the
+    real time, which we select — survives float32, L-057). Cut = copy then border-filtered
+    delete.
+  - **CRV-7** right-click empty curve canvas: Select mode → clears selection; Insert mode →
+    drops to Select (one-callback change to `onCanvasContextMenu`, branch on `mode`).
+  - **CRV-8** Time spinner `step 1→0.1` (legacy granularity) + 2dp display (L-056 default).
+    Touched 1 composition golden (`curve-editor-focused.composition.golden.yaml:122`,
+    `"0"`→`"0.00"`) — updated by reasoning, legacy `.json` provably unaffected (`children:
+    []`). See **L-058** (couldn't run native a11y; fresh worktree lacked the toolchain).
+  - vitest **440** (was 428; +12). `pnpm build` clean, `tsc --noEmit` clean.
+
+### 🐛 Engine crash deep-dive (the session's main effort — `5ba2bd5`)
+**Symptom.** Adjusting curve keys (drag/spinner) crashed with an MSVC debug assert
+`cannot dereference value-initialized map/set iterator` (`xtree:181`), in
+`EmitterInstance::UpdateTrackCursors`.
+
+**Root cause.** `EmitterInstance` caches `std::multiset<Track::Key>::const_iterator`
+cursors (`prev`/`next`) per live particle, per track, and derefs them every frame. The
+legacy Win32 editor reseated them after each edit via `Engine::OnParticleSystemChanged(track)`
+([src/main.cpp:2695](src/main.cpp:2695)); the arch-C `BridgeDispatcher` key handlers
+(`set-track-key` / `delete-track-keys` / `add-track-key`) **never made that call** — so an
+`erase` orphaned cursors pointing at the moved key → next `Engine::Update` derefed a
+dangling iterator. **Pre-existing, NOT caused by P6-rest** (paste is insert-only; the
+trigger was the drag). Single-threaded (PeekMessage loop → `RenderD3D9`→`engine->Update`),
+so no data race — purely a missing post-edit reseat.
+
+**Why the first fix failed (and the lock-group twist).** Adding
+`OnParticleSystemChanged(trackIdx)` to the handlers fixed single-channel edits but **still
+crashed**: the engine reseat (`EmitterInstance::onParticleSystemChanged`, `track>=0`
+branch) reseated only `m_cursors[trackIdx]`. With a **lock group** (green/blue/alpha locked
+to red), `tracks[j]` alias ONE shared `keys` container; editing red orphaned BOTH the red
+and the aliased green cursor, but reseating only index 0 left index 1 (green) dangling →
+crash at `track=1`. **Fix is two-part:** (1) handlers call `OnParticleSystemChanged(trackIdx)`;
+(2) the engine reseat now reseats the edited track **AND every channel whose `tracks[j] ==
+tracks[track]`**.
+
+**The MSVC wording trap (cost ~2 wrong fixes).** `xtree:181`'s "value-initialized" message
+ALSO fires for an **orphaned** (erase-invalidated, `_Myproxy==null`, `_Ptr` non-null)
+iterator, not only a default-constructed one — it sent me hunting a nonexistent
+init-ordering bug. Confirmed default-vs-orphaned by reading the iterator's raw debug layout
+`[_Myproxy, _Mynextiter, _Ptr]`.
+
+**Debugging technique (no cdb/WinDbg installed; modal assert).** Installed a temporary
+`#ifndef NDEBUG` `_CrtSetReportHook2`/`W2` hook that, on `_CRT_ASSERT`, wrote a **DbgHelp
+symbolized backtrace** + crash-context globals to `%LOCALAPPDATA%\AloParticleEditor\crash-stack.txt`
+(NOT stdout — Debug `WinMain` redirects stdout to an `AllocConsole` window you can't read).
+`RtlCaptureStackBackTrace` resolved at runtime from `ntdll` (proto invisible under
+`_WIN32_WINNT=0x0501`). The stack pinned `UpdateTrackCursors:379`; context globals gave
+`track=1 aliasOfTrack=0 _Myproxy=NULL` → orphaned aliased green cursor. **All diagnostics
+were stripped before commit** — shipped diff is only the two real fixes. → **L-059**.
+
+### New lessons
+- **L-058** — a fresh per-session worktree starts EMPTY of build products (`node_modules`,
+  NuGet `packages/`, `x64/Debug/*.exe`); a handoff saying "the exe is already built" refers
+  to a different, now-gone worktree. Verify presence before relying.
+- **L-059** — the cursor-reseat invariant + lock-alias-awareness + the MSVC
+  "value-initialized"==orphaned wording trap + the assert-hook/DbgHelp debugging technique.
+
+### How verified
+- **Web:** vitest **440** (49 files), `pnpm build` clean, `tsc --noEmit` clean.
+- **Native:** Debug x64 rebuilt clean (0 errors) after every change + final
+  diagnostics-stripped build; smoke-launched healthy (compositing, not L-033 ~4 FPS).
+  **User confirmed on-screen:** P6-rest features work AND the crash is gone (incl. the
+  lock-group repro: edit red with G/B/A locked + live particles).
+- **Composition a11y:** the 1 touched golden updated by reasoning (couldn't run the native
+  CDP harness — see L-058).
+
+### Native toolchain (this worktree only)
+Built fresh THIS session: `nuget`-cache-copy of WebView2 1.0.3967.48 → `packages/` (L-039),
+MSBuild Debug x64 → `x64/Debug/ParticleEditor.exe`. **A NEW worktree won't have these** —
+rebuild from scratch (L-058/L-039/L-046). Release not built. MSBuild path used:
+`C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+
+### ⭐ NEXT TASK options (pick with the user; full catalog in ui-delta-report.md)
+1. **P7 — Link groups (LNK-1/2/6/8/10)** (the next fix-plan phase): `[L<n>]` name prefix /
+   per-row dot (LNK-1/2), interactive bracket click-select + hover (LNK-6), Dissolve action
+   (LNK-8), join-conflict warning (LNK-10).
+2. **P8 — Color/texture (PAL-2/3/14):** color picker live-preview + cancel/revert (PAL-2/3),
+   broken-vs-missing texture thumbnails (PAL-14).
+3. **Deferred polish:** curve **marquee-from-the-axis-margins** (user request — needs the
+   curve canvas reworked to a margin-inclusive viewBox); SEL-12 drag-autoscroll; SEL-13
+   reorder-drag cancel.
+4. **Native track (now unblocked):** VPT-2 undo capture-wiring + VPT-3 autosave port.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; `origin/lt-4` = `8f4ec58` or newer; 0 ahead / 0 behind; clean.
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **440 passed** (49 files).
+- `pnpm --filter @particle-editor/editor build` → clean. `…lint` (`tsc --noEmit`) exit 0.
+- Native (a11y / faithful `--new-ui`): toolchain is **NOT in a fresh worktree** — restore
+  `packages/` (L-039) + MSBuild Debug x64 (L-046) first.
+
+---
+
 ## 2026-06-03 (session 13) — **comprehensive UI-vs-legacy delta audit → fix sweep**: shipped **9** commits — CRITICAL rotation-scaling fix, spinner cluster, global accelerators, menu/clipboard enablement, marquee selection, curve multi-key group-drag. NEXT: continue the fix-plan queue (P6-rest / P7 link-groups / P8 color-texture) + the native track (undo/autosave)
 
 **`origin/lt-4` = `91f3617`** (was `a1e8120` at session start; **9 commits** + plan/doc
