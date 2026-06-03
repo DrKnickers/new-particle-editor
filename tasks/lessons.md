@@ -3582,3 +3582,53 @@ to 4 colour channels, 3 rescale/increment dialogs, CurveEditor index+time; dropp
 re-baselined (value-format only), 0 legacy goldens, vitest 406. Cross-reference
 [L-052](#l-052) (composition-lane only) and [L-053](#l-053) (a Spinner/chrome change fans
 out across many goldens — budget for it).
+
+---
+
+## L-057 — A synthetic pointer-drag in the headless preview does NOT emit the trailing `click` a real mouse / native WebView fires, and the MockBridge stores exact doubles where the real engine stores float32 — so a "drag-then-collapse" selection bug and a float-precision selection-drift both PASS the browser-preview check yet FAIL in the native app; dispatch the trailing click and account for float32, or hand drag-interaction verification to the user
+
+**Rule.** The browser preview (vite + MockBridge) is the reliable surface for *React
+behaviour* (L-041), but it diverges from the native app in two ways that silently pass a
+flawed verification:
+
+1. **No trailing `click`.** Dispatching `pointerdown`/`pointermove`/`pointerup` does NOT
+   produce the synthetic `click` event that a real mouse — and the native WebView2 —
+   fires after a press-release on the same element. So a bug where the *trailing click*
+   does something wrong (here: the curve key's `onClick` re-fired `onKeyClick`, collapsing
+   a multi-selection down to the grabbed key after a group drag) is INVISIBLE to a
+   pointer-only synthetic test. **When verifying a drag, also `dispatchEvent(new
+   MouseEvent('click', …))` on the drag target**, or verify in the native app / hand to
+   the user.
+2. **MockBridge stores exact doubles; the real engine stores float32.** Selection that is
+   keyed by value-equality (`selectedKeyTimes.has(key.time)`) matches perfectly against
+   the MockBridge (it echoes the committed JS double verbatim) but DRIFTS by a float32 ULP
+   against the real C++ engine (it round-trips times as float32). So "key stays selected
+   after a move" passes the preview and fails natively. Make value-keyed selection
+   tolerant of float32 drift (snap to the nearest actual key within ~1e-3 after the
+   refetch) — don't rely on exact equality surviving a native round-trip.
+
+Also: the headless preview **throttles `requestAnimationFrame`** so `await rAF` hangs —
+read state in a *separate* `preview_eval` call after the dispatch (React's state flush is
+async anyway), never via an in-page rAF await.
+
+**Why it matters.** I claimed CRV-1's multi-key group drag "live-verified, both keys stay
+selected" — twice — and both times it was still broken for the user, because my synthetic
+test omitted the trailing click that was the actual bug. A preview "PASS" on a
+drag/selection interaction is necessary but NOT sufficient; the trailing-click + float32
+gaps are exactly where preview and native diverge.
+
+**How to apply.** For any drag-then-select / drag-then-commit interaction: (a) dispatch
+the trailing `click` in the synthetic test, (b) reason about float32 round-trips through
+the real engine for any value-keyed state, (c) treat a clean preview run as provisional
+and confirm the specific gesture in the native build (or with the user) before declaring
+it fixed.
+
+**Source incident (2026-06-03, session 13, CRV-1).** Multi-key curve group drag collapsed
+the selection to the grabbed key on release. Preview (pointer-only) showed both keys
+selected → I reported "fixed". User: still broken. Root cause was the trailing synthetic
+`click` re-running `onKeyClick` (the backdrop guarded on `dragConsumedClickRef`; the key
+circle did not). Plus a native-only float32 drift in `selectedKeyTimes`. Fix: guard the
+key `onClick` on `dragConsumedClickRef`, snap `selectedKeyTimes` to the refetched key
+times after `tree/changed`, and commit the `fround`ed time. Re-verified WITH a trailing
+`click` dispatched. Cross-reference [L-033](#l-033) (native arch-C verification truth) and
+[L-041] (browser-preview as the React-behaviour surface).

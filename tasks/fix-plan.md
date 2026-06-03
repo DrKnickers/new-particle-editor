@@ -158,3 +158,16 @@ off-machine.
 ### a11y golden status
 P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
 DOM unchanged). Full `pnpm a11y` run deferred to a batch checkpoint before FF to lt-4.
+
+---
+
+## Session 13 end (2026-06-03)
+**`origin/lt-4` = `91f3617`.** Shipped P1, P2, P3, P4a, P4b, P5, P6/CRV-1 (9 commits) +
+the audit report + this plan. Native toolchain set up (WebView2 restored, Debug x64
+built). 428 vitest, 155/4-splitter a11y, all user-confirmed in the faithful build.
+Handoff: HANDOFF.md (session 13) + next-session-prompt.md refreshed + L-057 added.
+
+**Remaining queue:** P6-rest (CRV-2 copy/paste, CRV-7 right-click deselect, CRV-8 decimal
+time) · P7 link-groups (LNK-1/2/6/8/10) · P8 color/texture (PAL-2/3/14) · deferred
+(curve marquee-from-margins, SEL-12 autoscroll, SEL-13 reorder-drag cancel) · native track
+(VPT-2 undo capture-wiring, VPT-3 autosave). Full catalog: ui-delta-report.md.

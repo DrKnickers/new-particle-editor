@@ -1,5 +1,85 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-03 (session 13) — **comprehensive UI-vs-legacy delta audit → fix sweep**: shipped **9** commits — CRITICAL rotation-scaling fix, spinner cluster, global accelerators, menu/clipboard enablement, marquee selection, curve multi-key group-drag. NEXT: continue the fix-plan queue (P6-rest / P7 link-groups / P8 color-texture) + the native track (undo/autosave)
+
+**`origin/lt-4` = `91f3617`** (was `a1e8120` at session start; **9 commits** + plan/doc
+commits). Tree clean, 0 ahead / 0 behind. **No `master` changes.** This was a big
+session: a full audit of the new UI against the legacy UI, then a phased fix sweep, all
+user-confirmed (the user launched the faithful `--new-ui` and verified each).
+
+### What happened
+1. **UI delta audit** ([tasks/ui-delta-report.md](ui-delta-report.md)) — 8 parallel
+   read-only subagents extracted the legacy (C++) vs new (React) contract for every
+   interaction surface; ~95 findings tagged by severity/confidence/verify-channel. This is
+   the **authoritative remaining-work catalog**. The phased remediation plan +
+   per-phase progress is [tasks/fix-plan.md](fix-plan.md).
+2. **Fix sweep** (user chose: *defects only*, keep intentional redesigns; undo/autosave on
+   a *separate native track*; wire-existing-accelerators + flag gaps; *batch a11y
+   re-baseline per phase*):
+   - `1d384c0` **P1 CRITICAL** — rotation average/variance display scaling (PRM-4/5). The
+     engine stores these as a normalised ratio; the new UI showed/wrote the raw value
+     (corrupting `.alo`). `FieldSpinner` gained a `displayScale` transform (×360 / ×100).
+     **Live-confirmed end-to-end.**
+   - `b9e9ab0` **P2** — spinner drag-modifier (un-inverted), wheel honors `step` + Ctrl=fine,
+     hold-to-repeat (SPN-4/5/6/7).
+   - `919197a` **P3** — bounciness clamp relaxed + stale curve comment (PRM-6, CRV-14).
+   - `4f66541` **P4a** — global keyboard accelerators wired (MNU-2/VPT-1/SEL-14);
+     `lib/use-app-accelerators.ts`; host parser verified to accept every combo.
+   - `8985864`+`ff9059a` **P4b** — Edit/Emitters menu enablement + context-menu clipboard
+     (MNU-1/3/4, SEL-5/6); `lib/emitter-clipboard.ts`; **a11y golden re-baselined**
+     (only `menubar-emitters-open`, 2 lines; composition lane only).
+   - `a78e8bc` **P5** — marquee (rubber-band) selection on the emitter tree (SEL-1);
+     `lib/marquee.ts` + pointer handling + Esc-cancel.
+   - `8093684`+`91f3617` **P6/CRV-1** — multi-key curve group-drag + full-selection
+     retention (user-surfaced during testing). See **L-057**.
+3. **Native toolchain set up in this worktree** — `nuget restore` WebView2 1.0.3967.48 →
+   `packages/`; MSBuild Debug x64 → `x64/Debug/ParticleEditor.exe`. Future golden
+   re-baselines + native work no longer need the from-scratch setup.
+
+### New lesson
+- **L-057** — synthetic pointer-drags in the headless preview omit the trailing `click` a
+  real mouse/WebView fires, AND the MockBridge stores exact doubles where the real engine
+  stores float32 — so a drag-then-collapse selection bug + float-drift both PASS the
+  preview yet FAIL natively. I twice reported CRV-1 "verified" while still broken. Dispatch
+  the trailing click + account for float32, or hand drag-verification to the user.
+
+### How verified
+- **Web logic:** vitest **428** (was 406; +22 across the new `marquee`, `use-app-accelerators`,
+  `rotationScale`, spinner tests). `pnpm build` clean throughout.
+- **Composition a11y:** native harness **155 passed / 4 splitters** (L-033 artifact);
+  re-baselined once for P4b (`pnpm a11y:update`, composition lane only, legacy `.json`
+  untouched per L-052).
+- **Native:** Debug x64 built; faithful `--new-ui` launched + confirmed via `host.log`
+  (`[host] Engine constructed OK`, `[lighting-restore]`, `[view-restore]`, 240 FPS — NOT
+  the L-033 ~4 FPS state). **User confirmed each fix on-screen** ("this is great").
+- **Live-driven** the new UI in the browser preview (MockBridge) for P1/P4b/P5/CRV-1
+  (with the L-057 caveats applied after they bit).
+
+### ⭐ NEXT TASK options (pick with the user; full catalog in ui-delta-report.md)
+1. **Continue the fix-plan queue** (the productive loop): **P6-rest** — curve key
+   copy/cut/paste (CRV-2), right-click deselect (CRV-7), integer→decimal time (CRV-8);
+   **P7 link groups** — `[L<n>]` prefix / per-row dot (LNK-1/2), interactive bracket
+   click-select + hover (LNK-6), Dissolve action (LNK-8), join-conflict warning (LNK-10);
+   **P8 color/texture** — color live-preview + cancel/revert (PAL-2/3), broken-vs-missing
+   thumbnails (PAL-14).
+2. **Deferred polish surfaced this session:** **marquee-from-the-axis-margins** in the
+   curve editor (user request) — needs the curve canvas coordinate/layout reworked so the
+   36px Y-label col + 22px X-label row fold into the interactive SVG (margin-inclusive
+   viewBox); SEL-12 drag-autoscroll; SEL-13 reorder-drag Esc/right-click cancel.
+3. **Native track (own focused effort, now unblocked):** undo capture-wiring (VPT-2 —
+   wire `Capture()` into every host mutation) + autosave port (VPT-3). These are the two
+   CRITICAL/HIGH items needing C++ work; the Debug build is set up.
+
+### Verified baseline (run before changing anything)
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **428 passed** (49 files).
+- `pnpm --filter @particle-editor/editor build` → clean (+`dist/`, composition).
+- `pnpm --filter @particle-editor/editor a11y` → **155 / 4 splitters** (L-033; needs the
+  native Debug exe — already built here; kill stray `ParticleEditor.exe` first; CDP flaky → retry).
+- `.sln` Debug x64 is built (`x64/Debug/ParticleEditor.exe`); `packages/` has WebView2.
+
+---
+
 ## 2026-06-03 (session 12) — shipped **4** new-UI commits: **full lighting registry restore + Force Align cross-mode sync + Lighting toolbar toggle** → **raw-lighting panel display + `ALO_SETTINGS_LIVE` CDP test seam** → **property-tab chevron animation fix** → **app-wide 2dp numeric display**. NEXT: keep user-driven new-UI bug-testing (no concrete known gap left)
 
 **`origin/lt-4` = `4d9496d`** (was `96e1f82` at session start; **4 commits**). Tree
