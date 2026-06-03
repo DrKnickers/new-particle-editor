@@ -324,10 +324,10 @@ function eventToViewBox(
 }
 
 /** Per-channel y-axis range used by the multi-channel overlay branch.
- *  Mirrors the legacy + Phase 3 conventions: colour channels lock to
- *  [0, 1]; Scale/Index auto-range with 1.2× headroom and a minimum max
- *  of 100; RotationSpeed auto-ranges symmetrically around 0. Each
- *  channel's curve is normalised to fill the panel height — comparing
+ *  Colour channels lock to [0, 1]; Scale/Index auto-range from 0 up to
+ *  the highest key value, floored at a max of 1; RotationSpeed auto-ranges
+ *  symmetrically around 0 (expands to the lowest and highest keys, no caps).
+ *  Each channel's curve is normalised to fill the panel height — comparing
  *  absolute values across channels isn't the goal of the overlay. */
 function valueRangeForTrack(track: TrackDto): { min: number; max: number } {
   switch (track.name) {

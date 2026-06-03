@@ -63,7 +63,13 @@ labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-de
   local ramp accumulator + holdingRef resync guard. 6 new Spinner tests; suite 416
   green; build clean. DOM/a11y tree unchanged (no golden impact). Input-math behaviors
   are deterministically unit-tested.
-- P3: next.
+- **P3 (partial) ✅** no-golden quick wins: bounciness max=1 clamp removed (PRM-6 —
+  >1 is legit super-elastic + round-trip on edit); stale curve y-range comment fixed
+  (CRV-14). **Kept** weather/tail `min=0` (PRM-10) — negative cube/tail is meaningless,
+  legacy's allowance was incidental, load still preserves; removing gives no benefit.
+  Remaining P3 (status bar VPT-6/7/8, Import "Clear" MNU-12) touch a11y goldens →
+  batched with P4.
+- P4: next (menus / clipboard / accelerators — first golden-cascade phase).
 
 ### a11y golden status
 P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner

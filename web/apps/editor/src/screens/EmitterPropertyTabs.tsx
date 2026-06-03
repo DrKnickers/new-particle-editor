@@ -1452,11 +1452,12 @@ export function PhysicsTab({
           testId="physics-ground-behavior-trigger"
           widthBoost="mid"
         />
+        {/* PRM-6: legacy bounciness was an unbounded float (Emitter.cpp:259-266,
+            506). Don't clamp to [0,1] — a modder can use >1 (super-elastic) and
+            existing files outside [0,1] must round-trip on edit. */}
         <FieldSpinner
           label="Bounciness:"
           value={properties.bounciness}
-          min={0}
-          max={1}
           step={0.05}
           disabled={!bouncinessEnabled}
           onCommit={(v) => onCommit({ bounciness: v })}
