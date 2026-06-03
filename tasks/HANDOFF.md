@@ -1,5 +1,125 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-02 (session 11) — shipped **4** new-UI parity/UX commits: **ground/background/skydome registry-restore** + **Lighting docked pane (shares Spawner slot) with Bloom folded in** + menu/reorder cleanup + 9px gap. NEXT: keep user-driven new-UI bug-testing (no concrete known gap left)
+
+**`origin/lt-4` = `61fddd6`** (was `e2caeed` at session start; **4 commits**). Tree
+clean, 0 ahead / 0 behind. **No `master` changes.** Verified: vitest **403** (was 392;
+45→46 files), composition native a11y **155 passed / 4 splitters** (155 = 157 − the
+removed bloom surface; the 4 splitters are the L-033 geometry artifact, NOT a
+regression — see below), `.sln` Debug+Release x64 clean (session 1 ground work; the
+rest is **pure web-layer, no native rebuild**), `dist/` rebuilt (composition). The
+session was **user-driven new-UI work**: the user launched the faithful arch-C build,
+asked for fixes/features, I implemented + verified each over CDP/host.log.
+
+> **Branch-flow note:** the first commit (`4526ab6`) was FF'd from the session branch
+> `claude/naughty-williamson-cb0b43` into `lt-4` per CLAUDE.md; the next three were
+> committed **directly on `lt-4`** (I was already on it) and pushed. So the old session
+> branch is stale at `4526ab6` — irrelevant, since a fresh session branches from
+> `lt-4`'s tip (`61fddd6`). Pre-flight `git log lt-4..HEAD` will be 0 as usual.
+
+### The 4 commits (newest first)
+- `61fddd6` **9px gap above Bloom** — the Bloom section sat flush against the Mirror
+  Sun / Reset footer; added a `mt-[9px]` wrapper matching `.panel-section`'s
+  `margin-bottom` (the collapsed Fill 1→Fill 2 gap). CSS-only, a11y-transparent
+  `<div>` (no golden change). `LightingPanel.tsx`.
+- `9ca6a20` **menu + reorder cleanup** — removed the View-menu **"Bloom"** on/off item
+  (the toolbar "Toggle bloom" button covers it; dropped the orphaned `bloom`/
+  `bloomAvailable` reads in `MenuBar.tsx`); moved **Force Align Fill Lights** out of the
+  footer to sit under the Fill 1/Fill 2 sections it governs; moved the **Bloom** section
+  to the very bottom, below Mirror Sun / Reset. `LightingPanel.tsx` + `MenuBar.tsx`.
+- `560c71b` **Lighting → docked pane** — promoted Lighting from a floating `ToolPanel`
+  overlay to a **docked full-height right column** that shares ONE slot with the Spawner
+  (exclusive: opening one closes the other). **Bloom folded into Lighting** as a
+  collapsible section. New `lib/right-dock.ts` (`dock: "spawner"|"lighting"|null`,
+  exclusive `toggle`, migrates legacy `alo:spawner-visible`) replaces
+  `spawner-visibility.ts`; `PanelLayout` keys its reflow on dock **presence** (a
+  spawner↔lighting swap reflows nothing — only open↔closed carves/absorbs width, reusing
+  `deriveOuterLayoutOnToggle` verbatim); `ToolPanel` gained `variant="docked"` (fills
+  column, skips viewport hole-punch); `BloomSection.tsx` extracted from the deleted
+  `BloomPanel.tsx`. **No native rebuild** (a docked column sits beside the engine, not
+  over it, so no occlusion). Net **−215 lines** in touched files. → **L-052**.
+- `4526ab6` **ground/background/skydome registry restore** — the new-UI `HostWindow`
+  restored only recent-files + last-mod; now restores the same persisted view settings
+  legacy does (`main.cpp:7614-7692`): background colour, show-ground, ground slot custom
+  paths / solid colour / texture index, skydome custom paths / index. Folded into the
+  session-10 bloom `if (!useTestHost)` registry block in `HostWindow.cpp` (~:1799), same
+  inline-read pattern (the legacy `Read*` helpers are `static`). GroundZ deliberately NOT
+  restored (legacy resets to 0). A permanent `[view-restore]` `host.log` line is the
+  standing no-user verification channel. → **L-051**.
+
+New lessons: **L-051** (a `!useTestHost`-gated restore CANNOT be verified over the
+`--test-host` CDP bridge — the gate disables it; verify from a faithful non-test-host
+launch + `host.log` dump), **L-052** (the two a11y golden lanes diverge: composition
+`*.composition.golden.yaml` is maintained, legacy UIA `*.golden.json` is NOT — never
+blanket-regenerate the legacy lane for an unrelated change).
+
+### How each was verified (arch-C — DOM/host.log + the user, NOT agent screenshots, L-033)
+- **Ground restore:** faithful non-test-host launch logged
+  `[view-restore] bg=0x6E6E6E showGround=1 groundTex=5 groundSolid=0x626262 skydome=1`
+  — every field the saved registry value, none the ctor default. **User confirmed
+  on-screen** ("it all matches").
+- **Lighting dock + reorder + menu:** drove the live `--test-host` build over CDP
+  (`chromium.connectOverCDP('http://127.0.0.1:9222')`) and read the **DOM/accessibility
+  tree** (trustworthy under arch-C — L-033 is about engine *pixels*, not WebView2 DOM).
+  Confirmed: View menu has no Bloom items; Lighting renders inside `quadrant-spawner`
+  (260×662 docked column), Spawner closes; DOM order Fill2→ForceAlign→Ambient … Reset→
+  Bloom; toggling Enable bloom flips engine state; toolbar Spawner button `aria-pressed`
+  tracks the slot both ways. **User confirmed** ("looks great").
+- **9px gap:** measured both gaps over CDP `getBoundingClientRect` — Fill1→Fill2 = 9px,
+  Reset→Bloom = 9px (exact match).
+- **a11y golden diff-review (Risk-1):** composition `dialog-lighting` + `menubar-view-open`
+  regenerated; every changed line explained (Lighting overlay→docked `complementary`,
+  Spawner toggle un-pressed from the exclusive swap, `group: Bloom` relocated, Force
+  Align relocated, menu lines removed). Nothing else moved.
+
+### Tooling notes worth keeping
+- **CDP DOM measurement is the trustworthy arch-C verification for React-UI structure/
+  layout** (menus, panel docking, element order, pixel *offsets* via
+  `getBoundingClientRect`) — it's unaffected by the L-033 engine-pixel misrender. Pattern:
+  launch `--new-ui --test-host`, `connectOverCDP('http://127.0.0.1:9222')` (IPv4),
+  `page.evaluate(... document.querySelector ... getBoundingClientRect)`. Used a throwaway
+  `verify-*.mjs` driver under `web/apps/editor/` (deleted after). Engine *pixels* still go
+  to the user (L-033).
+- **L-051 verify-channel paradox:** never try to confirm a `!useTestHost`-gated restore
+  over the `--test-host` bridge — the gate turns it off. host.log + faithful launch.
+- **L-052 a11y two lanes:** `pnpm a11y` (default) = composition lane (`*.composition.
+  golden.yaml`, the documented 157/4 baseline). `pnpm a11y:legacy` = UIA lane
+  (`*.golden.json`), **unmaintained** — `a11y:update:legacy` churned ~25 unrelated
+  surfaces, so it was reverted wholesale. After ANY `:legacy` run, **rebuild composition
+  dist** (`pnpm build`) — the legacy run leaves dist in `VITE_HOSTING_MODE=legacy`.
+- **The 4 splitter a11y failures (`splitters.spec.ts:125/163/227/258`) are the L-033
+  baseline artifact** (geometry assertions under arch-C agent launch), identical every
+  run including layout-untouched ones. Toggle *logic* is covered green by the
+  `PanelLayout.test.tsx` unit tests. Not a regression.
+- **MSBuild path** (only needed if touching native): `C:\Program Files\Microsoft Visual
+  Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`, via **PowerShell** (L-046).
+  Fresh worktree → materialise WebView2 NuGet into `packages/` (L-039).
+
+### ⭐ NEXT TASK options (user-driven; pick with the user)
+1. **Keep bug-testing / refining the new UI** — the productive loop all session: user
+   launches the faithful `--new-ui`, exercises a feature, reports what's off or wants
+   changed; agent root-causes via host.log + CDP DOM + faithful launch and fixes. No
+   concrete known parity gap remains (ground / background / skydome / bloom / lighting
+   all done) — the next item will come from the user's testing.
+2. **Adjacent polish surfaced but not requested:** Force Align is session-only in the new
+   UI (localStorage, not the registry `LightingForceFillAlignment` REG_DWORD legacy
+   uses) — a cross-mode-sync follow-up if anyone asks. Lighting/Spawner could grow a
+   toolbar toggle for Lighting (only Spawner has one today). Neither requested.
+3. **Strategic:** the LT-4→master cutover (Phase 4) is still gated on arch-C trust — the
+   user still daily-drives legacy/arch-A (`memory/project_daily_driving_legacy.md`).
+   These 4 commits build that trust; not ready to cut over yet.
+
+### Verified baseline (run before changing anything)
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **403 passed** (46 files).
+- `pnpm --filter @particle-editor/editor build` → clean (+`dist/`, composition mode).
+- `pnpm --filter @particle-editor/editor a11y` → **~155 passed / 4 splitters** (L-033;
+  CDP flaky → retry, `127.0.0.1:9222` not `localhost`; count varies ±a few with flake).
+- `.sln` Debug + Release x64 only if touching native (this session's commits 2-4 are
+  web-only; the Release exe from commit 1 is current).
+
+---
+
 ## 2026-06-02 (session 10) — shipped 3 arch-C/new-UI fixes: the **black line** (D3D9Ex→D3D11 shared-surface guard band), **bloom** (registry restore), **emitter drag-reorder** (pointer events). NEXT: ground-settings registry-restore parity gap (same class as bloom), or keep bug-testing the new UI
 
 **`origin/lt-4` = `9585b4e`** (was `d57c3cc` at session start; **3 commits**, all
