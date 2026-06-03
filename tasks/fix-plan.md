@@ -117,6 +117,14 @@ off-machine.
   - **GAP flagged:** "Paste As ▸ Child" NOT added — `emitters/paste` has no
     paste-into-slot param; needs a host command (follow-up).
   - Build clean; 422 tests green; TS happy.
+  - **✅ a11y re-baselined + backed up.** Native toolchain set up this session
+    (nuget restore WebView2 1.0.3967.48 → `packages/`; MSBuild Debug x64 →
+    `x64/Debug/ParticleEditor.exe`). `pnpm a11y:update` → **155 passed / 4 splitters**
+    (L-033 artifact). Diff was surgical: ONLY `menubar-emitters-open.composition.golden.yaml`
+    (Show/Hide All lose `[disabled]`, 2 lines); legacy `.golden.json` untouched (L-052).
+    P1 left NO golden drift (appearance scenario doesn't populate rotation fields).
+    **`origin/lt-4` = `ff9059a`** (P4a + P4b). Native build now in-worktree → future
+    golden re-baselines are cheap (no re-setup).
   - **Golden re-baseline PENDING native build:** the a11y harness launches
     `x64\Debug\ParticleEditor.exe`, which isn't built in this fresh worktree (empty
     `packages/`). Confirmed change: `menubar-emitters-open` (Show/Hide All lose
