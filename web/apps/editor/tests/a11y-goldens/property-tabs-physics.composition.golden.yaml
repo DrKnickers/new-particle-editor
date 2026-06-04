@@ -64,7 +64,7 @@
 - combobox "Lock-to track" [disabled]: None
 - button "Delete selected keys" [disabled]
 - text: "Time:"
-- textbox "Selected key time" [disabled]: "0"
+- textbox "Selected key time" [disabled]: "0.00"
 - text: "Value:"
 - textbox "Selected key value" [disabled]: "0.00"
 - group "Curve channels":
