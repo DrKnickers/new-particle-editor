@@ -1,222 +1,207 @@
-# P6-rest — Curve-editor parity fixes (CRV-2 / CRV-7 / CRV-8)
+# P7 — Link-group parity fixes (LNK-2 / LNK-6 / LNK-8 / LNK-10)
 
-**Status:** PLAN — awaiting scope confirmation before execution.
-**Branch:** `claude/elastic-dirac-a978aa` (FF into `lt-4` at session end).
-**Baseline verified:** git clean (HEAD = origin/lt-4 = ad4ceca), vitest 428/49,
-`pnpm build` clean.
+**Status:** PLAN — scope confirmed by user (2026-06-03). Ready to execute.
+**Branch:** `claude/jovial-cray-1ba27e` (FF into `lt-4` at session end).
+**Baseline verified:** git clean (HEAD = origin/lt-4 = `8d18a2e`), vitest **440/49**,
+`node_modules` reinstalled (fresh worktree, L-058). Native build NOT yet present.
 
 ---
 
 ## 1. Goal + scope
 
-**Goal.** Close the three remaining P6 curve-editor deltas so the new curve
-editor matches the legacy `CurveEditor.cpp` interaction contract for key
-clipboard, right-click, and time granularity.
+**Goal.** Close four of the five P7 link-group deltas so the new EmitterTree matches
+the legacy link-group interaction contract: a per-row "is-linked" affordance, an
+interactive bracket gutter (click-select + hover), an explicit Dissolve action, and a
+join-conflict warning before a join silently clobbers disagreeing fields.
 
 **In:**
-- **CRV-2 (HIGH)** — Copy / Cut / Paste of selected curve keys via Ctrl+C / X / V,
-  matching legacy `CopyKeys`/`PasteKeys` ([src/UI/CurveEditor.cpp:414-470](src/UI/CurveEditor.cpp:414)).
-- **CRV-7 (MED)** — Right-click on the empty curve canvas in **Select** mode clears
-  the selection (legacy `WM_RBUTTONDOWN` → `CM_SELECT` branch,
-  [src/UI/CurveEditor.cpp:563-582](src/UI/CurveEditor.cpp:563)). Insert-mode
-  right-click keeps dropping to Select mode (already correct).
-- **CRV-8 (LOW)** — Time spinner step `1`→`0.1` so the wheel/arrows nudge in tenths
-  of a percent (legacy granularity); display picks up the app-wide 2 dp default
-  (L-056) for consistency with the sibling Value spinner.
+- **LNK-2 (MED)** — render the per-row link **dot** the file-header comment already
+  promises ([EmitterTree.tsx:33-36](web/apps/editor/src/screens/EmitterTree.tsx:33));
+  small `bg-accent` circle when `linkGroup !== 0`. **Decorative + `aria-hidden`** → no
+  a11y golden change. Web-only.
+- **LNK-6 (MED)** — make the bracket gutter **interactive** (was `pointer-events-none`,
+  [EmitterTree.tsx:1565](web/apps/editor/src/screens/EmitterTree.tsx:1565)): click a
+  bracket selects every group member (Ctrl/Cmd = union); hover tints members + thickens
+  the bracket. Brackets stay `aria-hidden` (mouse convenience over the already-accessible
+  row click) → no golden change. Web-only.
+- **LNK-8 (MED)** — context-menu **"Dissolve Link Group"** (enabled when `isLinked`),
+  under Leave Link Group. Gathers all member ids and fires one
+  `linkGroups/set-membership {ids:<all>, groupId:null}` — reuses the host's
+  `LeaveLinkGroup`+auto-dissolve under one `captureUndo`. Web-only (no new host surface).
+- **LNK-10 (MED)** — **join-conflict warning.** New read-only host command
+  `linkGroups/diff-membership {ids, groupId} → {conflicts:{id,fields[]}[]}` wrapping the
+  existing [`DiffNonExemptParams`](src/LinkGroup.cpp:267). `SetLinkGroupDialog` OK now
+  diffs first; non-empty conflicts → confirm modal listing the fields; OK proceeds with
+  `set-membership`, Cancel aborts. **Needs the native Debug x64 build** (host C++ touched).
 
 **Out (deferred, with reasons):**
-- Curve **marquee-from-the-axis-margins** (separate deferred-polish item — needs the
-  canvas viewBox reworked; not a P6 defect).
-- P7 link-groups / P8 color-texture — next plan after P6-rest lands + is confirmed.
-- A host-side / cross-process curve-key clipboard — the legacy used a Win32
-  `RegisterClipboardFormat`; in the web app we keep an **in-app module store**
-  (mirrors `emitter-clipboard.ts`). Cross-*application* paste was never a real
-  workflow here; cross-*track* and cross-*emitter* paste within the editor session
-  is preserved.
-- Right-click **on a key** stays the existing Delete context menu (CRV-5, an
-  intentional new-only feature on the KEEP list) — untouched.
-- Moving the window-scoped **Delete** handler — it works and isn't in scope;
-  leaving it avoids churn (surgical-changes principle).
-
----
+- **LNK-1** (`[L<n>]` text name prefix) — **dropped by user decision** (dot-only):
+  the kept colored bracket gutter (LNK-3/4/5, intentional) + the new dot already convey
+  linkage; the legacy text prefix existed only because legacy had no gutter, so re-adding
+  it would be a third redundant signal contradicting the new-UI redesign.
+- **LNK-10 settings-OK un-exempt warning** — the *second* legacy disagreement surface
+  (un-exempting a field in `LinkGroupSettings` where members already disagree → which
+  value wins). Scoped OUT this phase to keep it shippable; proposed as a follow-up. The
+  `diff-membership` command added here is the reusable primitive a follow-up would build on.
+- P8 color/texture, deferred polish, native track (VPT-2/3) — separate fix-plan entries.
 
 ## 2. What the codebase already gives us
 
-- **`CurveEditorPanel.tsx`** owns selection (`selectedKeyTimes` by TIME), the
-  Time/Value spinners, the focus channel, `focusedTrack`, `borderKeyTimes`, the
-  window-scoped **Delete** keydown effect ([CurveEditorPanel.tsx:990](web/apps/editor/src/components/CurveEditorPanel.tsx:990)),
-  `handleDelete` (border-filtered), and `handleCanvasAdd` (adds a key + auto-selects
-  the returned time). These are the exact primitives Copy/Cut/Paste compose from.
-- **`emitters/add-track-key`** dedupes by epsilon (bumps +0.001 until the time is
-  unique) and **returns the actual inserted `{time, value}`**
-  ([bridge-schema index.ts:647](web/packages/bridge-schema/src/index.ts:647),
-  mock `addTrackKeyInOverlay` [mock-state.ts:1371](web/apps/editor/src/bridge/mock-state.ts:1371)).
-  → paste-at-original-time is **safe even into the same track**; we select the
-  returned times.
-- **`TrackKey = { time, value }`** ([bridge-schema index.ts:329](web/packages/bridge-schema/src/index.ts:329)) —
-  interpolation is **per-track**, not per-key, so the clipboard only needs
-  `{time, value}[]`.
-- **`emitter-clipboard.ts`** is the prior-art pattern: a tiny zustand store +
-  imperative setter + reactive `hasContent` hook. We add a sibling
-  **`curve-key-clipboard.ts`** that actually stores the keys (not just a flag),
-  since there is no host buffer for curve keys.
-- **`onCanvasContextMenu`** is already wired (`() => setMode("select")`,
-  [CurveEditorPanel.tsx:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371))
-  and the renderer already calls it + `preventDefault`s the native menu on the
-  empty backdrop ([CurveEditor.tsx:1607](web/apps/editor/src/screens/CurveEditor.tsx:1607)).
-  CRV-7 only needs the callback to branch on `mode`.
-- **Tree clipboard scoping precedent:** the emitter tree's Ctrl+C/X/V live on the
-  tree container's `onKeyDown` (focus-scoped, [EmitterTree.tsx:1474](web/apps/editor/src/screens/EmitterTree.tsx:1474)).
-  The curve panel's Delete is **window-scoped** on purpose — clicking an SVG key
-  doesn't move DOM focus into the panel, so a focus-scoped handler would never fire.
-
----
+- **Bracket geometry** — [`computeLinkGroupBrackets`](web/apps/editor/src/lib/link-group-colors.ts:54)
+  already emits `{groupId, color, firstRowIndex, lastRowIndex, memberRowIndices, lane}`
+  per group (≥2 members). The render layer (EmitterTree.tsx:1561-1600) already maps it to
+  absolutely-positioned bars + per-member stubs — LNK-6 only adds interactivity, not geometry.
+- **Selection store** — [`emitter-selection.ts`](web/apps/editor/src/lib/emitter-selection.ts)
+  exposes `setIds(ids, primary)` (group-select), `getEmitterSelectionSnapshot()` (Ctrl union
+  base), and `useEmitterSelectionStore`. No new store needed for LNK-6.
+- **Dissolve** — host already has [`DissolveLinkGroup`](src/LinkGroup.cpp:239) AND the
+  `set-membership groupId:0` leave path ([BridgeDispatcher.cpp:3890-3895](src/host/BridgeDispatcher.cpp:3890))
+  with `LeaveLinkGroup` auto-dissolve — LNK-8 reuses the latter from the client, no host change.
+- **Diff engine** — [`DiffNonExemptParams`](src/LinkGroup.cpp:267) returns the differing
+  non-exempt field labels for two emitters under a group's `LinkExemptFlags`. Canonical
+  member = `members[0]` ([JoinLinkGroup](src/LinkGroup.cpp:186)); `members[0]` is first in
+  `getEmitters()` order ([GetLinkGroupMembers](src/LinkGroup.cpp:104)). LNK-10 only needs
+  a thin bridge wrapper — the diffing logic is done.
+- **Dialog patterns** — `SetLinkGroupDialog`, `LinkGroupSettingsDialog`, the `Modal`
+  primitive, `tree-context` atom, and the mock bridge `linkGroups/*` cases
+  ([mock.ts:1092-1145](web/apps/editor/src/bridge/mock.ts:1092)) are all in place.
 
 ## 3. Architecture / implementation approach
 
-### CRV-8 (smallest — do first)
-`CurveEditorPanel.tsx` Time spinner ([:1229](web/apps/editor/src/components/CurveEditorPanel.tsx:1229)):
-`step={1}` → `step={0.1}`; drop `decimals={0}` so it inherits the Spinner's 2 dp
-default (matches the Value spinner's `decimals={sb.step >= 1 ? 0 : undefined}`
-idiom). `min/max/unit` unchanged. **Touches a composition golden** (toolbar Time
-spinner now reads e.g. `45.00` not `45`).
+**LNK-2 (dot).** Add a decorative `<span aria-hidden data-testid="emitter-link-dot-<id>">`
+in the row grid, rendered only when `node.linkGroup !== 0`. Reuse the existing grid; place
+it so it doesn't shift the accessible name. Color: `bg-accent` (per the comment). No new
+state.
 
-### CRV-7
-Change the `onCanvasContextMenu` prop ([:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371)) to branch on the
-panel's `mode`:
-```ts
-onCanvasContextMenu={() => {
-  if (mode === "insert") { setMode("select"); return; }   // legacy CM_INSERT branch
-  // legacy CM_SELECT branch — clear the selection
-  setOptimisticSelected(null);
-  setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
-}}
-```
-No renderer change (it already calls the callback + suppresses the native menu).
+**LNK-6 (interactive brackets).** In EmitterTree:
+- New local state `hoveredLinkGroup: number | null`.
+- Per-bracket wrapper gains `pointer-events-auto cursor-pointer`, `onPointerEnter/Leave`
+  (set/clear `hoveredLinkGroup`), and `onClick(e)`:
+  - members = `flatRows.filter(r => r.node.linkGroup === groupId).map(node.id)` (render order).
+  - plain click → `setIds(members, members[0])` + `bridge emitters/select {id:members[0]}`.
+  - Ctrl/Cmd click → union(currentIds, members), primary = members[0].
+- Hover tint: thread `hoveredLinkGroup` to rows; a row whose `linkGroup === hoveredLinkGroup`
+  gets a subtle tint class; the hovered bracket brightens/thickens (width 2→3, opacity).
+- Brackets stay `aria-hidden`; gutter container can keep `pointer-events-none` while each
+  bracket re-enables `pointer-events-auto` (so the gaps between brackets stay click-through
+  to rows beneath, if any overlap).
 
-### CRV-2 — new `lib/curve-key-clipboard.ts`
-```ts
-// Module store of copied curve keys (in-app; no host buffer exists for keys).
-type CopiedKey = { time: number; value: number };
-useCurveKeyClipboardStore: zustand<{ keys: CopiedKey[]; setKeys(k): void }>
-export function setCurveKeysClipboard(keys: CopiedKey[]): void
-export function getCurveKeysClipboard(): CopiedKey[]
-export function useCurveKeyClipboardHasContent(): boolean   // for future menu gating
-```
-Then in `CurveEditorPanel.tsx`, a **window-scoped** keydown effect (sibling to the
-Delete effect) handling Ctrl/Cmd + C / X / V:
-- **Guards (bail early):** target inside a `TYPING_TAGS` element (existing pattern);
-  **target inside the emitter tree** (`(e.target as HTMLElement).closest('[data-testid="emitter-tree"]')`)
-  — the tree owns its own clipboard, so this prevents a double-fire when the tree
-  is focused. This is the central collision mitigation.
-- **Copy (`c`):** if `selectedKeyTimes.size === 0` bail; gather
-  `focusedTrack.keys.filter(k => selectedKeyTimes.has(k.time))` → `setCurveKeysClipboard`.
-  Copies ALL selected keys incl. borders (legacy copies the whole selection).
-- **Cut (`x`):** Copy (above); if nothing copied, bail; then `handleDelete()`
-  (border-filtered server-side, matching legacy WM_CLEAR).
-- **Paste (`v`):** bail if clipboard empty, `selectedId === null`, or `focusLocked`;
-  for each clipboard key fire `emitters/add-track-key {time, value}` on the focus
-  track; collect the returned `{time}`; `setSelectedKeyTimes(new Set(returnedTimes))`
-  (mirrors `handleCanvasAdd`'s auto-select-returned-time path, incl. its no-fround
-  convention). Clears `optimisticSelected` first.
+**LNK-8 (Dissolve).** New `handleDissolveLinkGroup` in the Row component: read the full tree
+(or the already-available `flatRows`), collect ids where `linkGroup === node.linkGroup`,
+fire `set-membership {ids, groupId:null}`. Context-menu `<ContextMenu.Item>` "Dissolve Link
+Group" with `disabled={!isLinked}`, placed under Leave Link Group.
 
-`useCallback` handlers `handleCopyKeys` / `handleCutKeys` / `handlePasteKeys`; the
-effect depends on them + `selectedKeyTimes` (same shape as the Delete effect).
+**LNK-10 (join warning).**
+- **Schema** (`bridge-schema/src/index.ts`): add request
+  `{kind:"linkGroups/diff-membership"; params:{ids:number[]; groupId:number}}` and response
+  `{conflicts:{id:number; fields:string[]}[]}`.
+- **Mock** (`mock.ts`): a `diff-membership` case returning a configurable conflicts list
+  (seeded via mock-state) so the React flow is unit-testable; default `[]`.
+- **Host** (`BridgeDispatcher.cpp`): new handler. Resolve emitters from `ids`. If
+  `groupId>0`: canonical = `GetLinkGroupMembers(group)[0]`, exempt = `getLinkExemptFlags`,
+  joiners = ids not already in group. If `groupId===-1`: canonical = first resolved id,
+  joiners = the rest, exempt = `GetDefaultLinkExemptFlags()`. If `0/null`: empty (leaving
+  never clobbers). For each joiner, `fields = DiffNonExemptParams(*joiner,*canonical,exempt)`;
+  push `{id,fields}` when non-empty. Read-only — no `captureUndo`, no mutation, no tree emit.
+- **Dialog** (`SetLinkGroupDialog.tsx`): `handleOk` becomes async — call `diff-membership`
+  with the same `{ids, groupId}` it would send to `set-membership`. If `conflicts.length>0`,
+  enter a `confirm` sub-state rendering the field list ("Joining will overwrite N field(s)
+  on M emitter(s): …"); confirm → fire `set-membership` + close; cancel → back to the form.
+  Empty conflicts → fire directly (today's behavior). Keep it inside the one Modal (swap body).
 
----
+**Where new code lives:** all React in existing files + the dialog; one new bridge command
+across schema/mock/host. No new lib files expected (bracket geometry already factored).
 
 ## 4. Risks named up front + mitigations
 
-1. **Clipboard collision with the emitter tree (Ctrl+C/V double-fire).** The curve
-   handler is window-scoped (must be — SVG clicks don't focus the panel) while the
-   tree handler is focus-scoped but still bubbles to window. With a tree emitter AND
-   curve keys both selected, one Ctrl+C could set both clipboards.
-   **Mitigation:** the curve handler bails when `e.target.closest('[data-testid="emitter-tree"]')`
-   is non-null — the tree, when focused, owns the gesture. Copy/Cut additionally
-   require `selectedKeyTimes.size > 0`. Tested with a synthetic tree-origin target.
-2. **Paste at a colliding time corrupts the multiset / breaks selection-by-time.**
-   **Mitigation:** none needed — `add-track-key` already dedupes by epsilon and
-   returns the real time; we select the returned times, never the requested ones.
-   This is the same guarantee `handleCanvasAdd` relies on.
-3. **Paste into a locked channel writes to a read-only alias.**
-   **Mitigation:** Paste bails on `focusLocked` (same guard the Delete/Insert
-   affordances already use).
-4. **CRV-8 silently breaks a composition a11y golden.** The toolbar Time spinner's
-   rendered text changes (`45` → `45.00`).
-   **Mitigation:** expected + planned — re-baseline the composition lane only
-   (`pnpm a11y:update`, L-052), legacy `.json` untouched. Diff the golden to confirm
-   ONLY the Time-spinner value-format changed.
-5. **float32 drift on pasted-key selection (L-057).** Native paste returns float32;
-   selecting the requested double would miss the highlight.
-   **Mitigation:** select the **returned** time from the bridge response (not the
-   requested), exactly as `handleCanvasAdd` does. Hand final native paste-highlight
-   verification to the user (preview stores exact doubles — L-057 caveat).
-
----
+1. **Golden churn from LNK-2/6 (a11y re-baseline cost + native dependency).** If the dot or
+   interactive brackets leak into the accessible tree, the emitter-tree composition goldens
+   drift and force a native re-baseline. *Mitigation:* keep both strictly decorative —
+   `aria-hidden` on the dot and every bracket element, no `role`/`aria-label`, no accessible
+   name change. After build, run `git status` on the golden dir to **prove zero change**
+   before declaring no re-baseline needed (L-053 aggregate-diff discipline).
+2. **LNK-10 canonical-member mismatch (warn lists the wrong fields).** If `diff-membership`
+   picks a different canonical than `JoinLinkGroup` actually syncs to, the warning misleads.
+   *Mitigation:* mirror the host exactly — canonical = `GetLinkGroupMembers(group)[0]` and
+   exempt = `getLinkExemptFlags(group)`, the same two calls `JoinLinkGroup` makes
+   ([LinkGroup.cpp:186-187](src/LinkGroup.cpp:186)). For `-1` new-group, mirror the
+   `set-membership` create path (first target canonical, default exempt). Cover both in the
+   host handler comment so the coupling is explicit.
+3. **L-057: web-lane PASS ≠ native truth for the diff.** The mock can't faithfully diff real
+   float32 emitter params. *Mitigation:* the web tests prove only the *wiring* (diff called
+   with the right args; non-empty → modal; confirm → set-membership; empty → direct). The
+   real field-level correctness is verified by **the user** in `--new-ui` (their lane, L-033).
+   State this split in the test names + handoff so no one mistakes green web tests for native
+   proof.
+4. **Dissolve via N-leaves vs one dissolve (undo granularity / auto-dissolve edge).**
+   `set-membership {all ids, null}` loops `LeaveLinkGroup`; at 2-remaining the auto-dissolve
+   detaches the last — net all-detached under one `captureUndo`. *Risk:* an off-by-one if a
+   member id is stale. *Mitigation:* collect ids from the live `flatRows`/tree at click time,
+   not a cached list; the host already no-ops a leave on `linkGroup===0`. One Ctrl+Z restores
+   the whole group (single captureUndo). Verified by the user natively + a mock unit test on
+   the emitted call shape.
+5. **Native toolchain absent (L-058) blocks LNK-10 compile.** *Mitigation:* stand up
+   WebView2 `packages/` (L-039) + MSBuild Debug x64 (L-046) before touching host C++; build
+   clean after the change; hand the runtime verify to the user. Sequence LNK-10 last so the
+   three web-only items land even if the native bring-up hiccups.
 
 ## 5. Testing & verification
 
-**Web (vitest — `CurveEditorPanel.test.tsx`, mirrors the Delete-handler tests):**
-- [ ] Ctrl+C with 2 keys selected → `curve-key-clipboard` holds those 2 `{time,value}`.
-- [ ] Ctrl+V → fires `add-track-key` once per clipboard key on the focus track;
-      selection becomes the returned times.
-- [ ] Ctrl+X → copies then fires `delete-track-keys` (border filtered).
-- [ ] Copy with empty selection → no clipboard write, no throw.
-- [ ] Paste with empty clipboard / no emitter / locked focus → no `add-track-key`.
-- [ ] Ctrl+C fired from inside an `<input>` (TYPING_TAGS) → no clipboard write.
-- [ ] Ctrl+C fired from a target inside `[data-testid="emitter-tree"]` → no curve
-      clipboard write (collision guard).
-- [ ] Cross-track paste: copy on Red, switch focus to Green, paste → keys land on Green.
-- [ ] **CRV-7:** right-click empty canvas in Select mode with a selection →
-      `selectedKeyTimes` cleared; in Insert mode → mode flips to select, selection
-      untouched. (Renderer-level: `onCanvasContextMenu` fires + `preventDefault`.)
-- [ ] **CRV-8:** Time spinner renders `step="0.1"`; displayed value shows 2 dp.
+**Web (vitest, TDD — red first):**
+- *LNK-2:* row with `linkGroup!==0` renders `emitter-link-dot-<id>`; `linkGroup===0` does
+  not; the dot carries `aria-hidden` (accessible name unchanged).
+- *LNK-6:* click `link-group-bracket-<g>` selects exactly the group's member ids (primary =
+  first); Ctrl/Cmd-click unions with prior selection; `onPointerEnter` sets the hovered-group
+  tint on member rows, `onPointerLeave` clears it.
+- *LNK-8:* "Dissolve Link Group" enabled only when `isLinked`; selecting it fires
+  `set-membership` with all member ids + `groupId:null`.
+- *LNK-10:* `diff-membership` mock returns conflicts → OK shows the confirm body listing the
+  fields; confirm fires `set-membership`; cancel returns to form; empty conflicts → OK fires
+  `set-membership` directly (no confirm). Bridge-contract test for the new command's shape.
+- Full suite green (expect ~440 + new); `pnpm build` clean; `tsc --noEmit` exit 0 (L-046).
 
-**Composition a11y:** re-baseline curve-panel golden(s) touched by CRV-8; diff to
-confirm only the Time-spinner format changed. (L-052: composition lane only.)
+**Goldens:** `git status` the composition golden dir after build → **expect no change**
+(decorative-only). If anything drifted, investigate before re-baselining (composition lane
+only, legacy `.json` untouched, L-052).
 
-**Build/full suite:** `pnpm build` clean; `pnpm test` green (428 + new).
+**Native (LNK-10 — user lane, L-033):** Debug x64 compiles clean; user launches `--new-ui`,
+attempts a join of emitters with genuinely disagreeing shared fields → warning lists the
+real differing fields; OK clobbers as expected; Cancel leaves them untouched; a group with
+no disagreement joins with no prompt. Confirm via `host.log` healthy (not L-033 ~4 FPS).
 
-**Native (hand to user — L-057):** launch faithful `--new-ui`; select an emitter,
-marquee a few curve keys, Ctrl+C, click empty, Ctrl+V → pasted keys appear + are
-selected; Ctrl+X removes selected non-border keys; right-click empty in Select mode
-clears the selection; Time spinner nudges in 0.1 steps.
+**Cleanup:** any `#ifndef NDEBUG` host instrumentation stripped before commit (L-059 pattern).
 
 ---
 
-## 6. Review
+## Review
 
-**Shipped — all three items, TDD (red→green per item):**
-- **CRV-8** — Time spinner `step={1} decimals={0}` → `step={0.1}` + inherit 2dp
-  default ([CurveEditorPanel.tsx:1234](web/apps/editor/src/components/CurveEditorPanel.tsx:1234)).
-  2 new tests (2dp display + 0.1 ArrowUp nudge); updated the existing F8 line-877
-  assertion (`"50"` → `"50.00"`).
-- **CRV-7** — `onCanvasContextMenu` branches on `mode`
-  ([CurveEditorPanel.tsx:1371](web/apps/editor/src/components/CurveEditorPanel.tsx:1371)):
-  Insert → drop to Select; Select → clear selection. 2 new tests.
-- **CRV-2** — new [lib/curve-key-clipboard.ts](web/apps/editor/src/lib/curve-key-clipboard.ts)
-  (in-app zustand store, `{time,value}[]`) + window-scoped Ctrl/Cmd+C/X/V effect +
-  `handleCopyKeys`/`handleCutKeys`/`handlePasteKeys`. 8 new tests (copy, paste,
-  cut, empty-selection, empty-clipboard, TYPING_TAGS guard, tree-origin guard,
-  cross-track paste).
+**Shipped (2026-06-04, session 15) — all user-verified in the faithful `--new-ui`.**
 
-**Verification (web lane — green):**
-- vitest **440** (was 428; +12). `pnpm build` clean. `pnpm lint` (`tsc --noEmit`) exit 0.
-- Composition a11y golden `curve-editor-focused.composition.golden.yaml:122` updated
-  by hand (`"0"` → `"0.00"`) — the one deterministic line CRV-8 touches. Legacy `.json`
-  provably unaffected (Edit nodes carry `children: []`; no spinner value captured).
-  CRV-7/CRV-2 add no rendered DOM, so no other golden drifts.
+- **LNK-2 dot** — Option A (group-coloured dot in a fixed col-3 slot left of the name).
+  Decorative/`aria-hidden`, no golden change.
+- **LNK-6** — landed as **visual-only brackets + row-hover tint** (NOT bracket
+  click-select). The interactive overlay stole row-selection clicks; dropped it, moved the
+  "group lights up" affordance to row hover. See **L-060**.
+- **LNK-8 Dissolve** — context action, one `set-membership {ids:<all>, groupId:null}`.
+- **LNK-10** — `linkGroups/diff-membership` host command + **inline** amber field-overwrite
+  note in the dialog; **synchronous one-click** OK. The async diff-on-OK + confirm-modal
+  first cut caused a "first OK does nothing" bug → decoupled the join from the diff. See **L-061**.
 
-**Could NOT verify here (handed to user — L-033/L-057):**
-- Native a11y CDP harness + engine-pixel / drag-feel / keyboard-in-WebView checks.
-  This is a FRESH worktree: no `packages/` (NuGet), no `x64/Debug/ParticleEditor.exe`
-  — the handoff's "already built" was the prior worktree's (binaries aren't committed).
-  Standing up the native toolchain for one deterministic golden line is
-  disproportionate; native verification is the user's lane. → see new lesson L-058.
+**Round-2 fixes surfaced by user testing (all this session):**
+1. **Engine crash** setting/joining a group with live particles — orphaned cursors via the
+   link-group paths `set-membership` / `propagateLinkGroup`. Full reseat. Extends **L-059**.
+2. **Right-click → browser menu** in the faithful build — `AreDefaultContextMenusEnabled(FALSE)`
+   in `HostWindow`. **L-057** (jsdom couldn't catch it).
+3. **Shift-click lost the anchor** — stable `anchor` added to the selection store.
+4. **Dot too far / wrong colour + bracket too close** — Option A placement, group colour,
+   bracket gap 8→16px.
 
-**User native checklist:** select an emitter → marquee/Ctrl-click several curve keys →
-Ctrl+C, click empty, Ctrl+V (pasted keys appear + selected) → Ctrl+X (removes selected
-non-border keys, keeps them on the clipboard) → right-click empty in Select mode (clears
-selection) → right-click empty in Insert mode (drops to Select, keeps selection) → Time
-spinner nudges by 0.1 and reads 2 dp. Cross-track: copy on one channel, focus another,
-paste.
+**Deviations from the original plan.** LNK-6 shipped as visual-only (not click-interactive)
+— a deliberate scope change after the click-steal bug; LNK-10 shipped inline (not a separate
+confirm) per user preference + to fix the first-click bug. LNK-1 dropped (user: dot-only).
+
+**Verification.** vitest **454**; `pnpm build` + `tsc --noEmit` clean; native Debug x64
+rebuilt clean (cursor-reseat + context-menu + diff-membership); a11y **155 / 4-splitter**
+(L-033), `emitter-tree` golden re-matches; 18 composition goldens re-baselined for the
+pre-existing session-14 CRV-8 cascade (L-053/L-058). User confirmed on-screen: dot, dissolve,
+inline warning, one-click join, no crash, no deselecting.

@@ -3461,6 +3461,22 @@ fanned out. (Confirm the cascade cheaply: `grep -l "Toggle Spawner panel"
 [L-051](#l-051) (the gated-restore in the same session was verified via host.log, since
 its `dialog-lighting` golden change was only the toolbar button, not anything lighting).
 
+**Corollary — a *display-value* change cascades the same way, and reasoning about ONE
+golden when you can't run the harness leaves the rest silently drifted ([L-058](#l-058)).**
+A panel that's always present in the chrome (here the Curve-editor Time spinner) embeds
+in every full-page composition snapshot exactly like the toolbar does — so a `step 1→0.1`
++ 2dp display tweak (CRV-8) flips `Selected key time "0"`→`"0.00"` in **18** goldens, not
+just `curve-editor-focused`. Session 14 shipped CRV-8 but, lacking the native build
+([L-058](#l-058)), updated only the one golden it reasoned about; the other 17 stayed at
+`"0"` and surfaced as an `emitter-tree` (et al.) mismatch the moment a later session ran
+the harness. **Rule:** a value/text change in an always-visible panel is a cascade too —
+`grep -l` the old literal across `*.composition.golden.yaml` to size it. If you *can't*
+run `a11y:update` this session, do NOT claim the re-baseline done — say "N goldens still
+hold the old value; finish when the native harness is available" so the debt is visible,
+not silent. (2026-06-03, session 15: the P7 link-group diff after `a11y:update` was a
+clean `18 files, 18× "0"→"0.00", 0 other lines` — the P7 dot/brackets are `aria-hidden`
+and added nothing, so every changed line was the inherited CRV-8 cascade.)
+
 ## L-054 — When a `--test-host` determinism gate also blocks the only CDP channel that could test a registry round-trip, add an env-var that LIFTS the gate (e.g. `ALO_SETTINGS_LIVE`) — the a11y harness stays deterministic (never sets it) while an opt-in CDP launch drives the real registry; and seed a panel's DISPLAY from the registry raw values, not the engine snapshot (which is lossy)
 
 **Two coupled lessons from making `settings/*` cross-mode + testable.**
@@ -3727,3 +3743,53 @@ key handlers never reseated cursors; reseat wasn't alias-aware. Fixed both; veri
 the user (crash gone) after a stack-trace hook + raw-iterator capture pinpointed
 `track=1 aliasOfTrack=0, _Myproxy=NULL` (orphaned green cursor). Cross-reference
 [L-057](#l-057) (native-only bugs invisible to the web lane) and [L-033](#l-033).
+
+**Extension (2026-06-04, session 15) — link-group paths.** The SAME assert fired again,
+this time from `linkGroups/set-membership` (creating/joining a group) and
+`propagateLinkGroup` (syncing a shared-field edit to siblings). Both call
+`copySharedParamsFrom`, which **reassigns each member's non-exempt track multisets**,
+invalidating live particles' cursors across ALL non-exempt tracks — not just the one the
+user edited. Session 14's fix only covered the lock-alias + direct key-edit handlers. Fix:
+`OnParticleSystemChanged(-1)` (full reseat) after the membership mutation, and inside
+`propagateLinkGroup` itself (the single choke point where the orphaning happens, so no
+caller can forget). **Rule extension:** the reseat invariant applies to EVERY operation
+that reassigns a track container, including bulk copies between emitters — and when a copy
+can touch many tracks on many emitters, use the broad `-1` reseat, not a per-track one.
+
+## L-060 — An interactive (`pointer-events:auto`) overlay positioned OVER a full-width clickable row steals the row's clicks in its band; there is no z-order "click priority" — the topmost element wins, so an interactive overlay and a full-width row click cannot coexist, one must yield
+
+**The trap.** LNK-6 made the link-group bracket gutter click-to-select-a-group. The
+brackets are an absolute overlay that "hugs the names" — but the emitter rows are
+`w-full`, so they extend UNDERNEATH the gutter to the panel edge. Making the bracket
+`pointer-events:auto` meant a row-click landing in the bracket's x-band (a 2px bar sitting
+mid-row) hit the bracket instead of the row → the selection jumped to the whole group.
+Users experienced it as "my selection keeps getting wiped" while trying to multi-select.
+
+**Why tweaking won't save it.** The DOM has no "this element is clickable but yields to
+what's beneath" — the topmost hit-tested element with `pointer-events:auto` captures the
+event, full stop. So an interactive element layered over a full-width click target is
+fundamentally irreconcilable: either the overlay yields (`pointer-events:none`, lose its
+interactivity) or the row's click area must stop before the overlay (layout rework). For a
+*decorative* element (the bracket is `aria-hidden` ornamentation), the overlay yields:
+make it `pointer-events:none` and move the affordance it carried (here: hover-to-tint) onto
+the ROW, which already owns the pointer. Verify the conflict empirically (preview: click
+the overlay, read the selection store) rather than eyeballing — a 2px target *looks*
+harmless but isn't.
+
+## L-061 — Never gate a must-succeed action behind an informational query: an OK that has to `await` a read-only request before doing its real work can "do nothing" on the first click when that request lags/fails — run the query in a separate reactive effect and keep the action synchronous
+
+**The trap.** LNK-10's first design made the Set-Link-Group dialog's OK handler
+`async`: it `await`ed `linkGroups/diff-membership`, then either showed a confirm modal or
+joined. Natively, the first OK "did nothing" (the user had to click twice). The join — the
+thing the user actually wanted — was coupled to a network round-trip + a follow-up confirm
+step that could swallow the interaction.
+
+**The fix + the rule.** Move the informational query into its own read-only `useEffect`
+that runs reactively as inputs change, render its result inline (here: an amber "these
+fields will be overwritten" note shown BEFORE the user clicks), and make the action handler
+**synchronous** — it just fires the mutation and closes, exactly as it did before the query
+was added. An action that must succeed should never depend on a query that might fail or
+lag; decoupling them makes the action deterministic AND usually lands closer to the legacy
+UX (which listed the differing fields in the same dialog, not a second modal). Cross-ref
+[L-057](#l-057): this class of bug is native-only — the MockBridge returns instantly so the
+web lane never reproduces the first-click failure.

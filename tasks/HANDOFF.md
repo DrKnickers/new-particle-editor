@@ -1,5 +1,85 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-04 (session 15) — **P7 link-groups shipped** (LNK-2 dot / LNK-6 visual brackets + row-hover / LNK-8 Dissolve / LNK-10 inline join-warning) + **4 user-surfaced fixes** (link-group cursor-crash, WebView2 context-menu, shift-click anchor, dot placement). NEXT: **P8 color/texture** (PAL-2/3/14), or deferred polish / native track (VPT-2/3)
+
+**`origin/lt-4` = `<docs-commit>`** (was `8d18a2e` at session start; **4 commits**, FF-pushed).
+Tree clean, 0 ahead / 0 behind. **No `master` changes.** Heavy user-driven loop: the user
+launched the faithful `--new-ui`, reported what was off, I root-caused (often empirically in
+the browser preview) + fixed + the user re-verified on-screen.
+
+### The 4 commits (newest first)
+- `<docs>` **docs** — fix-plan P7 done + this handoff + next-session-prompt + **L-060/L-061**.
+- `ee93a7f` **chore(a11y)** — re-baseline 18 composition goldens for the **pre-existing**
+  session-14 CRV-8 cascade (`Selected key time "0"`→`"0.00"`). NOT a P7 change.
+- `42fc939` **fix(native)** — `linkGroups/diff-membership` command + **cursor reseat** after
+  link-group edits (L-059 extension) + **disable WebView2 native context menu**. `src/host/
+  BridgeDispatcher.cpp` + `src/host/HostWindow.cpp`.
+- `bb5708b` **feat(new-ui)** — P7 LNK-2/6/8/10 + shift-click anchor. TDD, web-only.
+
+### What shipped (P7 link groups)
+- **LNK-2 dot** — group-coloured dot LEFT of the name (col-3 grid slot), `aria-hidden`.
+- **LNK-6** — brackets are **visual-only**; "group lights up" driven by **row hover** (not
+  bracket click — that overlay stole row-selection clicks; see L-060). Bracket click-select dropped.
+- **LNK-8** — "Dissolve Link Group" context action.
+- **LNK-10** — `diff-membership` host command + **inline** amber field-overwrite note in the
+  Set-Link-Group dialog; **synchronous one-click** OK (see L-061).
+- **OUT (flagged):** settings-OK un-exempt disagreement warning (follow-up; `diff-membership`
+  is the reusable primitive). **LNK-1** dropped (user: dot-only).
+
+### The 4 user-surfaced fixes (the loop's value)
+1. **🐛 crash** — setting/joining a group with live particles → `xtree:181` in
+   `UpdateTrackCursors`. `copySharedParamsFrom` reassigns members' track multisets, orphaning
+   cursors; `set-membership` + `propagateLinkGroup` never reseated. Fixed with
+   `OnParticleSystemChanged(-1)`. **Extends L-059** (S14 covered only lock-alias/key-edit paths).
+2. **🐛 right-click → browser menu** (masked the Radix menu → Dissolve unreachable).
+   `put_AreDefaultContextMenusEnabled(FALSE)`. Native-only, jsdom-invisible (**L-057**).
+3. **🐛 "kept deselecting"** building a multi-select — interactive bracket overlay stole row
+   clicks. Confirmed empirically in-preview (click bracket → selection wiped to group). → **L-060**.
+4. **🐛 dot wrong colour/too-far + bracket too close** — Option A placement (dot left of name,
+   group-coloured), bracket gap 8→16px. And **shift-click** lost the anchor → stable `anchor`.
+5. **🐛 "add to group takes two tries / first OK does nothing"** — the async diff-on-OK +
+   confirm-modal swallowed the first click. Reworked LNK-10 to inline + synchronous OK. → **L-061**.
+
+### New lessons
+- **L-060** — an interactive (`pointer-events:auto`) overlay over a full-width clickable row
+  steals the row's clicks; no DOM "click priority", topmost wins — the decorative overlay
+  must yield (`pointer-events:none`) and move its affordance onto the row.
+- **L-061** — never gate a must-succeed action behind an informational query; run the query in
+  a separate reactive effect, render inline, keep the action handler synchronous.
+
+### How verified
+- **Web:** vitest **454** (49 files), `pnpm build` clean, `tsc --noEmit` exit 0 (L-046).
+- **Native:** Debug x64 rebuilt clean after each host change; faithful `--new-ui` smoke-launched
+  healthy (compositing, real fps — not L-033 ~4 FPS). **User confirmed on-screen:** dot, dissolve,
+  inline warning, one-click join, no crash, no deselecting.
+- **a11y:** **155 passed / 4 splitters** (L-033 flake). `emitter-tree` golden re-matches; P7
+  added nothing to the a11y tree (dot/brackets `aria-hidden`, dialog uncaptured — proven by the
+  golden diff). 18 goldens re-baselined for the CRV-8 cascade (composition lane only, L-052).
+
+### Native toolchain (this worktree only — L-058)
+Rebuilt fresh this session: WebView2 1.0.3967.48 `packages/` (robocopy from nuget cache — note
+`Copy-Item -Recurse $src\*` SILENTLY skips nested dirs; use robocopy), MSBuild Debug x64.
+**A new worktree won't have these.** MSBuild: `C:\Program Files\Microsoft Visual Studio\18\
+Community\MSBuild\Current\Bin\MSBuild.exe`. The `.sln` is at the REPO ROOT, not `web/`.
+
+### ⭐ NEXT TASK options (pick with the user; full catalog in ui-delta-report.md)
+1. **P8 — Color/texture (PAL-2/3/14):** color picker live-preview + cancel/revert (PAL-2/3),
+   broken-vs-missing texture thumbnails (PAL-14). The next fix-plan phase.
+2. **LNK follow-up:** settings-OK un-exempt disagreement warning (reuses `diff-membership`).
+3. **Deferred polish:** curve marquee-from-axis-margins (user request); SEL-12 autoscroll;
+   SEL-13 reorder-drag cancel.
+4. **Native track:** VPT-2 undo capture-wiring + VPT-3 autosave port.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; `origin/lt-4` = the session-15 docs commit or newer; 0 ahead / 0 behind; clean.
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **454 passed** (49 files).
+- `pnpm --filter @particle-editor/editor build` → clean. `…lint` (`tsc --noEmit`) exit 0.
+- Native (a11y / faithful `--new-ui`): toolchain is **NOT in a fresh worktree** — restore
+  `packages/` (L-039, use robocopy) + MSBuild Debug x64 (L-046) first.
+
+---
+
 ## 2026-06-03 (session 14) — **P6-rest curve-editor parity (CRV-2/7/8)** shipped, then root-caused + fixed a **native engine crash** (orphaned particle-cursor iterators on curve-key edits, lock-alias-aware). NEXT: **P7 link-groups** (LNK-1/2/6/8/10), then P8 color/texture, deferred polish, native track (VPT-2/3)
 
 **`origin/lt-4` = `8f4ec58`** (was `ad4ceca` at session start; **3 commits**, FF-pushed).

@@ -64,9 +64,48 @@ user at phase boundaries.
     `OnParticleSystemChanged`), and the reseat wasn't lock-alias-aware. Fixed both halves;
     user-verified crash-gone. See **L-059** (incl. the MSVC "value-initialized" ==
     orphaned-iterator wording trap + the assert-hook/DbgHelp debugging technique).
-- **P7 — Link groups (LNK-1/2/6/8/10).** `[L<n>]` prefix; per-row dot (or drop dead
-  comment); interactive bracket (click-select-group + hover); Dissolve action;
-  join/disagreement confirmation.
+- **P7 — Link groups (LNK-2/6/8/10) ✅ DONE (user-verified in `--new-ui`).** User chose
+  **dot-only** (LNK-1 `[L<n>]` text prefix DROPPED — redundant with the kept bracket
+  gutter) and **include LNK-10**. Several round-2 fixes landed from user testing (below).
+  - **LNK-2** per-row link dot — decorative `aria-hidden` dot, **Option A**: a fixed
+    col-3 slot LEFT of the name (grid `18px 18px 10px 1fr`), **coloured to match the row's
+    bracket** (`colorForGroup`). Web-only, no golden change.
+  - **LNK-6** bracket gutter — **visual-only** (NOT click-interactive). An interactive
+    overlay over the full-width rows stole row-selection clicks (the "kept deselecting"
+    bug — confirmed in the preview: clicking a bracket wiped the selection to the group).
+    Kept the "group lights up" affordance by driving the tint from **row hover**
+    (`onPointerEnter` sets `hoveredLinkGroup` → member rows tint + bracket thickens);
+    **dropped** bracket click-to-select-group. Web-only, brackets `aria-hidden`.
+  - **LNK-8** Dissolve Link Group context action — gathers all members from `flatRows`,
+    fires one `set-membership {ids:<all>, groupId:null}`. `disabled` when `!isLinked`. Web-only.
+  - **LNK-10** join-conflict warning — new read-only `linkGroups/diff-membership
+    {ids, groupId} → {conflicts:{id,fields[]}[]}` (schema + mock + host wrapping
+    `DiffNonExemptParams`, mirroring set-membership's canonical/exempt selection).
+    **INLINE, one-click**: `SetLinkGroupDialog` runs the diff in a read-only effect and
+    shows the differing fields as an amber note BEFORE a single synchronous OK joins
+    (legacy showed fields in the same dialog). The first design (async diff-on-OK +
+    separate "Join Anyway" confirm) caused a "first OK does nothing" bug — decoupling the
+    join from the diff fixed it. Host C++ + native Debug x64 rebuilt clean.
+  - **🐛 Engine crash fix (L-059, link-group paths).** Setting/joining a link group with
+    live particles asserted in `UpdateTrackCursors` (orphaned cursors). `copySharedParamsFrom`
+    REASSIGNS each member's non-exempt track multisets; `set-membership` and
+    `propagateLinkGroup` never reseated. Fixed: `OnParticleSystemChanged(-1)` after the
+    membership mutation + inside `propagateLinkGroup` (single choke point). Extends L-059
+    (session 14 covered only the lock-alias + key-edit paths).
+  - **🐛 Right-click context menu** — faithful WebView2 showed its NATIVE menu (masking the
+    Radix menu, so Dissolve/Set-Link-Group were unreachable). `HostWindow` now calls
+    `put_AreDefaultContextMenusEnabled(FALSE)` for all launches (L-057 — jsdom couldn't catch it).
+  - **🐛 Shift-click anchor** (SEL, pre-existing) — `range` pivoted on the moving `primary`,
+    so consecutive shift-clicks lost the origin row. Added a stable `anchor` to the
+    selection store.
+  - **OUT (flagged):** the settings-OK un-exempt disagreement warning (second legacy
+    surface) — proposed as a follow-up; `diff-membership` is the reusable primitive.
+  - vitest **454**. `pnpm build` + `tsc --noEmit` clean. TDD throughout.
+  - **a11y:** P7 caused **zero** golden change (dot + brackets `aria-hidden`, dialog not a
+    captured surface — proven by `git diff` + `emitter-tree` golden re-matching). Re-baselined
+    **18 composition goldens** for a *pre-existing* session-14 CRV-8 cascade
+    (`Selected key time "0"`→`"0.00"`, surfaced now the native harness runs — L-053/L-058).
+    Legacy `.json` untouched (L-052).
 - **P8 — Color/texture (PAL-2/3/14).** Color live-drag preview; cancel/revert;
   broken-vs-missing thumbnail distinction.
 
