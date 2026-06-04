@@ -238,6 +238,11 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   // Collapsed category ids. Empty = all expanded (the default).
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // LNK-10 (settings surface): members the proposed exempt set would
+  // overwrite to the canonical value when a now-exempt field becomes
+  // shared. Fetched reactively as the local exempt set changes; shown
+  // INLINE before OK (which resolves it host-side). Read-only preview.
+  const [conflicts, setConflicts] = useState<{ id: number; fields: string[] }[]>([]);
 
   // Fetch the current exempt set when the dialog opens. Each open is a
   // fresh fetch so external edits (legacy --legacy-ui session writing
@@ -266,6 +271,33 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
       cancelled = true;
     };
   }, [bridge, open, groupId]);
+
+  // Reactively preview which members the CURRENT (proposed) exempt set would
+  // overwrite when a now-exempt field becomes shared, so the form can list
+  // them BEFORE the user commits. Read-only; OK always proceeds (and the host
+  // resolves the disagreement on commit). Re-runs whenever the local exempt
+  // set changes — `state` is a fresh object on every toggle.
+  useEffect(() => {
+    if (!open || groupId === null || state.kind !== "loaded") {
+      setConflicts([]);
+      return;
+    }
+    let cancelled = false;
+    bridge
+      .request({
+        kind: "linkGroups/diff-exempt-change",
+        params: { groupId, exempt: Array.from(state.exempt) },
+      })
+      .then((r) => {
+        if (!cancelled) setConflicts(r?.conflicts ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setConflicts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, open, groupId, state]);
 
   const toggleField = (field: string, sharedNext: boolean) => {
     setState((cur) => {
@@ -356,6 +388,29 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
               edits propagate to every member. Unchecked fields are{" "}
               <em>per-emitter</em>.
             </p>
+            {(() => {
+              const conflictFields = Array.from(
+                new Set(conflicts.flatMap((c) => c.fields)),
+              );
+              if (conflictFields.length === 0) return null;
+              const n = conflictFields.length;
+              const m = conflicts.length;
+              return (
+                <div
+                  data-testid="link-settings-conflict-inline"
+                  className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-200"
+                >
+                  <p className="font-medium">
+                    Sharing {n} {n === 1 ? "field" : "fields"} will overwrite{" "}
+                    {m} {m === 1 ? "emitter" : "emitters"} with the canonical
+                    (first-in-tree-order) value:
+                  </p>
+                  <p className="mt-0.5 text-amber-300/90">
+                    {conflictFields.map((f) => FIELD_LABELS[f] ?? f).join(", ")}
+                  </p>
+                </div>
+              );
+            })()}
             <div className="link-settings-scroll max-h-[40vh] overflow-y-auto pr-1">
               {FIELD_CATEGORIES.map((cat) => (
                 <CategorySection

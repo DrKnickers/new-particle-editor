@@ -12,7 +12,9 @@ import { LinkGroupSettingsDialog } from "../LinkGroupSettingsDialog";
 import { useTreeContextStore } from "@/lib/tree-context";
 import type { Bridge } from "@particle-editor/bridge-schema";
 
-function makeStubBridge(): Bridge & {
+function makeStubBridge(opts?: {
+  conflicts?: { id: number; fields: string[] }[];
+}): Bridge & {
   request: ReturnType<typeof vi.fn>;
 } {
   return {
@@ -21,6 +23,9 @@ function makeStubBridge(): Bridge & {
         return Promise.resolve({
           fields: ["colorTexture", "normalTexture", "trackIndex"],
         });
+      }
+      if (req.kind === "linkGroups/diff-exempt-change") {
+        return Promise.resolve({ conflicts: opts?.conflicts ?? [] });
       }
       return Promise.resolve({});
     }),
@@ -103,5 +108,54 @@ describe("LinkGroupSettingsDialog", () => {
     const committed = (call![0] as { params: { fields: string[] } }).params.fields;
     expect(committed).not.toContain("trackIndex");
     expect(committed).toContain("colorTexture");
+  });
+
+  it("shows an inline disagreement warning when sharing a field members disagree on", async () => {
+    const bridge = makeStubBridge({
+      conflicts: [{ id: 2, fields: ["lifetime"] }],
+    });
+    await act(async () => {
+      useTreeContextStore.getState().openDialog("link-group", 0, 1);
+    });
+    render(<LinkGroupSettingsDialog bridge={bridge} />);
+    await waitFor(() => screen.getByLabelText("Color texture"));
+
+    const warning = await screen.findByTestId("link-settings-conflict-inline");
+    expect(warning).toHaveTextContent(/lifetime/i);
+    // One dissenting emitter.
+    expect(warning).toHaveTextContent(/1 emitter/i);
+  });
+
+  it("shows no warning when members agree (no conflicts)", async () => {
+    const bridge = makeStubBridge({ conflicts: [] });
+    await act(async () => {
+      useTreeContextStore.getState().openDialog("link-group", 0, 1);
+    });
+    render(<LinkGroupSettingsDialog bridge={bridge} />);
+    await waitFor(() => screen.getByLabelText("Color texture"));
+    // Let the reactive diff effect settle.
+    await act(async () => {});
+    expect(screen.queryByTestId("link-settings-conflict-inline")).not.toBeInTheDocument();
+  });
+
+  it("re-queries diff-exempt-change with the proposed exempt set when a field is toggled", async () => {
+    const bridge = makeStubBridge({ conflicts: [] });
+    await act(async () => {
+      useTreeContextStore.getState().openDialog("link-group", 0, 1);
+    });
+    render(<LinkGroupSettingsDialog bridge={bridge} />);
+    await waitFor(() => screen.getByLabelText("Color texture"));
+
+    // Share colorTexture (un-exempt it) → the next diff call's exempt set
+    // should no longer contain it.
+    fireEvent.click(screen.getByLabelText("Color texture"));
+    await waitFor(() => {
+      const diffCalls = bridge.request.mock.calls.filter(
+        (c) => (c[0] as { kind: string }).kind === "linkGroups/diff-exempt-change",
+      );
+      const last = diffCalls.at(-1)![0] as { params: { groupId: number; exempt: string[] } };
+      expect(last.params.groupId).toBe(1);
+      expect(last.params.exempt).not.toContain("colorTexture");
+    });
   });
 });

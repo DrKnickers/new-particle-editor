@@ -98,8 +98,15 @@ user at phase boundaries.
   - **🐛 Shift-click anchor** (SEL, pre-existing) — `range` pivoted on the moving `primary`,
     so consecutive shift-clicks lost the origin row. Added a stable `anchor` to the
     selection store.
-  - **OUT (flagged):** the settings-OK un-exempt disagreement warning (second legacy
-    surface) — proposed as a follow-up; `diff-membership` is the reusable primitive.
+  - **Settings-OK disagreement warning (2nd surface) ✅ DONE (web + host compile verified; user
+    native-verify pending).** **Verified `diff-membership` did NOT fit** (L-022 — it diffs joiners
+    under the stored exempt set; settings needs existing members under the *proposed* set), so
+    added a NEW read command `linkGroups/diff-exempt-change {groupId, exempt[]}` +
+    `MakeNewlySharedMask` helper, and **extended `set-exempt-fields` to faithfully resolve**
+    (clobber dissenters to canonical for newly-shared fields + L-059 reseat, one undo entry).
+    Inline amber warning in LinkGroupSettingsDialog (LNK-10 pattern). vitest **469** (+3, TDD);
+    build + `tsc` clean; native Debug x64 compiles clean; zero golden change. User verifies
+    warn + resolve + no-crash with live particles in `--new-ui`.
   - vitest **454**. `pnpm build` + `tsc --noEmit` clean. TDD throughout.
   - **a11y:** P7 caused **zero** golden change (dot + brackets `aria-hidden`, dialog not a
     captured surface — proven by `git diff` + `emitter-tree` golden re-matching). Re-baselined

@@ -1158,6 +1158,12 @@ export class MockBridge implements Bridge {
         return { conflicts: useMockLinkGroupConflicts.getState().conflicts };
       }
 
+      // LNK settings surface: same stub — the real exempt→shared field diff
+      // is a native concern; echo the seeded conflicts so a test/preview can
+      // drive the inline settings warning.
+      case "linkGroups/diff-exempt-change":
+        return { conflicts: useMockLinkGroupConflicts.getState().conflicts };
+
       // ---------------- settings: cross-mode registry ----------------
       //
       // `settings/lighting` returns the raw lighting split (the native

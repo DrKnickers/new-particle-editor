@@ -478,6 +478,24 @@ LinkExemptFlags LinkExemptFlagsFromJsonArray(const json& arr)
     return out;
 }
 
+// LNK settings surface: build a LinkExemptFlags "diff mask" that marks every
+// field exempt EXCEPT those transitioning exempt(old)→shared(proposed).
+// DiffNonExemptParams / copySharedParamsFrom then act on exactly the
+// newly-shared fields — the precise set the legacy settings-OK warned about
+// and resolved (EmitterList.cpp:2841). `name` is forced exempt (never shared).
+LinkExemptFlags MakeNewlySharedMask(const LinkExemptFlags& oldFlags,
+                                    const LinkExemptFlags& proposed)
+{
+    LinkExemptFlags mask;
+    for (size_t k = 0; k < kLinkFieldCount; ++k)
+    {
+        bool LinkExemptFlags::* f = kLinkFieldTable[k].flag;
+        mask.*f = !((oldFlags.*f) && !(proposed.*f)); // false only if newly shared
+    }
+    mask.name = true;
+    return mask;
+}
+
 // LT-4: walk a ParticleSystem and build an EmitterTreeNode-shaped JSON
 // tree. Mirrors the schema definition at
 // web/packages/bridge-schema/src/index.ts:91. Children are computed
@@ -3661,8 +3679,44 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             params.contains("fields") ? params["fields"] : json::array();
         LinkExemptFlags flags = LinkExemptFlagsFromJsonArray(fieldsJson);
 
+        ParticleSystem* sys = m_pParticleSystem->get();
+        const LinkExemptFlags oldFlags = sys->getLinkExemptFlags(groupId);
+
         captureUndo();
-        (*m_pParticleSystem)->setLinkExemptFlags(groupId, flags);
+        sys->setLinkExemptFlags(groupId, flags);
+
+        // LNK settings surface — faithful to legacy settings-OK
+        // (EmitterList.cpp:2841): when a field transitions exempt→shared and
+        // members disagree, resolve it by copying the canonical (members[0],
+        // first-in-tree-order) value to every sibling for exactly the
+        // newly-shared fields (the diff mask). Only the newly-shared fields
+        // are touched, so already-shared params are left as-is. captureUndo()
+        // above already snapshotted, so flags + clobbered values fold into
+        // ONE undo entry (matches legacy).
+        bool resolved = false;
+        std::vector<ParticleSystem::Emitter*> members =
+            GetLinkGroupMembers(*sys, groupId);
+        if (groupId != 0 && members.size() >= 2)
+        {
+            const LinkExemptFlags diffMask = MakeNewlySharedMask(oldFlags, flags);
+            bool anyDisagree = false;
+            for (size_t i = 1; i < members.size() && !anyDisagree; ++i)
+                if (!DiffNonExemptParams(*members[i], *members[0], diffMask).empty())
+                    anyDisagree = true;
+
+            if (anyDisagree)
+            {
+                for (size_t i = 1; i < members.size(); ++i)
+                    members[i]->copySharedParamsFrom(*members[0], diffMask);
+                resolved = true;
+            }
+        }
+        // L-059: copySharedParamsFrom reassigns each sibling's non-exempt
+        // track multisets, orphaning live particles' cached cursor iterators.
+        // Reseat every instance's cursors (the propagateLinkGroup chokepoint
+        // pattern). Only fires when we actually copied.
+        if (resolved && m_engine != nullptr)
+            m_engine->OnParticleSystemChanged(-1);
 
         sendOk(json::object());
         markDirty();
@@ -3784,6 +3838,63 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
                 {
                     json entry;
                     entry["id"]     = j.first;
+                    entry["fields"] = fields;
+                    conflicts.push_back(entry);
+                }
+            }
+        }
+
+        sendOk(json{{"conflicts", conflicts}});
+        return res;
+    }
+
+    // -------- linkGroups/diff-exempt-change (LNK settings surface) ---
+    //
+    // Read-only preview for the settings dialog: which existing members the
+    // PROPOSED exempt set would overwrite to the canonical (members[0],
+    // first-in-tree-order) value when a now-exempt field becomes SHARED.
+    // Mirrors the legacy settings-OK disagreement scan (EmitterList.cpp:2841):
+    // only fields transitioning exempt(stored)→shared(proposed) count, diffed
+    // per non-canonical member. set-exempt-fields resolves it on commit.
+    // No mutation, no undo, no events.
+    if (kind == "linkGroups/diff-exempt-change")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+        ParticleSystem* sys = m_pParticleSystem->get();
+
+        uint32_t groupId = params.value("groupId", static_cast<uint32_t>(0));
+        const json& exemptJson =
+            params.contains("exempt") ? params["exempt"] : json::array();
+        const LinkExemptFlags proposed = LinkExemptFlagsFromJsonArray(exemptJson);
+
+        json conflicts = json::array();
+        std::vector<ParticleSystem::Emitter*> members =
+            GetLinkGroupMembers(*sys, groupId);
+        if (groupId != 0 && members.size() >= 2)
+        {
+            const LinkExemptFlags  oldFlags = sys->getLinkExemptFlags(groupId);
+            const LinkExemptFlags  diffMask = MakeNewlySharedMask(oldFlags, proposed);
+
+            const auto& allEmitters = sys->getEmitters();
+            auto wireIdOf = [&](ParticleSystem::Emitter* e) -> int {
+                for (size_t i = 0; i < allEmitters.size(); ++i)
+                    if (allEmitters[i] == e) return static_cast<int>(i);
+                return -1;
+            };
+
+            ParticleSystem::Emitter* canonical = members[0];
+            for (size_t i = 1; i < members.size(); ++i)
+            {
+                std::vector<std::string> fields =
+                    DiffNonExemptParams(*members[i], *canonical, diffMask);
+                if (!fields.empty())
+                {
+                    json entry;
+                    entry["id"]     = wireIdOf(members[i]);
                     entry["fields"] = fields;
                     conflicts.push_back(entry);
                 }

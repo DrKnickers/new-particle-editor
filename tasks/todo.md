@@ -1,3 +1,119 @@
+# LNK follow-up — settings-OK disagreement warning + resolution (LNK-10 / MNU-13, 2nd surface)
+
+**Status:** PLAN — scope confirmed by user (2026-06-04, "proceed with host version").
+**Branch:** `lt-4` (HEAD = `9c92c7c`). FF state already on `lt-4`.
+**Baseline:** vitest 466, build/tsc clean, native Debug x64 builds (toolchain restored this session).
+
+> **Verified the P7 primitive does NOT fit (L-022).** `linkGroups/diff-membership` diffs
+> *joiners* (non-members) against canonical using the group's *stored* exempt set — it returns
+> ZERO conflicts for the settings case (membership unchanged; exempt set edited locally). So
+> this needs a NEW host command, not a reuse. Host C++ + native rebuild, like P8b.
+
+## 1. Goal + scope
+**Goal.** Restore the legacy settings-OK behaviour ([EmitterList.cpp:2841](src/UI/EmitterList.cpp:2841)):
+when the user shares (un-exempts) a field on which group members currently disagree, (a) **warn**
+which fields will be overwritten to the canonical (first-in-tree-order, members[0]) value, and
+(b) on OK, **resolve** the disagreement by clobbering members to canonical — instead of arch-C's
+current silent flag-set that leaves members inconsistent until the next edit.
+
+**In:** new read-only `linkGroups/diff-exempt-change` command; extend `set-exempt-fields` to
+resolve disagreements on commit (+ L-059 reseat); inline amber warning in
+LinkGroupSettingsDialog (LNK-10 inline/synchronous pattern); schema + both mocks; native rebuild.
+**Out:** a separate confirm modal (use the inline pattern, L-061); the join surface (LNK-10, shipped
+in P7); per-field granular undo (one undo entry per OK, matching legacy).
+
+## 2. What the codebase gives us
+- `DiffNonExemptParams(a, b, exempt)` ([LinkGroup.cpp:267](src/LinkGroup.cpp:267)) — returns
+  non-exempt fields where a≠b. Pass the PROPOSED exempt flags → shared-and-disagreeing fields.
+- `LinkExemptFlagsFromJsonArray(json)` ([BridgeDispatcher.cpp:455](src/host/BridgeDispatcher.cpp:455)) —
+  wire names → flags. `GetLinkGroupMembers`, `getLinkExemptFlags`, `copySharedParamsFrom`,
+  `OnParticleSystemChanged(-1)` (the P7/L-059 reseat, used by `propagateLinkGroup`).
+- `set-exempt-fields` handler ([:3651](src/host/BridgeDispatcher.cpp:3651)) — currently flags-only.
+- `diff-membership` handler ([:3713](src/host/BridgeDispatcher.cpp:3713)) — structure to mirror.
+- LNK-10 inline-warning pattern in `SetLinkGroupDialog.tsx` (reactive diff effect + synchronous OK).
+- Mock: `exempts` Map + a seeded `conflicts` stub for diff-membership (mock-state.ts:238,290) —
+  field-level correctness is a native concern, so the mock returns seeded conflicts.
+
+## 3. Implementation approach
+- **Schema:** add
+  `{ kind: "linkGroups/diff-exempt-change"; params: { groupId: number; exempt: string[] } }`
+  → `{ conflicts: { id: number; fields: string[] }[] }`.
+- **Host — new read command `diff-exempt-change`:** resolve members (`GetLinkGroupMembers`);
+  canonical = members[0]; old = `getLinkExemptFlags(groupId)`, proposed =
+  `LinkExemptFlagsFromJsonArray(exempt)`; for each non-canonical member, run
+  `DiffNonExemptParams(member, canonical, proposed)` but **keep only fields that were exempt in
+  `old` and are shared in `proposed`** (the exempt→shared transition — matches legacy). Read-only.
+- **Host — extend `set-exempt-fields`:** after `setLinkExemptFlags`, if any newly-shared field
+  disagrees, for each non-canonical member `copySharedParamsFrom(*canonical, newFlags)` then
+  `OnParticleSystemChanged(-1)` (L-059 reseat — copySharedParamsFrom reassigns track multisets).
+  One `captureUndo()` already wraps it → single undo entry (matches legacy). Skip the clobber
+  when no disagreement (cheap, event-free common case).
+- **React (LinkGroupSettingsDialog):** a reactive effect calls `diff-exempt-change` with the
+  current local `exempt` set whenever it changes; render an inline amber note listing the fields
+  + dissenting-member count BEFORE OK (mirrors LNK-10). `handleOk` stays synchronous (the warning
+  already showed; OK just fires `set-exempt-fields`, which now resolves). Loading/error unaffected.
+- **Mocks:** test `makeBridge`-style canned `diff-exempt-change`; dev mock returns seeded
+  conflicts (mirror the diff-membership stub).
+
+## 4. Risks + mitigations
+1. **L-059 crash (the big one).** `copySharedParamsFrom` reassigns members' track multisets →
+   orphans live-particle cursors → `UpdateTrackCursors` assert. *Mitigation:* `OnParticleSystemChanged(-1)`
+   broad reseat after the clobber, exactly as P7 did inside `propagateLinkGroup`. Native-only;
+   user verifies no crash with live particles.
+2. **Warn-vs-stored-exempt drift.** The host compares proposed against the group's *stored* exempt,
+   which equals what React loaded on open — consistent. *Mitigation:* host owns the old set; React
+   only sends the proposed.
+3. **Already-shared-but-unsynced fields.** Arch-C's prior no-clobber may have left a "shared" field
+   disagreeing. The exempt→shared *transition* filter means we won't re-warn for those on an
+   unrelated OK; the next edit still syncs them (pre-existing behaviour, out of scope).
+4. **Mock fidelity.** Mock returns seeded conflicts, so the browser preview can't exercise real
+   field diffs (L-057) — unit tests cover the React contract; native covers correctness.
+
+## 5. Testing & verification
+- **TDD (web):** LinkGroupSettingsDialog test — un-exempting a field with seeded conflicts renders
+  the inline warning (fields + count); no conflicts → no warning; OK fires `set-exempt-fields`
+  with the proposed set; the diff effect re-runs on toggle. Add `diff-exempt-change` to the test bridge.
+- vitest (expect 466 + ~3), build, `tsc` clean.
+- **a11y goldens:** the settings dialog is a Modal (not a captured composition surface, like the
+  other dialogs) — grep-confirm zero capture.
+- **Host:** native Debug x64 compiles clean.
+- **User's lane (native):** with live particles, share a field two members disagree on → warning
+  lists it → OK overwrites the dissenter to canonical, no crash (L-059); no-disagreement OK is silent.
+
+## Review
+
+**Shipped (2026-06-04).** LNK-10/MNU-13 2nd surface — settings-OK disagreement warning +
+faithful resolution.
+
+- **Schema** — new read-only `linkGroups/diff-exempt-change { groupId, exempt[] } → { conflicts }`.
+- **Host** ([BridgeDispatcher.cpp](src/host/BridgeDispatcher.cpp)) — `MakeNewlySharedMask(old,
+  proposed)` helper (marks every field exempt except exempt→shared transitions); new
+  `diff-exempt-change` command (diffs each non-canonical member vs members[0] over the
+  newly-shared mask); **extended `set-exempt-fields`** to resolve on commit — when a newly-shared
+  field disagrees, `copySharedParamsFrom(members[0], diffMask)` clobbers siblings + `captureUndo`
+  folds it into one entry + **`OnParticleSystemChanged(-1)` L-059 reseat**. No-disagreement OK
+  stays flag-only (event-free, no multiset churn).
+- **React** ([LinkGroupSettingsDialog.tsx](web/apps/editor/src/screens/LinkGroupSettingsDialog.tsx)) —
+  reactive `diff-exempt-change` effect on the local exempt set; inline amber warning listing the
+  fields + dissenting-member count BEFORE a synchronous OK (mirrors LNK-10, L-061).
+- **Mocks** — test stub + dev MockBridge return the seeded conflicts (mirror diff-membership;
+  field-level correctness is native).
+
+**Verification:**
+- vitest **469** (was 466; +3: warning renders / no-warning / re-query-on-toggle). TDD red→green.
+- `pnpm build` clean; `tsc --noEmit` exit 0.
+- **Native Debug x64 compiles + links clean** (`MSBUILD EXIT=0`).
+- **Zero golden change** (grep — settings dialog is a Modal, not a captured surface).
+
+**Verified the P7 primitive did NOT fit** (L-022): `diff-membership` diffs joiners under the
+stored exempt set → zero conflicts for the settings case. Needed the new command.
+
+**User's lane (native, L-033/L-057):** with live particles, share a field two members disagree
+on → warning lists it → OK overwrites the dissenter to canonical with NO crash (L-059); a
+no-disagreement OK is silent.
+
+---
+
 # P8b — Texture thumbnails: broken-vs-missing (PAL-14)
 
 **Status:** PLAN — scope + visual ("softer tinted + icon") confirmed by user (2026-06-04).

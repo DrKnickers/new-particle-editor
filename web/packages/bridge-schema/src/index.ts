@@ -758,6 +758,13 @@ export type Request =
   // Pure read — no mutation, no undo capture, no events.
   | { kind: "linkGroups/diff-membership";      params: { ids: number[]; groupId: number | null } }
 
+  // Read-only preview for the settings dialog: given a PROPOSED exempt set
+  // for an existing group, which members would be overwritten to the
+  // canonical (first-in-tree-order) value when a now-exempt field becomes
+  // shared. Drives the inline disagreement warning before set-exempt-fields
+  // resolves it. Pure read — no mutation, no undo, no events.
+  | { kind: "linkGroups/diff-exempt-change";   params: { groupId: number; exempt: string[] } }
+
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
@@ -989,6 +996,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "linkGroups/set-exempt-fields" }   ? Record<string, never> :
   R extends { kind: "linkGroups/reset-exempt-fields" } ? Record<string, never> :
   R extends { kind: "linkGroups/diff-membership" }     ? { conflicts: { id: number; fields: string[] }[] } :
+  R extends { kind: "linkGroups/diff-exempt-change" }  ? { conflicts: { id: number; fields: string[] }[] } :
 
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :
