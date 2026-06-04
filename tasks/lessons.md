@@ -3793,3 +3793,26 @@ lag; decoupling them makes the action deterministic AND usually lands closer to 
 UX (which listed the differing fields in the same dialog, not a second modal). Cross-ref
 [L-057](#l-057): this class of bug is native-only — the MockBridge returns instantly so the
 web lane never reproduces the first-click failure.
+
+
+## L-062 — In the browser preview, reading the DOM synchronously right after dispatching an event sees PRE-React-flush state; a controlled-close popover still shows its content and a reverted field still shows the old value until the next tick — read settled state in a SEPARATE eval, or you will diagnose a phantom bug
+
+**The trap.** While verifying the P8a color picker in the preview (vite + MockBridge), I
+clicked Cancel and, in the SAME `preview_eval`, read `popoverOpen` and the trigger label.
+Both came back stale: popover "still open", trigger "not reverted" — looking exactly like a
+broken Cancel. It was not broken. `element.click()` (and dispatched input/keydown events)
+run the React handler synchronously, but React 18 batches the resulting state update and
+flushes the re-render + portal unmount AFTER the current JS task. So a read in the same
+synchronous eval observes the DOM as it was BEFORE the update committed.
+
+**Why it bites here specifically.** The component is controlled (`open` state) and the
+close + the revert `onChange` both flow through React state, not direct DOM mutation. There
+is no synchronous DOM change to observe — everything waits for the flush.
+
+**How to apply.** When driving React in the preview, split "act" and "assert" across two
+`preview_eval` calls: dispatch the event in one, read settled state in the next (the gap
+between tool calls is many ticks — more than enough). If you must read in one call, await a
+micro/macro task first (`await new Promise(r => setTimeout(r))`). NEVER conclude a bug from
+a synchronous post-event read. Cross-ref [L-041] (preview is the React-behaviour surface)
+and [L-057] (preview vs native divergence) — this is a third preview caveat: preview vs
+*itself* across the flush boundary.

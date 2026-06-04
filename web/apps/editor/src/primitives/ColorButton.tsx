@@ -68,9 +68,13 @@ export function ColorButton({
   "aria-label": ariaLabel = "Pick color",
 }: ColorButtonProps) {
   const { slots, addColor, setSlot } = usePaletteStore();
-  // Local picker state — not committed until the user clicks Apply or selects.
+  // In-flight picker state. `pickerColor` previews live; `originalColor` is the
+  // color the picker opened with, so Cancel/Escape can restore it (the engine has
+  // no undo of its own — PAL-3). Both are (re)snapshotted on each open.
   const [pickerColor, setPickerColor] = useState<RgbColor>(value);
+  const [originalColor, setOriginalColor] = useState<RgbColor>(value);
   const [hexText, setHexText] = useState<string>(rgbToHex(value).slice(1).toUpperCase());
+  const [open, setOpen] = useState(false);
 
   const swatchStyle = { backgroundColor: rgbToHex(value) };
 
@@ -85,6 +89,7 @@ export function ColorButton({
     const rgb = hexToRgb(raw);
     if (rgb) {
       setPickerColor(rgb);
+      onChange(rgb); // PAL-2: live preview on each valid hex.
     }
   };
 
@@ -103,11 +108,26 @@ export function ColorButton({
     const next = { ...pickerColor, [channel]: clampByte(v) };
     setPickerColor(next);
     setHexText(rgbToHex(next).slice(1).toUpperCase());
-    // Don't fire onChange on every slider tick — wait for release.
+    onChange(next); // PAL-2: live preview — drive the engine as the value changes.
   };
 
-  const handleSliderCommit = () => {
-    onChange(pickerColor);
+  // PAL-3: re-commit the open-time color. Shared by the Cancel button + Escape.
+  const handleCancel = () => {
+    onChange(originalColor);
+    setPickerColor(originalColor);
+    setHexText(rgbToHex(originalColor).slice(1).toUpperCase());
+  };
+
+  // Single funnel for every open/close. On the open transition, snapshot the
+  // pre-edit color (and re-sync pickerColor, which would otherwise stay at the
+  // mount value). Outside-click / re-clicking the trigger land here too = keep.
+  const handleOpenChange = (next: boolean) => {
+    if (next && !open) {
+      setOriginalColor(value);
+      setPickerColor(value);
+      setHexText(rgbToHex(value).slice(1).toUpperCase());
+    }
+    setOpen(next);
   };
 
   const handleAddToCustom = () => {
@@ -117,7 +137,7 @@ export function ColorButton({
   const HEIGHT_MAP = { tight: "h-[22px]", default: "h-[26px]", loose: "h-[32px]" };
 
   return (
-    <Popover.Root>
+    <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger asChild>
         <button
           type="button"
@@ -141,6 +161,7 @@ export function ColorButton({
           sideOffset={4}
           className="z-50 w-72 rounded-md border border-border-2 bg-bg-2 p-3 shadow-xl"
           onOpenAutoFocus={(e) => e.preventDefault()}
+          onEscapeKeyDown={handleCancel}
         >
           {/* Basic colors — 4 rows × 8 columns = 32 slots */}
           <div className="mb-2">
@@ -189,7 +210,7 @@ export function ColorButton({
               value={hexText}
               onChange={(e) => handleHexChange(e.target.value)}
               onBlur={handleHexCommit}
-              onKeyDown={(e) => { if (e.key === "Enter") handleHexCommit(); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { handleHexCommit(); setOpen(false); } }}
               maxLength={6}
               className="w-20 rounded border border-border-2 bg-panel-2 px-2 py-0.5 font-mono text-xs text-text outline-none focus:border-accent"
               aria-label="Hex color input"
@@ -213,16 +234,61 @@ export function ColorButton({
                   max={255}
                   value={pickerColor[ch]}
                   onChange={(e) => handleSliderChange(ch, parseInt(e.target.value, 10))}
-                  onMouseUp={handleSliderCommit}
-                  onKeyUp={handleSliderCommit}
                   className="flex-1 accent-sky-500"
                   aria-label={`${ch.toUpperCase()} channel`}
                 />
-                <span className="w-8 text-right font-mono text-[10px] text-text-2">
-                  {pickerColor[ch]}
-                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={255}
+                  value={pickerColor[ch]}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(n)) handleSliderChange(ch, n);
+                  }}
+                  className="w-12 rounded border border-border-2 bg-panel-2 px-1 py-0.5 text-right font-mono text-[10px] text-text-2 outline-none focus:border-accent"
+                  aria-label={`${ch.toUpperCase()} value`}
+                />
               </div>
             ))}
+          </div>
+
+          {/* Before / after preview + Cancel / OK. The swatch pair makes the
+              Cancel affordance discoverable: "Cancel goes back to Original". */}
+          <div className="mb-2 flex items-center gap-2">
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-[9px] text-text-3">Original</span>
+                <span
+                  data-testid="color-original"
+                  className="inline-block h-5 w-7 rounded-sm border border-border-2"
+                  style={{ backgroundColor: rgbToHex(originalColor) }}
+                />
+              </div>
+              <div className="flex flex-col items-center gap-0.5">
+                <span className="text-[9px] text-text-3">New</span>
+                <span
+                  className="inline-block h-5 w-7 rounded-sm border border-border-2"
+                  style={{ backgroundColor: rgbToHex(pickerColor) }}
+                />
+              </div>
+            </div>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => { handleCancel(); setOpen(false); }}
+                className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-[10px] text-text-2 hover:bg-panel-3 hover:text-text"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded border border-accent bg-accent px-3 py-1 text-[10px] font-medium text-white hover:opacity-90"
+              >
+                OK
+              </button>
+            </div>
           </div>
 
           {/* Add to custom */}

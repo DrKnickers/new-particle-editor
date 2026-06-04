@@ -106,8 +106,23 @@ user at phase boundaries.
     **18 composition goldens** for a *pre-existing* session-14 CRV-8 cascade
     (`Selected key time "0"`→`"0.00"`, surfaced now the native harness runs — L-053/L-058).
     Legacy `.json` untouched (L-052).
-- **P8 — Color/texture (PAL-2/3/14).** Color live-drag preview; cancel/revert;
-  broken-vs-missing thumbnail distinction.
+- **P8 — Color/texture (PAL-2/3/14).** Split into P8a (color picker, web) + P8b (thumbnails,
+  host/native).
+  - **P8a — Color picker (PAL-2/3) ✅ DONE (web-verified; user native-verify pending).**
+    Live-preview + cancel/revert as a faithful port of `ColorButton.cpp`'s two-phase
+    transaction (snapshot `originalColor` on open → stream `onChange` live → OK/click-outside
+    keep, Cancel/Escape revert). Controlled `Popover` via one `onOpenChange` funnel. **Plus 3
+    user-approved UX extras:** Original/New before-after swatches, editable R/G/B number
+    inputs (narrows the PAL-1 gap), Enter-in-hex commits+closes. One file
+    ([ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) + test. vitest **463**
+    (+9, TDD red→green); build + `tsc` clean; **zero golden change** (grep-proven — no open
+    popover captured). Browser-preview verified live preview + Cancel/OK/Escape in the real
+    app. See **L-062** (preview-eval stale-DOM read).
+  - **P8b — Texture thumbnails (PAL-14): NEXT.** Distinguish broken (decode-failed, magenta-X)
+    vs missing (file-not-found, grey-X) — legacy did, arch-C flattens both to one blank block.
+    Needs `DecodeToPngBytes`/`GetThumbnailDataUri` to surface a 3-state status → bridge
+    `{dataUri,status}` → schema + mock → React placeholders. Host C++ + native rebuild;
+    native-only verification; LOW sev.
 
 ## Separate track (after P1–P8, native/host)
 - **Undo capture wiring (VPT-2).** Wire `Capture()` into every new-UI host mutation.

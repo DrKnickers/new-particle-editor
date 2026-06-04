@@ -1,207 +1,230 @@
-# P7 — Link-group parity fixes (LNK-2 / LNK-6 / LNK-8 / LNK-10)
+# P8a — Color picker live-preview + cancel/revert (PAL-2 / PAL-3)
 
-**Status:** PLAN — scope confirmed by user (2026-06-03). Ready to execute.
-**Branch:** `claude/jovial-cray-1ba27e` (FF into `lt-4` at session end).
-**Baseline verified:** git clean (HEAD = origin/lt-4 = `8d18a2e`), vitest **440/49**,
-`node_modules` reinstalled (fresh worktree, L-058). Native build NOT yet present.
+**Status:** PLAN — scope + dismiss-model confirmed by user (2026-06-04). Ready to execute.
+**Branch:** `claude/practical-moore-1a19a1` (FF into `lt-4` at session end).
+**Baseline verified:** git clean (HEAD = origin/lt-4 = `8f783b6`, 0/0), vitest **454/49**,
+`pnpm build` clean, `tsc --noEmit` exit 0. `node_modules` reinstalled (fresh worktree, L-058).
+Native build NOT present and **NOT needed** for P8a (proven web-only — see §4 risk 5).
+
+> P8 splits into **P8a (this plan — PAL-2/3, pure web, TDD)** and **P8b (PAL-14 thumbnails,
+> host C++ + native rebuild)**. P8a ships + FFs first; P8b is a separate follow-up commit.
 
 ---
 
 ## 1. Goal + scope
 
-**Goal.** Close four of the five P7 link-group deltas so the new EmitterTree matches
-the legacy link-group interaction contract: a per-row "is-linked" affordance, an
-interactive bracket gutter (click-select + hover), an explicit Dissolve action, and a
-join-conflict warning before a join silently clobbers disagreeing fields.
+**Goal.** Restore the legacy color-picker's two-phase transaction so an exploratory color
+edit is both *live* and *reversible*. After this ships: dragging an RGB slider (or typing a
+hex, or clicking a swatch) updates the 3D scene **live** as you go (PAL-2), and an explicit
+**Cancel** (or Escape) snaps the engine back to the color the picker opened with (PAL-3) —
+the safety net the new commit-as-you-go picker lost, made more important by the inert undo
+(VPT-2). Faithful port of `src/UI/ColorButton.cpp` (legacy `CustomHookProc` fires
+`CBN_CHANGE` per R/G/B change; `WM_LBUTTONUP` snapshots `original` and reverts on Cancel).
 
 **In:**
-- **LNK-2 (MED)** — render the per-row link **dot** the file-header comment already
-  promises ([EmitterTree.tsx:33-36](web/apps/editor/src/screens/EmitterTree.tsx:33));
-  small `bg-accent` circle when `linkGroup !== 0`. **Decorative + `aria-hidden`** → no
-  a11y golden change. Web-only.
-- **LNK-6 (MED)** — make the bracket gutter **interactive** (was `pointer-events-none`,
-  [EmitterTree.tsx:1565](web/apps/editor/src/screens/EmitterTree.tsx:1565)): click a
-  bracket selects every group member (Ctrl/Cmd = union); hover tints members + thickens
-  the bracket. Brackets stay `aria-hidden` (mouse convenience over the already-accessible
-  row click) → no golden change. Web-only.
-- **LNK-8 (MED)** — context-menu **"Dissolve Link Group"** (enabled when `isLinked`),
-  under Leave Link Group. Gathers all member ids and fires one
-  `linkGroups/set-membership {ids:<all>, groupId:null}` — reuses the host's
-  `LeaveLinkGroup`+auto-dissolve under one `captureUndo`. Web-only (no new host surface).
-- **LNK-10 (MED)** — **join-conflict warning.** New read-only host command
-  `linkGroups/diff-membership {ids, groupId} → {conflicts:{id,fields[]}[]}` wrapping the
-  existing [`DiffNonExemptParams`](src/LinkGroup.cpp:267). `SetLinkGroupDialog` OK now
-  diffs first; non-empty conflicts → confirm modal listing the fields; OK proceeds with
-  `set-membership`, Cancel aborts. **Needs the native Debug x64 build** (host C++ touched).
+- **PAL-2 (MED)** — live preview: fire `onChange` on every in-flight edit (slider tick,
+  valid hex parse, swatch click), not just on slider release.
+- **PAL-3 (MED)** — Cancel/revert: snapshot `originalColor` on open; **OK + click-outside
+  keep** (consistent with new-UI commit-on-blur, SPN-9, KEEP list); **Cancel button +
+  Escape revert** to `originalColor`. New `Cancel | OK` footer row.
+- Fix a latent staleness bug surfaced by the rework: `pickerColor` is currently
+  `useState(value)` (initialized once at mount, never re-synced) — the open-edge snapshot
+  re-syncs it each open.
+- **UX extras (user-approved 2026-06-04):**
+  - **Before/After preview swatch** — show `originalColor` next to `pickerColor` by the
+    OK/Cancel row (native-ChooseColor-style), making Cancel discoverable. Display-only.
+  - **Editable R/G/B inputs** — the read-only R/G/B value spans become `type="number"`
+    inputs (clamp 0–255, live `onChange`), narrowing the PAL-1 gap.
+  - **Enter-in-hex = OK** — Enter in the hex field commits *and* closes.
 
-**Out (deferred, with reasons):**
-- **LNK-1** (`[L<n>]` text name prefix) — **dropped by user decision** (dot-only):
-  the kept colored bracket gutter (LNK-3/4/5, intentional) + the new dot already convey
-  linkage; the legacy text prefix existed only because legacy had no gutter, so re-adding
-  it would be a third redundant signal contradicting the new-UI redesign.
-- **LNK-10 settings-OK un-exempt warning** — the *second* legacy disagreement surface
-  (un-exempting a field in `LinkGroupSettings` where members already disagree → which
-  value wins). Scoped OUT this phase to keep it shippable; proposed as a follow-up. The
-  `diff-membership` command added here is the reusable primitive a follow-up would build on.
-- P8 color/texture, deferred polish, native track (VPT-2/3) — separate fix-plan entries.
+**Out (with reasons):**
+- **PAL-14** thumbnails (broken-vs-missing) — separate P8b commit; needs host C++ + native
+  bring-up; native-only verification; LOW sev. Deferred by explicit scope decision.
+- **PAL-9** single-click texture apply, **PAL-1** custom picker, **PAL-4** registry
+  persistence, **PAL-8** popover-not-toolwindow — all on the KEEP list (intentional new-UI).
+- **rAF/throttle coalescing** of live onChange — not now (YAGNI; legacy didn't throttle and
+  the bridge is async fire-and-forget). Revisit only if the user reports drag lag (Risk 1).
+- **No new host command / schema / mock change** — `onChange` already flows to the engine
+  via existing call-site bridge requests.
 
 ## 2. What the codebase already gives us
 
-- **Bracket geometry** — [`computeLinkGroupBrackets`](web/apps/editor/src/lib/link-group-colors.ts:54)
-  already emits `{groupId, color, firstRowIndex, lastRowIndex, memberRowIndices, lane}`
-  per group (≥2 members). The render layer (EmitterTree.tsx:1561-1600) already maps it to
-  absolutely-positioned bars + per-member stubs — LNK-6 only adds interactivity, not geometry.
-- **Selection store** — [`emitter-selection.ts`](web/apps/editor/src/lib/emitter-selection.ts)
-  exposes `setIds(ids, primary)` (group-select), `getEmitterSelectionSnapshot()` (Ctrl union
-  base), and `useEmitterSelectionStore`. No new store needed for LNK-6.
-- **Dissolve** — host already has [`DissolveLinkGroup`](src/LinkGroup.cpp:239) AND the
-  `set-membership groupId:0` leave path ([BridgeDispatcher.cpp:3890-3895](src/host/BridgeDispatcher.cpp:3890))
-  with `LeaveLinkGroup` auto-dissolve — LNK-8 reuses the latter from the client, no host change.
-- **Diff engine** — [`DiffNonExemptParams`](src/LinkGroup.cpp:267) returns the differing
-  non-exempt field labels for two emitters under a group's `LinkExemptFlags`. Canonical
-  member = `members[0]` ([JoinLinkGroup](src/LinkGroup.cpp:186)); `members[0]` is first in
-  `getEmitters()` order ([GetLinkGroupMembers](src/LinkGroup.cpp:104)). LNK-10 only needs
-  a thin bridge wrapper — the diffing logic is done.
-- **Dialog patterns** — `SetLinkGroupDialog`, `LinkGroupSettingsDialog`, the `Modal`
-  primitive, `tree-context` atom, and the mock bridge `linkGroups/*` cases
-  ([mock.ts:1092-1145](web/apps/editor/src/bridge/mock.ts:1092)) are all in place.
+- **`ColorButton.tsx`** ([primitives/ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) —
+  the only behaviour file. Already has `pickerColor` state, `handleSelectColor` (fires
+  `onChange`, keeps popover open), `handleSliderChange` (currently *suppresses* onChange,
+  ColorButton.tsx:106), `handleSliderCommit` (onMouseUp/onKeyUp → onChange), hex
+  handlers, Radix `Popover.Root` (currently **uncontrolled**).
+- **Call sites** forward `onChange` to thin setters that do `setState` +
+  `void bridge.request(...)` — e.g. `updateSun`/`updateAmbient`
+  ([LightingPanel.tsx:239,290](web/apps/editor/src/screens/LightingPanel.tsx:239)),
+  plus `GroundTexturePanel`, `ToolPanel`, `PrimitivesGallery`. No undo push (VPT-2 inert),
+  nothing heavy per call. **No call-site edits needed** — they just fire more often (= the
+  live preview we want).
+- **Legacy reference** `src/UI/ColorButton.cpp:97-110` (snapshot `original`; OK keeps,
+  Cancel sets `rgbResult = original` + fires final change) + `CustomHookProc:40-45` (per-
+  change `CBN_CHANGE`).
+- **Existing tests** `__tests__/ColorButton.test.tsx` (3 cases: popover opens, basic color
+  fires onChange, Add-to-custom) — extend, keep green.
 
-## 3. Architecture / implementation approach
+## 3. Implementation approach
 
-**LNK-2 (dot).** Add a decorative `<span aria-hidden data-testid="emitter-link-dot-<id>">`
-in the row grid, rendered only when `node.linkGroup !== 0`. Reuse the existing grid; place
-it so it doesn't shift the accessible name. Color: `bg-accent` (per the comment). No new
-state.
+**Single primitive, CONTROLLED popover via a single `onOpenChange` funnel.** (The
+Enter-in-hex=OK extra needs programmatic close, which uncontrolled can't do cleanly;
+controlled also makes OK/Cancel trivial. Desync risk is contained by funnelling every
+open/close — and the open-snapshot — through one `onOpenChange`.)
 
-**LNK-6 (interactive brackets).** In EmitterTree:
-- New local state `hoveredLinkGroup: number | null`.
-- Per-bracket wrapper gains `pointer-events-auto cursor-pointer`, `onPointerEnter/Leave`
-  (set/clear `hoveredLinkGroup`), and `onClick(e)`:
-  - members = `flatRows.filter(r => r.node.linkGroup === groupId).map(node.id)` (render order).
-  - plain click → `setIds(members, members[0])` + `bridge emitters/select {id:members[0]}`.
-  - Ctrl/Cmd click → union(currentIds, members), primary = members[0].
-- Hover tint: thread `hoveredLinkGroup` to rows; a row whose `linkGroup === hoveredLinkGroup`
-  gets a subtle tint class; the hovered bracket brightens/thickens (width 2→3, opacity).
-- Brackets stay `aria-hidden`; gutter container can keep `pointer-events-none` while each
-  bracket re-enables `pointer-events-auto` (so the gaps between brackets stay click-through
-  to rows beneath, if any overlap).
+- **Controlled open:** `const [open, setOpen] = useState(false);`
+  ```
+  <Popover.Root open={open} onOpenChange={(o) => {
+    if (o && !open) {                 // open transition → snapshot pre-edit truth
+      setOriginalColor(value);
+      setPickerColor(value);
+      setHexText(rgbToHex(value).slice(1).toUpperCase());
+    }
+    setOpen(o);                       // single funnel: trigger / outside-click / Escape all land here
+  }}>
+  ```
+  New state: `const [originalColor, setOriginalColor] = useState<RgbColor>(value);`
+  (Also fixes the latent `pickerColor` staleness — re-synced each open.)
+- **PAL-2 live preview:**
+  - `handleSliderChange` → set state **and** `onChange(next)` (delete the suppress comment;
+    **remove** `handleSliderCommit` + the now-dead `onMouseUp/onKeyUp` on the ranges).
+  - `handleHexChange` → on a *valid* `hexToRgb`, also `onChange(rgb)` (live). Invalid input
+    still only updates the text (no onChange). Keep `handleHexCommit` for invalid-text cleanup.
+  - `handleSelectColor` (swatch) → unchanged (already fires onChange, keeps open).
+- **PAL-3 keep/revert** (`handleCancel` shared by the Cancel button + Escape):
+  ```
+  const handleCancel = () => {
+    onChange(originalColor);              // re-commit the pre-edit color (engine has no undo)
+    setPickerColor(originalColor);
+    setHexText(rgbToHex(originalColor).slice(1).toUpperCase());
+  };
+  ```
+  - **OK button** → plain `<button onClick={() => setOpen(false)}>OK</button>`. **No
+    `onChange`** — `pickerColor` is provably in sync with the last `onChange` (slider/hex/
+    swatch set both together; invalid hex sets neither). "Keep" = just close.
+  - **Cancel button** → `<button onClick={() => { handleCancel(); setOpen(false); }}>`.
+  - **Escape** → `Popover.Content onEscapeKeyDown={handleCancel}` (revert; Radix then funnels
+    `onOpenChange(false)` → `setOpen(false)`). Verified reachable via document keydown
+    (Modal.test.tsx:36-48).
+  - **Outside-click / re-click trigger** → funnel closes, no revert; **keep**.
+- **UX extras:**
+  - **Before/After swatch:** in the footer, two squares — `originalColor` (label "Original",
+    `data-testid="color-original"`) and `pickerColor` (label "New") — so the user sees what
+    Cancel restores.
+  - **Editable R/G/B inputs:** replace each read-only value `<span>` with
+    `<input type="number" min={0} max={255} value={pickerColor[ch]}
+    onChange={(e) => { const n = parseInt(e.target.value,10); if (!Number.isNaN(n))
+    handleSliderChange(ch, n); }} aria-label={`${ch.toUpperCase()} value`} />`. Reuses
+    `handleSliderChange` (clamps + live onChange). NaN-guard ignores transient-empty;
+    select-replace + spinner arrows still work (controlled-numeric quirk, accepted).
+  - **Enter-in-hex = OK:** the hex `onKeyDown` Enter branch → `handleHexCommit();
+    setOpen(false);` (commit + close).
+- **Footer layout:** `[Original|New swatches] … [Cancel] [OK]` row, then "Add to custom
+  colors" below. Distinct `aria-label`s on every button/input for the tests.
 
-**LNK-8 (Dissolve).** New `handleDissolveLinkGroup` in the Row component: read the full tree
-(or the already-available `flatRows`), collect ids where `linkGroup === node.linkGroup`,
-fire `set-membership {ids, groupId:null}`. Context-menu `<ContextMenu.Item>` "Dissolve Link
-Group" with `disabled={!isLinked}`, placed under Leave Link Group.
+**Data flow:** open → snapshot original=value → user edits stream `onChange` → engine live →
+close path decides: keep (just close) or revert (`onChange(original)`). The engine has no
+undo, so revert *is* a re-commit of the old value — exactly the legacy model.
 
-**LNK-10 (join warning).**
-- **Schema** (`bridge-schema/src/index.ts`): add request
-  `{kind:"linkGroups/diff-membership"; params:{ids:number[]; groupId:number}}` and response
-  `{conflicts:{id:number; fields:string[]}[]}`.
-- **Mock** (`mock.ts`): a `diff-membership` case returning a configurable conflicts list
-  (seeded via mock-state) so the React flow is unit-testable; default `[]`.
-- **Host** (`BridgeDispatcher.cpp`): new handler. Resolve emitters from `ids`. If
-  `groupId>0`: canonical = `GetLinkGroupMembers(group)[0]`, exempt = `getLinkExemptFlags`,
-  joiners = ids not already in group. If `groupId===-1`: canonical = first resolved id,
-  joiners = the rest, exempt = `GetDefaultLinkExemptFlags()`. If `0/null`: empty (leaving
-  never clobbers). For each joiner, `fields = DiffNonExemptParams(*joiner,*canonical,exempt)`;
-  push `{id,fields}` when non-empty. Read-only — no `captureUndo`, no mutation, no tree emit.
-- **Dialog** (`SetLinkGroupDialog.tsx`): `handleOk` becomes async — call `diff-membership`
-  with the same `{ids, groupId}` it would send to `set-membership`. If `conflicts.length>0`,
-  enter a `confirm` sub-state rendering the field list ("Joining will overwrite N field(s)
-  on M emitter(s): …"); confirm → fire `set-membership` + close; cancel → back to the form.
-  Empty conflicts → fire directly (today's behavior). Keep it inside the one Modal (swap body).
+**Forward synergy (note for VPT-2 undo, out of scope):** the `originalColor` open-snapshot
+is exactly the hook a future undo-capture wants — capture ONE undo entry per picker session
+(open→commit), not one per live tick. Flag in the handoff so VPT-2 coalesces.
 
-**Where new code lives:** all React in existing files + the dialog; one new bridge command
-across schema/mock/host. No new lib files expected (bracket geometry already factored).
+## 4. Risks + mitigations
 
-## 4. Risks named up front + mitigations
-
-1. **Golden churn from LNK-2/6 (a11y re-baseline cost + native dependency).** If the dot or
-   interactive brackets leak into the accessible tree, the emitter-tree composition goldens
-   drift and force a native re-baseline. *Mitigation:* keep both strictly decorative —
-   `aria-hidden` on the dot and every bracket element, no `role`/`aria-label`, no accessible
-   name change. After build, run `git status` on the golden dir to **prove zero change**
-   before declaring no re-baseline needed (L-053 aggregate-diff discipline).
-2. **LNK-10 canonical-member mismatch (warn lists the wrong fields).** If `diff-membership`
-   picks a different canonical than `JoinLinkGroup` actually syncs to, the warning misleads.
-   *Mitigation:* mirror the host exactly — canonical = `GetLinkGroupMembers(group)[0]` and
-   exempt = `getLinkExemptFlags(group)`, the same two calls `JoinLinkGroup` makes
-   ([LinkGroup.cpp:186-187](src/LinkGroup.cpp:186)). For `-1` new-group, mirror the
-   `set-membership` create path (first target canonical, default exempt). Cover both in the
-   host handler comment so the coupling is explicit.
-3. **L-057: web-lane PASS ≠ native truth for the diff.** The mock can't faithfully diff real
-   float32 emitter params. *Mitigation:* the web tests prove only the *wiring* (diff called
-   with the right args; non-empty → modal; confirm → set-membership; empty → direct). The
-   real field-level correctness is verified by **the user** in `--new-ui` (their lane, L-033).
-   State this split in the test names + handoff so no one mistakes green web tests for native
-   proof.
-4. **Dissolve via N-leaves vs one dissolve (undo granularity / auto-dissolve edge).**
-   `set-membership {all ids, null}` loops `LeaveLinkGroup`; at 2-remaining the auto-dissolve
-   detaches the last — net all-detached under one `captureUndo`. *Risk:* an off-by-one if a
-   member id is stale. *Mitigation:* collect ids from the live `flatRows`/tree at click time,
-   not a cached list; the host already no-ops a leave on `linkGroup===0`. One Ctrl+Z restores
-   the whole group (single captureUndo). Verified by the user natively + a mock unit test on
-   the emitted call shape.
-5. **Native toolchain absent (L-058) blocks LNK-10 compile.** *Mitigation:* stand up
-   WebView2 `packages/` (L-039) + MSBuild Debug x64 (L-046) before touching host C++; build
-   clean after the change; hand the runtime verify to the user. Sequence LNK-10 last so the
-   three web-only items land even if the native bring-up hiccups.
+1. **Live-onChange bridge flood.** Per slider tick = one async `bridge.request`. *Mitigation:*
+   matches legacy `CBN_CHANGE`-per-change; requests are `void`-fire-and-forget (non-blocking);
+   engine tolerated this natively for years. **Accepted.** rAF-coalescing is a deferred
+   follow-up only if the user reports drag lag — not designed-around now.
+2. **`value` echo vs in-flight state.** Live `onChange` updates the parent → re-renders
+   ColorButton with a new `value` (for lighting, round-tripped through 0-1 float via
+   `rgbToVec4`). *Mitigation:* `originalColor`/`pickerColor` are snapshotted **only on the
+   open edge**, never re-derived from `value` per render — so echoes can't fight the drag.
+   The closed swatch/label reading live `value` is correct (shows the live color).
+3. **8-bit revert precision.** Lighting colors are 0-1 floats; the picker is 0-255 ints, so
+   `originalColor` is the 8-bit-accurate open value and revert restores *that*, not sub-8-bit
+   float precision. *Mitigation:* inherent to an 8-bit picker and identical to legacy
+   COLORREF — **accepted, faithful.** (L-057-adjacent but not a regression.)
+4. **Controlled-open desync.** A scattered `setOpen` could fight Radix's own dismiss.
+   *Mitigation:* every open/close + the snapshot funnels through ONE `onOpenChange`; OK/
+   Cancel/Enter only ever call `setOpen(false)`. Trigger-toggle, outside-click, and Escape
+   all land in the funnel. Explicit reopen + swatch-stays-open tests guard it.
+5. **Golden/a11y.** New OK/Cancel live inside the popover content (mounts only when open);
+   trigger markup byte-unchanged. **Verified:** `grep` of `*.golden.{yaml,json}` for
+   "Basic colors / Add to custom / Hex color input / Pick color" = **no matches** → no
+   scenario captures an open color popover → **zero golden change, no native harness
+   needed.** (Re-grep after coding to reconfirm.)
 
 ## 5. Testing & verification
 
-**Web (vitest, TDD — red first):**
-- *LNK-2:* row with `linkGroup!==0` renders `emitter-link-dot-<id>`; `linkGroup===0` does
-  not; the dot carries `aria-hidden` (accessible name unchanged).
-- *LNK-6:* click `link-group-bracket-<g>` selects exactly the group's member ids (primary =
-  first); Ctrl/Cmd-click unions with prior selection; `onPointerEnter` sets the hovered-group
-  tint on member rows, `onPointerLeave` clears it.
-- *LNK-8:* "Dissolve Link Group" enabled only when `isLinked`; selecting it fires
-  `set-membership` with all member ids + `groupId:null`.
-- *LNK-10:* `diff-membership` mock returns conflicts → OK shows the confirm body listing the
-  fields; confirm fires `set-membership`; cancel returns to form; empty conflicts → OK fires
-  `set-membership` directly (no confirm). Bridge-contract test for the new command's shape.
-- Full suite green (expect ~440 + new); `pnpm build` clean; `tsc --noEmit` exit 0 (L-046).
+**TDD — write red first, then implement.** Extend `ColorButton.test.tsx`:
 
-**Goldens:** `git status` the composition golden dir after build → **expect no change**
-(decorative-only). If anything drifted, investigate before re-baselining (composition lane
-only, legacy `.json` untouched, L-052).
+*Happy paths (PAL-2 live):*
+- [ ] Slider drag fires `onChange` per change (`fireEvent.change` on the R range →
+  `onChange` called with the new RGB *before* any mouseUp).
+- [ ] Typing a valid hex fires `onChange` live; typing an invalid hex does **not**.
+- [ ] Basic-swatch click still fires `onChange` + popover stays open (existing, keep green).
 
-**Native (LNK-10 — user lane, L-033):** Debug x64 compiles clean; user launches `--new-ui`,
-attempts a join of emitters with genuinely disagreeing shared fields → warning lists the
-real differing fields; OK clobbers as expected; Cancel leaves them untouched; a group with
-no disagreement joins with no prompt. Confirm via `host.log` healthy (not L-033 ~4 FPS).
+*Cancel/revert (PAL-3):*
+- [ ] Open (value=red) → drag to blue (onChange blue) → click **Cancel** → last `onChange` = red.
+- [ ] Open (red) → drag to blue → **Escape** via `fireEvent.keyDown(document, {key:"Escape",
+  code:"Escape"})` → last `onChange` = red. (Repo-proven Radix-escape mechanism, Modal.test.)
 
-**Cleanup:** any `#ifndef NDEBUG` host instrumentation stripped before commit (L-059 pattern).
+*Keep:*
+- [ ] Open (red) → drag to blue → click **OK** → last `onChange` = blue (no revert fired).
+- [ ] **No outside-click-dismiss test** — Radix `pointerDownOutside` is jsdom-flaky
+  (Modal.test.tsx:165 avoids it). "Keep" is the default no-revert path, already proven by
+  the OK-keeps case; final click-away behaviour is the user's native lane.
 
----
+*UX extras:*
+- [ ] Editable R/G/B input: `fireEvent.change(R-value-input, {value:"100"})` → `onChange`
+  fires with `r:100` (live); out-of-range clamps to 0–255.
+- [ ] Before/After swatch: after dragging, `color-original` swatch still shows the open
+  color (style backgroundColor) while "New" shows the dragged color.
+- [ ] Enter-in-hex closes: type a valid hex + Enter → `onChange` fired AND popover content
+  gone (`queryByText("Basic colors")` is null).
+
+*Lifecycle / edge:*
+- [ ] Reopen after external `value` change re-snapshots the fresh original (rerender with a
+  new value, reopen, Cancel → reverts to the *new* value, not the stale mount value).
+- [ ] `disabled` → trigger doesn't open (existing behaviour, no regression).
+- [ ] Existing 3 tests stay green (popover opens, basic-color fires onChange, Add-to-custom).
+
+*Suite-level:*
+- [ ] `pnpm --filter @particle-editor/editor test` → was 454; expect 454 + new cases.
+- [ ] `pnpm --filter @particle-editor/editor build` clean; `lint` (`tsc --noEmit`) exit 0.
+- [ ] Re-grep goldens to reconfirm zero capture → no `a11y:update` (web-only, L-052/L-053).
+
+*User's lane (L-033/L-057 — native, hand off):*
+- [ ] In faithful `--new-ui`: drag a Lighting color slider → scene updates live (PAL-2).
+- [ ] Cancel/Escape snaps the scene back to the open color (PAL-3); OK/click-away keep.
 
 ## Review
 
-**Shipped (2026-06-04, session 15) — all user-verified in the faithful `--new-ui`.**
+**Shipped (2026-06-04).** PAL-2 + PAL-3 + all three user-approved UX extras, one file
+([primitives/ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) + its test.
 
-- **LNK-2 dot** — Option A (group-coloured dot in a fixed col-3 slot left of the name).
-  Decorative/`aria-hidden`, no golden change.
-- **LNK-6** — landed as **visual-only brackets + row-hover tint** (NOT bracket
-  click-select). The interactive overlay stole row-selection clicks; dropped it, moved the
-  "group lights up" affordance to row hover. See **L-060**.
-- **LNK-8 Dissolve** — context action, one `set-membership {ids:<all>, groupId:null}`.
-- **LNK-10** — `linkGroups/diff-membership` host command + **inline** amber field-overwrite
-  note in the dialog; **synchronous one-click** OK. The async diff-on-OK + confirm-modal
-  first cut caused a "first OK does nothing" bug → decoupled the join from the diff. See **L-061**.
+- **PAL-2 live preview** — `handleSliderChange` and valid-`handleHexChange` now fire
+  `onChange` per change (deleted the suppress comment + the dead `handleSliderCommit` /
+  `onMouseUp/onKeyUp`).
+- **PAL-3 cancel/revert** — controlled `open` via a single `onOpenChange` funnel that
+  snapshots `originalColor` on the open edge; `handleCancel` re-commits it. **OK +
+  click-outside keep**; **Cancel button + `onEscapeKeyDown` revert**.
+- **UX extras** — Original/New before-after swatches; editable R/G/B `type=number` inputs
+  (reuse `handleSliderChange`, NaN-guarded); Enter-in-hex commits + closes.
+- **Latent bug fixed** — `pickerColor` now re-syncs each open (was mount-only).
 
-**Round-2 fixes surfaced by user testing (all this session):**
-1. **Engine crash** setting/joining a group with live particles — orphaned cursors via the
-   link-group paths `set-membership` / `propagateLinkGroup`. Full reseat. Extends **L-059**.
-2. **Right-click → browser menu** in the faithful build — `AreDefaultContextMenusEnabled(FALSE)`
-   in `HostWindow`. **L-057** (jsdom couldn't catch it).
-3. **Shift-click lost the anchor** — stable `anchor` added to the selection store.
-4. **Dot too far / wrong colour + bracket too close** — Option A placement, group colour,
-   bracket gap 8→16px.
+**Verification (web lane — fully mine, L-057):**
+- vitest **463** (was 454; +9 ColorButton cases). Watched all 9 fail RED first, then GREEN.
+- `pnpm build` clean; `tsc --noEmit` exit 0.
+- **Zero golden change** — re-grepped `*.golden.{yaml,json}` for the new strings: no match
+  (no scenario captures an open color popover). No native a11y harness needed.
+- **Browser preview (real app + MockBridge)** — drove the Sun-diffuse picker: live slider/
+  number preview updates the trigger; Original swatch holds the open color; **Cancel** and
+  **Escape** both revert + close; **OK** keeps + closes; console error-free. (Reads taken in
+  a tick *after* each event — synchronous post-event reads see pre-React-flush DOM; see
+  L-062.)
 
-**Deviations from the original plan.** LNK-6 shipped as visual-only (not click-interactive)
-— a deliberate scope change after the click-steal bug; LNK-10 shipped inline (not a separate
-confirm) per user preference + to fix the first-click bug. LNK-1 dropped (user: dot-only).
-
-**Verification.** vitest **454**; `pnpm build` + `tsc --noEmit` clean; native Debug x64
-rebuilt clean (cursor-reseat + context-menu + diff-membership); a11y **155 / 4-splitter**
-(L-033), `emitter-tree` golden re-matches; 18 composition goldens re-baselined for the
-pre-existing session-14 CRV-8 cascade (L-053/L-058). User confirmed on-screen: dot, dissolve,
-inline warning, one-click join, no crash, no deselecting.
+**User's lane (native, L-033/L-057):** confirm the live preview drives the actual 3D scene
+colour and that Cancel/Escape snaps the scene back, in the faithful `--new-ui`.
