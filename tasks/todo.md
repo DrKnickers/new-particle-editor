@@ -1,3 +1,110 @@
+# P8b — Texture thumbnails: broken-vs-missing (PAL-14)
+
+**Status:** PLAN — scope + visual ("softer tinted + icon") confirmed by user (2026-06-04).
+**Branch:** `claude/practical-moore-1a19a1` (FF into `lt-4`). HEAD = `df7dcda` (P8a).
+**Baseline:** vitest 463, build/tsc clean. Native toolchain ABSENT (L-058); nuget cache
+PRESENT → robocopy WebView2 1.0.3967.48 + MSBuild Debug x64 needed for the host compile.
+
+## 1. Goal + scope
+**Goal.** Restore the legacy distinction between a **broken** thumbnail (file present but
+won't decode → reddish-tinted cell + icon + "broken") and a **missing** one (file not found
+→ grey-tinted cell + icon + "missing"). Arch-C currently flattens both (and loading) to one
+blank block, so a user can't tell "I typo'd the path" from "the .dds is corrupt".
+
+**In:** schema `status` field; host 3-state classification threaded through decode→cache→
+bridge; React distinct placeholders (softer tinted + icon + label); both mocks; native
+Debug x64 rebuild to confirm compile. **Out:** the magenta/grey *literal* legacy style
+(user chose softer); any change to the apply/pin gestures (KEEP list); loading spinner
+(neutral block stays).
+
+## 2. What the codebase gives us
+- Host already *computes* the distinction: `DecodeToPngBytes` returns `false` for both
+  `OpenTextureFile==null` (missing, [PaletteThumbs.cpp:136](src/UI/PaletteThumbs.cpp:136))
+  and decode/size failures (broken) — just doesn't surface which. `GetThumbnailDataUri`
+  ([:213](src/UI/PaletteThumbs.cpp:213)) caches `filename→string`; one caller
+  (BridgeDispatcher.cpp:1894).
+- Legacy reference: `GetBrokenPlaceholder`/`GetMissingPlaceholder`
+  ([TexturePalette.cpp:189](src/UI/TexturePalette.cpp:189)).
+- React `PaletteCell` ([TexturePalettePopover.tsx:203](web/apps/editor/src/screens/TexturePalettePopover.tsx:203))
+  with the existing `palette-thumb-placeholder-${filename}` testid (keep it).
+- Test mock `makeBridge` (TexturePalettePopover.test.tsx) + dev MockBridge (mock.ts:563).
+
+## 3. Implementation approach
+- **Schema:** `{ dataUri: string | null }` → `{ dataUri: string | null; status: "ok" |
+  "missing" | "broken" }`. `dataUri` non-null iff `status==="ok"`.
+- **Host** (TexturePalette.h + PaletteThumbs.cpp + BridgeDispatcher.cpp):
+  - `enum class ThumbStatus { Ok, Missing, Broken };`
+    `struct ThumbnailResult { std::string dataUri; ThumbStatus status; };`
+  - `DecodeToPngBytes` returns `ThumbStatus` (Ok fills `outPng`). Missing = fm/device null
+    OR file-not-found; Broken = size 0 / decode / lock / encode failure.
+  - Replace `GetThumbnailDataUri` with `ThumbnailResult GetThumbnail(...)`; cache becomes
+    `unordered_map<wstring, ThumbnailResult>` (still caches failures — don't re-decode).
+  - Bridge emits `{dataUri, status}` (status string from the enum).
+- **React** `PaletteCell`: state `{dataUri, status}|undefined` (undefined=loading). Render:
+  `status==="ok"` (dataUri) → `<img>`; `"broken"` → reddish cell (`bg-red-950/40`
+  border-red) + broken-image glyph + "broken"; `"missing"` → grey cell + glyph + "missing";
+  loading → neutral block. Keep the `palette-thumb-placeholder-${filename}` testid on the
+  placeholder wrapper + add `data-thumb-status`. `catch` → treat as `broken` (transport/
+  decode failure is the closest visual).
+- **Mocks:** test `makeBridge` gains `thumbnailStatus`; dev mock returns
+  `{dataUri:null, status:"missing"}`.
+
+## 4. Risks + mitigations
+1. **Backward-compat of the existing null-placeholder test.** It asserts the testid with a
+   mock returning `{dataUri:null}` (no status). *Mitigation:* keep the testid on the wrapper;
+   default `status ?? "missing"` so an absent status still renders a placeholder → existing
+   test stays green.
+2. **Cache type change.** `g_bridgeThumbCache` value `string→ThumbnailResult`.
+   `ClearBridgeThumbCache` unaffected. Low risk; compile-checked.
+3. **Native rebuild required (L-039/L-046).** Host C++ change → must compile Debug x64.
+   *Mitigation:* robocopy WebView2 from nuget cache (NOT `Copy-Item -Recurse $src\*`) +
+   MSBuild `ParticleEditor.sln` (repo root). Confirm clean compile; hand visual verify to user.
+4. **`catch`→broken.** A transport failure isn't a corrupt texture. *Mitigation:* rare;
+   broken is the closest honest signal; comment it.
+
+## 5. Testing & verification
+- **TDD (web):** extend TexturePalettePopover.test.tsx — `status:"broken"` →
+  `data-thumb-status="broken"` + "broken" label; `status:"missing"` → "missing"; `status:"ok"`
+  → `<img>`; existing null-placeholder test still green. Update `makeBridge`.
+- vitest (expect 463 + ~3), build, `tsc` clean.
+- **a11y goldens:** the palette popover isn't a captured surface (popover, like the color
+  picker) — grep-confirm zero capture; no re-baseline expected.
+- **Host:** native Debug x64 compiles clean (toolchain bring-up first).
+- **User's lane (native):** point a slot at (a) a non-existent file → grey "missing"; (b) a
+  corrupt/zero-byte .dds → reddish "broken"; a valid texture → thumbnail.
+
+## Review
+
+**Shipped (2026-06-04).** PAL-14 across all layers, "softer tinted + icon" style.
+
+- **Schema** — `textures/palette/thumbnail` response gains `status: "ok"|"missing"|"broken"`.
+- **Host** ([PaletteThumbs.cpp](src/UI/PaletteThumbs.cpp), [TexturePalette.h](src/UI/TexturePalette.h),
+  [BridgeDispatcher.cpp](src/host/BridgeDispatcher.cpp)) — `enum ThumbStatus` +
+  `struct ThumbnailResult`; `DecodeToPngBytes` now returns the 3-state status (Missing =
+  device/FM null or file-not-found; Broken = empty / decode / encode failure);
+  `GetThumbnailDataUri`→`GetThumbnail` (cache now `filename→ThumbnailResult`); bridge emits
+  `{dataUri, status}`.
+- **React** ([TexturePalettePopover.tsx](web/apps/editor/src/screens/TexturePalettePopover.tsx)) —
+  `PaletteCell` branches on status: reddish cell + ⚠ + "broken", grey cell + ? + "missing",
+  neutral block while loading, `<img>` on ok. Kept the `palette-thumb-placeholder-*` testid;
+  added `data-thumb-status`. `catch`→broken.
+- **Mocks** — test `makeBridge` gains `thumbnailStatus`; dev MockBridge returns
+  `{dataUri:null, status:"missing"}`.
+
+**Verification:**
+- vitest **466** (was 463; +3: broken/missing/ok). TDD: watched broken+missing fail RED
+  (no `data-thumb-status`), then GREEN; "ok" passed via the existing img branch.
+- `pnpm build` clean; `tsc --noEmit` exit 0.
+- **Native Debug x64 compiles + links clean** (`MSBUILD EXIT=0` → `x64\Debug\ParticleEditor.exe`)
+  after robocopy WebView2 restore (L-039) + MSBuild (L-046). LNK4098 is pre-existing/benign.
+- **Zero golden change** (grep — palette popover not a captured surface).
+
+**User's lane (native, L-033/L-057):** open the texture palette in `--new-ui` and confirm a
+non-existent path shows grey "missing", a corrupt/zero-byte .dds shows reddish "broken", and
+a valid texture still thumbnails. (MockBridge can't exercise this — no engine/files.)
+
+---
+
 # P8a — Color picker live-preview + cancel/revert (PAL-2 / PAL-3)
 
 **Status:** PLAN — scope + dismiss-model confirmed by user (2026-06-04). Ready to execute.

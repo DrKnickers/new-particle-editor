@@ -118,11 +118,15 @@ user at phase boundaries.
     (+9, TDD red→green); build + `tsc` clean; **zero golden change** (grep-proven — no open
     popover captured). Browser-preview verified live preview + Cancel/OK/Escape in the real
     app. See **L-062** (preview-eval stale-DOM read).
-  - **P8b — Texture thumbnails (PAL-14): NEXT.** Distinguish broken (decode-failed, magenta-X)
-    vs missing (file-not-found, grey-X) — legacy did, arch-C flattens both to one blank block.
-    Needs `DecodeToPngBytes`/`GetThumbnailDataUri` to surface a 3-state status → bridge
-    `{dataUri,status}` → schema + mock → React placeholders. Host C++ + native rebuild;
-    native-only verification; LOW sev.
+  - **P8b — Texture thumbnails (PAL-14) ✅ DONE (web + host compile verified; user native-verify
+    pending).** Distinguish broken (decode-failed) vs missing (file-not-found) — arch-C had
+    flattened both (and loading) to one blank block. `enum ThumbStatus` + `struct
+    ThumbnailResult` in the host; `DecodeToPngBytes` surfaces the 3-state verdict;
+    `GetThumbnailDataUri`→`GetThumbnail` (cache holds the result); bridge emits
+    `{dataUri,status}`; schema + both mocks updated; React renders **softer tinted + icon +
+    label** placeholders (user choice over legacy's literal magenta/grey-X). vitest **466**
+    (+3, TDD); build + `tsc` clean; **native Debug x64 compiles clean** (MSBUILD EXIT=0);
+    zero golden change. User verifies real missing/broken textures in `--new-ui`.
 
 ## Separate track (after P1–P8, native/host)
 - **Undo capture wiring (VPT-2).** Wire `Capture()` into every new-UI host mutation.

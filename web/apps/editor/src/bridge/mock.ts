@@ -561,7 +561,7 @@ export class MockBridge implements Bridge {
         return { hasMod: false, filter: req.params.slot, pins: [], recents: [] };
 
       case "textures/palette/thumbnail":
-        return { dataUri: null };
+        return { dataUri: null, status: "missing" as const };
 
       case "textures/palette/toggle-pin":
         return { ok: true, pinned: false };

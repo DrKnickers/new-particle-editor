@@ -211,18 +211,23 @@ function PaletteCell({
   onApply: (filename: string) => void;
   onTogglePin: (filename: string) => void;
 }) {
-  // undefined = still loading; null = missing/broken → placeholder.
-  const [dataUri, setDataUri] = useState<string | null | undefined>(undefined);
+  // undefined = still loading; otherwise the decoded URI + why-no-image status.
+  // PAL-14: the host distinguishes a missing file (typo'd path) from a broken
+  // texture (present but won't decode) so we can show different placeholders.
+  type Thumb = { dataUri: string | null; status: "ok" | "missing" | "broken" };
+  const [thumb, setThumb] = useState<Thumb | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     void bridge
       .request({ kind: "textures/palette/thumbnail", params: { filename: entry.filename } })
       .then((r) => {
-        if (!cancelled) setDataUri(r.dataUri);
+        if (!cancelled) setThumb({ dataUri: r.dataUri, status: r.status });
       })
       .catch(() => {
-        if (!cancelled) setDataUri(null);
+        // A transport/decode failure is, for the user, indistinguishable from a
+        // corrupt texture — show the broken placeholder rather than nothing.
+        if (!cancelled) setThumb({ dataUri: null, status: "broken" });
       });
     return () => {
       cancelled = true;
@@ -239,13 +244,31 @@ function PaletteCell({
           title={entry.filename}
           className="relative block aspect-square w-full overflow-hidden rounded border border-border-2 transition hover:border-accent"
         >
-          {dataUri ? (
-            <img src={dataUri} alt="" className="absolute inset-0 h-full w-full object-cover" />
+          {thumb?.dataUri ? (
+            <img src={thumb.dataUri} alt="" className="absolute inset-0 h-full w-full object-cover" />
           ) : (
             <div
               data-testid={`palette-thumb-placeholder-${entry.filename}`}
-              className="absolute inset-0 bg-bg-2"
-            />
+              data-thumb-status={thumb ? thumb.status : "loading"}
+              className={`absolute inset-0 flex flex-col items-center justify-center gap-0.5 ${
+                thumb?.status === "broken"
+                  ? "bg-red-950/40 text-red-300"
+                  : thumb?.status === "missing"
+                    ? "bg-bg-2 text-text-3"
+                    : "bg-bg-2"
+              }`}
+            >
+              {thumb && (
+                <>
+                  <span aria-hidden="true" className="text-base leading-none">
+                    {thumb.status === "broken" ? "⚠" : "?"}
+                  </span>
+                  <span className="text-[9px] uppercase tracking-wide">
+                    {thumb.status === "broken" ? "broken" : "missing"}
+                  </span>
+                </>
+              )}
+            </div>
           )}
           <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-1 py-0.5 text-left text-[10px] text-text backdrop-blur-sm">
             {entry.filename}

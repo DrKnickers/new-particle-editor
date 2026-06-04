@@ -866,7 +866,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "textures/palette/list" }
     ? { hasMod: boolean; filter: "color" | "bump"; pins: PaletteEntry[]; recents: PaletteEntry[] } :
   R extends { kind: "textures/palette/thumbnail" }
-    ? { dataUri: string | null } :
+    ? { dataUri: string | null; status: "ok" | "missing" | "broken" } :
   R extends { kind: "textures/palette/toggle-pin" }
     ? { ok: true; pinned: boolean } | { ok: false; reason: "pins-full" } :
   R extends { kind: "textures/palette/touch-recent" }

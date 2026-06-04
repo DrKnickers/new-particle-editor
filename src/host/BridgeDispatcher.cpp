@@ -1891,9 +1891,15 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             filename = it->get<std::string>();
 
         IDirect3DDevice9* dev = m_engine ? m_engine->GetDevice() : nullptr;
-        const std::string uri = TexturePalette::GetThumbnailDataUri(
+        const TexturePalette::ThumbnailResult t = TexturePalette::GetThumbnail(
             Utf8ToWide(filename), m_fileManager, dev);
-        sendOk(json{{"dataUri", uri.empty() ? json(nullptr) : json(uri)}});
+        const char* status =
+            t.status == TexturePalette::ThumbStatus::Ok      ? "ok"      :
+            t.status == TexturePalette::ThumbStatus::Missing ? "missing" : "broken";
+        sendOk(json{
+            {"dataUri", t.dataUri.empty() ? json(nullptr) : json(t.dataUri)},
+            {"status",  status},
+        });
         return res;
     }
 

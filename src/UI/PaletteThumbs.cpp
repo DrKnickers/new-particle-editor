@@ -36,14 +36,17 @@ using std::wstring;
 
 namespace {
 
+using ThumbStatus = TexturePalette::ThumbStatus;
+
 // Decode at a fixed square size. Larger than the legacy 32px popup thumb
 // (the React grid renders ~120px cells from sub-feature B's "faithful"
 // option) but bounded so the base64 payload stays small.
 const int THUMB_PNG_PX = 128;
 
-// filename -> data URI. Empty string is cached too: a known-missing /
-// undecodable texture shouldn't be re-decoded on every popover open.
-std::unordered_map<wstring, string> g_bridgeThumbCache;
+// filename -> decode result (uri + status). Failures are cached too: a
+// known-missing / undecodable texture shouldn't be re-decoded on every
+// popover open, and the missing/broken verdict is stable per mod.
+std::unordered_map<wstring, TexturePalette::ThumbnailResult> g_bridgeThumbCache;
 
 // --- copied verbatim from AlphaCompositor.cpp (anonymous namespace there) ---
 
@@ -127,16 +130,21 @@ IFile* OpenTextureFile(IFileManager* fm, const string& filename)
     return nullptr;
 }
 
-bool DecodeToPngBytes(IFileManager* fm, IDirect3DDevice9* device,
-                      const wstring& filename, vector<uint8_t>& outPng)
+// Decode `filename` to PNG bytes (on Ok). PAL-14: the return value reports
+// WHY there's no image. Missing = the file isn't reachable (no device/FM, or
+// FileManager can't resolve it = a typo'd/absent path). Broken = the file IS
+// present but unusable (empty, or D3DX/GDI+ can't turn it into pixels). This
+// mirrors the legacy popup's GetMissingPlaceholder vs GetBrokenPlaceholder.
+ThumbStatus DecodeToPngBytes(IFileManager* fm, IDirect3DDevice9* device,
+                             const wstring& filename, vector<uint8_t>& outPng)
 {
-    if (fm == nullptr || device == nullptr) return false;
+    if (fm == nullptr || device == nullptr) return ThumbStatus::Missing;
 
     IFile* file = OpenTextureFile(fm, WideToAnsi(filename));
-    if (file == nullptr) return false;
+    if (file == nullptr) return ThumbStatus::Missing;
 
     const unsigned long size = file->size();
-    if (size == 0) { delete file; return false; }
+    if (size == 0) { delete file; return ThumbStatus::Broken; }
 
     vector<char> bytes(size);
     file->read(bytes.data(), size);
@@ -148,17 +156,17 @@ bool DecodeToPngBytes(IFileManager* fm, IDirect3DDevice9* device,
         THUMB_PNG_PX, THUMB_PNG_PX, 1, 0,
         D3DFMT_A8R8G8B8, D3DPOOL_SCRATCH,
         D3DX_DEFAULT, D3DX_DEFAULT, 0, NULL, NULL, &tex);
-    if (FAILED(hr) || tex == nullptr) { if (tex) tex->Release(); return false; }
+    if (FAILED(hr) || tex == nullptr) { if (tex) tex->Release(); return ThumbStatus::Broken; }
 
     IDirect3DSurface9* surf = nullptr;
-    if (FAILED(tex->GetSurfaceLevel(0, &surf))) { tex->Release(); return false; }
+    if (FAILED(tex->GetSurfaceLevel(0, &surf))) { tex->Release(); return ThumbStatus::Broken; }
 
     D3DLOCKED_RECT lr = {};
     if (FAILED(surf->LockRect(&lr, NULL, D3DLOCK_READONLY)))
     {
         surf->Release();
         tex->Release();
-        return false;
+        return ThumbStatus::Broken;
     }
 
     // Copy out into a tightly-packed BGRA buffer so the source surface can be
@@ -174,56 +182,63 @@ bool DecodeToPngBytes(IFileManager* fm, IDirect3DDevice9* device,
     tex->Release();
 
     CLSID pngClsid = {};
-    if (!GetPngEncoderClsid(pngClsid)) return false;
+    if (!GetPngEncoderClsid(pngClsid)) return ThumbStatus::Broken;
 
     // D3DFMT_A8R8G8B8 is BGRA in memory, matching GDI+ PixelFormat32bppARGB.
     Gdiplus::Bitmap bmp(THUMB_PNG_PX, THUMB_PNG_PX, stride,
                         PixelFormat32bppARGB, dib.data());
-    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return ThumbStatus::Broken;
 
     IStream* stream = nullptr;
     if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)) || stream == nullptr)
-        return false;
+        return ThumbStatus::Broken;
     if (bmp.Save(stream, &pngClsid, nullptr) != Gdiplus::Ok)
     {
         stream->Release();
-        return false;
+        return ThumbStatus::Broken;
     }
 
     LARGE_INTEGER zero = {};
     stream->Seek(zero, STREAM_SEEK_SET, nullptr);
     STATSTG stat = {};
-    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) { stream->Release(); return false; }
+    if (FAILED(stream->Stat(&stat, STATFLAG_NONAME))) { stream->Release(); return ThumbStatus::Broken; }
     const size_t n = (size_t)stat.cbSize.QuadPart;
     outPng.resize(n);
     ULONG readBytes = 0;
     if (FAILED(stream->Read(outPng.data(), (ULONG)n, &readBytes)) || readBytes != n)
     {
         stream->Release();
-        return false;
+        return ThumbStatus::Broken;
     }
     stream->Release();
-    return true;
+    return ThumbStatus::Ok;
 }
 
 } // namespace
 
 namespace TexturePalette {
 
-std::string GetThumbnailDataUri(const std::wstring& filename,
-                                IFileManager* fileManager,
-                                IDirect3DDevice9* device)
+ThumbnailResult GetThumbnail(const std::wstring& filename,
+                             IFileManager* fileManager,
+                             IDirect3DDevice9* device)
 {
     auto it = g_bridgeThumbCache.find(filename);
     if (it != g_bridgeThumbCache.end()) return it->second;
 
-    string uri;
     vector<uint8_t> png;
-    if (DecodeToPngBytes(fileManager, device, filename, png) && !png.empty())
-        uri = "data:image/png;base64," + Base64Encode(png.data(), png.size());
+    const ThumbStatus status = DecodeToPngBytes(fileManager, device, filename, png);
 
-    g_bridgeThumbCache[filename] = uri;  // cache "" too (don't re-decode known-bad)
-    return uri;
+    ThumbnailResult result;
+    result.status = status;
+    if (status == ThumbStatus::Ok && !png.empty())
+        result.dataUri = "data:image/png;base64," + Base64Encode(png.data(), png.size());
+    else if (status == ThumbStatus::Ok)
+        // Defensive: an "Ok" decode that produced no bytes is, to the user, a
+        // broken texture (no image to show).
+        result.status = ThumbStatus::Broken;
+
+    g_bridgeThumbCache[filename] = result;  // cache failures too (don't re-decode known-bad)
+    return result;
 }
 
 void ClearBridgeThumbCache()

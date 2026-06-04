@@ -18,6 +18,7 @@ type ListResp = {
 function makeBridge(opts?: {
   list?: Partial<ListResp>;
   thumbnail?: string | null;
+  thumbnailStatus?: "ok" | "missing" | "broken";
   togglePin?: { ok: true; pinned: boolean } | { ok: false; reason: "pins-full" };
 }) {
   const listResp: ListResp = {
@@ -34,7 +35,10 @@ function makeBridge(opts?: {
         case "textures/palette/list":
           return Promise.resolve({ ...listResp, filter: req.params!.slot });
         case "textures/palette/thumbnail":
-          return Promise.resolve({ dataUri: opts?.thumbnail ?? null });
+          return Promise.resolve({
+            dataUri: opts?.thumbnail ?? null,
+            status: opts?.thumbnailStatus ?? (opts?.thumbnail ? "ok" : "missing"),
+          });
         case "textures/palette/toggle-pin":
           return Promise.resolve(opts?.togglePin ?? { ok: true, pinned: true });
         case "textures/palette/touch-recent":
@@ -183,6 +187,64 @@ describe("TexturePalettePopover", () => {
     expect(
       await screen.findByTestId(`palette-thumb-placeholder-${pin.filename}`),
     ).toBeInTheDocument();
+  });
+
+  it("distinguishes a broken thumbnail (decode-failed) from missing (PAL-14)", async () => {
+    const b = makeBridge({
+      list: { pins: [pin], recents: [] },
+      thumbnail: null,
+      thumbnailStatus: "broken",
+    });
+    render(
+      <TexturePalettePopover bridge={b} slot="color" onApply={() => {}}>
+        <button>Palette</button>
+      </TexturePalettePopover>,
+    );
+    open();
+    const ph = await screen.findByTestId(`palette-thumb-placeholder-${pin.filename}`);
+    expect(ph).toHaveAttribute("data-thumb-status", "broken");
+    expect(ph).toHaveTextContent(/broken/i);
+  });
+
+  it("marks a missing thumbnail (file-not-found) as missing (PAL-14)", async () => {
+    const b = makeBridge({
+      list: { pins: [pin], recents: [] },
+      thumbnail: null,
+      thumbnailStatus: "missing",
+    });
+    render(
+      <TexturePalettePopover bridge={b} slot="color" onApply={() => {}}>
+        <button>Palette</button>
+      </TexturePalettePopover>,
+    );
+    open();
+    const ph = await screen.findByTestId(`palette-thumb-placeholder-${pin.filename}`);
+    expect(ph).toHaveAttribute("data-thumb-status", "missing");
+    expect(ph).toHaveTextContent(/missing/i);
+  });
+
+  it("renders the decoded image when status is ok", async () => {
+    const b = makeBridge({
+      list: { pins: [pin], recents: [] },
+      thumbnail: "data:image/png;base64,AAAA",
+      thumbnailStatus: "ok",
+    });
+    render(
+      <TexturePalettePopover bridge={b} slot="color" onApply={() => {}}>
+        <button>Palette</button>
+      </TexturePalettePopover>,
+    );
+    open();
+    const applyBtn = await screen.findByRole("button", { name: `Apply ${pin.filename}` });
+    await waitFor(() =>
+      expect(applyBtn.querySelector("img")).toHaveAttribute(
+        "src",
+        "data:image/png;base64,AAAA",
+      ),
+    );
+    expect(
+      screen.queryByTestId(`palette-thumb-placeholder-${pin.filename}`),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the no-mod hint when no mod is active", async () => {
