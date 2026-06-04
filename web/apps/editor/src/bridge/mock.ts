@@ -55,6 +55,7 @@ import {
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
+  useMockLinkGroupConflicts,
   useMockRecentFiles,
   useMockTrackOverlay,
   snapshotEngineState,
@@ -1145,6 +1146,16 @@ export class MockBridge implements Bridge {
           payload: useMockEmitterTree.getState().tree,
         });
         return {};
+      }
+
+      // LNK-10: the native host diffs real emitter params; the mock has
+      // none, so it echoes whatever conflicts the test seeded (default:
+      // none). Read-only — no mutation, no events.
+      case "linkGroups/diff-membership": {
+        const groupId = req.params.groupId;
+        // Leaving (0/null) never overwrites anything → no conflicts.
+        if (groupId === null || groupId === 0) return { conflicts: [] };
+        return { conflicts: useMockLinkGroupConflicts.getState().conflicts };
       }
 
       // ---------------- settings: cross-mode registry ----------------

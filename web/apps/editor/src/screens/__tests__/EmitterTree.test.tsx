@@ -300,12 +300,13 @@ describe("EmitterTree", () => {
     // The gutter no longer reserves a fixed flex-column width; it's an
     // absolute layer positioned at (measured longest-name right + gap).
     // jsdom returns 0-size rects, so the measured right is 0 and left
-    // collapses to the gap constant (BRACKET_NAME_GAP_PX = 8px).
+    // collapses to the gap constant (BRACKET_NAME_GAP_PX = 16px, LNK-6
+    // widened from 8 so the bracket no longer hugs the name).
     const gutter = screen.getByTestId("link-group-bracket-gutter");
     expect(gutter).toBeInTheDocument();
     expect(gutter.className).toContain("absolute");
     expect(gutter.style.width).toBe("");      // no fixed width anymore
-    expect(gutter.style.left).toBe("8px");    // hug position (gap only in jsdom)
+    expect(gutter.style.left).toBe("16px");   // hug position (gap only in jsdom)
   });
 
   it("rendered brackets carry a data-lane attribute matching their assigned lane", async () => {
@@ -489,12 +490,13 @@ describe("EmitterTree", () => {
     });
 
     // Each row's outer button carries the grid template via inline style.
-    // Columns are [eye | role-glyph | name]: the glyph sits between the
-    // eye and the label. DOM order stays [eye, label, role] (glyph + label
-    // re-placed visually via grid-column) so the a11y tree / goldens are
-    // unchanged — assert that DOM order explicitly below.
+    // Columns are [eye | role-glyph | link-dot | name]: the glyph sits in
+    // col 2, the LNK-2 dot in col 3 (reserved on every row). DOM order stays
+    // [eye, label, role, dot] (all re-placed visually via grid-column; the
+    // dot is aria-hidden) so the a11y tree / goldens are unchanged — assert
+    // that DOM order explicitly below.
     const rowButton = screen.getByText("Smoke").closest("button")!;
-    expect(rowButton.style.gridTemplateColumns).toBe("18px 18px 1fr");
+    expect(rowButton.style.gridTemplateColumns).toBe("18px 18px 10px 1fr");
 
     // The visibility toggle is the FIRST DOM child (auto-placed in column 1).
     expect(rowButton.firstElementChild).toBe(
@@ -621,5 +623,132 @@ describe("EmitterTree", () => {
     const hideAll = screen.getByLabelText("Hide all emitters");
     expect(showAll.querySelector("svg")).not.toBeNull();
     expect(hideAll.querySelector("svg")).not.toBeNull();
+  });
+
+  // ─── P7 LNK-2 — per-row link dot ─────────────────────────────────
+
+  it("renders a decorative link dot on rows whose linkGroup !== 0", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Smoke (id=0) and Sparks (id=3) are both in linkGroup 1.
+    const dot0 = screen.getByTestId("emitter-link-dot-0");
+    const dot3 = screen.getByTestId("emitter-link-dot-3");
+    expect(dot0).toBeInTheDocument();
+    expect(dot3).toBeInTheDocument();
+
+    // The dot is decorative — it must NOT add to the accessible tree
+    // (keeps the a11y goldens stable, L-052/L-053).
+    expect(dot0.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("does NOT render a link dot on unlinked rows (linkGroup === 0)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke embers")).toBeInTheDocument();
+    });
+
+    // Smoke embers (id=1), Smoke puff (id=2), Spark trail (id=4), Flash
+    // (id=5) all have linkGroup 0 → no dot.
+    expect(screen.queryByTestId("emitter-link-dot-1")).toBeNull();
+    expect(screen.queryByTestId("emitter-link-dot-5")).toBeNull();
+  });
+
+  // ─── P7 LNK-6 — bracket hover-tint (brackets are visual-only) ─────
+
+  it("the bracket gutter is NON-interactive (no click handler steals row selection)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Pre-select Flash (id=5).
+    fireEvent.click(screen.getByText("Flash"));
+    expect(useEmitterSelectionStore.getState().ids).toEqual([5]);
+
+    // Clicking the bracket must NOT change the selection — it overlays the
+    // full-width rows, so a clickable bracket would steal row-selection
+    // clicks (the "kept deselecting" bug). It's purely visual now.
+    fireEvent.click(screen.getByTestId("link-group-bracket-1"));
+    expect(useEmitterSelectionStore.getState().ids).toEqual([5]);
+  });
+
+  it("hovering a LINKED row tints its whole group (data-link-hover), cleared on leave", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    const rowFor = (id: number) =>
+      document.querySelector(`[data-emitter-id="${id}"]`) as HTMLElement;
+
+    // Hover Smoke (id=0, group 1) → both group-1 members tint.
+    fireEvent.pointerEnter(rowFor(0));
+    expect(rowFor(0).getAttribute("data-link-hover")).toBe("true");
+    expect(rowFor(3).getAttribute("data-link-hover")).toBe("true");
+    // A non-member row stays un-tinted.
+    expect(rowFor(5).getAttribute("data-link-hover")).toBe("false");
+
+    fireEvent.pointerLeave(rowFor(0));
+    expect(rowFor(0).getAttribute("data-link-hover")).toBe("false");
+  });
+
+  it("hovering an UNLINKED row tints nothing", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Flash")).toBeInTheDocument();
+    });
+    const rowFor = (id: number) =>
+      document.querySelector(`[data-emitter-id="${id}"]`) as HTMLElement;
+
+    fireEvent.pointerEnter(rowFor(5)); // Flash, linkGroup 0
+    expect(rowFor(5).getAttribute("data-link-hover")).toBe("false");
+    expect(rowFor(0).getAttribute("data-link-hover")).toBe("false");
+  });
+
+  // ─── P7 LNK-8 — Dissolve link group ──────────────────────────────
+
+  it("Dissolve Link Group on a linked row unlinks every member at once", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+
+    // Open the context menu on Smoke (id=0, group 1 with Sparks id=3).
+    const smokeRow = document.querySelector('[data-emitter-id="0"]') as HTMLElement;
+    fireEvent.contextMenu(smokeRow);
+
+    const dissolve = await screen.findByText("Dissolve Link Group");
+    fireEvent.click(dissolve);
+
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const sm = calls.find((c) => c.kind === "linkGroups/set-membership");
+    expect(sm).toBeDefined();
+    // Every group-1 member dissolved in one call, groupId null = unlink.
+    expect(sm.params.ids.sort((a: number, b: number) => a - b)).toEqual([0, 3]);
+    expect(sm.params.groupId).toBeNull();
+  });
+
+  it("Dissolve Link Group is disabled on an unlinked row", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Flash")).toBeInTheDocument();
+    });
+
+    // Flash (id=5) is unlinked (linkGroup 0).
+    const flashRow = document.querySelector('[data-emitter-id="5"]') as HTMLElement;
+    fireEvent.contextMenu(flashRow);
+
+    const dissolve = await screen.findByText("Dissolve Link Group");
+    expect(dissolve.closest("[role='menuitem']")?.getAttribute("data-disabled")).not.toBeNull();
   });
 });

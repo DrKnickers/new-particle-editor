@@ -37,6 +37,11 @@ import { create } from "zustand";
 type EmitterSelectionStore = {
   ids: number[];
   primary: number | null;
+  // The shift-range pivot. Set by every NON-shift gesture (setSingle,
+  // toggle-add, setIds) and held FIXED across consecutive shift-clicks so
+  // a series of shift-clicks all extend from the same origin row — not
+  // from the previously shift-clicked row (the moving-anchor bug).
+  anchor: number | null;
   setSingle: (id: number) => void;
   toggle: (id: number) => void;
   range: (toId: number, orderedIds: number[]) => void;
@@ -48,13 +53,14 @@ export const useEmitterSelectionStore = create<EmitterSelectionStore>(
   (set, get) => ({
     ids: [],
     primary: null,
-    setSingle: (id) => set({ ids: [id], primary: id }),
+    anchor: null,
+    setSingle: (id) => set({ ids: [id], primary: id, anchor: id }),
     toggle: (id) => {
       const { ids, primary } = get();
       const idx = ids.indexOf(id);
       if (idx === -1) {
-        // Add. Becomes the new primary.
-        set({ ids: [...ids, id], primary: id });
+        // Add. Becomes the new primary AND the new shift anchor.
+        set({ ids: [...ids, id], primary: id, anchor: id });
       } else {
         // Remove. Primary stays unless we just removed it.
         const nextIds = ids.filter((x) => x !== id);
@@ -64,32 +70,35 @@ export const useEmitterSelectionStore = create<EmitterSelectionStore>(
           // falling back to null when the set is now empty.
           nextPrimary = nextIds.length > 0 ? nextIds[nextIds.length - 1]! : null;
         }
-        set({ ids: nextIds, primary: nextPrimary });
+        set({ ids: nextIds, primary: nextPrimary, anchor: nextPrimary });
       }
     },
     range: (toId, orderedIds) => {
-      const { primary } = get();
-      // No primary anchor → behave like setSingle (selects only toId).
-      if (primary === null) {
-        set({ ids: [toId], primary: toId });
+      // Pivot from the stable anchor (fall back to primary, then toId) so
+      // repeated shift-clicks all extend from the same origin row. primary
+      // moves to toId (the focus row); anchor is left UNTOUCHED.
+      const { anchor, primary } = get();
+      const pivot = anchor ?? primary;
+      if (pivot === null) {
+        set({ ids: [toId], primary: toId, anchor: toId });
         return;
       }
-      const fromIdx = orderedIds.indexOf(primary);
+      const fromIdx = orderedIds.indexOf(pivot);
       const toIdx   = orderedIds.indexOf(toId);
       if (fromIdx === -1 || toIdx === -1) {
         // One of the endpoints isn't in the rendered tree (mid-mutation
         // race?). Fall back to a single-row selection so the UI stays
         // consistent.
-        set({ ids: [toId], primary: toId });
+        set({ ids: [toId], primary: toId, anchor: toId });
         return;
       }
       const lo = Math.min(fromIdx, toIdx);
       const hi = Math.max(fromIdx, toIdx);
       const slice = orderedIds.slice(lo, hi + 1);
-      set({ ids: slice, primary: toId });
+      set({ ids: slice, primary: toId }); // anchor unchanged
     },
-    clear: () => set({ ids: [], primary: null }),
-    setIds: (ids, primary) => set({ ids: [...ids], primary }),
+    clear: () => set({ ids: [], primary: null, anchor: null }),
+    setIds: (ids, primary) => set({ ids: [...ids], primary, anchor: primary }),
   }),
 );
 

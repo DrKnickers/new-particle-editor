@@ -91,7 +91,7 @@ import {
   resolveReparentSlot,
   type DropZone,
 } from "@/lib/drop-zone";
-import { computeLinkGroupBrackets } from "@/lib/link-group-colors";
+import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
 
 type Props = {
   bridge: Bridge;
@@ -239,6 +239,14 @@ type RowProps = {
   setEditValue: (value: string) => void;
   commitEdit: () => void;
   cancelEdit: () => void;
+  // LNK-6: true when this row's link group is the one currently hovered —
+  // the row paints a subtle tint so the user sees the whole group light up
+  // together. `onHoverLinkGroup` reports this row's group on pointer enter
+  // (null on leave) so the parent can drive the tint + bracket highlight.
+  linkHover: boolean;
+  onHoverLinkGroup: (groupId: number | null) => void;
+  // LNK-8: dissolve the entire link group this row belongs to.
+  onDissolveLinkGroup: (groupId: number) => void;
 };
 
 // FD10 (Group A): mirror of MenuBar's OccludingMenubarContent for
@@ -275,6 +283,7 @@ function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
   draggingId, indicator, startDrag,
   editing, beginEdit, setEditValue, commitEdit, cancelEdit,
+  linkHover, onHoverLinkGroup, onDissolveLinkGroup,
 }: RowProps) {
   const { node, depth, siblings, indexInSiblings } = row;
   const isPrimary = primaryId === node.id;
@@ -511,6 +520,9 @@ function EmitterRow({
           <button
             type="button"
             onPointerDown={(e) => startDrag(node, e)}
+            // LNK-6: hovering a linked row lights up its whole group.
+            onPointerEnter={() => onHoverLinkGroup(node.linkGroup || null)}
+            onPointerLeave={() => onHoverLinkGroup(null)}
             onClick={(e) =>
               onRowClick(node.id, {
                 ctrlKey: e.ctrlKey,
@@ -533,6 +545,7 @@ function EmitterRow({
             }}
             data-emitter-id={node.id}
             data-link-group={node.linkGroup}
+            data-link-hover={linkHover ? "true" : "false"}
             data-selected={isSelected ? "true" : "false"}
             data-primary={isPrimary ? "true" : "false"}
             data-drop-zone={indicatorZone ?? ""}
@@ -544,19 +557,23 @@ function EmitterRow({
               rowBgClass,
               reparentTintClass,
               fontClass,
+              // LNK-6: hovering a group's bracket tints its member rows.
+              linkHover ? "bg-accent/10" : "",
               node.visible ? "" : "opacity-50",
               draggingId === node.id ? "opacity-50" : "",
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
-              // Visual columns: [eye | role-glyph | name]. The role glyph
-              // (children only) sits between the visibility toggle and the
-              // label. DOM order stays [eye, label, role] — the glyph and
-              // label are re-placed VISUALLY via grid-column below — so the
+              // Visual columns: [eye | role-glyph | link-dot | name]. The
+              // role glyph (children only) sits in col 2; the LNK-2 link dot
+              // (linked rows only) reserves col 3 on EVERY row so names stay
+              // left-aligned whether linked or not. DOM order stays
+              // [eye, label, role, dot] — glyph/label/dot are placed VISUALLY
+              // via grid-column below, and the dot is aria-hidden — so the
               // accessibility tree (and the emitter-tree a11y goldens, which
               // capture "default ↻" + the row's accessible name) are
               // unchanged. Eye auto-places into column 1.
-              gridTemplateColumns: "18px 18px 1fr",
+              gridTemplateColumns: "18px 18px 10px 1fr",
             }}
           >
             {/* F1: visibility toggle on the LEFT (replaces the old role
@@ -600,7 +617,7 @@ function EmitterRow({
               // parent's `commitEdit`).
               <input
                 ref={inputRef}
-                style={{ gridColumn: 3, gridRow: 1 }}
+                style={{ gridColumn: 4, gridRow: 1 }}
                 data-testid={`emitter-rename-input-${node.id}`}
                 value={editing!.value}
                 onChange={(e) => setEditValue(e.target.value)}
@@ -634,7 +651,7 @@ function EmitterRow({
               <span
                 className="truncate"
                 data-emitter-name
-                style={{ gridColumn: 3, gridRow: 1 }}
+                style={{ gridColumn: 4, gridRow: 1 }}
                 onDoubleClick={(e) => {
                   // Double-click on the label starts inline rename. The
                   // stopPropagation prevents the click-handler chain
@@ -661,6 +678,23 @@ function EmitterRow({
               >
                 {roleGlyph(node.role)}
               </span>
+            )}
+            {/* LNK-2: per-row "is-linked" dot, placed in col 3 (left of the
+                name). Decorative (aria-hidden) so the accessible name — and
+                the emitter-tree a11y goldens — stay unchanged. Coloured to
+                MATCH this row's bracket (colorForGroup), so the dot and the
+                gutter bracket read as the same group at a glance. */}
+            {isLinked && (
+              <span
+                aria-hidden
+                data-testid={`emitter-link-dot-${node.id}`}
+                style={{
+                  gridColumn: 3,
+                  gridRow: 1,
+                  background: colorForGroup(node.linkGroup) ?? undefined,
+                }}
+                className="pointer-events-none size-1.5 justify-self-center rounded-full"
+              />
             )}
           </button>
         </ContextMenu.Trigger>
@@ -749,6 +783,13 @@ function EmitterRow({
               Leave Link Group
             </ContextMenu.Item>
             <ContextMenu.Item
+              onSelect={() => onDissolveLinkGroup(node.linkGroup)}
+              disabled={!isLinked}
+              className={menuItemClass}
+            >
+              Dissolve Link Group
+            </ContextMenu.Item>
+            <ContextMenu.Item
               onSelect={handleLinkGroupSettings}
               disabled={!isLinked}
               className={menuItemClass}
@@ -773,7 +814,7 @@ const LANE_WIDTH_PX     = 10;  // 2px bracket + 8px gap to next lane
 // lane. The bracket layer is absolutely positioned at (measured longest-name
 // right + this gap) so the brackets hug the names instead of sitting at the
 // panel's far-right edge. See the measure effect in EmitterTree.
-const BRACKET_NAME_GAP_PX = 8;
+const BRACKET_NAME_GAP_PX = 16;
 
 // ─── Panel-header toolbar ────────────────────────────────────────────
 // FD10 (Group A polish): restore the legacy panel toolbar from
@@ -1249,6 +1290,34 @@ export function EmitterTree({ bridge }: Props) {
     [flatRows],
   );
 
+  // LNK-6: hovering a LINKED row lights up its whole group — the member
+  // rows tint and the gutter bracket thickens/brightens. `hoveredLinkGroup`
+  // is the group currently hovered (null = none). The brackets themselves
+  // are NOT click targets (they overlay the full-width rows and would steal
+  // selection clicks), so the hover signal originates from the rows.
+  const [hoveredLinkGroup, setHoveredLinkGroup] = useState<number | null>(null);
+
+  // LNK-8: dissolve a whole link group in one action. Gather every member
+  // of `groupId` from the live flat list and unlink them all with a single
+  // `set-membership {groupId:null}` — the host's per-target LeaveLinkGroup
+  // (+ auto-dissolve of the last pair) unwinds the group under one
+  // captureUndo, so a single Ctrl+Z restores it. Reads the live flatRows
+  // at call time, never a cached id list (R4 mitigation).
+  const handleDissolveLinkGroup = useCallback(
+    (groupId: number) => {
+      if (groupId === 0) return;
+      const ids = flatRows
+        .filter((r) => r.node.linkGroup === groupId)
+        .map((r) => r.node.id);
+      if (ids.length === 0) return;
+      void bridge.request({
+        kind: "linkGroups/set-membership",
+        params: { ids, groupId: null },
+      });
+    },
+    [flatRows, bridge],
+  );
+
   // [link-group polish] "Hug the longest name": position the bracket
   // layer at (longest visible name's right edge + gap) instead of the
   // panel's far-right edge. The 1fr name column FILLS the row, so the
@@ -1547,6 +1616,12 @@ export function EmitterTree({ bridge }: Props) {
               setEditValue={setEditValue}
               commitEdit={commitEdit}
               cancelEdit={cancelEdit}
+              linkHover={
+                hoveredLinkGroup !== null &&
+                row.node.linkGroup === hoveredLinkGroup
+              }
+              onHoverLinkGroup={setHoveredLinkGroup}
+              onDissolveLinkGroup={handleDissolveLinkGroup}
             />
           ))}
           </ul>
@@ -1557,7 +1632,13 @@ export function EmitterTree({ bridge }: Props) {
               per group, by groupId); a STUB is drawn at every member row
               (including first + last), not just top/bottom caps. The
               layer scrolls with the rows (absolute inside the relative
-              scroll container) and is pointer-events-none + aria-hidden. */}
+              scroll container). The gutter container stays
+              pointer-events-none so the gaps between lanes click through;
+              each bracket re-enables pointer events for LNK-6 (click =
+              select the group, hover = tint members). Brackets stay
+              aria-hidden — they're a mouse convenience over the already
+              keyboard-accessible row selection, so the a11y tree (and the
+              goldens) are unchanged. */}
           {bracketLeft !== null && brackets.length > 0 && (
             <div
               data-testid="link-group-bracket-gutter"
@@ -1569,14 +1650,31 @@ export function EmitterTree({ bridge }: Props) {
                 const top    = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
                 const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
                 const left   = b.lane * LANE_WIDTH_PX;
+                const hovered = hoveredLinkGroup === b.groupId;
                 return (
+                  // LNK-6: the bracket is VISUAL-ONLY (pointer-events-none,
+                  // inherited from the gutter). It must NOT capture clicks —
+                  // it overlays the full-width row buttons, so a clickable
+                  // bracket steals row-selection clicks that land in its x
+                  // band (confirmed: clicking it wiped an in-progress
+                  // selection). The "light up the whole group" affordance is
+                  // driven by hovering a member ROW instead (sets
+                  // hoveredLinkGroup), which the bracket reads here to
+                  // thicken/brighten.
                   <div
                     key={b.groupId}
                     data-testid={`link-group-bracket-${b.groupId}`}
                     data-link-group={b.groupId}
                     data-lane={b.lane}
                     className="absolute"
-                    style={{ top, left, width: 2, height, background: b.color }}
+                    style={{
+                      top,
+                      left,
+                      width: hovered ? 3 : 2,
+                      height,
+                      background: b.color,
+                      opacity: hovered ? 1 : 0.85,
+                    }}
                   >
                     {b.memberRowIndices.map((rowIdx) => (
                       <div

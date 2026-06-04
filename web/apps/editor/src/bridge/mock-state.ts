@@ -274,6 +274,33 @@ export const useMockLinkGroupExempt = create<LinkGroupExemptStore>(
   }),
 );
 
+// ─── LNK-10 join-conflict seam (mock only) ──────────────────────────
+//
+// The native host computes a join's field disagreements from the real
+// emitter params via `DiffNonExemptParams`. The MockBridge has only the
+// tree DTO (no per-emitter params), so it can't diff for real — instead
+// `linkGroups/diff-membership` returns whatever this store is seeded with
+// (default: none). Tests drive the SetLinkGroupDialog confirm flow by
+// seeding conflicts here; the real field-level correctness is a native
+// (user) verification (L-057 web-lane-vs-native split).
+
+export type LinkJoinConflict = { id: number; fields: string[] };
+
+type LinkGroupConflictStore = {
+  conflicts: LinkJoinConflict[];
+  setConflicts: (conflicts: LinkJoinConflict[]) => void;
+  resetAll: () => void;
+};
+
+export const useMockLinkGroupConflicts = create<LinkGroupConflictStore>(
+  (set) => ({
+    conflicts: [],
+    setConflicts: (conflicts) =>
+      set({ conflicts: conflicts.map((c) => ({ ...c, fields: [...c.fields] })) }),
+    resetAll: () => set({ conflicts: [] }),
+  }),
+);
+
 // ─── Tree-mutation helpers (Screen 4 Batch B1) ──────────────────────
 //
 // MockBridge invokes these to mutate the fixture in-place while

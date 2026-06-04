@@ -747,6 +747,17 @@ export type Request =
   | { kind: "linkGroups/set-exempt-fields";    params: { groupId: number; fields: string[] } }
   | { kind: "linkGroups/reset-exempt-fields";  params: { groupId: number } }
 
+  // LNK-10 join-conflict preview (read-only). Given the SAME params
+  // `set-membership` would receive, return — per joining emitter — the
+  // list of non-exempt fields that disagree with the value a join would
+  // overwrite them to, so the UI can warn before clobbering. Mirrors the
+  // host exactly: for `groupId > 0` the canonical is the group's first
+  // member and the exempt set is the group's; for `groupId === -1` (new
+  // group) the canonical is the first id and the exempt set is defaults;
+  // for `0`/`null` (leave) there's nothing to overwrite → no conflicts.
+  // Pure read — no mutation, no undo capture, no events.
+  | { kind: "linkGroups/diff-membership";      params: { ids: number[]; groupId: number | null } }
+
   // Undo / spawner / layout / accelerators
   | { kind: "undo/perform";               params: { direction: "undo" | "redo" } }
   | { kind: "layout/viewport-rect";       params: { x: number; y: number; w: number; h: number } }
@@ -977,6 +988,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "linkGroups/list-exempt-fields" }  ? { fields: string[] } :
   R extends { kind: "linkGroups/set-exempt-fields" }   ? Record<string, never> :
   R extends { kind: "linkGroups/reset-exempt-fields" } ? Record<string, never> :
+  R extends { kind: "linkGroups/diff-membership" }     ? { conflicts: { id: number; fields: string[] }[] } :
 
   // Undo / spawner / layout / accelerators
   R extends { kind: "undo/perform" }              ? { applied: boolean; label?: string } :

@@ -69,9 +69,90 @@ describe("SetLinkGroupDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
 
+    // OK now diffs first (LNK-10), so the join lands a microtask later.
+    await waitFor(() => {
+      const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      expect(calls.find((c) => c.kind === "linkGroups/set-membership")).toBeDefined();
+    });
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const membership = calls.find((c) => c.kind === "linkGroups/set-membership");
+    expect(membership.params).toEqual({ ids: [0, 1], groupId: -1 });
+  });
+
+  // ─── LNK-10 — inline join-conflict note (one-click join) ─────────
+
+  function makeConflictBridge(
+    tree: EmitterTreeDto,
+    conflicts: { id: number; fields: string[] }[],
+  ): Bridge & { request: ReturnType<typeof vi.fn> } {
+    return {
+      request: vi.fn().mockImplementation((req: { kind: string }) => {
+        if (req.kind === "emitters/list") return Promise.resolve(tree);
+        if (req.kind === "linkGroups/diff-membership")
+          return Promise.resolve({ conflicts });
+        return Promise.resolve({});
+      }),
+      on: vi.fn().mockReturnValue(() => {}),
+    } as unknown as Bridge & { request: ReturnType<typeof vi.fn> };
+  }
+
+  it("shows an INLINE note listing the fields a join would overwrite (no separate confirm)", async () => {
+    const bridge = makeConflictBridge(fixtureTree(), [
+      { id: 1, fields: ["lifetime", "gravity"] },
+    ]);
+    useEmitterSelectionStore.getState().setIds([0, 1], 0);
+    useTreeContextStore.getState().openDialog("set-link-group", 0);
+    render(<SetLinkGroupDialog bridge={bridge} />);
+    await screen.findByTestId("set-link-group-radio-new");
+
+    // The note appears reactively (no OK click needed) and lists the fields.
+    await screen.findByTestId("link-conflict-inline");
+    expect(screen.getByText(/lifetime/)).toBeInTheDocument();
+    expect(screen.getByText(/gravity/)).toBeInTheDocument();
+
+    // The diff was requested with the SAME params the join will use, and no
+    // join has fired yet (the user is just viewing the form).
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    const diff = calls.find((c) => c.kind === "linkGroups/diff-membership");
+    expect(diff.params).toEqual({ ids: [0, 1], groupId: -1 });
+    expect(calls.find((c) => c.kind === "linkGroups/set-membership")).toBeUndefined();
+  });
+
+  it("OK joins in a SINGLE click even when fields disagree", async () => {
+    const bridge = makeConflictBridge(fixtureTree(), [
+      { id: 1, fields: ["lifetime"] },
+    ]);
+    useEmitterSelectionStore.getState().setIds([0, 1], 0);
+    useTreeContextStore.getState().openDialog("set-link-group", 0);
+    render(<SetLinkGroupDialog bridge={bridge} />);
+    await screen.findByTestId("set-link-group-radio-new");
+    await screen.findByTestId("link-conflict-inline"); // note is showing
+
+    // One click → join fires immediately (handleOk is synchronous now).
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     const membership = calls.find((c) => c.kind === "linkGroups/set-membership");
     expect(membership).toBeDefined();
     expect(membership.params).toEqual({ ids: [0, 1], groupId: -1 });
+  });
+
+  it("shows no inline note when the join overwrites nothing", async () => {
+    const bridge = makeConflictBridge(fixtureTree(), []);
+    useEmitterSelectionStore.getState().setIds([0, 1], 0);
+    useTreeContextStore.getState().openDialog("set-link-group", 0);
+    render(<SetLinkGroupDialog bridge={bridge} />);
+    await screen.findByTestId("set-link-group-radio-new");
+
+    // Let the reactive diff resolve.
+    await waitFor(() => {
+      const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+      expect(calls.find((c) => c.kind === "linkGroups/diff-membership")).toBeDefined();
+    });
+    expect(screen.queryByTestId("link-conflict-inline")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "linkGroups/set-membership")).toBeDefined();
   });
 });

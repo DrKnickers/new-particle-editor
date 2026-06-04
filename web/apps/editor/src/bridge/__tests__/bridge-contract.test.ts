@@ -11,6 +11,7 @@ import {
   useMockEmitterTree,
   useMockEngineState,
   useMockLinkGroupExempt,
+  useMockLinkGroupConflicts,
   useMockRecentFiles,
   useMockTrackOverlay,
   makeDefaultEmitterTree,
@@ -29,6 +30,7 @@ beforeEach(() => {
   useMockRecentFiles.getState().reset();
   useMockEmitterTree.setState({ tree: makeDefaultEmitterTree() });
   useMockLinkGroupExempt.getState().resetAll();
+  useMockLinkGroupConflicts.getState().resetAll();
   useMockEmitterClipboard.getState().reset();
   useMockTrackOverlay.getState().reset();
   useMockEmitterProperties.getState().reset();
@@ -1002,6 +1004,37 @@ describe("MockBridge contract", () => {
     expect(r.fields).toEqual(expect.arrayContaining([
       "colorTexture", "normalTexture", "trackIndex",
     ]));
+  });
+
+  // ─── LNK-10 — linkGroups/diff-membership (join-conflict preview) ──
+
+  it("linkGroups/diff-membership returns the seeded conflicts for a real-group join", async () => {
+    const b = new MockBridge();
+    useMockLinkGroupConflicts.getState().setConflicts([
+      { id: 4, fields: ["lifetime", "gravity"] },
+    ]);
+    const r = await b.request({
+      kind: "linkGroups/diff-membership",
+      params: { ids: [4], groupId: 1 },
+    });
+    expect(r.conflicts).toEqual([{ id: 4, fields: ["lifetime", "gravity"] }]);
+  });
+
+  it("linkGroups/diff-membership reports no conflicts when leaving (groupId null/0)", async () => {
+    const b = new MockBridge();
+    useMockLinkGroupConflicts.getState().setConflicts([
+      { id: 4, fields: ["lifetime"] },
+    ]);
+    const left = await b.request({
+      kind: "linkGroups/diff-membership",
+      params: { ids: [4], groupId: null },
+    });
+    expect(left.conflicts).toEqual([]);
+    const zero = await b.request({
+      kind: "linkGroups/diff-membership",
+      params: { ids: [4], groupId: 0 },
+    });
+    expect(zero.conflicts).toEqual([]);
   });
 
   // ─── Screen 6 Batch A — emitters/get-tracks ─────────────────────

@@ -70,6 +70,32 @@ describe("emitter-selection atom", () => {
     expect(st.primary).toBe(1);
   });
 
+  it("consecutive shift ranges pivot from the ORIGINAL anchor, not the moving primary", () => {
+    // Repro: click `default` (0), shift-click `default_2` (1), shift-click
+    // `default_1` (2). Each shift must extend from the first-clicked anchor
+    // (0), so the result is [0,1,2] — not [1,2] (the moving-anchor bug).
+    const order = [0, 1, 2, 3, 4, 5];
+    const s = useEmitterSelectionStore.getState();
+    s.setSingle(0); // anchor = 0
+    s.range(1, order); // [0,1]
+    s.range(2, order); // extends from anchor 0, not primary 1
+    const st = useEmitterSelectionStore.getState();
+    expect(st.ids).toEqual([0, 1, 2]);
+    expect(st.primary).toBe(2);
+  });
+
+  it("a plain click re-anchors subsequent shift ranges", () => {
+    const order = [0, 1, 2, 3, 4, 5];
+    const s = useEmitterSelectionStore.getState();
+    s.setSingle(0);
+    s.range(2, order); // [0,1,2], anchor still 0
+    s.setSingle(4); // new anchor = 4
+    s.range(5, order); // extends from 4, not 0
+    const st = useEmitterSelectionStore.getState();
+    expect(st.ids).toEqual([4, 5]);
+    expect(st.primary).toBe(5);
+  });
+
   it("clear empties the selection", () => {
     const s = useEmitterSelectionStore.getState();
     s.setSingle(3);

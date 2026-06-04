@@ -51,6 +51,11 @@ export function SetLinkGroupDialog({ bridge }: Props) {
   const [mode, setMode] = useState<"new" | "existing">("new");
   const [existingGroups, setExistingGroups] = useState<number[]>([]);
   const [chosenGroup, setChosenGroup] = useState<number | null>(null);
+  // LNK-10: the non-exempt fields the chosen join would overwrite, shown
+  // INLINE so the user sees them before a single OK commits — no separate
+  // confirm step. Fetched reactively as the target (mode / group) changes;
+  // read-only, never blocks the join.
+  const [conflicts, setConflicts] = useState<{ id: number; fields: string[] }[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -58,6 +63,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
     const ids = [...useEmitterSelectionStore.getState().ids];
     setSelectedIds(ids);
     setMode("new");
+    setConflicts([]);
     // Fetch the live tree to extract existing groups.
     let cancelled = false;
     bridge
@@ -86,6 +92,27 @@ export function SetLinkGroupDialog({ bridge }: Props) {
     return false;
   }, [mode, chosenGroup, selectedIds]);
 
+  // LNK-10: reactively preview which non-exempt fields the current target
+  // (a new group, or the chosen existing group) would overwrite, so the
+  // form can list them BEFORE the user commits. Read-only; the result only
+  // drives the inline note — OK always proceeds. Re-runs when the target
+  // changes (mode / chosen group / selection).
+  useEffect(() => {
+    if (!open || selectedIds.length === 0) { setConflicts([]); return; }
+    if (mode === "existing" && chosenGroup === null) { setConflicts([]); return; }
+    const groupId = mode === "new" ? -1 : chosenGroup!;
+    let cancelled = false;
+    bridge
+      .request({ kind: "linkGroups/diff-membership", params: { ids: selectedIds, groupId } })
+      .then((r) => { if (!cancelled) setConflicts(r?.conflicts ?? []); })
+      .catch(() => { if (!cancelled) setConflicts([]); });
+    return () => { cancelled = true; };
+  }, [open, bridge, selectedIds, mode, chosenGroup]);
+
+  // OK joins in ONE click. The inline note above already showed any field
+  // disagreements, so there's no separate confirm step (legacy listed the
+  // differing fields in the same dialog). Synchronous — no async gap that
+  // could swallow the first click.
   const handleOk = () => {
     if (okDisabled) return;
     const groupId = mode === "new" ? -1 : chosenGroup!;
@@ -95,6 +122,11 @@ export function SetLinkGroupDialog({ bridge }: Props) {
     });
     close();
   };
+
+  // Differing fields across all joiners (deduped) + how many emitters
+  // would be overwritten — drives the inline note copy.
+  const conflictFields = Array.from(new Set(conflicts.flatMap((c) => c.fields)));
+  const conflictEmitterCount = conflicts.length;
 
   return (
     <Modal
@@ -151,6 +183,26 @@ export function SetLinkGroupDialog({ bridge }: Props) {
             All {selectedIds.length} selected
             {selectedIds.length === 1 ? " emitter" : " emitters"} will be linked.
           </p>
+          {/* LNK-10: inline disagreement note. Shows which shared fields the
+              join would overwrite, so the user decides BEFORE the single OK
+              — no separate confirm step. */}
+          {conflictFields.length > 0 && (
+            <div
+              data-testid="link-conflict-inline"
+              className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-200"
+            >
+              <p className="font-medium">
+                Joining overwrites {conflictFields.length}{" "}
+                {conflictFields.length === 1 ? "field" : "fields"} on{" "}
+                {conflictEmitterCount}{" "}
+                {conflictEmitterCount === 1 ? "emitter" : "emitters"} with the
+                group's values:
+              </p>
+              <p className="mt-0.5 text-amber-300/90">
+                {conflictFields.join(", ")}
+              </p>
+            </div>
+          )}
         </div>
       </Modal.Body>
       <Modal.Footer>
