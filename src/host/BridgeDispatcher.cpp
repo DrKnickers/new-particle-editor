@@ -2589,11 +2589,27 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             GetLinkGroupMembers(*sys, edited->linkGroup);
         const LinkExemptFlags& exempt =
             sys->getLinkExemptFlags(edited->linkGroup);
+        bool copied = false;
         for (size_t i = 0; i < members.size(); ++i)
         {
             if (members[i] != edited)
+            {
                 members[i]->copySharedParamsFrom(*edited, exempt);
+                copied = true;
+            }
         }
+        // L-059: copySharedParamsFrom REASSIGNS each sibling's non-exempt
+        // track multisets — invalidating any live particle's cached cursor
+        // iterators into them, across ALL non-exempt tracks (not just the
+        // one the user edited). The callers reseat only the edited track,
+        // which leaves a sibling's OTHER track cursors dangling → the next
+        // Engine::Update derefs a singular iterator (xtree:181 assert).
+        // Reseat every instance's cursors here, at the single choke point
+        // where the orphaning happens, so no caller can forget. Only fires
+        // for a linked emitter with ≥1 sibling (unlinked edits keep their
+        // own cheaper per-track reseat).
+        if (copied && m_engine != nullptr)
+            m_engine->OnParticleSystemChanged(-1);
     };
 
     // -------- emitters/get-properties (Phase 4.1 Fix dispatch 1) ----
@@ -3671,6 +3687,107 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- linkGroups/diff-membership (LNK-10) --------------------
+    //
+    // Read-only preview of a would-be join's non-exempt field
+    // disagreements, so the UI can warn before set-membership silently
+    // clobbers them. Mirrors the set-membership branches EXACTLY so the
+    // warning lists precisely the fields that handler would overwrite:
+    //   - groupId null/0 (leave): nothing is overwritten → no conflicts.
+    //   - groupId  >  0 and the group EXISTS (join): canonical =
+    //     members[0]; exempt = the group's flags; every target not
+    //     already in the group is diffed against the canonical
+    //     (matches JoinLinkGroup, which copies each joiner from members[0]
+    //     under the group's exempt set).
+    //   - groupId  >  0 but the group is empty, or groupId == -1 (new
+    //     group): canonical = the first resolved target; exempt = v1
+    //     defaults; the remaining targets are diffed against it (matches
+    //     set-membership's create paths).
+    // No mutation, no undo capture, no events fired.
+    if (kind == "linkGroups/diff-membership")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendErr("particle system not bound");
+            return res;
+        }
+
+        ParticleSystem* sys = m_pParticleSystem->get();
+
+        int groupIdRaw = 0;
+        if (params.contains("groupId") && !params["groupId"].is_null())
+            groupIdRaw = params["groupId"].get<int>();
+
+        const json& idsJson =
+            params.contains("ids") ? params["ids"] : json::array();
+
+        // Resolve (wire-id, emitter) pairs in caller order. The wire id
+        // is echoed back in each conflict so the UI can attribute it.
+        std::vector<std::pair<int, ParticleSystem::Emitter*>> targets;
+        for (const auto& v : idsJson)
+        {
+            int id = v.get<int>();
+            ParticleSystem::Emitter* e = getEmitterById(id);
+            if (e != nullptr) targets.emplace_back(id, e);
+        }
+
+        // Determine the canonical member, the exempt set, and the joiners
+        // to diff — exactly as set-membership would.
+        ParticleSystem::Emitter* canonical = nullptr;
+        const LinkExemptFlags*   exempt    = nullptr;
+        std::vector<std::pair<int, ParticleSystem::Emitter*>> joiners;
+
+        if (groupIdRaw > 0)
+        {
+            uint32_t target = static_cast<uint32_t>(groupIdRaw);
+            std::vector<ParticleSystem::Emitter*> members =
+                GetLinkGroupMembers(*sys, target);
+            if (!members.empty())
+            {
+                canonical = members[0];
+                exempt    = &sys->getLinkExemptFlags(target);
+                for (const auto& t : targets)
+                    if (t.second->linkGroup != target)
+                        joiners.push_back(t);
+            }
+            else if (!targets.empty())
+            {
+                canonical = targets[0].second;
+                exempt    = &GetDefaultLinkExemptFlags();
+                for (size_t i = 1; i < targets.size(); ++i)
+                    joiners.push_back(targets[i]);
+            }
+        }
+        else if (groupIdRaw == -1 && !targets.empty())
+        {
+            canonical = targets[0].second;
+            exempt    = &GetDefaultLinkExemptFlags();
+            for (size_t i = 1; i < targets.size(); ++i)
+                joiners.push_back(targets[i]);
+        }
+        // groupIdRaw == 0 (leave): canonical stays null → no conflicts.
+
+        json conflicts = json::array();
+        if (canonical != nullptr && exempt != nullptr)
+        {
+            for (const auto& j : joiners)
+            {
+                std::vector<std::string> fields =
+                    DiffNonExemptParams(*j.second, *canonical, *exempt);
+                if (!fields.empty())
+                {
+                    json entry;
+                    entry["id"]     = j.first;
+                    entry["fields"] = fields;
+                    conflicts.push_back(entry);
+                }
+            }
+        }
+
+        sendOk(json{{"conflicts", conflicts}});
+        return res;
+    }
+
     // -------- Screen 4 Batch B2 — add child / move / link-group memb -
 
     // -------- emitters/add-lifetime-child ---------------------------
@@ -3945,6 +4062,19 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // "no singleton groups" invariant, but a defensive sweep keeps
         // any future caller honest.
         EnforceSingleMemberLinkGroups();
+
+        // L-059: Join/Create call `copySharedParamsFrom`, which REPLACES
+        // each joining member's non-exempt track multisets with copies from
+        // the canonical member. Any live particle of those members holds
+        // cached cursor iterators into the OLD containers — now orphaned —
+        // and the next Engine::Update would dereference a dangling iterator
+        // (the xtree:181 "value-initialized iterator" assert). The legacy
+        // key-edit handlers reseat per-track; a membership change can touch
+        // EVERY non-exempt track on MULTIPLE members, so reseat all cursors
+        // for all instances (-1). Cheap (re-finds cursors) and idempotent.
+        if (m_engine != nullptr)
+            m_engine->OnParticleSystemChanged(-1);
+
         sendOk(json::object());
         markDirty();
         EmitEngineStateChanged();

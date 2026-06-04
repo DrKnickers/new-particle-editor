@@ -1114,17 +1114,28 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
         Log("[host] WebView2 bg => transparent\n");
     }
 
-    // Task 2.2: test-host mode enables DevTools (F12) so
-    // CDP debugging is fully functional for Playwright. No
-    // effect in normal launches — production users don't
-    // see DevTools unless they explicitly pass --test-host.
-    if (useTestHost && webView)
+    // WebView2 settings. Two things:
+    //  1. ALWAYS disable the native right-click context menu. This is a
+    //     desktop app, not a browser — the WebView2 default menu (Reload /
+    //     Save As / Inspect) otherwise pops on top of and MASKS the app's
+    //     own Radix context menus (emitter tree, curve editor), so e.g.
+    //     "Dissolve Link Group" is unreachable. The jsdom test lane can't
+    //     catch this (Radix opens fine there); only a faithful WebView2
+    //     launch surfaces it (L-057).
+    //  2. test-host mode enables DevTools (F12) for Playwright/CDP — no
+    //     effect in normal launches (gated on useTestHost).
+    if (webView)
     {
         ComPtr<ICoreWebView2Settings> settings;
         if (SUCCEEDED(webView->get_Settings(&settings)) && settings)
         {
-            settings->put_AreDevToolsEnabled(TRUE);
-            Log("[host] test-host: DevTools enabled (F12)\n");
+            settings->put_AreDefaultContextMenusEnabled(FALSE);
+            Log("[host] WebView2 default context menu disabled\n");
+            if (useTestHost)
+            {
+                settings->put_AreDevToolsEnabled(TRUE);
+                Log("[host] test-host: DevTools enabled (F12)\n");
+            }
         }
     }
 
