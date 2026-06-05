@@ -42,6 +42,7 @@ import { useTreeContextStore } from "@/lib/tree-context";
 import { requestEmitterRename } from "@/lib/tree-action";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 import { toggleDock } from "@/lib/right-dock";
+import { RESET_CAMERA } from "@/lib/reset-camera";
 import { Modal } from "@/components/Modal";
 
 // FD8 follow-up: each MenubarContent needs to register itself with the
@@ -739,20 +740,15 @@ export function MenuBar({
               <CheckSlot active={false} />
               Step Forward
             </Menubar.Item>
-            {/* FD10 Group D: dispatches engine/set/camera with the
-                legacy default vectors from main.cpp:1814 — no new
-                bridge kind required, the camera setter already exists.
-                Matches the engine constructor's defaults (engine.cpp:
-                m_eye.{Position,Target,Up}). */}
+            {/* FD10 Group D: dispatches engine/set/camera with the legacy
+                default vectors. Shares RESET_CAMERA with the Ctrl+Home
+                accelerator (lib/reset-camera.ts) so the two can't drift —
+                no new bridge kind required, the camera setter already exists. */}
             <Menubar.Item
               className={ITEM}
               onSelect={send({
                 kind: "engine/set/camera",
-                params: {
-                  position: [0, -250, 125],
-                  target:   [0,    0,   0],
-                  up:       [0,    0,   1],
-                },
+                params: RESET_CAMERA,
               })}
             >
               <CheckSlot active={false} />

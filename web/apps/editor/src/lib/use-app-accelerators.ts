@@ -24,15 +24,7 @@ import type { Bridge, EngineStateDto } from "@particle-editor/bridge-schema";
 import { promptSaveChanges } from "@/lib/file-state";
 import { toggleDock } from "@/lib/right-dock";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
-
-// Reset-camera default vectors — the legacy `ID_VIEW_RESETCAMERA` result
-// (main.cpp:1814 / engine constructor defaults). Kept identical to the
-// View → Reset Camera menu item in MenuBar.tsx.
-const RESET_CAMERA = {
-  position: [0, -250, 125] as [number, number, number],
-  target: [0, 0, 0] as [number, number, number],
-  up: [0, 0, 1] as [number, number, number],
-};
+import { RESET_CAMERA } from "@/lib/reset-camera";
 
 const ACCEL_COMBOS = [
   "Ctrl+N",

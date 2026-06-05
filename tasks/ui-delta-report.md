@@ -227,7 +227,7 @@ Model and field set are byte-identical to legacy (host `kLinkFieldTable` mirrors
 | **MNU-3** | MED | 🟢 SOURCE | **Emitters menu: Toggle Visibility / Show All / Hide All are disabled placeholders** (`console.log` TODOs) ([MenuBar.tsx:501-521](web/apps/editor/src/components/MenuBar.tsx:501)). |
 | **MNU-5** | MED | 🟢 SOURCE | Link-group menu simplified (see LNK-8). |
 | **MNU-13** | MED | ⚪ USER | **`IDD_LINK_GROUP_DISAGREEMENT` has no React counterpart** (see LNK-10) — un-exempting conflicting fields may silently pick a winner. |
-| **MNU-7** | MED | ⚪ USER | **Reset Camera** uses hard-coded vectors `[0,-250,125]/[0,0,0]/[0,0,1]` ([MenuBar.tsx:662-675](web/apps/editor/src/components/MenuBar.tsx:662)); confirm they equal the legacy `ID_VIEW_RESETCAMERA` engine default. No `Ctrl+Home`. |
+| **MNU-7** | MED | ✅ VERIFIED | **Reset Camera vectors equal the legacy default — confirmed.** New-UI menu item ([MenuBar.tsx:747](web/apps/editor/src/components/MenuBar.tsx:747)) and the **`Ctrl+Home` accelerator** ([use-app-accelerators.ts:157](web/apps/editor/src/lib/use-app-accelerators.ts:157)) both dispatch `engine/set/camera` with `[0,-250,125]/[0,0,0]/[0,0,1]`, which the host maps 1:1 into the **same `Engine::SetCamera()`** the legacy `ID_VIEW_RESETCAMERA` ([main.cpp:1834](src/main.cpp:1834)) calls; vectors match the engine ctor default ([engine.cpp:2190](src/engine.cpp:2190)) exactly. (Earlier "No `Ctrl+Home`" note was stale — the accelerator is wired.) Both copies consolidated into one shared `RESET_CAMERA` constant ([reset-camera.ts](web/apps/editor/src/lib/reset-camera.ts)) so menu + shortcut can't drift. |
 | **MNU-6** | LOW | 🟢 SOURCE | View → Bloom… (`Ctrl+B`) + Bloom dialog removed (relocated to toolbar toggle + Lighting pane). Intentional. |
 | **MNU-12** | LOW | 🟢 SOURCE | **Import Emitters dialog is missing the legacy "Clear" button** (has Select All only). Other dialogs (Rescale ×2, Increment Index, Mod Nickname, Link Group Settings) are at field parity. |
 | **MNU-8 / MNU-11** | LOW/COSMETIC | 🟢 SOURCE | About dialog: different product name/author, **dropped Expat license text**; Mods menu drops the `folder (nickname)` parenthetical. |
@@ -277,7 +277,7 @@ legacy build:
 
 **Likely bugs — want fixes?**
 9. **SPN-4** drag modifier inverted vs keyboard/wheel (and the wrong comment).
-10. **MNU-7** Reset-Camera vectors — verify they match legacy exactly.
+10. ~~**MNU-7** Reset-Camera vectors — verify they match legacy exactly.~~ ✅ Verified (exact match) + vectors consolidated into one shared constant.
 11. **CRV-14** stale "1.2× headroom" comment that doesn't match the code.
 
 **Intentional evolution — thumbs up/down?**

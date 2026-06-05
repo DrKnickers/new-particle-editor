@@ -172,7 +172,12 @@ user at phase boundaries.
   golden (`dialog-autosave-recovery` via fixed-orphan `?demo=` route, deterministic age) + 2
   bridge round-trips (test-host suppression + recover no-op). Native **168/0**, web **481**.
   Live crash→recover round-trip = manual smoke (suppressed under `--test-host`). CHANGELOG added.
-- **Verify Reset-Camera vectors (MNU-7)** against legacy engine default.
+- ~~**Verify Reset-Camera vectors (MNU-7)** against legacy engine default.~~ ✅ DONE —
+  exact match confirmed (menu item + `Ctrl+Home` accel both dispatch `engine/set/camera`
+  with `[0,-250,125]/[0,0,0]/[0,0,1]` → same `Engine::SetCamera()` as legacy
+  `ID_VIEW_RESETCAMERA`, matching the engine ctor default). The two hard-coded copies were
+  consolidated into one shared `RESET_CAMERA` constant (`lib/reset-camera.ts`); the stale
+  "No `Ctrl+Home`" delta-report note was corrected.
 
 ## Explicitly KEEPING (intentional — not defects)
 Docking/splitters (VPT-9/10), multi-channel curve overlay + solo + shift-append +

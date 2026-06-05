@@ -16,6 +16,33 @@ Conventions:
 
 ## Changelog
 
+### Reset-Camera parity verified + single source of truth (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+View → Reset Camera (and its `Ctrl+Home` shortcut) restores exactly the legacy camera —
+eye `(0, -250, 125)`, target origin, up `+Z`. This was confirmed against the legacy editor at
+every hop and is no longer two separate hard-coded copies, so the menu item and the shortcut
+can't drift apart. No behavioural change — the vectors already matched; this locks that in.
+
+**How tackled.** Both the menu item ([`MenuBar.tsx`](web/apps/editor/src/components/MenuBar.tsx:747))
+and the `Ctrl+Home` accelerator ([`use-app-accelerators.ts`](web/apps/editor/src/lib/use-app-accelerators.ts:157))
+dispatch `engine/set/camera`, whose host handler
+([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1347)) maps the DTO 1:1 into an
+`Engine::Camera` and calls the *same* `Engine::SetCamera()` the legacy `ID_VIEW_RESETCAMERA`
+([`main.cpp`](src/main.cpp:1834)) invokes — so identical input vectors provably yield an
+identical camera, matching the engine constructor's `m_eye` default
+([`engine.cpp`](src/engine.cpp:2190)). The two duplicated literals were replaced by one exported
+constant ([`lib/reset-camera.ts`](web/apps/editor/src/lib/reset-camera.ts)), pinned to the legacy
+default by a unit test.
+
+**Issues encountered and resolutions.** The delta report claimed the new UI had no `Ctrl+Home`
+binding; reading the code showed the accelerator was in fact wired (stale note, now corrected).
+`Vec3` is a `readonly` tuple, so the shared constant is annotated `CameraDto` and relies on
+contextual typing to accept the plain array literals (`tsc --noEmit` clean).
+
+---
+
 ### Crash-recovery autosave (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
