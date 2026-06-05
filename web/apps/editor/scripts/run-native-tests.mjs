@@ -257,9 +257,38 @@ async function main() {
   });
 
   let childExited = false;
+  // Mid-run host-death guard (see lessons.md L-066). If the host dies WHILE
+  // Playwright is running, every remaining spec fails with
+  // `connect ECONNREFUSED ::1:9222` (the CDP endpoint died with the host).
+  // That ~60-failure cascade is indistinguishable from a real regression
+  // unless we detect it and shout: a single mid-run death once turned a real
+  // 160/5 into 39-failed and looked like a catastrophe. `pwRunning` gates the
+  // detection so the EXPECTED end-of-run teardown kill (after Playwright has
+  // already exited) and the CDP-timeout kill (before it starts) don't trip it.
+  let pwRunning = false;
+  let pwChild = null;
+  let hostDiedMidRun = false;
   child.on("exit", (code, signal) => {
     childExited = true;
     console.log(`[run-native-tests] host process exited (code=${code}, signal=${signal})`);
+    if (pwRunning) {
+      hostDiedMidRun = true;
+      console.error(
+        "\n[run-native-tests] *** FATAL: host process died MID-RUN " +
+          `(code=${code}, signal=${signal}). ***\n` +
+          "  Remaining specs are INVALID — their CDP endpoint died with the\n" +
+          "  host. This is NOT a test failure / regression. Re-run the suite;\n" +
+          "  if it recurs, check for a stale `--test-host` process or a locked\n" +
+          "  WebView2 user-data folder (lessons.md L-030 / L-066).\n",
+      );
+      // Stop Playwright NOW so the run halts at the death instead of burning
+      // through every remaining spec against the dead CDP endpoint.
+      try {
+        pwChild?.kill();
+      } catch {
+        /* already gone */
+      }
+    }
   });
 
   let cdpUp = false;
@@ -292,6 +321,7 @@ async function main() {
   const playwrightCli = join(editorDir, "node_modules", "@playwright", "test",
     "cli.js");
   const pwExit = await new Promise((resolve) => {
+    pwRunning = true;
     const pw = spawn(process.execPath, [
       playwrightCli, "test",
       "tests/bridge-native.spec.ts",
@@ -391,8 +421,13 @@ async function main() {
       stdio: "inherit",
       shell: false,
     });
-    pw.on("exit", (code) => resolve(code ?? 1));
+    pwChild = pw;
+    pw.on("exit", (code) => {
+      pwRunning = false;
+      resolve(code ?? 1);
+    });
     pw.on("error", (err) => {
+      pwRunning = false;
       console.error("[run-native-tests] failed to spawn playwright:", err);
       resolve(1);
     });
@@ -405,6 +440,17 @@ async function main() {
   }
   await sleep(500);
   await killAny();
+
+  // A mid-run host death (detected in child.on("exit") above) makes the
+  // Playwright exit code meaningless — exit 2 to distinguish it from ordinary
+  // spec failures (exit 1) and a clean pass (exit 0). See lessons.md L-066.
+  if (hostDiedMidRun) {
+    console.error(
+      "[run-native-tests] run ABORTED: host died mid-run (see FATAL above). " +
+        "Exiting 2 — NOT a regression; re-run before trusting this result.",
+    );
+    process.exit(2);
+  }
 
   process.exit(pwExit);
 }

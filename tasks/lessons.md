@@ -3986,6 +3986,14 @@ or a locked/dirty SHARED WebView2 user-data folder (L-030) poisoning the first r
   SORTED order with statuses filled in, NOT execution order — so "crashed after test N" from the
   reporter is unreliable; the `ECONNREFUSED ::1:9222` cascade + the `host process exited` line are
   the real signal that the host died and everything after is phantom.
+  - **Now self-detecting (this session).** `run-native-tests.mjs` watches the host child while
+    Playwright runs (a `pwRunning` gate); if the host exits mid-run it kills Playwright, prints a
+    `*** FATAL: host process died MID-RUN ***` banner, and exits **2** — distinct from ordinary
+    spec failures (exit 1) and a clean pass (exit 0). The expected end-of-run teardown kill
+    (SIGTERM after Playwright already exited, `pwRunning=false`) does NOT trip it. Proven by
+    fault-injection (`Stop-Process -Force` on `--test-host` mid-run → FATAL + exit 2, no cascade)
+    AND a clean run (165/0, exit 0, no false trigger). A future poisoned run now announces itself;
+    exit 2 ⇒ re-run, don't investigate as a regression.
 - Diagnose dumpless vs dump-producing exits: check `%LOCALAPPDATA%\CrashDumps` and the Windows
   Application event log. WER active + zero dump for THIS exit ⇒ NOT an unhandled exception ⇒ don't
   hunt for a C++ crash site. Exit `-1`/`0xFFFFFFFF` = external termination, not `abort()` (which is

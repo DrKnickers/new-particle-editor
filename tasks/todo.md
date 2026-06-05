@@ -135,10 +135,19 @@ prior real dumps; L-030 shared user-data folder). Captured as **L-066**.
   no source/component changes, no collateral golden regeneration.
 - web vitest untouched (no web src changed; 471 still stands).
 
-### Not done (deliberately, out of scope)
-- Harness fragility: one host death cascades ~60 phantom failures (no
-  "host died ⇒ abort loudly" guard in run-native-tests.mjs). Optional
-  hardening — flagged, not implemented (not part of green-up).
+### Follow-up DONE — harness host-death guard (this session, per user request)
+`run-native-tests.mjs`: a `pwRunning` gate + `pwChild` ref let the host's
+`exit` handler detect a MID-RUN death → kills Playwright, prints a
+`*** FATAL: host process died MID-RUN ***` banner, exits **2** (distinct
+from spec-fail 1 / clean 0). Teardown SIGTERM (after Playwright exited) is
+NOT tripped. Verified both ways:
+- Fault-injection: `Stop-Process -Force` on `--test-host` mid-run (killed
+  after test 91, code=4294967295 — same -1 signature as the original
+  poisoning) → FATAL + exit 2, aborted instead of cascading ~100 specs.
+- Clean run: 165 passed / 0 failed / 29 skipped, exit 0, ZERO false FATAL.
+So a future poisoned run announces itself. L-066 updated.
+
+### Still not done (deliberately, out of scope)
 - Did NOT add a host minidump handler / SetUnhandledExceptionFilter
-  (would help diagnose any FUTURE real crash, but the chased crash was
+  (would help diagnose any FUTURE *real* crash, but the chased crash was
   environmental — separate idea).
