@@ -3953,3 +3953,55 @@ keep `coalesceKey=0` (never fold).
   out the window makes each test's first edit start fresh instead of folding into the previous
   test's same-key entry on a shared host. Within a test, near-instant sequential bridge calls are
   inside the window by construction.
+
+## L-066
+
+**A fresh worktree's FIRST native-harness run can be environmentally POISONED — the host dies
+mid-run and cascades dozens of phantom failures — and looks identical to a catastrophic
+regression. Re-run before trusting any catastrophic native result; the dumpless exit code is the
+tell.**
+
+**Context.** Session 18, "native-harness green-up." The handoff said the baseline was 160 passed /
+5 failed (splitters ×4 + dialog-set-link-group ×1). The FIRST `pnpm test:native` on the fresh
+worktree instead produced **39 failed / 65 passed / 61 did-not-run**: the host process exited
+`0xFFFFFFFF` (-1) mid-run (after `emitter-keyboard`), and every later spec failed with `connect
+ECONNREFUSED ::1:9222` (CDP gone with the dead host). On top of that, 19 composition a11y goldens
+"drifted" (captured 1 emitter instead of the fixture's 3, unfrozen stats) — all garbage captures
+from the dying/poisoned host. A second, clean re-run produced EXACTLY the handoff's 160/5; all 19
+a11y "drifts" passed. So the entire first-run catastrophe was a one-off environmental poisoning,
+NOT a code bug.
+
+**The tell that it's environmental, not a crash.** A true unhandled C++ crash (SEH, or the
+exceptions-disabled nlohmann `JSON_THROW`→`std::abort()` at json.hpp:2523) drops a WER minidump —
+`%LOCALAPPDATA%\CrashDumps` had 6 from real past crashes (5/27–6/3), proving WER LocalDumps is
+active for `ParticleEditor.exe`. The session-18 death produced ZERO dump and ZERO Application-log
+event, and exit `-1` is the `TerminateProcess` signature (a clean quit returns `m.wParam`=0 per
+HostWindow.cpp:3395; a crash returns the exception NTSTATUS). Dumpless + no-event + code -1 ⇒ the
+host was *terminated/told to exit*, not a segfault — almost certainly a stale/stray `--test-host`
+or a locked/dirty SHARED WebView2 user-data folder (L-030) poisoning the first run.
+
+**Rules.**
+- When a native harness result is catastrophically worse than the handoff baseline (host death +
+  cascade), treat it as suspect and RE-RUN once before investigating. Playwright prints results in
+  SORTED order with statuses filled in, NOT execution order — so "crashed after test N" from the
+  reporter is unreliable; the `ECONNREFUSED ::1:9222` cascade + the `host process exited` line are
+  the real signal that the host died and everything after is phantom.
+- Diagnose dumpless vs dump-producing exits: check `%LOCALAPPDATA%\CrashDumps` and the Windows
+  Application event log. WER active + zero dump for THIS exit ⇒ NOT an unhandled exception ⇒ don't
+  hunt for a C++ crash site. Exit `-1`/`0xFFFFFFFF` = external termination, not `abort()` (which is
+  exit 3 / 0xC0000409) and not a clean quit (0).
+- Don't "fix" a11y golden drift you can't reproduce on a clean run — broad full-page drift sharing
+  one state delta (here: 1 vs 3 emitters across every surface) is a single upstream cause, usually
+  a poisoned host, not N golden bugs.
+- To see the EXACT reproducible diff behind one a11y golden failure, regenerate just it
+  (`pnpm a11y:update --grep "<surface>"`) and `git diff` the golden — removes the post-teardown
+  capture-timing confound in `error-context.md` (Playwright snapshots AFTER the test's `finally`
+  teardown, so the dialog is already dismissed there). This revealed dialog-set-link-group's golden
+  was merely STALE behind a deliberately-tightened "require ≥2 emitters" validation
+  (SetLinkGroupDialog.tsx, web-tested) — not a teardown-leakage bug as first hypothesized.
+- Splitter %-assertions vs PIXEL `minSize` floors: a spec that calls itself "window-size-agnostic"
+  because it asserts percentages is WRONG when the panels carry pixel `minSize` floors (PanelLayout
+  `left` 330px, `spawner` 260px). At the test-host's ~1264px window, 20% = ~253px < 330px → `left`
+  clamps to ~26%. Fix the TEST (the floor is intentional UI): compute the expected % from the
+  MEASURED group width — `max(defaultPct, floorPx/widthPx*100)` — so it's correct at every window
+  size, falling back to the flat default on a window wide enough that the floor doesn't bind.

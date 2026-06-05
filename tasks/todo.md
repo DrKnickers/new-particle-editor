@@ -1,453 +1,144 @@
-# LNK follow-up — settings-OK disagreement warning + resolution (LNK-10 / MNU-13, 2nd surface)
+# Session 18 — Native harness green-up (INVESTIGATION, pre-plan)
 
-**Status:** PLAN — scope confirmed by user (2026-06-04, "proceed with host version").
-**Branch:** `lt-4` (HEAD = `9c92c7c`). FF state already on `lt-4`.
-**Baseline:** vitest 466, build/tsc clean, native Debug x64 builds (toolchain restored this session).
+## STOP / re-plan: baseline does NOT match the handoff
 
-> **Verified the P7 primitive does NOT fit (L-022).** `linkGroups/diff-membership` diffs
-> *joiners* (non-members) against canonical using the group's *stored* exempt set — it returns
-> ZERO conflicts for the settings case (membership unchanged; exempt set edited locally). So
-> this needs a NEW host command, not a reuse. Host C++ + native rebuild, like P8b.
+Task picked (with user): get `pnpm test:native` fully green by fixing the
+"5 pre-existing failures (splitters ×4 + a11y-dialogs ×1)" the session-17
+handoff described as proven-pre-existing and flaky 5↔6.
 
-## 1. Goal + scope
-**Goal.** Restore the legacy settings-OK behaviour ([EmitterList.cpp:2841](src/UI/EmitterList.cpp:2841)):
-when the user shares (un-exempts) a field on which group members currently disagree, (a) **warn**
-which fields will be overwritten to the canonical (first-in-tree-order, members[0]) value, and
-(b) on OK, **resolve** the disagreement by clobbering members to canonical — instead of arch-C's
-current silent flag-set that leaves members inconsistent until the next edit.
+**Reality on this fresh worktree (commit dd757b5) does not match that.**
 
-**In:** new read-only `linkGroups/diff-exempt-change` command; extend `set-exempt-fields` to
-resolve disagreements on commit (+ L-059 reseat); inline amber warning in
-LinkGroupSettingsDialog (LNK-10 inline/synchronous pattern); schema + both mocks; native rebuild.
-**Out:** a separate confirm modal (use the inline pattern, L-061); the join surface (LNK-10, shipped
-in P7); per-field granular undo (one undo entry per OK, matching legacy).
+### What I did (setup — all clean)
+- Pre-flight: `origin/lt-4` = dd757b5, 0/0, tree clean. Web: `pnpm install`,
+  `test` → **471 passed**.
+- Restored native lane: WebView2 `packages/` via robocopy (L-039);
+  MSBuild Debug x64 → **exit 0** (LNK4098 benign). Built composition `dist/`
+  (L-040) → exit 0.
+- Ran full native harness (`pnpm test:native`).
 
-## 2. What the codebase gives us
-- `DiffNonExemptParams(a, b, exempt)` ([LinkGroup.cpp:267](src/LinkGroup.cpp:267)) — returns
-  non-exempt fields where a≠b. Pass the PROPOSED exempt flags → shared-and-disagreeing fields.
-- `LinkExemptFlagsFromJsonArray(json)` ([BridgeDispatcher.cpp:455](src/host/BridgeDispatcher.cpp:455)) —
-  wire names → flags. `GetLinkGroupMembers`, `getLinkExemptFlags`, `copySharedParamsFrom`,
-  `OnParticleSystemChanged(-1)` (the P7/L-059 reseat, used by `propagateLinkGroup`).
-- `set-exempt-fields` handler ([:3651](src/host/BridgeDispatcher.cpp:3651)) — currently flags-only.
-- `diff-membership` handler ([:3713](src/host/BridgeDispatcher.cpp:3713)) — structure to mirror.
-- LNK-10 inline-warning pattern in `SetLinkGroupDialog.tsx` (reactive diff effect + synchronous OK).
-- Mock: `exempts` Map + a seeded `conflicts` stub for diff-membership (mock-state.ts:238,290) —
-  field-level correctness is a native concern, so the mock returns seeded conflicts.
+### Harness result: 39 failed / 65 passed / 29 skipped / 61 did-not-run
+NOT "160 passed / 5 failed." Two distinct problems:
 
-## 3. Implementation approach
-- **Schema:** add
-  `{ kind: "linkGroups/diff-exempt-change"; params: { groupId: number; exempt: string[] } }`
-  → `{ conflicts: { id: number; fields: string[] }[] }`.
-- **Host — new read command `diff-exempt-change`:** resolve members (`GetLinkGroupMembers`);
-  canonical = members[0]; old = `getLinkExemptFlags(groupId)`, proposed =
-  `LinkExemptFlagsFromJsonArray(exempt)`; for each non-canonical member, run
-  `DiffNonExemptParams(member, canonical, proposed)` but **keep only fields that were exempt in
-  `old` and are shared in `proposed`** (the exempt→shared transition — matches legacy). Read-only.
-- **Host — extend `set-exempt-fields`:** after `setLinkExemptFlags`, if any newly-shared field
-  disagrees, for each non-canonical member `copySharedParamsFrom(*canonical, newFlags)` then
-  `OnParticleSystemChanged(-1)` (L-059 reseat — copySharedParamsFrom reassigns track multisets).
-  One `captureUndo()` already wraps it → single undo entry (matches legacy). Skip the clobber
-  when no disagreement (cheap, event-free common case).
-- **React (LinkGroupSettingsDialog):** a reactive effect calls `diff-exempt-change` with the
-  current local `exempt` set whenever it changes; render an inline amber note listing the fields
-  + dissenting-member count BEFORE OK (mirrors LNK-10). `handleOk` stays synchronous (the warning
-  already showed; OK just fires `set-exempt-fields`, which now resolves). Loading/error unaffected.
-- **Mocks:** test `makeBridge`-style canned `diff-exempt-change`; dev mock returns seeded
-  conflicts (mirror the diff-membership stub).
+1. **Host CRASH mid-run.** After `emitter-keyboard` (test 114) the host
+   process exited `0xFFFFFFFF` (`[run-native-tests] host process exited
+   code=4294967295`). Every later spec failed with `connect ECONNREFUSED
+   ::1:9222` — a cascade from the dead host, NOT real failures. host.log
+   ends cleanly after the emitter-keyboard Delete keystrokes (vk=46) with
+   no error trace → an unhandled crash that bypassed logging.
+   - **`splitters` never ran live this session** (host already dead) — so
+     the handoff's "splitters ×4" is unverified here. (Window client is
+     1264px per [PERF] logs, which WOULD clamp left to 330px/1264 ≈ 26%
+     — matching the handoff number — but the spec didn't execute.)
 
-## 4. Risks + mitigations
-1. **L-059 crash (the big one).** `copySharedParamsFrom` reassigns members' track multisets →
-   orphans live-particle cursors → `UpdateTrackCursors` assert. *Mitigation:* `OnParticleSystemChanged(-1)`
-   broad reseat after the clobber, exactly as P7 did inside `propagateLinkGroup`. Native-only;
-   user verifies no crash with live particles.
-2. **Warn-vs-stored-exempt drift.** The host compares proposed against the group's *stored* exempt,
-   which equals what React loaded on open — consistent. *Mitigation:* host owns the old set; React
-   only sends the proposed.
-3. **Already-shared-but-unsynced fields.** Arch-C's prior no-clobber may have left a "shared" field
-   disagreeing. The exempt→shared *transition* filter means we won't re-warn for those on an
-   unrelated OK; the next edit still syncs them (pre-existing behaviour, out of scope).
-4. **Mock fidelity.** Mock returns seeded conflicts, so the browser preview can't exercise real
-   field diffs (L-057) — unit tests cover the React contract; native covers correctness.
+2. **19 composition a11y goldens drift (pre-crash, real).** a11y-chrome
+   ×12, a11y-curve-spinner ×2, a11y-dialogs ×1 (dialog-set-link-group),
+   a11y-keyboard ×4 — NOT the single dialog-set-link-group the handoff
+   named. Exact diff (golden vs captured tree, menubar-closed):
+   - tree has **1** emitter (`default`) vs golden's **3** (default +
+     lifetime child ↻ + death child ✕)
+   - an emitter is **selected** (panels populated) vs golden's **no
+     selection** (placeholder panels)
+   - stats **unfrozen** (FPS 258) vs golden's frozen `—`
+   The emitter-count delta (1 vs 3) is the trustworthy signal (the
+   selection/freeze bits may be post-teardown capture-timing artifacts).
+   A single global state delta baked into every full-page snapshot ⇒ one
+   upstream cause, not 19 bugs: the `beforeEach` `file/open` of
+   `tests/fixtures/a11y-base-state.alo` is producing a 1-emitter doc where
+   the goldens encode a 3-emitter doc.
 
-## 5. Testing & verification
-- **TDD (web):** LinkGroupSettingsDialog test — un-exempting a field with seeded conflicts renders
-  the inline warning (fields + count); no conflicts → no warning; OK fires `set-exempt-fields`
-  with the proposed set; the diff effect re-runs on toggle. Add `diff-exempt-change` to the test bridge.
-- vitest (expect 466 + ~3), build, `tsc` clean.
-- **a11y goldens:** the settings dialog is a Modal (not a captured composition surface, like the
-  other dialogs) — grep-confirm zero capture.
-- **Host:** native Debug x64 compiles clean.
-- **User's lane (native):** with live particles, share a field two members disagree on → warning
-  lists it → OK overwrites the dissenter to canonical, no crash (L-059); no-disagreement OK is silent.
+### Leading hypotheses (UNCONFIRMED — do not act yet)
+- **H1 (environmental pollution).** The host reuses a STABLE/SHARED
+  WebView2 user-data folder (L-030). A prior --test-host run (or the
+  user's daily-driving) may have left it dirty; `seedCanonicalUiState`
+  only seeds theme + right-dock, not selection/doc. Could explain the
+  global state delta AND possibly the instability.
+- **H2 (real fixture/loader regression).** `a11y-base-state.alo` or the
+  `file/open` path resolves/loads differently now (1 root, no children).
+- **H3 (host crash = flake vs deterministic).** Unknown without a re-run.
 
-## Review
+### Next experiment (cheapest decisive datapoint)
+Re-run once after clearing the shared WebView2 user-data folder; observe
+(a) whether the host crash reproduces, (b) whether the a11y count/pattern
+is stable, (c) capture ONE clean CDP `ariaSnapshot` of menubar-closed
+(fresh host, exact beforeEach) and diff vs golden — removes the
+post-teardown timing confound.
 
-**Shipped (2026-06-04).** LNK-10/MNU-13 2nd surface — settings-OK disagreement warning +
-faithful resolution.
+## RESOLVED: the crash is a one-off, NOT a regression
 
-- **Schema** — new read-only `linkGroups/diff-exempt-change { groupId, exempt[] } → { conflicts }`.
-- **Host** ([BridgeDispatcher.cpp](src/host/BridgeDispatcher.cpp)) — `MakeNewlySharedMask(old,
-  proposed)` helper (marks every field exempt except exempt→shared transitions); new
-  `diff-exempt-change` command (diffs each non-canonical member vs members[0] over the
-  newly-shared mask); **extended `set-exempt-fields`** to resolve on commit — when a newly-shared
-  field disagrees, `copySharedParamsFrom(members[0], diffMask)` clobbers siblings + `captureUndo`
-  folds it into one entry + **`OnParticleSystemChanged(-1)` L-059 reseat**. No-disagreement OK
-  stays flag-only (event-free, no multiset churn).
-- **React** ([LinkGroupSettingsDialog.tsx](web/apps/editor/src/screens/LinkGroupSettingsDialog.tsx)) —
-  reactive `diff-exempt-change` effect on the local exempt set; inline amber warning listing the
-  fields + dissenting-member count BEFORE a synchronous OK (mirrors LNK-10, L-061).
-- **Mocks** — test stub + dev MockBridge return the seeded conflicts (mirror diff-membership;
-  field-level correctness is native).
+Re-ran the full harness (clean). Result: **160 passed / 5 failed / 29
+skipped** — EXACTLY the handoff baseline. Host exited normally
+(`code=null, signal=SIGTERM` = harness teardown). All 19 a11y "drifts"
+from run 1 PASS now → they were garbage captures from the dying host.
 
-**Verification:**
-- vitest **469** (was 466; +3: warning renders / no-warning / re-query-on-toggle). TDD red→green.
-- `pnpm build` clean; `tsc --noEmit` exit 0.
-- **Native Debug x64 compiles + links clean** (`MSBUILD EXIT=0`).
-- **Zero golden change** (grep — settings dialog is a Modal, not a captured surface).
+**Conclusion:** run 1's host death + broad a11y drift was an
+environmental one-off (dumpless exit code -1 = external TerminateProcess
+signature; zero WER dump despite WER being active and capturing 6 prior
+real crashes). Fails the systematic-debugging reproducibility gate ⇒
+environmental, not a code bug. Likely a stale/stray ParticleEditor
+--test-host or a locked/dirty shared WebView2 user-data folder (L-030)
+poisoning the FIRST run on a fresh worktree.
 
-**Verified the P7 primitive did NOT fit** (L-022): `diff-membership` diffs joiners under the
-stored exempt set → zero conflicts for the settings case. Needed the new command.
+### The 5 REAL (reproducible) failures — both root-caused
+1. **splitters ×4** — CONFIRMED. `Received: 26.108%` / `26.190%` vs
+   `Expected < 21`. Window client = 1264px; `left` Panel has a **pixel**
+   `minSize={330}` (PanelLayout.tsx:262) → 330/1264 = 26.1%. The spec
+   asserts flat 20/60/20 %, but the px floor clamps it at this window
+   width. Test-side bug (the px floor is intentional/correct UI); the
+   spec's "percentage assertions are window-size-agnostic" premise is
+   false. Affected: defaults(125), drag-persist(163), corrupted(227),
+   spawner-toggle(258).
+2. **dialog-set-link-group ×1** — `dialog-lighting`'s teardown clicks
+   Close → `setDock(null)` persists `alo:right-dock="none"`
+   (right-dock.ts:42); nothing re-seeds it, so later surfaces capture a
+   collapsed dock vs the goldens' "spawner". Non-symmetric teardown.
+   Test-harness bug, not the dock store.
 
-**User's lane (native, L-033/L-057):** with live particles, share a field two members disagree
-on → warning lists it → OK overwrites the dissenter to canonical with NO crash (L-059); a
-no-disagreement OK is silent.
+### Only real harness fragility found
+One host death cascaded ~60 phantom failures — the harness has no
+"host died mid-run ⇒ abort loudly" guard (run-native-tests.mjs watches
+`child.on('exit')` but Playwright keeps going against a dead CDP).
+Optional hardening, separate from the 5 fixes.
 
----
+## REVIEW — native harness fully GREEN (165 passed / 0 failed / 29 skipped)
 
-# P8b — Texture thumbnails: broken-vs-missing (PAL-14)
+User chose: fix all 5; splitters via compute-from-floor.
 
-**Status:** PLAN — scope + visual ("softer tinted + icon") confirmed by user (2026-06-04).
-**Branch:** `claude/practical-moore-1a19a1` (FF into `lt-4`). HEAD = `df7dcda` (P8a).
-**Baseline:** vitest 463, build/tsc clean. Native toolchain ABSENT (L-058); nuget cache
-PRESENT → robocopy WebView2 1.0.3967.48 + MSBuild Debug x64 needed for the host compile.
+### Fixes (test-side only — no shipping-UI changes, no native rebuild)
+1. **dialog-set-link-group golden regenerated.** Verified the drift via
+   `pnpm a11y:update --grep "dialog-set-link-group"` + `git diff`:
+   `"All 1 selected emitter will be linked." / OK` →
+   `"Select at least 2 emitters to create a group." / OK [disabled]`.
+   Confirmed intentional: SetLinkGroupDialog.tsx:188 + a vitest at
+   SetLinkGroupDialog.test.tsx:93 already assert it. Golden was STALE
+   behind a shipped validation tightening — regeneration is the fix.
+   (My initial teardown-leakage hypothesis was DISPROVEN — the modal's
+   golden is dialog-only; dock state never appears in it.)
+2. **splitters ×4 — floor-aware assertions.** Added `LEFT_MIN_PX=330`,
+   `SPAWNER_MIN_PX=260`, `outerGroupWidthPx(key)`, `flooredPct(...)` to
+   splitters.spec.ts; replaced the flat 19–21/59–61 outer-group bounds
+   with `max(defaultPct, floorPx/measuredWidth*100)` ±1 %. Correct at any
+   window size (wide → falls back to flat 20 %). The px floors are
+   intentional UI (label truncation), so the TEST was wrong, not
+   PanelLayout. Confirmed number: 330/1264 = 26.108 %.
 
-## 1. Goal + scope
-**Goal.** Restore the legacy distinction between a **broken** thumbnail (file present but
-won't decode → reddish-tinted cell + icon + "broken") and a **missing** one (file not found
-→ grey-tinted cell + icon + "missing"). Arch-C currently flattens both (and loading) to one
-blank block, so a user can't tell "I typo'd the path" from "the .dds is corrupt".
+### The "host crash" — NOT a regression (resolved)
+Non-reproducible. Clean re-run = 160/5 (handoff baseline exactly); the
+fix run = 165/0. Run-1 death was environmental poisoning (dumpless exit
+-1 = TerminateProcess signature; zero WER dump despite WER active w/ 6
+prior real dumps; L-030 shared user-data folder). Captured as **L-066**.
 
-**In:** schema `status` field; host 3-state classification threaded through decode→cache→
-bridge; React distinct placeholders (softer tinted + icon + label); both mocks; native
-Debug x64 rebuild to confirm compile. **Out:** the magenta/grey *literal* legacy style
-(user chose softer); any change to the apply/pin gestures (KEEP list); loading spinner
-(neutral block stays).
+### Verification
+- `pnpm --filter @particle-editor/editor lint` → exit 0.
+- `pnpm --filter @particle-editor/editor test:native` → **165 passed / 0
+  failed / 29 skipped**; host exited normally (SIGTERM teardown).
+- `git status`: only `splitters.spec.ts`, the one golden, `tasks/*` —
+  no source/component changes, no collateral golden regeneration.
+- web vitest untouched (no web src changed; 471 still stands).
 
-## 2. What the codebase gives us
-- Host already *computes* the distinction: `DecodeToPngBytes` returns `false` for both
-  `OpenTextureFile==null` (missing, [PaletteThumbs.cpp:136](src/UI/PaletteThumbs.cpp:136))
-  and decode/size failures (broken) — just doesn't surface which. `GetThumbnailDataUri`
-  ([:213](src/UI/PaletteThumbs.cpp:213)) caches `filename→string`; one caller
-  (BridgeDispatcher.cpp:1894).
-- Legacy reference: `GetBrokenPlaceholder`/`GetMissingPlaceholder`
-  ([TexturePalette.cpp:189](src/UI/TexturePalette.cpp:189)).
-- React `PaletteCell` ([TexturePalettePopover.tsx:203](web/apps/editor/src/screens/TexturePalettePopover.tsx:203))
-  with the existing `palette-thumb-placeholder-${filename}` testid (keep it).
-- Test mock `makeBridge` (TexturePalettePopover.test.tsx) + dev MockBridge (mock.ts:563).
-
-## 3. Implementation approach
-- **Schema:** `{ dataUri: string | null }` → `{ dataUri: string | null; status: "ok" |
-  "missing" | "broken" }`. `dataUri` non-null iff `status==="ok"`.
-- **Host** (TexturePalette.h + PaletteThumbs.cpp + BridgeDispatcher.cpp):
-  - `enum class ThumbStatus { Ok, Missing, Broken };`
-    `struct ThumbnailResult { std::string dataUri; ThumbStatus status; };`
-  - `DecodeToPngBytes` returns `ThumbStatus` (Ok fills `outPng`). Missing = fm/device null
-    OR file-not-found; Broken = size 0 / decode / lock / encode failure.
-  - Replace `GetThumbnailDataUri` with `ThumbnailResult GetThumbnail(...)`; cache becomes
-    `unordered_map<wstring, ThumbnailResult>` (still caches failures — don't re-decode).
-  - Bridge emits `{dataUri, status}` (status string from the enum).
-- **React** `PaletteCell`: state `{dataUri, status}|undefined` (undefined=loading). Render:
-  `status==="ok"` (dataUri) → `<img>`; `"broken"` → reddish cell (`bg-red-950/40`
-  border-red) + broken-image glyph + "broken"; `"missing"` → grey cell + glyph + "missing";
-  loading → neutral block. Keep the `palette-thumb-placeholder-${filename}` testid on the
-  placeholder wrapper + add `data-thumb-status`. `catch` → treat as `broken` (transport/
-  decode failure is the closest visual).
-- **Mocks:** test `makeBridge` gains `thumbnailStatus`; dev mock returns
-  `{dataUri:null, status:"missing"}`.
-
-## 4. Risks + mitigations
-1. **Backward-compat of the existing null-placeholder test.** It asserts the testid with a
-   mock returning `{dataUri:null}` (no status). *Mitigation:* keep the testid on the wrapper;
-   default `status ?? "missing"` so an absent status still renders a placeholder → existing
-   test stays green.
-2. **Cache type change.** `g_bridgeThumbCache` value `string→ThumbnailResult`.
-   `ClearBridgeThumbCache` unaffected. Low risk; compile-checked.
-3. **Native rebuild required (L-039/L-046).** Host C++ change → must compile Debug x64.
-   *Mitigation:* robocopy WebView2 from nuget cache (NOT `Copy-Item -Recurse $src\*`) +
-   MSBuild `ParticleEditor.sln` (repo root). Confirm clean compile; hand visual verify to user.
-4. **`catch`→broken.** A transport failure isn't a corrupt texture. *Mitigation:* rare;
-   broken is the closest honest signal; comment it.
-
-## 5. Testing & verification
-- **TDD (web):** extend TexturePalettePopover.test.tsx — `status:"broken"` →
-  `data-thumb-status="broken"` + "broken" label; `status:"missing"` → "missing"; `status:"ok"`
-  → `<img>`; existing null-placeholder test still green. Update `makeBridge`.
-- vitest (expect 463 + ~3), build, `tsc` clean.
-- **a11y goldens:** the palette popover isn't a captured surface (popover, like the color
-  picker) — grep-confirm zero capture; no re-baseline expected.
-- **Host:** native Debug x64 compiles clean (toolchain bring-up first).
-- **User's lane (native):** point a slot at (a) a non-existent file → grey "missing"; (b) a
-  corrupt/zero-byte .dds → reddish "broken"; a valid texture → thumbnail.
-
-## Review
-
-**Shipped (2026-06-04).** PAL-14 across all layers, "softer tinted + icon" style.
-
-- **Schema** — `textures/palette/thumbnail` response gains `status: "ok"|"missing"|"broken"`.
-- **Host** ([PaletteThumbs.cpp](src/UI/PaletteThumbs.cpp), [TexturePalette.h](src/UI/TexturePalette.h),
-  [BridgeDispatcher.cpp](src/host/BridgeDispatcher.cpp)) — `enum ThumbStatus` +
-  `struct ThumbnailResult`; `DecodeToPngBytes` now returns the 3-state status (Missing =
-  device/FM null or file-not-found; Broken = empty / decode / encode failure);
-  `GetThumbnailDataUri`→`GetThumbnail` (cache now `filename→ThumbnailResult`); bridge emits
-  `{dataUri, status}`.
-- **React** ([TexturePalettePopover.tsx](web/apps/editor/src/screens/TexturePalettePopover.tsx)) —
-  `PaletteCell` branches on status: reddish cell + ⚠ + "broken", grey cell + ? + "missing",
-  neutral block while loading, `<img>` on ok. Kept the `palette-thumb-placeholder-*` testid;
-  added `data-thumb-status`. `catch`→broken.
-- **Mocks** — test `makeBridge` gains `thumbnailStatus`; dev MockBridge returns
-  `{dataUri:null, status:"missing"}`.
-
-**Verification:**
-- vitest **466** (was 463; +3: broken/missing/ok). TDD: watched broken+missing fail RED
-  (no `data-thumb-status`), then GREEN; "ok" passed via the existing img branch.
-- `pnpm build` clean; `tsc --noEmit` exit 0.
-- **Native Debug x64 compiles + links clean** (`MSBUILD EXIT=0` → `x64\Debug\ParticleEditor.exe`)
-  after robocopy WebView2 restore (L-039) + MSBuild (L-046). LNK4098 is pre-existing/benign.
-- **Zero golden change** (grep — palette popover not a captured surface).
-
-**User's lane (native, L-033/L-057):** open the texture palette in `--new-ui` and confirm a
-non-existent path shows grey "missing", a corrupt/zero-byte .dds shows reddish "broken", and
-a valid texture still thumbnails. (MockBridge can't exercise this — no engine/files.)
-
----
-
-# P8a — Color picker live-preview + cancel/revert (PAL-2 / PAL-3)
-
-**Status:** PLAN — scope + dismiss-model confirmed by user (2026-06-04). Ready to execute.
-**Branch:** `claude/practical-moore-1a19a1` (FF into `lt-4` at session end).
-**Baseline verified:** git clean (HEAD = origin/lt-4 = `8f783b6`, 0/0), vitest **454/49**,
-`pnpm build` clean, `tsc --noEmit` exit 0. `node_modules` reinstalled (fresh worktree, L-058).
-Native build NOT present and **NOT needed** for P8a (proven web-only — see §4 risk 5).
-
-> P8 splits into **P8a (this plan — PAL-2/3, pure web, TDD)** and **P8b (PAL-14 thumbnails,
-> host C++ + native rebuild)**. P8a ships + FFs first; P8b is a separate follow-up commit.
-
----
-
-## 1. Goal + scope
-
-**Goal.** Restore the legacy color-picker's two-phase transaction so an exploratory color
-edit is both *live* and *reversible*. After this ships: dragging an RGB slider (or typing a
-hex, or clicking a swatch) updates the 3D scene **live** as you go (PAL-2), and an explicit
-**Cancel** (or Escape) snaps the engine back to the color the picker opened with (PAL-3) —
-the safety net the new commit-as-you-go picker lost, made more important by the inert undo
-(VPT-2). Faithful port of `src/UI/ColorButton.cpp` (legacy `CustomHookProc` fires
-`CBN_CHANGE` per R/G/B change; `WM_LBUTTONUP` snapshots `original` and reverts on Cancel).
-
-**In:**
-- **PAL-2 (MED)** — live preview: fire `onChange` on every in-flight edit (slider tick,
-  valid hex parse, swatch click), not just on slider release.
-- **PAL-3 (MED)** — Cancel/revert: snapshot `originalColor` on open; **OK + click-outside
-  keep** (consistent with new-UI commit-on-blur, SPN-9, KEEP list); **Cancel button +
-  Escape revert** to `originalColor`. New `Cancel | OK` footer row.
-- Fix a latent staleness bug surfaced by the rework: `pickerColor` is currently
-  `useState(value)` (initialized once at mount, never re-synced) — the open-edge snapshot
-  re-syncs it each open.
-- **UX extras (user-approved 2026-06-04):**
-  - **Before/After preview swatch** — show `originalColor` next to `pickerColor` by the
-    OK/Cancel row (native-ChooseColor-style), making Cancel discoverable. Display-only.
-  - **Editable R/G/B inputs** — the read-only R/G/B value spans become `type="number"`
-    inputs (clamp 0–255, live `onChange`), narrowing the PAL-1 gap.
-  - **Enter-in-hex = OK** — Enter in the hex field commits *and* closes.
-
-**Out (with reasons):**
-- **PAL-14** thumbnails (broken-vs-missing) — separate P8b commit; needs host C++ + native
-  bring-up; native-only verification; LOW sev. Deferred by explicit scope decision.
-- **PAL-9** single-click texture apply, **PAL-1** custom picker, **PAL-4** registry
-  persistence, **PAL-8** popover-not-toolwindow — all on the KEEP list (intentional new-UI).
-- **rAF/throttle coalescing** of live onChange — not now (YAGNI; legacy didn't throttle and
-  the bridge is async fire-and-forget). Revisit only if the user reports drag lag (Risk 1).
-- **No new host command / schema / mock change** — `onChange` already flows to the engine
-  via existing call-site bridge requests.
-
-## 2. What the codebase already gives us
-
-- **`ColorButton.tsx`** ([primitives/ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) —
-  the only behaviour file. Already has `pickerColor` state, `handleSelectColor` (fires
-  `onChange`, keeps popover open), `handleSliderChange` (currently *suppresses* onChange,
-  ColorButton.tsx:106), `handleSliderCommit` (onMouseUp/onKeyUp → onChange), hex
-  handlers, Radix `Popover.Root` (currently **uncontrolled**).
-- **Call sites** forward `onChange` to thin setters that do `setState` +
-  `void bridge.request(...)` — e.g. `updateSun`/`updateAmbient`
-  ([LightingPanel.tsx:239,290](web/apps/editor/src/screens/LightingPanel.tsx:239)),
-  plus `GroundTexturePanel`, `ToolPanel`, `PrimitivesGallery`. No undo push (VPT-2 inert),
-  nothing heavy per call. **No call-site edits needed** — they just fire more often (= the
-  live preview we want).
-- **Legacy reference** `src/UI/ColorButton.cpp:97-110` (snapshot `original`; OK keeps,
-  Cancel sets `rgbResult = original` + fires final change) + `CustomHookProc:40-45` (per-
-  change `CBN_CHANGE`).
-- **Existing tests** `__tests__/ColorButton.test.tsx` (3 cases: popover opens, basic color
-  fires onChange, Add-to-custom) — extend, keep green.
-
-## 3. Implementation approach
-
-**Single primitive, CONTROLLED popover via a single `onOpenChange` funnel.** (The
-Enter-in-hex=OK extra needs programmatic close, which uncontrolled can't do cleanly;
-controlled also makes OK/Cancel trivial. Desync risk is contained by funnelling every
-open/close — and the open-snapshot — through one `onOpenChange`.)
-
-- **Controlled open:** `const [open, setOpen] = useState(false);`
-  ```
-  <Popover.Root open={open} onOpenChange={(o) => {
-    if (o && !open) {                 // open transition → snapshot pre-edit truth
-      setOriginalColor(value);
-      setPickerColor(value);
-      setHexText(rgbToHex(value).slice(1).toUpperCase());
-    }
-    setOpen(o);                       // single funnel: trigger / outside-click / Escape all land here
-  }}>
-  ```
-  New state: `const [originalColor, setOriginalColor] = useState<RgbColor>(value);`
-  (Also fixes the latent `pickerColor` staleness — re-synced each open.)
-- **PAL-2 live preview:**
-  - `handleSliderChange` → set state **and** `onChange(next)` (delete the suppress comment;
-    **remove** `handleSliderCommit` + the now-dead `onMouseUp/onKeyUp` on the ranges).
-  - `handleHexChange` → on a *valid* `hexToRgb`, also `onChange(rgb)` (live). Invalid input
-    still only updates the text (no onChange). Keep `handleHexCommit` for invalid-text cleanup.
-  - `handleSelectColor` (swatch) → unchanged (already fires onChange, keeps open).
-- **PAL-3 keep/revert** (`handleCancel` shared by the Cancel button + Escape):
-  ```
-  const handleCancel = () => {
-    onChange(originalColor);              // re-commit the pre-edit color (engine has no undo)
-    setPickerColor(originalColor);
-    setHexText(rgbToHex(originalColor).slice(1).toUpperCase());
-  };
-  ```
-  - **OK button** → plain `<button onClick={() => setOpen(false)}>OK</button>`. **No
-    `onChange`** — `pickerColor` is provably in sync with the last `onChange` (slider/hex/
-    swatch set both together; invalid hex sets neither). "Keep" = just close.
-  - **Cancel button** → `<button onClick={() => { handleCancel(); setOpen(false); }}>`.
-  - **Escape** → `Popover.Content onEscapeKeyDown={handleCancel}` (revert; Radix then funnels
-    `onOpenChange(false)` → `setOpen(false)`). Verified reachable via document keydown
-    (Modal.test.tsx:36-48).
-  - **Outside-click / re-click trigger** → funnel closes, no revert; **keep**.
-- **UX extras:**
-  - **Before/After swatch:** in the footer, two squares — `originalColor` (label "Original",
-    `data-testid="color-original"`) and `pickerColor` (label "New") — so the user sees what
-    Cancel restores.
-  - **Editable R/G/B inputs:** replace each read-only value `<span>` with
-    `<input type="number" min={0} max={255} value={pickerColor[ch]}
-    onChange={(e) => { const n = parseInt(e.target.value,10); if (!Number.isNaN(n))
-    handleSliderChange(ch, n); }} aria-label={`${ch.toUpperCase()} value`} />`. Reuses
-    `handleSliderChange` (clamps + live onChange). NaN-guard ignores transient-empty;
-    select-replace + spinner arrows still work (controlled-numeric quirk, accepted).
-  - **Enter-in-hex = OK:** the hex `onKeyDown` Enter branch → `handleHexCommit();
-    setOpen(false);` (commit + close).
-- **Footer layout:** `[Original|New swatches] … [Cancel] [OK]` row, then "Add to custom
-  colors" below. Distinct `aria-label`s on every button/input for the tests.
-
-**Data flow:** open → snapshot original=value → user edits stream `onChange` → engine live →
-close path decides: keep (just close) or revert (`onChange(original)`). The engine has no
-undo, so revert *is* a re-commit of the old value — exactly the legacy model.
-
-**Forward synergy (note for VPT-2 undo, out of scope):** the `originalColor` open-snapshot
-is exactly the hook a future undo-capture wants — capture ONE undo entry per picker session
-(open→commit), not one per live tick. Flag in the handoff so VPT-2 coalesces.
-
-## 4. Risks + mitigations
-
-1. **Live-onChange bridge flood.** Per slider tick = one async `bridge.request`. *Mitigation:*
-   matches legacy `CBN_CHANGE`-per-change; requests are `void`-fire-and-forget (non-blocking);
-   engine tolerated this natively for years. **Accepted.** rAF-coalescing is a deferred
-   follow-up only if the user reports drag lag — not designed-around now.
-2. **`value` echo vs in-flight state.** Live `onChange` updates the parent → re-renders
-   ColorButton with a new `value` (for lighting, round-tripped through 0-1 float via
-   `rgbToVec4`). *Mitigation:* `originalColor`/`pickerColor` are snapshotted **only on the
-   open edge**, never re-derived from `value` per render — so echoes can't fight the drag.
-   The closed swatch/label reading live `value` is correct (shows the live color).
-3. **8-bit revert precision.** Lighting colors are 0-1 floats; the picker is 0-255 ints, so
-   `originalColor` is the 8-bit-accurate open value and revert restores *that*, not sub-8-bit
-   float precision. *Mitigation:* inherent to an 8-bit picker and identical to legacy
-   COLORREF — **accepted, faithful.** (L-057-adjacent but not a regression.)
-4. **Controlled-open desync.** A scattered `setOpen` could fight Radix's own dismiss.
-   *Mitigation:* every open/close + the snapshot funnels through ONE `onOpenChange`; OK/
-   Cancel/Enter only ever call `setOpen(false)`. Trigger-toggle, outside-click, and Escape
-   all land in the funnel. Explicit reopen + swatch-stays-open tests guard it.
-5. **Golden/a11y.** New OK/Cancel live inside the popover content (mounts only when open);
-   trigger markup byte-unchanged. **Verified:** `grep` of `*.golden.{yaml,json}` for
-   "Basic colors / Add to custom / Hex color input / Pick color" = **no matches** → no
-   scenario captures an open color popover → **zero golden change, no native harness
-   needed.** (Re-grep after coding to reconfirm.)
-
-## 5. Testing & verification
-
-**TDD — write red first, then implement.** Extend `ColorButton.test.tsx`:
-
-*Happy paths (PAL-2 live):*
-- [ ] Slider drag fires `onChange` per change (`fireEvent.change` on the R range →
-  `onChange` called with the new RGB *before* any mouseUp).
-- [ ] Typing a valid hex fires `onChange` live; typing an invalid hex does **not**.
-- [ ] Basic-swatch click still fires `onChange` + popover stays open (existing, keep green).
-
-*Cancel/revert (PAL-3):*
-- [ ] Open (value=red) → drag to blue (onChange blue) → click **Cancel** → last `onChange` = red.
-- [ ] Open (red) → drag to blue → **Escape** via `fireEvent.keyDown(document, {key:"Escape",
-  code:"Escape"})` → last `onChange` = red. (Repo-proven Radix-escape mechanism, Modal.test.)
-
-*Keep:*
-- [ ] Open (red) → drag to blue → click **OK** → last `onChange` = blue (no revert fired).
-- [ ] **No outside-click-dismiss test** — Radix `pointerDownOutside` is jsdom-flaky
-  (Modal.test.tsx:165 avoids it). "Keep" is the default no-revert path, already proven by
-  the OK-keeps case; final click-away behaviour is the user's native lane.
-
-*UX extras:*
-- [ ] Editable R/G/B input: `fireEvent.change(R-value-input, {value:"100"})` → `onChange`
-  fires with `r:100` (live); out-of-range clamps to 0–255.
-- [ ] Before/After swatch: after dragging, `color-original` swatch still shows the open
-  color (style backgroundColor) while "New" shows the dragged color.
-- [ ] Enter-in-hex closes: type a valid hex + Enter → `onChange` fired AND popover content
-  gone (`queryByText("Basic colors")` is null).
-
-*Lifecycle / edge:*
-- [ ] Reopen after external `value` change re-snapshots the fresh original (rerender with a
-  new value, reopen, Cancel → reverts to the *new* value, not the stale mount value).
-- [ ] `disabled` → trigger doesn't open (existing behaviour, no regression).
-- [ ] Existing 3 tests stay green (popover opens, basic-color fires onChange, Add-to-custom).
-
-*Suite-level:*
-- [ ] `pnpm --filter @particle-editor/editor test` → was 454; expect 454 + new cases.
-- [ ] `pnpm --filter @particle-editor/editor build` clean; `lint` (`tsc --noEmit`) exit 0.
-- [ ] Re-grep goldens to reconfirm zero capture → no `a11y:update` (web-only, L-052/L-053).
-
-*User's lane (L-033/L-057 — native, hand off):*
-- [ ] In faithful `--new-ui`: drag a Lighting color slider → scene updates live (PAL-2).
-- [ ] Cancel/Escape snaps the scene back to the open color (PAL-3); OK/click-away keep.
-
-## Review
-
-**Shipped (2026-06-04).** PAL-2 + PAL-3 + all three user-approved UX extras, one file
-([primitives/ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) + its test.
-
-- **PAL-2 live preview** — `handleSliderChange` and valid-`handleHexChange` now fire
-  `onChange` per change (deleted the suppress comment + the dead `handleSliderCommit` /
-  `onMouseUp/onKeyUp`).
-- **PAL-3 cancel/revert** — controlled `open` via a single `onOpenChange` funnel that
-  snapshots `originalColor` on the open edge; `handleCancel` re-commits it. **OK +
-  click-outside keep**; **Cancel button + `onEscapeKeyDown` revert**.
-- **UX extras** — Original/New before-after swatches; editable R/G/B `type=number` inputs
-  (reuse `handleSliderChange`, NaN-guarded); Enter-in-hex commits + closes.
-- **Latent bug fixed** — `pickerColor` now re-syncs each open (was mount-only).
-
-**Verification (web lane — fully mine, L-057):**
-- vitest **463** (was 454; +9 ColorButton cases). Watched all 9 fail RED first, then GREEN.
-- `pnpm build` clean; `tsc --noEmit` exit 0.
-- **Zero golden change** — re-grepped `*.golden.{yaml,json}` for the new strings: no match
-  (no scenario captures an open color popover). No native a11y harness needed.
-- **Browser preview (real app + MockBridge)** — drove the Sun-diffuse picker: live slider/
-  number preview updates the trigger; Original swatch holds the open color; **Cancel** and
-  **Escape** both revert + close; **OK** keeps + closes; console error-free. (Reads taken in
-  a tick *after* each event — synchronous post-event reads see pre-React-flush DOM; see
-  L-062.)
-
-**User's lane (native, L-033/L-057):** confirm the live preview drives the actual 3D scene
-colour and that Cancel/Escape snaps the scene back, in the faithful `--new-ui`.
+### Not done (deliberately, out of scope)
+- Harness fragility: one host death cascades ~60 phantom failures (no
+  "host died ⇒ abort loudly" guard in run-native-tests.mjs). Optional
+  hardening — flagged, not implemented (not part of green-up).
+- Did NOT add a host minidump handler / SetUnhandledExceptionFilter
+  (would help diagnose any FUTURE real crash, but the chased crash was
+  environmental — separate idea).

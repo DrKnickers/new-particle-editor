@@ -122,16 +122,52 @@ function dragSeparator(
   );
 }
 
-test("defaults render at 20/60/20 (outer) + 25/75 (left) + 75/25 (centre) on a clean localStorage", async () => {
+// PanelLayout's outer-group PIXEL floors (see PanelLayout.tsx: the `left`
+// Panel has minSize={330}, the `spawner` Panel minSize={260} — pixels, not
+// %, so inspector/dock labels don't truncate when dragged narrow). At a
+// narrow window these floors clamp the 20% defaults UPWARD, so the rendered
+// outer percentages are window-width-DEPENDENT: flat 20/60/20 only holds on a
+// window wide enough that 20% exceeds both floors (the test-host runs at
+// ~1264px client, where 20% = ~253px < 330px → left renders ~26%). Derive the
+// floor-aware expectation from the MEASURED group width instead of asserting a
+// flat 20% — this stays correct at any window size (wide → falls back to 20%).
+const LEFT_MIN_PX = 330;
+const SPAWNER_MIN_PX = 260;
+
+/** Width (px) of the horizontal outer Group whose `> [data-panel]` id set
+ *  joins to `key` (e.g. "left,center,spawner"). 0 if not found. */
+function outerGroupWidthPx(key: string) {
+  return page.evaluate((k) => {
+    for (const g of Array.from(document.querySelectorAll<HTMLElement>("[data-group]"))) {
+      if (window.getComputedStyle(g).flexDirection !== "row") continue;
+      const ids = Array.from(g.querySelectorAll<HTMLElement>(":scope > [data-panel]"))
+        .map((p) => p.id)
+        .join(",");
+      if (ids === k) return g.getBoundingClientRect().width;
+    }
+    return 0;
+  }, key);
+}
+
+/** The percentage a px-floored Panel renders at for a given group width:
+ *  max(defaultPct, floorPx / groupWidthPx * 100). */
+function flooredPct(floorPx: number, groupWidthPx: number, defaultPct: number) {
+  return Math.max(defaultPct, (floorPx / groupWidthPx) * 100);
+}
+
+test("defaults render at 20/60/20 (outer, floor-clamped) + 25/75 (left) + 75/25 (centre) on a clean localStorage", async () => {
   const layout = await readLayout();
   const outer = layout["horizontal:left,center,spawner"];
   expect(outer).toBeDefined();
-  expect(outer.left).toBeGreaterThan(19);
-  expect(outer.left).toBeLessThan(21);
-  expect(outer.center).toBeGreaterThan(59);
-  expect(outer.center).toBeLessThan(61);
-  expect(outer.spawner).toBeGreaterThan(19);
-  expect(outer.spawner).toBeLessThan(21);
+  // Floor-aware: left (330px) + spawner (260px) clamp upward at the narrow
+  // test window; center takes the remainder. (±1 %.)
+  const w3 = await outerGroupWidthPx("left,center,spawner");
+  const expLeft = flooredPct(LEFT_MIN_PX, w3, 20);
+  const expSpawner = flooredPct(SPAWNER_MIN_PX, w3, 20);
+  const expCenter = 100 - expLeft - expSpawner;
+  expect(Math.abs(outer.left - expLeft)).toBeLessThan(1);
+  expect(Math.abs(outer.center - expCenter)).toBeLessThan(1);
+  expect(Math.abs(outer.spawner - expSpawner)).toBeLessThan(1);
 
   const left = layout["vertical:tree,tabs"];
   expect(left).toBeDefined();
@@ -180,9 +216,10 @@ test("drag left↔centre separator persists across reload (±1 %)", async () => 
   expect(Object.keys(persisted).sort()).toEqual(["center", "left", "spawner"]);
   const sum = persisted.left + persisted.center + persisted.spawner;
   expect(Math.abs(sum - 100)).toBeLessThan(0.5);
-  // Left grew, spawner unchanged.
+  // Left grew, spawner unchanged (sits at its 260px floor, not a flat 20%).
   expect(persisted.left).toBeGreaterThan(20);
-  expect(Math.abs(persisted.spawner - 20)).toBeLessThan(0.5);
+  const wDrag = await outerGroupWidthPx("left,center,spawner");
+  expect(Math.abs(persisted.spawner - flooredPct(SPAWNER_MIN_PX, wDrag, 20))).toBeLessThan(1);
   // Rendered layout matches persisted (within ±1 %).
   expect(Math.abs(outer.left - persisted.left)).toBeLessThan(1);
   expect(Math.abs(outer.center - persisted.center)).toBeLessThan(1);
@@ -234,11 +271,10 @@ test("corrupted localStorage falls back to defaults without crashing", async () 
   await page.locator('[data-testid="quadrant-viewport"]').waitFor({ state: "visible" });
   const layout = await readLayout();
   const outer = layout["horizontal:left,center,spawner"];
-  // Defaults — corrupted blob ignored.
-  expect(outer.left).toBeGreaterThan(19);
-  expect(outer.left).toBeLessThan(21);
-  expect(outer.spawner).toBeGreaterThan(19);
-  expect(outer.spawner).toBeLessThan(21);
+  // Defaults — corrupted blob ignored. Floor-aware (left 330px, spawner 260px).
+  const wCorrupt = await outerGroupWidthPx("left,center,spawner");
+  expect(Math.abs(outer.left - flooredPct(LEFT_MIN_PX, wCorrupt, 20))).toBeLessThan(1);
+  expect(Math.abs(outer.spawner - flooredPct(SPAWNER_MIN_PX, wCorrupt, 20))).toBeLessThan(1);
 
   const left = layout["vertical:tree,tabs"];
   expect(left.tree).toBeGreaterThan(24);
@@ -271,11 +307,12 @@ test("Spawner toggle remounts outer Group with the 2-col key, then restores 3-co
   const layout2col = await readLayout();
   const outer2 = layout2col["horizontal:left,center"];
   expect(outer2).toBeDefined();
-  // 2-col defaults are 20/80.
-  expect(outer2.left).toBeGreaterThan(19);
-  expect(outer2.left).toBeLessThan(21);
-  expect(outer2.center).toBeGreaterThan(79);
-  expect(outer2.center).toBeLessThan(81);
+  // 2-col defaults are 20/80, but `left`'s 330px floor clamps it up at the
+  // narrow test window; center takes the remainder. (±1 %.)
+  const w2 = await outerGroupWidthPx("left,center");
+  const exp2Left = flooredPct(LEFT_MIN_PX, w2, 20);
+  expect(Math.abs(outer2.left - exp2Left)).toBeLessThan(1);
+  expect(Math.abs(outer2.center - (100 - exp2Left))).toBeLessThan(1);
 
   // Toggle back ON.
   await page.evaluate(() => {
@@ -291,8 +328,8 @@ test("Spawner toggle remounts outer Group with the 2-col key, then restores 3-co
   const layout3col = await readLayout();
   const outer3 = layout3col["horizontal:left,center,spawner"];
   expect(outer3).toBeDefined();
-  expect(outer3.left).toBeGreaterThan(19);
-  expect(outer3.left).toBeLessThan(21);
-  expect(outer3.spawner).toBeGreaterThan(19);
-  expect(outer3.spawner).toBeLessThan(21);
+  // Floor-aware (left 330px, spawner 260px) at the narrow test window.
+  const w3b = await outerGroupWidthPx("left,center,spawner");
+  expect(Math.abs(outer3.left - flooredPct(LEFT_MIN_PX, w3b, 20))).toBeLessThan(1);
+  expect(Math.abs(outer3.spawner - flooredPct(SPAWNER_MIN_PX, w3b, 20))).toBeLessThan(1);
 });

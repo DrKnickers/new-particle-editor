@@ -7,6 +7,6 @@
   - text: Join existing group
   - combobox [disabled]:
     - option "(none)" [selected]
-  - paragraph: All 1 selected emitter will be linked.
+  - paragraph: Select at least 2 emitters to create a group.
   - button "Cancel"
-  - button "OK"
+  - button "OK" [disabled]
