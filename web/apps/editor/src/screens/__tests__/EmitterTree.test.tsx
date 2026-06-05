@@ -217,6 +217,66 @@ describe("EmitterTree", () => {
     });
   });
 
+  // ─── SEL-13 — cancel an in-progress reorder drag ─────────────────
+
+  /** Start a reorder drag and leave it ACTIVE (past the threshold) without
+   *  releasing, so the cancel paths can be exercised. The pending intent is a
+   *  valid reorder, so any commit would dispatch emitters/drop. */
+  function startActiveDrag(
+    sourceBtn: HTMLElement,
+    targetBtn: HTMLElement,
+    clientY: number,
+  ) {
+    fireEvent.pointerDown(sourceBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(targetBtn, { button: 0, clientX: 0, clientY });
+  }
+
+  function dropCalls(bridge: ReturnType<typeof makeStubBridge>) {
+    return (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0])
+      .filter((c) => c.kind === "emitters/drop");
+  }
+
+  it("Escape cancels an in-progress reorder drag without dropping", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Sparks")).toBeInTheDocument();
+    });
+    const flashBtn = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);
+
+    startActiveDrag(flashBtn, sparksBtn, 103); // active, valid reorder pending
+    fireEvent.keyDown(document, { key: "Escape" });
+    // A trailing pointerup (as a real release would deliver) must NOT drop.
+    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+
+    expect(dropCalls(bridge)).toHaveLength(0);
+  });
+
+  it("right-click cancels an in-progress reorder drag and suppresses the menu", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByText("Sparks")).toBeInTheDocument();
+    });
+    const flashBtn = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);
+
+    startActiveDrag(flashBtn, sparksBtn, 103);
+    // A right-click during the drag cancels it. (Menu suppression — our
+    // capture-phase handler stops the event reaching Radix — is verified live
+    // in the browser; Radix preventDefaults contextmenu regardless, so a
+    // defaultPrevented assertion here would be vacuous.)
+    fireEvent.contextMenu(sparksBtn, { clientX: 0, clientY: 103 });
+    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+
+    // The drag is cancelled, so no reorder is committed.
+    expect(dropCalls(bridge)).toHaveLength(0);
+  });
+
   it("a completed drag swallows the trailing click so the row isn't re-selected", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);

@@ -32,8 +32,11 @@ user at phase boundaries.
   change. **Bug caught + fixed in review:** Esc-restore target = the prior selection,
   separate from the (empty-for-fresh-sweep) merge-base. Live-verified: correct spatial
   rows; Esc restores prior. Build clean; 428 tests.
-  - **Deferred polish:** SEL-12 drag autoscroll past the viewport edge; SEL-13
-    Esc/right-click cancel of the *reorder* drag (distinct from marquee).
+  - ~~**Deferred polish:** SEL-12 drag autoscroll past the viewport edge; SEL-13
+    Esc/right-click cancel of the *reorder* drag (distinct from marquee).~~ ✅ DONE —
+    SEL-12 proportional edge autoscroll (rAF loop + pure `drag-autoscroll.ts`, 7 tests,
+    live-verified) + SEL-13 Esc/right-click cancel with context-menu suppression (2 tests +
+    live). Web-only, no native lane.
 - **P6 — Curve editor (CRV-1/2/7/8/14).** Key copy/cut/paste; right-click deselect;
   time decimals.
   - **CRV-1 ✅ DONE (user-surfaced during testing).** Multi-key canvas drag: grabbing
@@ -286,5 +289,5 @@ Handoff: HANDOFF.md (session 13) + next-session-prompt.md refreshed + L-057 adde
 
 **Remaining queue:** P6-rest (CRV-2 copy/paste, CRV-7 right-click deselect, CRV-8 decimal
 time) · P7 link-groups (LNK-1/2/6/8/10) · P8 color/texture (PAL-2/3/14) · deferred
-(curve marquee-from-margins, SEL-12 autoscroll, SEL-13 reorder-drag cancel) · native track
+(curve marquee-from-margins; SEL-12/13 ✅ done) · native track
 (VPT-2 undo capture-wiring, VPT-3 autosave). Full catalog: ui-delta-report.md.

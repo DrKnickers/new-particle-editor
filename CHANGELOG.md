@@ -16,6 +16,39 @@ Conventions:
 
 ## Changelog
 
+### Emitter-tree reorder-drag polish: edge autoscroll + Esc/right-click cancel (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Reordering emitters in a long list is no longer cramped by the viewport. Dragging a row near
+the top or bottom edge of the emitter tree now autoscrolls the list — speed ramps up the closer
+you get to the edge — and the drop indicator keeps tracking the rows that slide under the
+pointer (SEL-12). An in-progress reorder drag can now be cancelled with **Esc** or a
+**right-click**, matching the legacy editor; the right-click also suppresses the row context
+menu so it doesn't pop up over the abort (SEL-13). A right-click *before* a drag starts still
+opens the context menu as normal.
+
+**How tackled.** Both behaviours live in the existing pointer-drag controller in
+[`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx:1220) — no new drag library. The
+autoscroll decision is a pure, unit-tested helper
+([`lib/drag-autoscroll.ts`](web/apps/editor/src/lib/drag-autoscroll.ts:1)) driven by a
+`requestAnimationFrame` loop that adds the delta to the scroll viewport each frame; because a
+held pointer fires no `pointermove` while content scrolls under it, the loop re-resolves the
+drop target each frame via `elementFromPoint`. The cancel listeners (`keydown` Escape +
+capture-phase `contextmenu`) attach when the drag goes *active* and detach in the existing
+`finish()` teardown, so a pre-threshold right-click is untouched.
+
+**Issues encountered and resolutions.** (1) The first instinct — route all hit-testing through
+`document.elementFromPoint` — would have broken every existing drag test, since jsdom has no
+layout and returns null; the event-driven path keeps using `ev.target` and only the autoscroll
+loop uses `elementFromPoint`. (2) jsdom can't exercise real scrolling, so the autoscroll wiring
+is verified live in the browser (a short-viewport drag scrolls 0→max at the bottom edge, back to
+0 at the top, and halts mid-list). (3) Radix already `preventDefault`s `contextmenu`, so a
+`defaultPrevented` assertion proves nothing about our suppression — the unit test asserts the
+robust signal (the drag cancels with no drop) and the menu-suppression is confirmed in-browser.
+
+---
+
 ### Reset-Camera parity verified + single source of truth (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

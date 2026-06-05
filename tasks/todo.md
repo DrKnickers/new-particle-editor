@@ -1,106 +1,135 @@
-# MNU-7 — Reset-Camera parity: verify + consolidate
+# SEL-12 / SEL-13 — Emitter-tree reorder-drag polish
 
-(Prior task VPT-3's plan+review is preserved in `tasks/HANDOFF.md` session 18.)
+(Prior task MNU-7's plan+review is in git @ `9f8a7d0` and summarized in this session.)
 
 ## 1. Goal + scope
 
-**Goal.** Confirm the new-UI Reset-Camera vectors exactly match the legacy
-engine default, record that result, and remove the latent drift hazard
-created by the vectors being hard-coded twice.
+**Goal.** Bring the new-UI emitter-tree reorder drag to legacy parity on two
+deferred polish items, both in `web/apps/editor/src/screens/EmitterTree.tsx`:
+- **SEL-12** — autoscroll the tree when a reorder drag nears the top/bottom
+  edge, so long lists can be reordered past the viewport without manual scroll.
+  Proportional speed (ramps toward the edge) — user choice.
+- **SEL-13** — `Esc` **and** right-click cancel an *in-progress* reorder drag
+  (today only `pointercancel` does). Right-click must also suppress the row's
+  Radix context menu while the drag is active.
 
-**In:**
-- Verification of the vectors at every hop (legacy ctor → legacy handler →
-  new-UI menu → new-UI accelerator → bridge → engine). **DONE** — see §5.
-- Consolidate the two duplicated vector copies (`MenuBar.tsx` inline literal
-  + `use-app-accelerators.ts` `RESET_CAMERA` const) into one shared exported
-  constant so the menu item and the `Ctrl+Home` accelerator can never drift.
-- A focused unit test locking the shared constant to the legacy default.
-- Docs: mark MNU-7 verified in `ui-delta-report.md` + `fix-plan.md`, correct
-  the stale "No `Ctrl+Home`" note; CHANGELOG entry.
+**In:** the two behaviours above; a pure, unit-tested autoscroll-delta helper;
+a small shared hit-test refactor; vitest coverage for SEL-13 + the helper;
+live browser-preview verification for SEL-12's real scrolling.
 
 **Out:**
-- Live native-host runtime confirmation — *deferred by user choice*; the
-  static proof is airtight (both new-UI paths converge on the identical
-  `Engine::SetCamera()` the legacy command calls, with provably-equal args).
-- Any change to the vectors themselves — they already match; this is a
-  no-behaviour-change refactor.
-- ROADMAP update — MNU-* are `ui-delta-report` tracking IDs, not ROADMAP
-  `[TIER-K]` tags; MNU-7 is not in ROADMAP.md.
+- Marquee-drag changes — SEL-13 is the *reorder* drag; the marquee already
+  has Esc-cancel.
+- Curve marquee-from-margins — separate deferred item, own task.
+- Any bridge / schema / native-host change — pure web.
+- Touch/momentum tuning beyond a sane default — YAGNI for a shallow list.
 
 ## 2. What the codebase already gives us
 
-- `engine/set/camera` bridge kind + `CameraDto` ({position,target,up}: Vec3)
-  already exist (`bridge-schema/src/index.ts`). No new bridge surface.
-- Host handler `BridgeDispatcher.cpp:1347` already maps the DTO 1:1 into
-  `Engine::Camera` and calls `Engine::SetCamera` — the SAME call the legacy
-  `ID_VIEW_RESETCAMERA` handler (`main.cpp:1840`) makes.
-- `Vec3 = readonly [number, number, number]` — contextual typing lets a
-  `CameraDto`-annotated object accept plain array literals.
-- `web/apps/editor/src/lib/` is the home for shared app helpers (`right-dock`,
-  `file-state`, `emitter-selection`) — the new constant fits there.
-- `bridge/__tests__/bridge-contract.test.ts` already exercises
-  `engine/set/camera` generically (good regression floor).
+- `startDrag` (EmitterTree.tsx:1220-1282) — the pointer-drag controller:
+  `onMove` hit-tests the row under the pointer + sets the drop indicator;
+  `finish(commit)` removes listeners, clears state, dispatches `emitters/drop`
+  only when `commit && lastParams`. `onCancel` already = `finish(false)`.
+- The **marquee controller** (handleScrollPointerDown, 1383-1446) already adds
+  a capture-phase `keydown` Escape listener mid-drag — the exact pattern to
+  mirror for SEL-13's Esc.
+- `treeScrollRef` (1327) is the `overflow-y-auto` scroll viewport — the element
+  whose `scrollTop` SEL-12 drives and whose rect defines the edge zones.
+- Each row is a Radix `ContextMenu.Trigger` (518-700) opening on the native
+  `contextmenu` event — so SEL-13 right-click must `preventDefault` it.
 
-## 3. Implementation approach
+## 3. Architecture / implementation approach
 
-1. **New** `web/apps/editor/src/lib/reset-camera.ts` exporting
-   `export const RESET_CAMERA: CameraDto = { position:[0,-250,125],
-   target:[0,0,0], up:[0,0,1] }`, with a comment citing the legacy sources.
-2. **Edit** `use-app-accelerators.ts`: delete the local `RESET_CAMERA` const
-   + comment; import it from the new module. (Usage at L158 unchanged.)
-3. **Edit** `MenuBar.tsx`: replace the inline `{position,target,up}` literal
-   with `params: RESET_CAMERA`; import the const; trim the now-redundant
-   "matches engine ctor" comment to point at the shared constant.
-4. **New** `web/apps/editor/src/lib/__tests__/reset-camera.test.ts`: assert
-   `RESET_CAMERA` deep-equals the documented legacy default.
-5. **Docs:** `ui-delta-report.md` (MNU-7 → verified ✓, fix the "No Ctrl+Home"
-   note), `fix-plan.md:175` (mark done), `CHANGELOG.md` (new top entry).
+**New pure helper** — `web/apps/editor/src/lib/drag-autoscroll.ts`:
+```ts
+/** px/frame to scroll while a drag hovers near a scroll-container edge.
+ *  0 outside the `zone`-px hot band; ramps linearly to ±maxSpeed at the
+ *  very edge. Negative = scroll up, positive = down. */
+export function computeAutoscrollDelta(
+  pointerY: number,
+  rect: { top: number; bottom: number },
+  opts?: { zone?: number; maxSpeed?: number },  // default zone 28, maxSpeed 12
+): number
+```
 
-## 4. Risks + mitigations
+**EmitterTree `startDrag` changes:**
+1. **Shared hit-test.** Extract `onMove`'s row-resolution + indicator block into
+   `updateDropTarget(clientX, clientY)` using
+   `document.elementFromPoint(x,y).closest("[data-emitter-id]")`. `onMove` calls
+   it with the event coords and records `lastX/lastY`.
+2. **Autoscroll loop.** While `active`, a `requestAnimationFrame` loop reads
+   `treeScrollRef` rect + `lastY`, computes `computeAutoscrollDelta`, and when
+   non-zero does `container.scrollTop += delta` **then** `updateDropTarget(
+   lastX, lastY)` so the indicator tracks while content scrolls under a
+   stationary pointer. Started when the drag goes active; `cancelAnimationFrame`
+   in `finish`.
+3. **SEL-13 cancel.** Two capture-phase document listeners added in `startDrag`,
+   acting only when `active`: `keydown` (Escape → `finish(false)` +
+   prevent/stop) and `contextmenu` (→ `finish(false)` + prevent/stop, killing
+   the Radix menu). Both removed in `finish` alongside the existing three.
 
-1. **Type mismatch on the literal.** `Vec3` is a readonly tuple; a bare
-   `[0,-250,125]` infers as `number[]`. *Mitigation:* annotate the object as
-   `CameraDto` so contextual typing pins each field to `Vec3`. Verified by
-   `tsc --noEmit` in §5.
-2. **Stale import / missed call site.** Leaving one site on the old literal
-   would defeat the dedupe. *Mitigation:* grep for `set/camera` + `[0, -250`
-   after editing; both call sites must reference `RESET_CAMERA`.
-3. **Silent behaviour change.** None expected (values identical), but a typo
-   in the constant would silently break BOTH paths now. *Mitigation:* the new
-   unit test pins the exact vectors to the legacy default.
+## 4. Risks named up front + mitigations
+
+1. **Indicator freezes during autoscroll.** A stationary pointer fires no
+   `pointermove`, so without intervention the drop indicator wouldn't update as
+   rows scroll past. *Mitigation:* the rAF loop re-runs `updateDropTarget(lastX,
+   lastY)` every frame it scrolls (§3.2) — the core correctness point.
+2. **rAF leak.** A loop left running after drop/cancel would scroll forever and
+   pin a frame callback. *Mitigation:* single `rafId` ref, `cancelAnimationFrame`
+   in `finish` (the one teardown path for up/cancel/Esc/right-click).
+3. **Right-click still opens the menu.** Radix listens on the native
+   `contextmenu`; a stale listener or wrong phase would let the menu through.
+   *Mitigation:* document-level **capture-phase** `contextmenu` listener with
+   `preventDefault` + `stopPropagation`, active only while dragging; removed in
+   `finish`. Pre-active right-click intentionally still opens the menu.
+4. **jsdom can't scroll.** `scrollTop`/`getBoundingClientRect` are faked, so an
+   autoscroll integration test would be vacuous. *Mitigation:* unit-test the
+   pure helper; verify real scrolling in the browser preview (§5).
+5. **Esc double-handling.** The tree's own `onKeyDown` / inline-rename Esc could
+   collide. *Mitigation:* capture-phase + `stopPropagation` on the drag's Esc,
+   and the listener only exists during an active drag.
 
 ## 5. Testing & verification
 
-- [x] **Static parity proof** — vectors equal across engine ctor
-      (engine.cpp:2190), legacy handler (main.cpp:1834), menu (MenuBar.tsx:752),
-      accelerator (use-app-accelerators.ts:31); bridge maps DTO→same SetCamera.
-- [x] `tsc --noEmit` (editor) exit 0 — the readonly-tuple contextual typing holds.
-- [x] `pnpm --filter @particle-editor/editor test` → **482 passed / 0 failed** (51 files; was 481/50).
-- [x] Post-edit grep: only remaining `-250, 125` hit is `mock-state.ts` (the mock's
-      *default snapshot* camera — a distinct role, correctly left alone) + `reset-camera.ts`
-      + its test; both reset call sites now use `RESET_CAMERA`.
-- [x] Docs: MNU-7 reads "✅ VERIFIED" in ui-delta-report, "No Ctrl+Home" corrected,
-      fix-plan item struck, CHANGELOG entry added.
+**Unit (vitest, jsdom):**
+- [x] `drag-autoscroll.test.ts` — 0 mid-list; ramps near top (neg) / bottom
+      (pos); clamps at ±maxSpeed past the edge; symmetric; custom zone/maxSpeed. **7 tests.**
+- [x] EmitterTree SEL-13: Escape during an active drag → no `emitters/drop`.
+- [x] EmitterTree SEL-13: right-click during an active drag → no `emitters/drop`.
+      (Dropped the planned `defaultPrevented` assertion — Radix preventDefaults
+      contextmenu itself, so it was vacuous; suppression verified live instead.)
+- [x] Full suite **491** (was 482; +7 autoscroll +2 SEL-13), 0 failed.
+
+**Live (browser preview — jsdom can't do layout):**
+- [x] Short-viewport drag to the bottom edge autoscrolled 0→64 (=maxScroll,
+      clamped); to the top edge scrolled back to 0; mid-list halted scrolling.
+- [x] Right-click during an active drag → drag cancelled AND context menu
+      suppressed (`suppressedMenuOpen:false`); control right-click with no drag
+      opens the menu (`controlMenuOpened:true`) — suppression is meaningful.
+
+**Static:** `tsc --noEmit` exit 0.
 
 ## Review
 
-**Outcome.** MNU-7 closed. The new-UI Reset-Camera vectors were verified — by static
-proof, not guesswork — to exactly match the legacy `ID_VIEW_RESETCAMERA` default at every
-hop, because both new-UI paths (menu + `Ctrl+Home`) converge on the identical
-`Engine::SetCamera()` the legacy command calls, with byte-equal arguments. The two
-duplicated literals are now one shared `RESET_CAMERA` constant locked by a unit test, so
-the menu item and the accelerator can never silently diverge.
+**Outcome.** Both deferred drag-polish items shipped to legacy parity, web-only.
+SEL-12 (proportional edge autoscroll) and SEL-13 (Esc/right-click cancel +
+context-menu suppression) both land in the existing pointer-drag controller in
+`EmitterTree.tsx` — no new drag library, no bridge/schema/native change.
 
-**Shipped:** new `lib/reset-camera.ts` + its test; `MenuBar.tsx` and `use-app-accelerators.ts`
-now import the shared const; docs (ui-delta-report MNU-7 → VERIFIED, stale "No Ctrl+Home"
-corrected; fix-plan item done; CHANGELOG entry).
+**Built test-first.** `computeAutoscrollDelta` was RED→GREEN before wiring; the
+SEL-13 cancel tests were RED (drag still dropped) before the listeners existed.
 
-**Verification:** `tsc --noEmit` exit 0; vitest **482/0** (added `RESET_CAMERA` test).
-Web-only — no native lane needed (the live runtime confirmation was deferred by user choice;
-the static proof is airtight). No behaviour change.
+**Two design pivots from reading the harness / runtime:**
+1. Hit-testing splits by path — the event-driven `onMove` keeps using
+   `ev.target` (so the jsdom drag tests still pass); only the autoscroll rAF
+   loop uses `elementFromPoint` (untestable in jsdom → verified live).
+2. The `defaultPrevented` assertion was abandoned once the RED run revealed
+   Radix itself preventDefaults `contextmenu`; the unit test asserts the robust
+   signal (no drop) and menu-suppression is a live check.
 
-**Notes for a future reader.** (1) `mock-state.ts` holds a *third* copy of the same vectors
-as the MockBridge's default engine snapshot — deliberately NOT folded into `RESET_CAMERA`
-because it's a different concept (initial state vs. reset action); revisit only if that
-coupling is ever wanted. (2) Doc drift (L-022) struck again: the "No Ctrl+Home" claim was
-false against the actual code.
+**Verification:** vitest 491/0, tsc 0, and a live in-browser drive proving real
+autoscroll (scroll up/down/stop/clamp) and real menu suppression.
+
+**Files:** new `lib/drag-autoscroll.ts` + test; `EmitterTree.tsx` (controller);
+`EmitterTree.test.tsx` (+2); docs (ui-delta SEL-12/13 → SHIPPED, fix-plan,
+CHANGELOG).

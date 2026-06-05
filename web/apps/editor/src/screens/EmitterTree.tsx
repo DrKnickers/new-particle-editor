@@ -84,6 +84,7 @@ import {
 } from "@/lib/emitter-selection";
 import { markEmittersCopied, useEmitterClipboardHasContent } from "@/lib/emitter-clipboard";
 import { rectFromPoints, emittersInMarquee, mergeMarqueeSelection } from "@/lib/marquee";
+import { computeAutoscrollDelta } from "@/lib/drag-autoscroll";
 import {
   computeDropZone,
   computeRootGapIndex,
@@ -1223,24 +1224,22 @@ export function EmitterTree({ bridge }: Props) {
     draggedRef.current = false;
     const startX = e.clientX;
     const startY = e.clientY;
+    let lastX = startX;
+    let lastY = startY;
     const curTree = tree;
     const curRoots = rootChildren;
     const curRows = flatRows;
     let active = false;
     let lastParams: DropParams | null = null;
+    let rafId: number | null = null;
     const THRESHOLD = 4;
 
-    const onMove = (ev: PointerEvent) => {
-      if (!active) {
-        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < THRESHOLD) {
-          return;
-        }
-        active = true;
-        setDraggingId(source.id);
-      }
-      const rowEl =
-        ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
-        null;
+    // Resolve the drop intent for the given row at vertical position `clientY`
+    // and reflect it in the indicator. Shared by the pointermove path (row
+    // from the event target) and the autoscroll loop (row from
+    // elementFromPoint — a held, stationary pointer fires no move while the
+    // content scrolls under it).
+    const updateDropTarget = (rowEl: HTMLElement | null, clientY: number) => {
       if (rowEl === null) {
         lastParams = null;
         setIndicator(null);
@@ -1254,17 +1253,64 @@ export function EmitterTree({ bridge }: Props) {
         return;
       }
       const rect = rowEl.getBoundingClientRect();
-      const zone = computeDropZone(ev.clientY - rect.top, rect.height);
+      const zone = computeDropZone(clientY - rect.top, rect.height);
       const targetRootIdx = curRoots.findIndex((c) => c.id === targetId);
       const params = resolveDropIntent(source, target, targetRootIdx, zone, curTree, curRoots);
       lastParams = params;
       setIndicator(params !== null ? { targetId, zone } : null);
     };
 
+    // [SEL-12] While the pointer sits in an edge zone of the scroll viewport,
+    // scroll it each frame (proportional to depth) and re-resolve the drop
+    // target so the indicator follows the rows moving under the pointer.
+    const tick = () => {
+      const sc = treeScrollRef.current;
+      if (sc !== null) {
+        const delta = computeAutoscrollDelta(lastY, sc.getBoundingClientRect());
+        if (delta !== 0) {
+          sc.scrollTop += delta;
+          const rowEl =
+            (document.elementFromPoint(lastX, lastY)?.closest?.("[data-emitter-id]") as
+              | HTMLElement
+              | null) ?? null;
+          updateDropTarget(rowEl, lastY);
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+      if (!active) {
+        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < THRESHOLD) {
+          return;
+        }
+        active = true;
+        setDraggingId(source.id);
+        // [SEL-13] Esc / right-click cancel only an ACTIVE drag — attach the
+        // listeners on activation so a pre-threshold right-click still opens
+        // the row context menu. [SEL-12] start the autoscroll loop.
+        document.addEventListener("keydown", onKey, true);
+        document.addEventListener("contextmenu", onCtx, true);
+        rafId = requestAnimationFrame(tick);
+      }
+      const rowEl =
+        ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
+        null;
+      updateDropTarget(rowEl, ev.clientY);
+    };
+
     const finish = (commit: boolean) => {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onCancel);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("contextmenu", onCtx, true);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       if (!active) return;
       setDraggingId(null);
       setIndicator(null);
@@ -1275,6 +1321,19 @@ export function EmitterTree({ bridge }: Props) {
     };
     const onUp = () => finish(true);
     const onCancel = () => finish(false);
+    // [SEL-13] Capture-phase so we win over the row's Radix context menu and
+    // the tree's own key handler; stopPropagation keeps the menu from opening.
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(false);
+    };
+    const onCtx = (ev: MouseEvent) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(false);
+    };
 
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
