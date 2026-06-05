@@ -494,6 +494,17 @@ export type EmitterTreeDto = { root: EmitterTreeNode };
 // texture has been used as. [LT-4 sub-feature B]
 export type PaletteEntry = { filename: string; pinned: boolean; slotMask: number };
 
+// Autosave crash-recovery candidate (VPT-3). Returned by
+// `autosave/check-recovery` when a crashed prior session left an orphaned
+// autosave under %TEMP%\AloParticleEditor\. At least one tier is present.
+// Mtimes are epoch-ms so React can render "N minutes ago" without a wire
+// format dependency.
+export type AutosaveOrphan = {
+  originalFilename: string;        // "" = untitled ("Unsaved new file")
+  recentMtimeMs: number | null;    // recent-tier file mtime, null if no recent file
+  stableMtimeMs: number | null;    // stable-tier file mtime, null if no stable file
+};
+
 export type Request =
   // File / recents
   | { kind: "file/new";                   params: Record<string, never> }
@@ -857,6 +868,16 @@ export type Request =
   | { kind: "mods/list";                  params: Record<string, never> }
   | { kind: "mods/select";                params: { path: string | null } }
   | { kind: "mods/refresh";               params: Record<string, never> }
+
+  // Autosave crash-recovery (VPT-3). React-initiated on mount (no host→React
+  // startup event, so there's no fire-before-subscribe race): `check-recovery`
+  // scans for an orphaned autosave from a crashed prior session and returns it
+  // (or null — also null under --test-host / when a CLI file was given);
+  // `recover` applies the user's choice (restore a tier, or discard) and
+  // consumes the orphan either way.
+  | { kind: "autosave/check-recovery";    params: Record<string, never> }
+  | { kind: "autosave/recover";           params: { choice: "recent" | "stable" | "discard" } }
+
   | { kind: "register-accelerators";      params: { combos: string[] } };
 
 // One response shape per Request kind.
@@ -883,6 +904,10 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "mods/list" }                 ? { mods: ModDescriptor[]; activePath: string | null } :
   R extends { kind: "mods/select" }               ? { ok: true; activePath: string | null } | { ok: false; error: string } :
   R extends { kind: "mods/refresh" }              ? { mods: ModDescriptor[]; activePath: string | null } :
+
+  // Autosave crash-recovery (VPT-3)
+  R extends { kind: "autosave/check-recovery" }   ? { orphan: AutosaveOrphan | null } :
+  R extends { kind: "autosave/recover" }          ? Record<string, never> :
 
   // Engine snapshot
   R extends { kind: "engine/state/snapshot" }     ? EngineStateDto :

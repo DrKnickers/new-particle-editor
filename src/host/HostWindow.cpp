@@ -73,6 +73,7 @@
 #include "../ParticleSystemInstance.h"
 #include "../SpawnerDriver.h"
 #include "../UndoStack.h"
+#include "../Autosave.h"  // VPT-3: two-tier autosave timers + clean-exit cleanup
 
 using namespace Microsoft::WRL;
 
@@ -2098,6 +2099,17 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         // Start the 4 Hz stats timer. Fires every 250 ms and emits a
         // stats/tick event to React so the status bar stays live.
         SetTimer(hwnd, kStatsTimerId, 250, nullptr);
+
+        // VPT-3: two-tier autosave timers (30 s recent / 5 min stable),
+        // mirroring legacy main.cpp:2227. Gated on !useTestHost so harness
+        // runs never write autosave files — those would orphan into a
+        // recovery prompt for the user's real editor. WM_TIMER writes the
+        // live ParticleSystem (dirty-gated) below.
+        if (!useTestHost)
+        {
+            SetTimer(hwnd, Autosave::RECENT_TIMER_ID, Autosave::RECENT_INTERVAL_MS, nullptr);
+            SetTimer(hwnd, Autosave::STABLE_TIMER_ID, Autosave::STABLE_INTERVAL_MS, nullptr);
+        }
         return 0;
     }
 
@@ -2109,6 +2121,25 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int particles  = engine ? engine->GetNumParticles() : 0;
             int instances  = engine ? engine->GetNumInstances() : 0;
             dispatcher->EmitStatsTick(fps, emitters, particles, instances);
+        }
+        // VPT-3: autosave tick. Best-effort + dirty-gated — skip the write
+        // when nothing changed since the last save (no point autosaving an
+        // unmodified saved file). Runs on the host UI thread between frames
+        // (single-threaded pump), same as legacy's WM_TIMER write.
+        else if ((wp == Autosave::RECENT_TIMER_ID || wp == Autosave::STABLE_TIMER_ID)
+                 && dispatcher && particleSystem && dispatcher->GetDirty())
+        {
+            Autosave::Tier tier = (wp == Autosave::RECENT_TIMER_ID)
+                                ? Autosave::Tier::Recent
+                                : Autosave::Tier::Stable;
+            bool wrote = Autosave::Write(*particleSystem, dispatcher->GetCurrentFilePath(), tier);
+#ifndef NDEBUG
+            fprintf(stderr, "[autosave] %s tier=%s\n",
+                    wrote ? "wrote" : "write-FAILED",
+                    tier == Autosave::Tier::Recent ? "recent" : "stable");
+#else
+            (void)wrote;
+#endif
         }
         return 0;
 
@@ -2326,6 +2357,15 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
         KillTimer(hwnd, kStatsTimerId);
+        // VPT-3: stop autosave + delete THIS session's autosave files on a
+        // clean exit so no orphan prompts on the next launch. A crash skips
+        // WM_DESTROY, leaving the orphan for recovery — exactly the point.
+        if (!useTestHost)
+        {
+            KillTimer(hwnd, Autosave::RECENT_TIMER_ID);
+            KillTimer(hwnd, Autosave::STABLE_TIMER_ID);
+            Autosave::DeleteOurSession();
+        }
         // Post-audit G8: release the class background brush. Per
         // WNDCLASSEX docs the system would free it on UnregisterClass,
         // but the class is never explicitly unregistered. Doing it

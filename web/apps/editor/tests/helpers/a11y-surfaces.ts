@@ -293,6 +293,27 @@ export const DIALOG_SURFACES: SurfaceCapture[] = [
       await page.waitForSelector('[data-testid="app-shell"]');
     },
   },
+  {
+    // VPT-3 autosave crash-recovery. The real check-recovery is suppressed
+    // under --test-host, so drive the dialog via the ?demo=autosave-recovery
+    // route, which renders it with a FIXED both-tiers orphan + FIXED nowMs —
+    // deterministic age text for the golden.
+    id: "dialog-autosave-recovery",
+    setup: async (page) => {
+      await page.evaluate(() => {
+        const base = window.location.href.split("?")[0];
+        window.location.href = base + "?demo=autosave-recovery";
+      });
+      await page.waitForSelector('[role="dialog"]');
+    },
+    teardown: async (page) => {
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => {
+        window.location.href = window.location.href.split("?")[0];
+      });
+      await page.waitForSelector('[data-testid="app-shell"]');
+    },
+  },
 
   // ── Tree-context (right-click) Modal dialogs ─────────────────────
   // Each requires the fixture to have at least one root emitter so

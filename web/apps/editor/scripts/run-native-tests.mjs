@@ -349,6 +349,7 @@ async function main() {
       "tests/property-tabs.spec.ts",
       "tests/mods-contract.spec.ts",
       "tests/leave-particles.spec.ts",
+      "tests/autosave-recovery.spec.ts",
       "tests/splitters.spec.ts",
       "tests/d3d9ex.spec.ts",
       "tests/alpha-compositor-snapshot.spec.ts",

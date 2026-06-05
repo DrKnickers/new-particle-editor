@@ -16,6 +16,45 @@ Conventions:
 
 ## Changelog
 
+### Crash-recovery autosave (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The new UI now autosaves your work in the background and offers to recover it after a crash —
+matching the legacy editor. Two tiers run while you edit: a 30-second "recent" snapshot and a
+5-minute "stable" one, written to `%TEMP%\AloParticleEditor\` (never over your own `.alo`). If
+the editor crashes and you relaunch, a dialog offers to restore the most recent autosave, the
+older stable backup, or discard them — showing the original filename and how long ago each was
+saved. Restored work opens as unsaved changes to the original file, so Ctrl+S saves it back
+where it belongs. Dismissing without choosing keeps the autosave for next launch (no accidental
+data loss).
+
+**How tackled.** The legacy `Autosave` data layer ([`src/Autosave.cpp`](src/Autosave.cpp:1),
+shipped #41) is UI-agnostic and already linked into the exe, so the port is pure wiring.
+[`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:2104) drives the two Win32 timers in
+`WM_TIMER` (dirty-gated `Autosave::Write`) and deletes the session's files on a clean exit;
+[`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1) gains two commands —
+`autosave/check-recovery` (scan → orphan|null) and `autosave/recover` (load the chosen tier
+via the same swap+notify sequence `file/open` uses, then present it as the original filename
+with `dirty=true`). The prompt is a React dialog
+([`AutosaveRecoveryDialog.tsx`](web/apps/editor/src/screens/AutosaveRecoveryDialog.tsx:1)), and
+— a refinement over the first design — it's React-initiated (the dialog calls check-recovery on
+mount) rather than host-pushed, which sidesteps a startup race where a host event could fire
+before React subscribed.
+
+**Issues encountered and resolutions.** Two interactions needed care. (1) Restoring a document
+while a cursor-bound spawn instance is live asserts in the engine (L-059), so recover reuses
+`file/open`'s exact kill-attached + `OnParticleSystemChanged(-1)` reseat instead of hand-rolling
+the load. (2) A real recovery prompt during the `--test-host` harness would corrupt a11y
+captures (cf. L-066), so the autosave timers are gated off under `--test-host` (no orphan files
+left behind) and check-recovery returns null there; the dialog's a11y golden is driven by a
+fixed-orphan `?demo=autosave-recovery` route with a pinned clock, so the relative-age text
+("45 seconds ago") is deterministic. The live autosave-write + crash→recover round-trip can't
+run under `--test-host`, so it's covered by the legacy module's existing tests plus a manual
+crash smoke; the harness covers suppression, the recover no-op, and the dialog a11y.
+
+---
+
 ### Scroll-wheel / rapid spinner edits now undo as one step (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

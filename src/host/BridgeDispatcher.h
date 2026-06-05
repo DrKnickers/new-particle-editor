@@ -37,6 +37,9 @@
 
 #include "third_party/nlohmann/json.hpp"
 
+// VPT-3: Autosave::OrphanSession is held by value in the recovery stash.
+#include "../Autosave.h"
+
 class Engine;
 class UndoStack;
 class ParticleSystem;
@@ -334,6 +337,15 @@ private:
     // after undo lands on the pre-mutation snapshot, not the
     // post-save snapshot, so the legacy isSavedState flag misses.
     std::vector<char>         m_savedSnapshot;
+
+    // VPT-3 autosave crash-recovery. `autosave/check-recovery` scans
+    // %TEMP%\AloParticleEditor\ for an orphan from a crashed prior session
+    // and stashes it here so `autosave/recover` can consume its temp paths
+    // without a re-scan; recover clears the stash (and DeleteOrphan's the
+    // files) regardless of the user's choice. `m_hasPendingOrphan` guards
+    // an empty stash (recover with no prior check, or a double recover).
+    Autosave::OrphanSession   m_pendingOrphan{};
+    bool                      m_hasPendingOrphan = false;
 
     // Phase 3 Screen 8 Batch 4 — spawner config cache for snapshot
     // parity. The host doesn't yet own a SpawnerDriver* (matches Batch 3

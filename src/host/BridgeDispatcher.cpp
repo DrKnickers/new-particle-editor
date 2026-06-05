@@ -2180,6 +2180,11 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
         SetDirty(false);
+        // VPT-3: the work is now on disk — this session's autosave is
+        // redundant. Delete it so a clean exit leaves no orphan to prompt
+        // for. Further edits re-create it on the next tick. (Mirrors legacy
+        // main.cpp DeleteOurSession-after-save.)
+        Autosave::DeleteOurSession();
         EmitRecentChanged();
         EmitEngineStateChanged();
         return res;
@@ -2235,6 +2240,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         m_savedSnapshot = UndoStack::Serialize(**m_pParticleSystem);
         sendOk(json{{"ok", true}, {"path", WideToUtf8(path)}});
         SetDirty(false);
+        // VPT-3: see file/save — autosave is redundant once saved to disk.
+        Autosave::DeleteOurSession();
         EmitRecentChanged();
         EmitEngineStateChanged();
         return res;
@@ -2251,6 +2258,116 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         json paths = json::array();
         for (const auto& w : m_recentFiles) paths.push_back(WideToUtf8(w));
         sendOk(json{{"paths", paths}});
+        return res;
+    }
+
+    // -------- autosave/check-recovery (VPT-3) --------
+    //
+    // React calls this once on mount. Scan %TEMP%\AloParticleEditor\ for an
+    // orphaned autosave left by a crashed prior session and return it (or
+    // null). Suppressed under --test-host (the harness must never get a
+    // recovery prompt — it would pollute a11y captures, cf. L-066) and when a
+    // document is already loaded (a CLI file / any non-untitled state "wins"
+    // over recovery, matching legacy main.cpp:7739). Stash the live
+    // OrphanSession so autosave/recover can consume its temp paths w/o re-scan.
+    if (kind == "autosave/check-recovery")
+    {
+        m_hasPendingOrphan = false;
+        if (m_testHost || !m_currentFilePath.empty())
+        {
+            sendOk(json{{"orphan", nullptr}});
+            return res;
+        }
+        Autosave::OrphanSession s;
+        if (!Autosave::ScanForOrphan(&s))
+        {
+            sendOk(json{{"orphan", nullptr}});
+            return res;
+        }
+        m_pendingOrphan    = s;
+        m_hasPendingOrphan = true;
+#ifndef NDEBUG
+        fprintf(stderr, "[autosave] check-recovery: orphan found (recent=%d stable=%d)\n",
+                s.recentPath.empty() ? 0 : 1, s.stablePath.empty() ? 0 : 1);
+#endif
+
+        // FILETIME (100-ns ticks since 1601) → Unix epoch ms for React.
+        auto mtimeMs = [](const FILETIME& ft) -> json {
+            ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+            const unsigned long long EPOCH_DIFF_100NS = 116444736000000000ULL;
+            if (u.QuadPart < EPOCH_DIFF_100NS) return json(nullptr);
+            return json((u.QuadPart - EPOCH_DIFF_100NS) / 10000ULL);
+        };
+        json orphan = {
+            {"originalFilename", WideToUtf8(s.originalFilename)},
+            {"recentMtimeMs", s.recentPath.empty() ? json(nullptr) : mtimeMs(s.recentMtime)},
+            {"stableMtimeMs", s.stablePath.empty() ? json(nullptr) : mtimeMs(s.stableMtime)},
+        };
+        sendOk(json{{"orphan", orphan}});
+        return res;
+    }
+
+    // -------- autosave/recover (VPT-3) --------
+    //
+    // Apply the recovery choice from the React dialog. For recent/stable,
+    // load the chosen temp .alo via the SAME swap+notify sequence file/open
+    // uses (so the L-059 attached-cursor reseat runs), then present it AS the
+    // original filename with dirty=true: an empty saved baseline keeps it
+    // dirty until a real save (the temp content matches no on-disk file), and
+    // the temp path never enters recents. For discard, leave the boot
+    // document untouched. Either way DeleteOrphan consumes the session.
+    if (kind == "autosave/recover")
+    {
+        if (!m_hasPendingOrphan)
+        {
+            sendOk(json::object());  // no prior check / already consumed
+            return res;
+        }
+        const std::string choice = params.value("choice", std::string("discard"));
+        const Autosave::OrphanSession s = m_pendingOrphan;
+        m_hasPendingOrphan = false;
+        m_pendingOrphan = Autosave::OrphanSession{};
+
+        std::wstring restorePath;
+        if (choice == "recent")      restorePath = s.recentPath;
+        else if (choice == "stable") restorePath = s.stablePath;
+#ifndef NDEBUG
+        fprintf(stderr, "[autosave] recover: choice=%s restore=%d\n",
+                choice.c_str(), restorePath.empty() ? 0 : 1);
+#endif
+
+        if (!restorePath.empty())
+        {
+            std::string err;
+            std::unique_ptr<ParticleSystem> loaded = LoadParticleSystem(restorePath, &err);
+            if (loaded)
+            {
+                if (m_ppAttachedParticleSystem && *m_ppAttachedParticleSystem && m_engine)
+                {
+                    m_engine->KillParticleSystem(*m_ppAttachedParticleSystem);
+                    *m_ppAttachedParticleSystem = nullptr;
+                }
+                if (m_pParticleSystem) *m_pParticleSystem = std::move(loaded);
+                EnforceSingleMemberLinkGroups();
+                if (m_undo) m_undo->Clear();
+                if (m_engine)
+                {
+                    m_engine->Clear();
+                    m_engine->OnParticleSystemChanged(-1);
+                    m_engine->ReloadTextures();
+                }
+                m_currentFilePath = s.originalFilename;  // "" → untitled
+                m_savedSnapshot.clear();                 // stays dirty until saved
+                SetDirty(true);
+                EmitEngineStateChanged();
+                EmitEmittersTreeChanged();
+            }
+            // Load failure → fall through to discard semantics (boot doc
+            // stays); the orphan is still consumed below.
+        }
+
+        Autosave::DeleteOrphan(s);
+        sendOk(json::object());
         return res;
     }
 

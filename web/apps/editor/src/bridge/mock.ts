@@ -445,6 +445,18 @@ export class MockBridge implements Bridge {
         // running. Accept the request silently.
         return {};
 
+      // ---------------- autosave crash-recovery (VPT-3) ----------------
+      case "autosave/check-recovery":
+        // Mock: no %TEMP% scan in browser mode — always "no orphan", so the
+        // recovery dialog never appears under `pnpm dev` / web vitest.
+        // Component tests that exercise the dialog inject an orphan directly
+        // (they render AutosaveRecoveryDialog, not the whole shell).
+        return { orphan: null };
+
+      case "autosave/recover":
+        // Mock: no document to swap. Accept silently.
+        return {};
+
       case "layout/viewport-rect":
         // Mock: no native HWND to reposition.
         return {};

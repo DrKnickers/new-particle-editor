@@ -162,7 +162,16 @@ user at phase boundaries.
     release (Spinner.tsx:18).
   - **Possible follow-up (not done):** apply the same coalescing to streaming track-key/curve
     edits if a user reports per-tick undo there (legacy keyed those by `track<<16|emitterIdx`).
-- **Autosave port (VPT-3).** Port the 30s/5min tiers + orphan recovery to `src/host`.
+- **Autosave port (VPT-3) ✅ DONE.** Ported the legacy two-tier autosave + orphan recovery to
+  the new UI. Host: timers + dirty-gated `Autosave::Write` in HostWindow `WM_TIMER` (gated OFF
+  under `--test-host` so harness runs leave no orphan files), `DeleteOurSession` on save +
+  clean exit; `autosave/check-recovery` + `autosave/recover` bridge commands (recover reuses
+  `file/open`'s swap+notify → L-059 reseat; restores as the original filename, dirty). React:
+  `AutosaveRecoveryDialog` — React-initiated check-on-mount (no host-push startup race),
+  3-state (both/recent-only/stable-only), dismiss = decide-later. Tests: 10 vitest + a11y
+  golden (`dialog-autosave-recovery` via fixed-orphan `?demo=` route, deterministic age) + 2
+  bridge round-trips (test-host suppression + recover no-op). Native **168/0**, web **481**.
+  Live crash→recover round-trip = manual smoke (suppressed under `--test-host`). CHANGELOG added.
 - **Verify Reset-Camera vectors (MNU-7)** against legacy engine default.
 
 ## Explicitly KEEPING (intentional — not defects)

@@ -14,6 +14,7 @@ import { IncrementIndexDialog } from "@/screens/IncrementIndexDialog";
 import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
 import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
+import { AutosaveRecoveryDialog, AutosaveRecoveryView } from "@/screens/AutosaveRecoveryDialog";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
@@ -196,6 +197,9 @@ function AppShell() {
       <LinkGroupSettingsDialog bridge={bridge} />
       {/* Screen 4 Batch B2 — multi-select link-group assignment. */}
       <SetLinkGroupDialog bridge={bridge} />
+      {/* VPT-3 — crash-recovery. Checks for an orphaned autosave on mount;
+          a no-op when the host reports none (always so under the mock). */}
+      <AutosaveRecoveryDialog bridge={bridge} />
     </div>
     </BridgeContext.Provider>
   );
@@ -214,6 +218,30 @@ function ModNicknameDemo() {
     <div className="flex h-full w-full items-center justify-center bg-bg text-sm text-text-2">
       <span>Mod Nickname dialog demo — dismiss to log the result.</span>
       <ModNicknameDialog />
+    </div>
+  );
+}
+
+// ?demo=autosave-recovery — VPT-3 a11y gate. Renders the recovery dialog
+// with a FIXED both-tiers orphan and a FIXED `nowMs`, so the age text is
+// deterministic for the composition a11y golden (the real check-recovery is
+// suppressed under --test-host, so the dialog can't be driven by a real scan).
+const DEMO_AUTOSAVE_NOW_MS = 1_700_000_000_000;
+const DEMO_AUTOSAVE_ORPHAN = {
+  originalFilename: "fire.alo",
+  recentMtimeMs: DEMO_AUTOSAVE_NOW_MS - 45_000,       // "45 seconds ago"
+  stableMtimeMs: DEMO_AUTOSAVE_NOW_MS - 8 * 60_000,   // "8 minutes ago"
+};
+function AutosaveRecoveryDemo() {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-bg text-sm text-text-2">
+      <span>Autosave recovery dialog demo.</span>
+      <AutosaveRecoveryView
+        orphan={DEMO_AUTOSAVE_ORPHAN}
+        nowMs={DEMO_AUTOSAVE_NOW_MS}
+        onChoose={(c) => console.log("[demo:autosave-recovery] choice:", c)}
+        onDismiss={() => console.log("[demo:autosave-recovery] dismissed")}
+      />
     </div>
   );
 }
@@ -252,6 +280,9 @@ export function App() {
   }
   if (DEMO_PARAM === "mod-nickname") {
     return <ModNicknameDemo />;
+  }
+  if (DEMO_PARAM === "autosave-recovery") {
+    return <AutosaveRecoveryDemo />;
   }
   return <AppShell />;
 }
