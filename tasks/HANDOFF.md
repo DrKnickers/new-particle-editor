@@ -1,5 +1,108 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-04 (session 16) — **P8 color/texture shipped** (PAL-2/3 picker live-preview+cancel/revert+3 UX extras / PAL-14 broken-vs-missing thumbnails) + **LNK settings-OK warn+resolve** (LNK-10/MNU-13 2nd surface) + **2 user-surfaced fixes** (unreadable warnings, silent 1-emitter group create). NEXT: **deferred polish** (curve marquee-from-margins, SEL-12/13) or **native track** (VPT-2/3)
+
+**`origin/lt-4` = `b3871c6`** (was `8f783b6` at session start; **4 commits**, FF-pushed).
+Tree clean, 0 ahead / 0 behind, on `lt-4`. **No `master` changes.** Heavy user-driven loop:
+user launched the faithful `--new-ui`, reported what was off, I root-caused (web suite +
+browser preview + native compile) + fixed + the user re-verified on-screen.
+
+### The 4 commits (newest first)
+- `b3871c6` **fix(new-ui)** — readable link warnings (theme-robust amber chip) + block silent
+  1-emitter "create group" (OK disabled + hint). Web-only. `SetLinkGroupDialog.tsx` +
+  `LinkGroupSettingsDialog.tsx`.
+- `8da0e17` **feat(new-ui)** — LNK settings-OK disagreement **warn + resolve**. New
+  `linkGroups/diff-exempt-change` host command + `MakeNewlySharedMask` + extended
+  `set-exempt-fields` to clobber dissenters (+L-059 reseat). Host C++ + React + schema + mocks.
+- `9c92c7c` **feat(new-ui)** — P8b texture thumbnails **broken-vs-missing** (PAL-14). `enum
+  ThumbStatus` + `ThumbnailResult`; `GetThumbnailDataUri`→`GetThumbnail`; bridge `{dataUri,status}`;
+  React softer-tinted+icon placeholders. Host C++ + React + schema + mocks.
+- `df7dcda` **feat(new-ui)** — P8a color picker **live-preview + cancel/revert** (PAL-2/3) + 3 UX
+  extras (before/after swatch, editable R/G/B inputs, Enter-in-hex=OK). Web-only, 1 file.
+
+### What shipped
+- **P8a (PAL-2/3)** — faithful port of legacy `ColorButton.cpp`'s two-phase transaction:
+  snapshot `originalColor` on open → stream `onChange` live (PAL-2) → OK/click-outside keep,
+  Cancel/Escape revert (PAL-3). Controlled Radix popover via one `onOpenChange` funnel. **User
+  chose** all 3 UX extras. **User-verified** live recolor + revert on screen.
+- **P8b (PAL-14)** — host distinguishes Missing (file-not-found) vs Broken (present but won't
+  decode) — was flattened to one blank block. **User chose** "softer tinted + icon" over legacy's
+  literal magenta/grey-X. **User-verified** missing(grey)/broken(red)/valid in `--new-ui`.
+- **LNK settings-OK (LNK-10/MNU-13 2nd surface)** — **Verified P7's `diff-membership` did NOT
+  fit** (L-022: it diffs joiners under the *stored* exempt set; settings needs existing members
+  under the *proposed* set). New `diff-exempt-change` + faithful clobber-on-OK. **User-verified**
+  via the texture-share path (Settings → check Color texture → warning names it → OK syncs).
+
+### The 2 user-surfaced fixes + 1 non-bug (the loop's value)
+1. **🐛 unreadable warning** — both link warnings used fixed `text-amber-200` (reads only on
+   dark); theme is light, app has **no `dark:` variant support** (themes via `data-theme` +
+   CSS-var tokens). Fixed: self-contained high-contrast amber chip (amber-900 on amber-200).
+   Web-lane-invisible (unit tests assert text content, not contrast). → **L-063**.
+2. **🐛 "creating the 2nd group took three tries / OK did nothing"** — host invariant "group
+   needs ≥2 members" (`CreateLinkGroup` returns 0 below 2, silently) wasn't mirrored in the UI.
+   A right-click promoting a 2-selection to the single targeted row → OK fired a no-op
+   `set-membership`. Fixed: OK disabled + "Select at least 2 emitters" hint when <2 for a new
+   group (join-1-to-existing still allowed). Reproduced the flow in the browser preview (a
+   **green** repro eliminated "selection is broken"). → **L-063**.
+3. **NOT a bug** — "color texture not synced on group create + no warning": `colorTexture` is
+   **exempt-by-default** ([LinkGroup.cpp:13] `colorTexture(true)`), matching legacy. A new group
+   neither shares nor warns about exempt fields. The first group "worked" only because the user
+   picked a shared-by-default field (`nParticlesPerSecond`). Sharing a texture is done via
+   Settings (the new warn+resolve path).
+
+### New lessons
+- **L-062** — in the browser preview, reading the DOM synchronously right after dispatching an
+  event sees PRE-React-flush state (controlled-close popover still shows, reverted field still
+  shows old value) → read settled state in a SEPARATE eval, or diagnose a phantom bug.
+- **L-063** — classify a "X doesn't work" report as (a) correct-behaviour-misread /
+  (b) silent-failure-from-unenforced-host-invariant / (c) real-defect BEFORE coding; UI must
+  mirror host invariants (min size, required field); a GREEN repro is evidence too; contrast/
+  theme regressions are web-lane-invisible (extends L-057).
+
+### How verified
+- **Web:** vitest **471** (49 files; +17 over session-15's 454), `pnpm build` clean, `tsc
+  --noEmit` exit 0 (L-046). TDD throughout (red→green per change).
+- **Native:** Debug x64 **compiles + links clean** (`MSBUILD EXIT=0`) after each host change
+  (P8b, LNK settings). Faithful `--new-ui` smoke-launched healthy (compositing, real fps + valid
+  `sharedTex`/`backBuffer` handle — not L-033 ~4 FPS). **User confirmed on-screen:** color
+  live-preview/revert, thumbnail classification, settings warn+resolve (texture share), readable
+  warnings, 1-emitter guard.
+- **a11y:** **zero golden change** all 4 commits (color picker, texture palette, link dialogs are
+  popovers/modals — NOT captured composition surfaces; grep-proven per commit). No re-baseline.
+
+### Native toolchain (this worktree only — L-058)
+Restored this session: WebView2 1.0.3967.48 `packages/` (**robocopy** from nuget cache, NOT
+`Copy-Item -Recurse $src\*` which silently skips nested dirs — L-039), MSBuild Debug x64 (L-046).
+**A new worktree won't have these.** MSBuild: `C:\Program Files\Microsoft Visual Studio\18\
+Community\MSBuild\Current\Bin\MSBuild.exe`. The `.sln` is at the REPO ROOT, not `web/`. nuget
+cache IS present at `~/.nuget/packages/microsoft.web.webview2/1.0.3967.48`.
+
+### Branch note
+Committed P8b/LNK/fixes directly on `lt-4` (stayed on `lt-4` after the P8a FF-push instead of
+switching back to the session branch). End state is identical to the FF flow — linear history,
+session branch synced forward. No issue, just noted so the next session isn't surprised
+`claude/practical-moore-1a19a1 == lt-4`.
+
+### ⭐ NEXT TASK options (pick with the user; full catalog in ui-delta-report.md)
+1. **Deferred polish:** curve marquee-from-axis-margins (user request — needs the curve canvas
+   reworked to a margin-inclusive viewBox); SEL-12 drag-autoscroll past viewport edge; SEL-13
+   Esc/right-click cancel of the *reorder* drag. All drag/native-lane (poorly web-verifiable).
+2. **Native track:** VPT-2 undo capture-wiring (the color-picker `originalColor` snapshot is a
+   ready hook — capture ONE undo entry per picker session, not per tick); VPT-3 autosave port;
+   verify Reset-Camera vectors (MNU-7).
+3. **MT-13 gate:** the user still daily-drives legacy/arch-A — these fixes build arch-C trust
+   toward the eventual LT-4→master cutover.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; `origin/lt-4` = `b3871c6` or newer; 0 ahead / 0 behind; clean.
+- From `web/`: `pnpm install` if `node_modules` absent, then
+  `pnpm --filter @particle-editor/editor test` → **471 passed** (49 files).
+- `pnpm --filter @particle-editor/editor build` → clean. `…lint` (`tsc --noEmit`) exit 0.
+- Native (a11y / faithful `--new-ui`): toolchain is **NOT in a fresh worktree** — restore
+  `packages/` (L-039, use robocopy) + MSBuild Debug x64 (L-046) first.
+
+---
+
 ## 2026-06-04 (session 15) — **P7 link-groups shipped** (LNK-2 dot / LNK-6 visual brackets + row-hover / LNK-8 Dissolve / LNK-10 inline join-warning) + **4 user-surfaced fixes** (link-group cursor-crash, WebView2 context-menu, shift-click anchor, dot placement). NEXT: **P8 color/texture** (PAL-2/3/14), or deferred polish / native track (VPT-2/3)
 
 **`origin/lt-4` = `<docs-commit>`** (was `8d18a2e` at session start; **4 commits**, FF-pushed).
