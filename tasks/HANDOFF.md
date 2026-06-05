@@ -1,5 +1,137 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-05 (session 18) — **Native-harness green-up (160/5 → 165/0) + mid-run host-death guard + VPT-3 autosave port (shipped, live-smoke verified → 168/0)**. NEXT: MNU-7 reset-camera / deferred web polish (SEL-12/13, curve marquee) / native parity
+
+**`origin/lt-4` = `3b589a4`** (was `dd757b5` at session start; **3 commits**, FF-pushed). Tree
+clean, on `claude/focused-wescoff-df0deb` (== `lt-4`). **No `master` changes.** Native harness
+**168 passed / 0 failed / 30 skipped**; web vitest **481**; `.sln` Debug x64 clean (LNK4098 benign).
+
+### The 3 commits (newest first)
+- `3b589a4` **feat(new-ui)** — VPT-3 autosave + crash recovery. Two-tier (30s recent / 5min stable)
+  background autosave + a React recovery dialog. Ported the legacy `Autosave` module (shipped #41,
+  reused VERBATIM) into arch-C. Host + React + schema + tests. Live crash→recover round-trip
+  verified via a temporary-patched smoke (below).
+- `e6eb6bb` **test(new-ui)** — harness host-death guard. `run-native-tests.mjs` detects a MID-RUN
+  host death (`pwRunning` gate), kills Playwright, prints a `*** FATAL: host process died MID-RUN ***`
+  banner, exits **2** (distinct from spec-fail 1 / clean 0). Stops a poisoned run masquerading as
+  ~60 failures. Verified by fault-injection (Stop-Process the test-host mid-run → exit 2) + clean run.
+- `2c51c64` **test(new-ui)** — native a11y harness green-up (160/5 → 165/0). splitters ×4 +
+  dialog-set-link-group golden.
+
+### ⚠️ The "5 pre-existing failures" + the phantom crash (read first — L-066)
+Session-17 said the harness had "5 pre-existing failures (splitters ×4 + a11y-dialogs ×1)." TRUE —
+but my FIRST `pnpm test:native` on the fresh worktree showed **39 failed**: a mid-run host crash
+(exit `0xFFFFFFFF`) cascading ~60 `ECONNREFUSED` + 19 a11y golden drifts. This was a NON-reproducible
+**environmental poisoning of the first run** (dumpless -1 exit = TerminateProcess signature, NOT a
+code crash — zero WER dump despite WER active w/ 6 prior real dumps). A clean re-run = EXACTLY the
+handoff's 160/5. **L-066:** re-run before trusting a catastrophic native result; the dumpless code
+-1 is the tell. (Drove the host-death guard, so a future poisoned run self-announces via exit 2.)
+
+### The 5 real failures — both root-caused, both TEST-side (no shipping-UI change)
+1. **splitters ×4** — spec asserted flat 20/60/20 %, but the `left`/`spawner` Panels carry intentional
+   PIXEL `minSize` floors (330px/260px) that clamp the % at the 1264px test window (left → 26.1%, the
+   exact number observed). Fix = the TEST: compute expected % from the measured group width
+   (`max(20, floorPx/width*100)`), correct at any window size. `splitters.spec.ts`.
+2. **dialog-set-link-group ×1** — golden was STALE behind a shipped "require ≥2 emitters / disable OK"
+   validation ([SetLinkGroupDialog.tsx:188](web/apps/editor/src/screens/SetLinkGroupDialog.tsx:188),
+   web-tested). Fix = regenerate the golden (verified the exact diff via `a11y:update --grep` + `git diff`).
+   Initial teardown-leakage hypothesis DISPROVEN by the actual diff (the modal golden is dialog-only).
+
+### VPT-3 autosave — what shipped + the design
+Full 5-part plan + review: [tasks/todo.md](tasks/todo.md). Design approved by the user; ONE flagged
+refinement: **React-initiated** `autosave/check-recovery` on mount instead of a host-pushed event
+(sidesteps a fire-before-subscribe startup race).
+- **Reused verbatim:** [src/Autosave.cpp](src/Autosave.cpp) (UI-agnostic data layer, shipped #41,
+  already linked into the exe) — NO changes, no build-system work.
+- **Host:** [HostWindow.cpp](src/host/HostWindow.cpp) WM_TIMER drives the two Win32 timers (dirty-gated
+  `Autosave::Write`) + `DeleteOurSession` on save/clean-exit — all gated `!useTestHost` so harness runs
+  leave no orphan files. [BridgeDispatcher.cpp](src/host/BridgeDispatcher.cpp): `autosave/check-recovery`
+  (scan → orphan|null; suppressed under --test-host / when a doc is loaded; stashes the `OrphanSession`)
+  + `autosave/recover` (load chosen tier via file/open's swap+notify → L-059 reseat; present AS the
+  original filename, `m_savedSnapshot.clear()` + `SetDirty(true)` so it stays dirty; `DeleteOrphan` consumes).
+- **React:** [AutosaveRecoveryDialog.tsx](web/apps/editor/src/screens/AutosaveRecoveryDialog.tsx) (pure
+  `AutosaveRecoveryView` + wired container); mounted in `App.tsx` AppShell; `?demo=autosave-recovery`
+  route (fixed orphan + pinned `nowMs`) drives the a11y golden deterministically. Dismiss (Esc/X/overlay)
+  = decide-later (no recover; re-prompts next launch).
+- **Schema:** `bridge-schema/src/index.ts` (AutosaveOrphan + 2 commands); MockBridge stubs
+  (check → {orphan:null}) so `pnpm dev` / web vitest never prompt.
+
+### VPT-3 verification (automated + LIVE)
+- vitest **481** (471 + 10 new); native harness **168/0** (+2 bridge round-trips: test-host suppression
+  + recover no-op; +1 a11y golden `dialog-autosave-recovery`).
+- **Live crash→recover smoke** (the path `--test-host` structurally can't run — timers gated off there):
+  temporarily patched the build (un-gate timers under test-host, recent interval 2s, drop check-recovery
+  suppression), drove the REAL flow over CDP across two host processes via a throwaway node script —
+  edit (1→2 emitters) → autosave file written (`autosave-<pid>-recent.alo`) → TerminateProcess (crash) →
+  relaunch → check-recovery found the orphan (correct payload) → recover{recent} restored the doc +
+  flipped dirty false→true → DeleteOrphan consumed. **ALL PASSED.** Patches then REVERTED via
+  `git checkout`, script deleted, rebuilt, harness re-confirmed **168/0**. Nothing from the smoke ships.
+
+### Files touched (commit 3b589a4)
+`src/host/BridgeDispatcher.{h,cpp}`, `src/host/HostWindow.cpp`; `web/packages/bridge-schema/src/index.ts`,
+`apps/editor/src/bridge/mock.ts`, `apps/editor/src/App.tsx`,
+`apps/editor/src/screens/AutosaveRecoveryDialog.tsx` (+ `__tests__/`),
+`apps/editor/tests/helpers/a11y-surfaces.ts` + NEW `a11y-goldens/dialog-autosave-recovery.composition.golden.yaml`,
+NEW `apps/editor/tests/autosave-recovery.spec.ts`, `scripts/run-native-tests.mjs`; `CHANGELOG.md`
+(hashes `TODO` until merge), `tasks/{fix-plan,todo,lessons}.md`. Green-up/guard commits touched
+`splitters.spec.ts`, the set-link-group golden, `run-native-tests.mjs`, `lessons.md`.
+
+### New lessons
+- **L-066** — fresh-worktree first native run can be environmentally poisoned (mid-run host-death
+  cascade + broad a11y drift); RE-RUN before trusting; dumpless exit `-1`/`0xFFFFFFFF` = external
+  termination not a crash (no WER dump); + the now-shipped harness self-detect guard (exit 2); + the
+  a11y-golden regenerate-and-`git diff` method; + the splitter px-floor-vs-% assertion fix.
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **MNU-7** — verify the new-UI Reset-Camera vectors vs the legacy engine default (small, native).
+2. **Deferred web polish** — SEL-12 (emitter-tree drag-autoscroll past the viewport edge), SEL-13
+   (Esc/right-click cancel of the *reorder* drag), curve marquee-from-axis-margins (needs the curve
+   canvas reworked to a margin-inclusive viewBox). All web-only, no native lane.
+3. **Native parity track** — remaining items. **VPT-2 undo + VPT-3 autosave both DONE.**
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; `origin/lt-4` = `3b589a4` or newer; 0 ahead / 0 behind; clean.
+- web: `pnpm install` if `node_modules` absent; `pnpm --filter @particle-editor/editor test` → **481**;
+  `build` clean; `lint` (`tsc --noEmit`) exit 0 (run `tsc` directly if pnpm's deps pre-check errors).
+- native (only for CDP/host work): restore `packages/` (robocopy L-039) + MSBuild Debug x64 (L-046) +
+  `pnpm --filter @particle-editor/editor build` (dist, L-040); then `pnpm test:native` → **168 passed /
+  30 skipped / 0 failed**. NEW: the harness now exits **2** + prints a `*** FATAL: host process died
+  MID-RUN ***` banner if the host dies mid-run — that's environmental, RE-RUN (L-066), don't investigate
+  as a regression.
+
+### ⚠️ VPT-3 caveat for a future session
+The live autosave-write + crash→recover round-trip is **gated off under `--test-host`**, so the
+standing harness covers only suppression + the recover no-op + the dialog a11y. The real flow was
+proven THIS session via the temporary-patched smoke (above) and is now correct — but if you touch the
+autosave write/scan/recover host code, re-run that smoke (patch → drive → revert) since the harness
+can't reach it. `[autosave]` `#ifndef NDEBUG` stderr lines (Write/check-recovery/recover) aid a manual check.
+
+### Kickoff (full) for the next session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-DComp
+> particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 18),
+> `tasks/todo.md` (VPT-3 plan+review), `tasks/fix-plan.md`, `tasks/lessons.md` (esp. **L-066** new this
+> session, L-064/L-065 undo, L-057/L-058 native-lane, L-039/L-046 toolchain restore). **VERIFY claims
+> against the actual code before acting** — docs have drifted here (L-022) and session-18's own first
+> native run was a phantom catastrophe (L-066). Pre-flight: `git fetch origin lt-4`; confirm
+> `origin/lt-4` = `3b589a4`, 0/0, clean; from `web/` `pnpm install` then
+> `pnpm --filter @particle-editor/editor test` → **481**. **Shipped this session:** native harness
+> green-up (165/0) + a mid-run host-death guard (harness exits 2 on poisoned runs) + VPT-3 autosave
+> (two-tier autosave + React crash-recovery dialog, live-smoke verified → 168/0). For native/CDP work,
+> restore the native lane (L-039 robocopy packages/ + L-046 MSBuild Debug x64 + L-040 `pnpm build` dist),
+> then `pnpm test:native` → **168/0** (if it shows a host-death FATAL + exit 2, that's environmental —
+> re-run, L-066). Default next task: pick WITH the user from MNU-7 (reset-camera parity) / deferred web
+> polish (SEL-12/13, curve marquee) / native parity. Summarize your understanding + confirm scope before
+> changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 18) + `tasks/lessons.md`
+> (esp. L-066), VERIFY against code (L-022/L-066). Pre-flight: `origin/lt-4` = `3b589a4`, 0/0, clean;
+> `pnpm --filter @particle-editor/editor test` → 481. Native harness is **168/0** (VPT-3 autosave +
+> green-up + host-death guard all shipped this session). Pick next task WITH the user: MNU-7 reset-camera
+> / SEL-12-13 + curve-marquee web polish / native parity. Confirm scope before changing anything.
+
+---
+
 ## 2026-06-05 (session 17) — **VPT-2 undo: verified the existing wiring + fixed 2 native-only bugs** (redo→undo swallow; per-tick → per-FIELD coalescing) — all verified over the `--test-host` CDP bridge + real keystrokes. NEXT: native-harness green-up (5 pre-existing failures) / deferred polish / VPT-3 autosave
 
 **`origin/lt-4` = `d9b7a90`** (was `4c790fa` at session start; **3 commits**, FF-pushed).
