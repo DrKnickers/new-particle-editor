@@ -3936,8 +3936,11 @@ capture (keep the first/session-start snapshot, drop intermediate ticks); the he
 auto-cap then snapshots the final live state on the first undo, so one undo spans the burst.
 
 **Fix.** Added `UndoStack::CapturePreCoalesced` (skip-on-key-match-within-window, head-only) used
-by arch-C property edits; legacy's `Capture()` (replace) left untouched. `set-properties` passes
-`MakeCoalesceKey(0x00E1, emitterId)`; structural ops keep `coalesceKey=0` (never fold).
+by arch-C property edits; legacy's `Capture()` (replace) left untouched. `set-properties` builds a
+**per-field** key (bit 31 set | 15-bit order-independent FNV-1a XOR-hash of the patch field names
+<< 16 | emitter id) so rapid edits to the SAME field fold but switching field starts a fresh step —
+finer than legacy's per-emitter folding, a deliberate arch-C choice (user request). Structural ops
+keep `coalesceKey=0` (never fold).
 
 **Rules.**
 - Before porting a windowed/coalescing behaviour across a capture-timing change (PRE vs POST,

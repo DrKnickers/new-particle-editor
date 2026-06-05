@@ -152,12 +152,14 @@ user at phase boundaries.
   - **Pending user check (CDP can't drive the native accelerator):** literal Ctrl+Z / Ctrl+Y
     on-screen.
   - **🐛 Fixed (user-reported 2026-06-05):** scroll-wheel / rapid spinner edits recorded one undo
-    entry PER TICK (`captureUndo` passed `coalesceKey=0` → no coalescing). Reinstated legacy-style
-    1500ms coalescing for `emitters/set-properties` via `UndoStack::CapturePreCoalesced`
-    (PRE-mutation SKIP semantics, vs legacy's POST-mutation REPLACE). One Ctrl+Z now reverts the
-    whole gesture. See **L-065** + CHANGELOG; regression in `tests/undo-navigation.spec.ts`.
-    Covers the hold-to-repeat case too (same `set-properties` path). Plain spinner drag already
-    commits once on release (Spinner.tsx:18).
+    entry PER TICK (`captureUndo` passed `coalesceKey=0` → no coalescing). Added 1500ms-window
+    coalescing for `emitters/set-properties` via `UndoStack::CapturePreCoalesced` (PRE-mutation
+    SKIP semantics, vs legacy's POST-mutation REPLACE). One Ctrl+Z now reverts the whole gesture.
+    **Per-FIELD** keying (FNV-1a hash of patch field names + emitter id), finer than legacy's
+    per-emitter — a deliberate user choice: switching field starts a fresh undo step. See **L-065**
+    + CHANGELOG; regressions in `tests/undo-navigation.spec.ts` (same-field folds / different-field
+    separate). Covers hold-to-repeat too (same path). Plain spinner drag already commits once on
+    release (Spinner.tsx:18).
   - **Possible follow-up (not done):** apply the same coalescing to streaming track-key/curve
     edits if a user reports per-tick undo there (legacy keyed those by `track<<16|emitterIdx`).
 - **Autosave port (VPT-3).** Port the 30s/5min tiers + orphan recovery to `src/host`.

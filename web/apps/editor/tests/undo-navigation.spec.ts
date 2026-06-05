@@ -75,12 +75,20 @@ async function firstEmitterId(): Promise<number> {
   if (id === undefined) throw new Error("no emitters in tree");
   return id;
 }
+async function getProps(id: number): Promise<{ lifetime: number; gravity: number }> {
+  const r = await req<{ properties: { lifetime: number; gravity: number } }>(
+    "emitters/get-properties",
+    { id },
+  );
+  return r.properties;
+}
 async function getLifetime(id: number): Promise<number> {
-  const r = await req<{ properties: { lifetime: number } }>("emitters/get-properties", { id });
-  return r.properties.lifetime;
+  return (await getProps(id)).lifetime;
 }
 const setLifetime = (id: number, v: number) =>
   req("emitters/set-properties", { id, patch: { lifetime: v } });
+const setProp = (id: number, patch: Record<string, number>) =>
+  req("emitters/set-properties", { id, patch });
 const undo = () => req<{ applied: boolean }>("undo/perform", { direction: "undo" });
 const redo = () => req<{ applied: boolean }>("undo/perform", { direction: "redo" });
 
@@ -162,4 +170,42 @@ test("a rapid burst of same-emitter edits coalesces into ONE undo step (wheel sc
   // restore
   await undo();
   expect(await getLifetime(id)).toBeCloseTo(p0, 4);
+});
+
+test("rapid edits to DIFFERENT fields are SEPARATE undo steps (per-field coalescing)", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const { lifetime: lt0, gravity: gv0 } = await getProps(id);
+  const lt1 = Number((lt0 + 3).toFixed(3));
+  const gv1 = Number((gv0 + 2).toFixed(3));
+
+  // Two rapid edits to DIFFERENT fields on the same emitter, within the
+  // coalesce window. Per-FIELD coalescing keeps these as separate steps;
+  // per-emitter coalescing (the prior behaviour) would fold them into one.
+  await setProp(id, { lifetime: lt1 });
+  await setProp(id, { gravity: gv1 });
+  expect((await getProps(id)).lifetime).toBeCloseTo(lt1, 4);
+  expect((await getProps(id)).gravity).toBeCloseTo(gv1, 4);
+
+  // ONE undo reverts only the LAST field (gravity); lifetime is untouched.
+  await undo();
+  let p = await getProps(id);
+  expect(p.gravity).toBeCloseTo(gv0, 4);
+  expect(p.lifetime).toBeCloseTo(lt1, 4);
+
+  // A SECOND undo reverts the earlier field (lifetime).
+  await undo();
+  p = await getProps(id);
+  expect(p.lifetime).toBeCloseTo(lt0, 4);
+  expect(p.gravity).toBeCloseTo(gv0, 4);
+});
+
+test("a same-field burst still coalesces under per-field keying", async () => {
+  // The per-field key must stay stable across ticks of one field.
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const p0 = await getLifetime(id);
+  for (let i = 1; i <= 3; i++) await setLifetime(id, Number((p0 + i).toFixed(3)));
+  await undo();
+  expect(await getLifetime(id)).toBeCloseTo(p0, 4); // one undo reverts all 3
 });

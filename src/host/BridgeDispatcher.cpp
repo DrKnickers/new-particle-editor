@@ -2780,13 +2780,23 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         const json& patch = params["patch"];
 
-        // Coalesce rapid property edits on the SAME emitter (scroll-wheel
-        // ticks, held arrow) within the time window into one undo step — the
-        // arch-C analogue of legacy main.cpp's
-        // MakeCoalesceKey(EP_CHANGE, emitterIdx). High word 0x00E1 tags the
-        // op class (property edit); low word is the emitter id so different
-        // emitters never fold together.
-        captureUndo(UndoStack::MakeCoalesceKey(0x00E1, static_cast<WORD>(id & 0xFFFF)));
+        // Coalesce rapid edits to the SAME field(s) on the SAME emitter
+        // (scroll-wheel ticks, held arrow) within the time window into one
+        // undo step; switching field starts a fresh step. Finer than legacy's
+        // per-emitter EP_CHANGE coalescing (main.cpp:2682) — a deliberate
+        // arch-C choice. Key layout: bit 31 set (never 0 = structural), bits
+        // 16..30 an order-independent FNV-1a hash of the patch field names,
+        // bits 0..15 the emitter id (so different emitters never fold).
+        uint32_t fieldHash = 0;
+        for (auto it = patch.begin(); it != patch.end(); ++it)
+        {
+            uint32_t h = 2166136261u; // FNV-1a offset basis
+            for (unsigned char c : it.key()) { h ^= c; h *= 16777619u; }
+            fieldHash ^= h; // XOR = order-independent across patch keys
+        }
+        const DWORD coalesceKey =
+            0x80000000u | ((fieldHash & 0x7FFFu) << 16) | (static_cast<DWORD>(id) & 0xFFFFu);
+        captureUndo(coalesceKey);
 
         // Helper macros — keep the per-field branch concise. Each
         // branch reads through `at()` only after a `contains()` check

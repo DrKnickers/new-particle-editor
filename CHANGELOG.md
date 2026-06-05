@@ -22,30 +22,35 @@ Conventions:
 
 Changing an emitter value with several quick scroll-wheel ticks (or a held spinner
 arrow) used to record one undo entry *per tick*, so reverting the gesture took as many
-Ctrl+Z presses as ticks. Now a burst of rapid edits to the same emitter collapses into a
-single undo/redo step (within a ~1.5 s window), matching the legacy editor. Distinct,
-deliberate edits (paused more than the window, or on a different emitter) stay separate.
+Ctrl+Z presses as ticks. Now a burst of rapid edits to the **same field** collapses into a
+single undo/redo step (within a ~1.5 s window). Switching to a different field — or pausing
+longer than the window — starts a fresh step, so each field stays independently undoable.
+(This is finer than the legacy editor, which folded all edits on one emitter together; the
+per-field granularity was a deliberate choice for the new UI.)
 
 **How tackled.** Legacy coalesced `EP_CHANGE` notifications by
 `MakeCoalesceKey(EP_CHANGE, emitterIdx)` ([`src/main.cpp`](src/main.cpp:2682)). The new UI
-now does the same: [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:2776)'s
-`emitters/set-properties` passes a per-emitter coalesce key to `captureUndo`. The twist is
-that arch-C captures snapshots PRE-mutation (legacy captured POST), so the existing
-`Capture()` coalesce — which *replaces* the tail with the latest state — would overwrite
-the burst's session-start state (the undo target). The fix adds
-[`UndoStack::CapturePreCoalesced`](src/UndoStack.cpp:126): when the previous entry shares
-the key within the window at the head of history, it *skips* the capture (keeping the
+takes the same window-based approach but with a per-field key:
+[`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:2783)'s
+`emitters/set-properties` builds a coalesce key from an order-independent FNV-1a hash of the
+patch's field names plus the emitter id (top bit set so it's never the structural `0`), and
+passes it to `captureUndo`. The twist is that arch-C captures snapshots PRE-mutation (legacy
+captured POST), so the existing `Capture()` coalesce — which *replaces* the tail with the
+latest state — would overwrite the burst's session-start state (the undo target). The fix
+adds [`UndoStack::CapturePreCoalesced`](src/UndoStack.cpp:126): when the previous entry
+shares the key within the window at the head of history, it *skips* the capture (keeping the
 session-start snapshot); the head-of-history auto-cap in `undo/perform` then snapshots the
 final live state on the first undo, so one undo spans the whole gesture.
 
 **Issues encountered and resolutions.** PRE- vs POST-mutation capture need *opposite*
 coalesce mechanics (skip vs replace) for the same UX — encoding skip as a separate method
 left legacy's `Capture()` untouched. The behaviour is time-windowed, so the regression
-test ([`tests/undo-navigation.spec.ts`](web/apps/editor/tests/undo-navigation.spec.ts:1))
-waits out `COALESCE_WINDOW_MS` in `beforeEach` to make the first edit of each test
-deterministically start a fresh entry rather than fold into a prior test's same-emitter
-edit. Scope: emitter property edits only — engine/preview edits don't capture undo, and
-plain spinner *drag* already commits once on release (Spinner.tsx:18).
+tests ([`tests/undo-navigation.spec.ts`](web/apps/editor/tests/undo-navigation.spec.ts:1))
+wait out `COALESCE_WINDOW_MS` in `beforeEach` to make the first edit of each test
+deterministically start a fresh entry rather than fold into a prior test's same-field edit,
+and cover both same-field folding and different-field separation. Scope: emitter property
+edits only — engine/preview edits don't capture undo, and plain spinner *drag* already
+commits once on release (Spinner.tsx:18).
 
 ---
 
