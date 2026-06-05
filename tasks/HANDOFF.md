@@ -1,5 +1,129 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-05 (session 17) — **VPT-2 undo: verified the existing wiring + fixed 2 native-only bugs** (redo→undo swallow; per-tick → per-FIELD coalescing) — all verified over the `--test-host` CDP bridge + real keystrokes. NEXT: native-harness green-up (5 pre-existing failures) / deferred polish / VPT-3 autosave
+
+**`origin/lt-4` = `d9b7a90`** (was `4c790fa` at session start; **3 commits**, FF-pushed).
+Tree clean, 0 ahead / 0 behind, on `claude/zealous-chatelet-dd6a5d` (== `lt-4`). **No `master`
+changes.** User-driven loop: user reported undo behaving wrong; I root-caused on the REAL host
+(CDP), fixed, regression-tested, the user re-verified on-screen.
+
+### The 3 commits (newest first)
+- `d9b7a90` **refactor(new-ui)** — undo coalescing **per-FIELD** instead of per-emitter (user
+  request). Coalesce key = bit31 | (FNV-1a XOR-hash of patch field names & 0x7FFF)<<16 |
+  emitterId. `src/host/BridgeDispatcher.cpp` set-properties + 2 specs.
+- `439edf0` **fix(new-ui)** — coalesce rapid same-field property edits into one undo step (wheel
+  scroll / held arrow). New `UndoStack::CapturePreCoalesced` (PRE-mutation **SKIP** coalescing).
+  Host C++ + spec + docs.
+- `658da6b` **fix(new-ui)** — undo no longer swallows a step after a redo. `m_liveAhead` flag gates
+  the head-of-history auto-cap + `ComputeCanUndo`. Host C++ + NEW `tests/undo-navigation.spec.ts`
+  (wired into the native harness).
+
+### Context: VPT-2 was NOT "wire undo from scratch" (L-022 trap fired)
+`fix-plan.md` said "wire `Capture()` into every new-UI mutation," but undo was **already fully
+wired** for every DOCUMENT mutation (~25 `captureUndo()` sites; working `undo/perform` with
+head-of-history auto-cap; Ctrl+Z/Y/Shift+Z accelerators; menu enable-state). Engine/preview edits
+(lighting/bloom/camera) are **not** undoable — they live on `m_engine`, not the `ParticleSystem`
+snapshot `UndoStack` serializes — **matching legacy** (NOT a defect, out of scope). So the session
+became *verify + fix*, and found 2 real bugs.
+
+### What shipped (2 bugs + 1 user-chosen refinement)
+1. **🐛 redo→undo swallow (`658da6b`).** `undo → redo → undo` lost the 2nd undo (and corrupted the
+   stack). The auto-cap in `undo/perform` fired on `Cursor()==Depth()`, which is ALSO true right
+   after `Redo()` (live already in sync) → it pushed a duplicate that the next `Undo()` returned →
+   no-op. Fix: `m_liveAhead` flag (set in `Capture`/`CapturePreCoalesced`, cleared in `Undo`/`Redo`)
+   gates BOTH the auto-cap and `ComputeCanUndo`. → **L-064**.
+2. **🐛 per-tick undo spam (`439edf0`).** Each scroll-wheel notch = a separate `emitters/set-properties`
+   = a separate undo entry (`captureUndo` passed `coalesceKey=0`, coalescing OFF). Legacy coalesced
+   by emitter within 1500ms (`MakeCoalesceKey(EP_CHANGE, emitterIdx)`, main.cpp:2682). Arch-C
+   captures **PRE**-mutation, so legacy's REPLACE-coalesce would clobber the session-start state
+   (the undo target) → new `CapturePreCoalesced` with **SKIP** semantics (keep the first pre-state;
+   the auto-cap snapshots the final live state on the first undo, so one undo spans the burst). →
+   **L-065**.
+3. **per-FIELD refinement (`d9b7a90`, user request).** Coalesce key now derives from the patch's
+   FIELD names (not just emitter id), so rapid edits to the SAME field fold but switching field
+   starts a fresh undo step — finer than legacy by deliberate choice.
+
+### How verified — the methodological win (read this)
+- **Drove the REAL host over CDP, not computer-use.** The faithful `--new-ui` React UI is a separate
+  `msedgewebview2.exe` process **MASKED** in computer-use screenshots. Instead used the existing
+  `--test-host` seam: launch `ParticleEditor.exe --new-ui --test-host` → CDP on `:9222` →
+  `chromium.connectOverCDP("http://127.0.0.1:9222")` → real `window.bridge` → real `UndoStack`.
+  Exact state reads (`emitters/get-properties`, `engine/state/snapshot`), not pixels.
+- **Real keystrokes via a hybrid.** CDP `page.keyboard.press` CANNOT reach the native
+  `AcceleratorKeyPressed` accelerator (renderer-level injection bypasses the host message loop).
+  Verified literal Ctrl+Z/Ctrl+Y by COMBINING computer-use (real OS key → native accelerator) +
+  CDP (exact value read): wheel-burst → one Ctrl+Z reverts all; Ctrl+Y reapplies; redo→undo steps
+  back. All ✅. request_access resolves the exe as `ParticleEditor.exe` (tier full).
+- **Regression:** `tests/undo-navigation.spec.ts` — 6 tests (single-edit round-trip; redo→undo;
+  cycle stability; wheel-burst coalesce; different-field separation; same-field burst). RED→GREEN
+  proven for each new behavior. Added to the harness fixed spec list.
+- **Full native harness: 160 passed / 29 skipped / 5 failed.** The 5 failures (`splitters` ×4 +
+  `a11y-dialogs-composition` ×1) are **PRE-EXISTING / environmental** — PROVEN by `git stash`-ing
+  the fix, rebuilding the baseline binary, and reproducing them without it (baseline showed 6; count
+  is flaky 5↔6). They touch no undo code.
+- Web: vitest unaffected (**471**; no web src changed). `tsc --noEmit` exit 0 (L-046 stderr-wrap).
+
+### Files touched
+- `src/UndoStack.{h,cpp}` — `m_liveAhead` + `IsLiveAhead()`; new `CapturePreCoalesced` (skip-coalesce).
+- `src/host/BridgeDispatcher.cpp` — auto-cap gated on `IsLiveAhead()`; `ComputeCanUndo()`
+  liveAhead-aware; `captureUndo(DWORD coalesceKey=0)`; set-properties per-field key (~line 2783).
+- `web/apps/editor/tests/undo-navigation.spec.ts` (NEW) + `scripts/run-native-tests.mjs` (+1 line).
+- `CHANGELOG.md` (2 entries, hashes are `TODO` until merge), `tasks/lessons.md` (L-064, L-065),
+  `tasks/fix-plan.md` (VPT-2 marked done + the deferred remainder closed).
+
+### New lessons
+- **L-064** — a positional proxy (`cursor==depth`) silently aliased "fresh edit" AND "after redo";
+  track the intent explicitly (`m_liveAhead`). + the CDP-drive-the-faithful-UI method + the
+  native-accelerator-not-reachable-by-CDP fact.
+- **L-065** — PRE- vs POST-mutation capture need OPPOSITE coalescing (skip vs replace) for the same
+  UX; add a sibling method, don't overload the legacy-shared `Capture`. Test windowed behavior by
+  controlling the clock (`beforeEach` waits out `COALESCE_WINDOW_MS`).
+
+### ⚠️ Discovered but NOT fixed (out of scope, proven pre-existing)
+**5 native-harness failures**: `splitters.spec.ts` (4 — layout-% assertions sensitive to window
+size / localStorage, e.g. got 26% vs expected <21%) + `a11y-dialogs-composition` (dialog tree golden
+drift; flaky between dialog-set-link-group / dialog-lighting). Confirmed pre-existing via baseline
+stash+rebuild. Candidate next task to get the harness fully green.
+
+### Native toolchain (this worktree only — L-058)
+A fresh worktree has NO `node_modules` / `packages/` / built exe. Restore: WebView2 1.0.3967.48
+`packages/` via **robocopy** from the nuget cache (L-039 — `Copy-Item -Recurse` skips nested dirs);
+MSBuild Debug x64 (`C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`,
+`.sln` at **REPO ROOT**, ~45s cold, LNK4098 is benign). CDP lane: `pnpm test:native` (full harness,
+self-manages the host) OR launch `--new-ui --test-host` + `connectOverCDP`. **Probe CDP from node,
+not PowerShell** (`-NoProxy` absent in PS 5.1; `localhost`→IPv6 misses the IPv4 bind — use
+`127.0.0.1`).
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **Native-harness green-up** — investigate the 5 pre-existing `splitters` + `a11y-dialogs`
+   failures (likely window-size calibration + stale composition goldens). Gets `pnpm test:native`
+   to a clean pass for a trustworthy regression gate.
+2. **Deferred polish** — curve marquee-from-axis-margins (needs the curve canvas reworked to a
+   margin-inclusive viewBox); SEL-12 drag-autoscroll past viewport edge; SEL-13 reorder-drag cancel.
+3. **Native track** — VPT-3 autosave port (30s/5min tiers + orphan recovery); verify Reset-Camera
+   vectors (MNU-7) vs legacy default. **VPT-2 undo is now DONE.**
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; `origin/lt-4` = `d9b7a90` or newer; 0 ahead / 0 behind; clean.
+- web: `pnpm install` if `node_modules` absent; `pnpm --filter @particle-editor/editor test` → **471**;
+  `build` clean; `lint` (`tsc --noEmit`) exit 0.
+- native (only for CDP/undo work): restore `packages/` (robocopy) + MSBuild Debug x64 first; then
+  `pnpm test:native` → expect **160 passed / 5 pre-existing failures** (splitters + a11y-dialogs).
+
+### Kickoff (short) for the next session
+> Pick up `new-particle-editor` (AloParticleEditor) on branch `lt-4`. Read `tasks/HANDOFF.md` top
+> (session 17), `tasks/fix-plan.md`, `tasks/lessons.md` (esp. L-064/L-065, L-057/L-058), then VERIFY
+> against code (L-022: docs have drifted before). Pre-flight: `git fetch origin lt-4`; confirm
+> `origin/lt-4` = `d9b7a90`, 0/0, clean; from `web/` `pnpm install` then
+> `pnpm --filter @particle-editor/editor test` → 471. **VPT-2 undo shipped this session** (redo→undo
+> + per-field coalescing). Default next task: get the native harness fully green by fixing the 5
+> pre-existing `splitters`/`a11y-dialogs-composition` failures (proven unrelated to undo) — OR ask
+> the user. For any native/undo work, restore the toolchain (L-058/L-039/L-046) and drive the real
+> host over the `--test-host` CDP seam (`connectOverCDP 127.0.0.1:9222`, real `window.bridge`), not
+> computer-use. Confirm scope before changing anything.
+
+---
+
 ## 2026-06-04 (session 16) — **P8 color/texture shipped** (PAL-2/3 picker live-preview+cancel/revert+3 UX extras / PAL-14 broken-vs-missing thumbnails) + **LNK settings-OK warn+resolve** (LNK-10/MNU-13 2nd surface) + **2 user-surfaced fixes** (unreadable warnings, silent 1-emitter group create). NEXT: **deferred polish** (curve marquee-from-margins, SEL-12/13) or **native track** (VPT-2/3)
 
 **`origin/lt-4` = `b3871c6`** (was `8f783b6` at session start; **4 commits**, FF-pushed).
