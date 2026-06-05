@@ -151,10 +151,15 @@ user at phase boundaries.
     See **L-064** + CHANGELOG.
   - **Pending user check (CDP can't drive the native accelerator):** literal Ctrl+Z / Ctrl+Y
     on-screen.
-  - **Deferred (genuine VPT-2 remainder, lower priority):** spinner hold-to-repeat (arrow held
-    ~50ms/tick) pushes one undo entry per tick — `captureUndo` always passes `coalesceKey=0`,
-    so no coalescing; reinstate legacy-style 1500ms coalescing if it proves annoying. Plain
-    spinner drag already commits once on release (Spinner.tsx:18), so this is an edge case.
+  - **🐛 Fixed (user-reported 2026-06-05):** scroll-wheel / rapid spinner edits recorded one undo
+    entry PER TICK (`captureUndo` passed `coalesceKey=0` → no coalescing). Reinstated legacy-style
+    1500ms coalescing for `emitters/set-properties` via `UndoStack::CapturePreCoalesced`
+    (PRE-mutation SKIP semantics, vs legacy's POST-mutation REPLACE). One Ctrl+Z now reverts the
+    whole gesture. See **L-065** + CHANGELOG; regression in `tests/undo-navigation.spec.ts`.
+    Covers the hold-to-repeat case too (same `set-properties` path). Plain spinner drag already
+    commits once on release (Spinner.tsx:18).
+  - **Possible follow-up (not done):** apply the same coalescing to streaming track-key/curve
+    edits if a user reports per-tick undo there (legacy keyed those by `track<<16|emitterIdx`).
 - **Autosave port (VPT-3).** Port the 30s/5min tiers + orphan recovery to `src/host`.
 - **Verify Reset-Camera vectors (MNU-7)** against legacy engine default.
 

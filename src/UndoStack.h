@@ -56,6 +56,23 @@ public:
     bool Capture(const ParticleSystem& sys, size_t selectedIndex,
                  DWORD coalesceKey);
 
+    // PRE-mutation coalescing variant for the arch-C bridge. Callers
+    // snapshot BEFORE applying the edit, so the FIRST capture of a rapid
+    // burst already holds the correct undo target (the session-start
+    // state). When the previous entry shares coalesceKey within the time
+    // window AND we are at the head of history, SKIP the capture entirely —
+    // keeping that session-start snapshot — so the whole burst (e.g. a
+    // scroll-wheel spinning a spinner, or a held arrow) collapses into a
+    // single undo step. Otherwise pushes a new entry. coalesceKey == 0
+    // disables coalescing (always pushes).
+    //
+    // Contrast Capture(), whose coalesce branch REPLACES the tail snapshot
+    // with the current state — correct for legacy's POST-mutation capture
+    // (the tail must track the LATEST state), but wrong for PRE-mutation
+    // callers (it would overwrite the session-start state we undo back to).
+    bool CapturePreCoalesced(const ParticleSystem& sys, size_t selectedIndex,
+                             DWORD coalesceKey);
+
     bool CanUndo() const;
     bool CanRedo() const;
 

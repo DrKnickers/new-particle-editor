@@ -52,6 +52,14 @@ test.afterAll(async () => {
   await browser?.close();
 });
 
+// Property-edit coalescing is time-windowed (UndoStack COALESCE_WINDOW_MS =
+// 1500ms). Wait out the window before each test so the first edit always
+// starts a fresh undo entry rather than folding into a prior test's
+// same-emitter edit — makes the time-dependent behaviour deterministic.
+test.beforeEach(async () => {
+  await page.waitForTimeout(1600);
+});
+
 // Bridge helpers — all run inside the page against the real host.
 type BridgeReq = { kind: string; params: unknown };
 async function req<T = unknown>(kind: string, params: unknown = {}): Promise<T> {
@@ -128,6 +136,30 @@ test("a full undo/redo/undo cycle is stable across repeats", async () => {
     expect(await getLifetime(id)).toBeCloseTo(target, 4);
   }
   // leave at the pre-edit value
+  await undo();
+  expect(await getLifetime(id)).toBeCloseTo(p0, 4);
+});
+
+test("a rapid burst of same-emitter edits coalesces into ONE undo step (wheel scroll)", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const p0 = await getLifetime(id);
+
+  // Simulate a scroll-wheel gesture: 4 rapid edits to the same field. Each is
+  // a separate emitters/set-properties (one per wheel notch), all landing
+  // inside the coalesce window.
+  for (let i = 1; i <= 4; i++) await setLifetime(id, Number((p0 + i).toFixed(3)));
+  expect(await getLifetime(id)).toBeCloseTo(p0 + 4, 4);
+
+  // ONE undo must revert the WHOLE burst — not just the last tick.
+  await undo();
+  expect(await getLifetime(id)).toBeCloseTo(p0, 4);
+
+  // ONE redo must reapply the whole burst.
+  await redo();
+  expect(await getLifetime(id)).toBeCloseTo(p0 + 4, 4);
+
+  // restore
   await undo();
   expect(await getLifetime(id)).toBeCloseTo(p0, 4);
 });

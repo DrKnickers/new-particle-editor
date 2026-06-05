@@ -16,6 +16,39 @@ Conventions:
 
 ## Changelog
 
+### Scroll-wheel / rapid spinner edits now undo as one step (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Changing an emitter value with several quick scroll-wheel ticks (or a held spinner
+arrow) used to record one undo entry *per tick*, so reverting the gesture took as many
+Ctrl+Z presses as ticks. Now a burst of rapid edits to the same emitter collapses into a
+single undo/redo step (within a ~1.5 s window), matching the legacy editor. Distinct,
+deliberate edits (paused more than the window, or on a different emitter) stay separate.
+
+**How tackled.** Legacy coalesced `EP_CHANGE` notifications by
+`MakeCoalesceKey(EP_CHANGE, emitterIdx)` ([`src/main.cpp`](src/main.cpp:2682)). The new UI
+now does the same: [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:2776)'s
+`emitters/set-properties` passes a per-emitter coalesce key to `captureUndo`. The twist is
+that arch-C captures snapshots PRE-mutation (legacy captured POST), so the existing
+`Capture()` coalesce — which *replaces* the tail with the latest state — would overwrite
+the burst's session-start state (the undo target). The fix adds
+[`UndoStack::CapturePreCoalesced`](src/UndoStack.cpp:126): when the previous entry shares
+the key within the window at the head of history, it *skips* the capture (keeping the
+session-start snapshot); the head-of-history auto-cap in `undo/perform` then snapshots the
+final live state on the first undo, so one undo spans the whole gesture.
+
+**Issues encountered and resolutions.** PRE- vs POST-mutation capture need *opposite*
+coalesce mechanics (skip vs replace) for the same UX — encoding skip as a separate method
+left legacy's `Capture()` untouched. The behaviour is time-windowed, so the regression
+test ([`tests/undo-navigation.spec.ts`](web/apps/editor/tests/undo-navigation.spec.ts:1))
+waits out `COALESCE_WINDOW_MS` in `beforeEach` to make the first edit of each test
+deterministically start a fresh entry rather than fold into a prior test's same-emitter
+edit. Scope: emitter property edits only — engine/preview edits don't capture undo, and
+plain spinner *drag* already commits once on release (Spinner.tsx:18).
+
+---
+
 ### Undo no longer swallows a step after a redo (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

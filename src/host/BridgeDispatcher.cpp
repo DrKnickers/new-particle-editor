@@ -2591,9 +2591,13 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
     // Capture-undo helper. Wraps the dispatcher's m_undo with the
     // current selection index so a future undo restores the
-    // pre-mutation state. coalesceKey=0 disables coalescing
-    // (structural ops should never fold).
-    auto captureUndo = [&]() {
+    // pre-mutation state. coalesceKey defaults to 0 = never coalesce
+    // (structural ops must never fold across an add/delete/move). A
+    // non-zero key routes to CapturePreCoalesced so rapid same-key edits
+    // (a wheel-spun spinner / held arrow on one emitter) fold into a
+    // single undo step within the time window — see legacy EP_CHANGE
+    // coalescing (main.cpp ~2682).
+    auto captureUndo = [&](DWORD coalesceKey = 0) {
         if (m_undo == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem) return;
         const ParticleSystem* sys = m_pParticleSystem->get();
         size_t selIdx = SIZE_MAX;
@@ -2602,7 +2606,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             selIdx = static_cast<size_t>(m_selectedEmitterId);
         }
-        m_undo->Capture(*sys, selIdx, 0);
+        if (coalesceKey != 0)
+            m_undo->CapturePreCoalesced(*sys, selIdx, coalesceKey);
+        else
+            m_undo->Capture(*sys, selIdx, 0);
     };
 
     // F4: link-group propagation. After a shared (non-exempt) field is
@@ -2773,7 +2780,13 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         const json& patch = params["patch"];
 
-        captureUndo();
+        // Coalesce rapid property edits on the SAME emitter (scroll-wheel
+        // ticks, held arrow) within the time window into one undo step — the
+        // arch-C analogue of legacy main.cpp's
+        // MakeCoalesceKey(EP_CHANGE, emitterIdx). High word 0x00E1 tags the
+        // op class (property edit); low word is the emitter id so different
+        // emitters never fold together.
+        captureUndo(UndoStack::MakeCoalesceKey(0x00E1, static_cast<WORD>(id & 0xFFFF)));
 
         // Helper macros — keep the per-field branch concise. Each
         // branch reads through `at()` only after a `contains()` check

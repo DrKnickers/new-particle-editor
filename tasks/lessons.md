@@ -3915,3 +3915,38 @@ flag names the actual intent the position only approximated. Regression: `tests/
   exact state reads (extends the L-041/L-062 preview lane to the REAL host). Probe CDP from node,
   not PowerShell `Invoke-WebRequest` (no `-NoProxy` in PS 5.1; `localhost`→IPv6 misses the IPv4
   bind — use `127.0.0.1`). request_access resolves this custom exe as `ParticleEditor.exe`.
+
+## L-065
+
+**PRE-mutation and POST-mutation undo capture need OPPOSITE coalescing mechanics — skip vs
+replace — to produce the same "rapid burst = one undo step" UX.**
+
+**Context.** VPT-2 follow-up: a scroll-wheel gesture (4 ticks) on an emitter spinner recorded
+4 undo entries — each wheel notch is a separate `emitters/set-properties` and `captureUndo`
+passed `coalesceKey=0` (coalescing disabled). Legacy coalesced rapid same-emitter edits via
+`MakeCoalesceKey(EP_CHANGE, emitterIdx)` within a 1500ms window (verified `src/main.cpp:2682`).
+
+**The trap.** Legacy captures POST-mutation, so its entries hold post-edit states and the
+existing `UndoStack::Capture()` coalesce branch REPLACES the tail with the latest state (tail
+must track the newest state; the entry before holds the session start = undo target). Arch-C
+captures PRE-mutation, so the tail holds the session-START state — exactly the undo target.
+Re-using the REPLACE coalesce would overwrite that start state with each tick's pre-value, so
+undo would STILL only step back one tick. The correct PRE-mutation coalesce is to SKIP the
+capture (keep the first/session-start snapshot, drop intermediate ticks); the head-of-history
+auto-cap then snapshots the final live state on the first undo, so one undo spans the burst.
+
+**Fix.** Added `UndoStack::CapturePreCoalesced` (skip-on-key-match-within-window, head-only) used
+by arch-C property edits; legacy's `Capture()` (replace) left untouched. `set-properties` passes
+`MakeCoalesceKey(0x00E1, emitterId)`; structural ops keep `coalesceKey=0` (never fold).
+
+**Rules.**
+- Before porting a windowed/coalescing behaviour across a capture-timing change (PRE vs POST,
+  pre-commit vs post-commit), re-derive WHICH snapshot is the undo target. The same window can
+  require opposite list mutations (replace the tail vs keep the tail) depending on timing.
+- Don't overload a shared primitive whose semantics suit one caller's timing; add a sibling
+  method so the other arch's proven path is untouched (legacy `Capture` ≠ arch-C
+  `CapturePreCoalesced`).
+- Testing time-windowed behaviour deterministically: control the clock. A `beforeEach` that waits
+  out the window makes each test's first edit start fresh instead of folding into the previous
+  test's same-key entry on a shared host. Within a test, near-instant sequential bridge calls are
+  inside the window by construction.

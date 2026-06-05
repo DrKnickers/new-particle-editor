@@ -123,6 +123,58 @@ bool UndoStack::Capture(const ParticleSystem& sys, size_t selectedIndex,
     return true;
 }
 
+bool UndoStack::CapturePreCoalesced(const ParticleSystem& sys,
+                                    size_t selectedIndex, DWORD coalesceKey)
+{
+    if (m_applying) return false;
+
+    // PRE-mutation capture: the caller mutates live right after this, so
+    // live becomes one step ahead of the tip (see IsLiveAhead()).
+    m_liveAhead = true;
+
+    DWORD now = GetTickCount();
+
+    // Skip-coalesce — only at the head of history (no redo branch). If the
+    // previous entry shares this key within the window, it ALREADY holds the
+    // burst's pre-mutation (session-start) state — exactly the undo target —
+    // so skip the capture and just slide the window. One undo then reverts
+    // the whole burst (the head-of-history auto-cap in undo/perform snapshots
+    // the final live state before stepping back). Mid-redo-branch
+    // (cursor < size) we never skip: a fresh edit after an undo must push.
+    if (coalesceKey != 0
+        && m_cursor == m_entries.size()
+        && !m_entries.empty()
+        && m_entries.back().coalesceKey == coalesceKey
+        && (now - m_entries.back().timestamp) <= COALESCE_WINDOW_MS)
+    {
+        m_entries.back().timestamp = now;
+        return false;
+    }
+
+    // No coalesce: invalidate any redo branch and push the pre-mutation
+    // state as a new entry (mirrors Capture()'s push path).
+    if (m_cursor < m_entries.size())
+    {
+        m_entries.erase(m_entries.begin() + m_cursor, m_entries.end());
+    }
+
+    Entry e;
+    e.snapshot      = Serialize(sys);
+    e.selectedIndex = selectedIndex;
+    e.coalesceKey   = coalesceKey;
+    e.timestamp     = now;
+    e.isSavedState  = false;
+    m_entries.push_back(std::move(e));
+    m_cursor = m_entries.size();
+
+    while (m_entries.size() > MAX_ENTRIES)
+    {
+        m_entries.pop_front();
+        if (m_cursor > 0) m_cursor--;
+    }
+    return true;
+}
+
 bool UndoStack::CanUndo() const
 {
     // Need at least one entry behind the cursor. Cursor at N points at
