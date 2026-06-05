@@ -16,6 +16,46 @@ Conventions:
 
 ## Changelog
 
+### Undo no longer swallows a step after a redo (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+In the new UI, an `undo → redo → undo` sequence used to lose the second undo — after
+redoing back to the tip, the next Ctrl+Z (or Edit → Undo) did nothing, and the stuck
+state corrupted further undo/redo navigation. Now redo-then-undo steps back correctly,
+and repeated undo/redo cycles are stable. Plain single-edit undo/redo, structural-op
+undo, link-group atomic undo, and the import/clipboard undo paths were already correct
+and remain so.
+
+**How we tackled it.** The new UI captures undo snapshots PRE-mutation (legacy captured
+POST), so after a fresh edit the live `ParticleSystem` sits one step ahead of the stack
+tip. [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:1693)'s `undo/perform`
+head-of-history auto-capture snapshotted live before stepping back, gated only on
+`Cursor() == Depth()`. That condition is *also* true right after a `Redo()` (redo to the
+tip leaves `cursor == size`), where live is already in sync — so the auto-cap fired
+spuriously, duplicated the tip, and the next `Undo()` returned the duplicate. The fix adds
+an explicit `m_liveAhead` flag to [`src/UndoStack.cpp`](src/UndoStack.cpp:64) — set in
+`Capture()` (every editing capture precedes a mutation), cleared in `Undo()`/`Redo()`
+(navigation re-syncs live to the restored entry) — and gates both the auto-cap and
+`ComputeCanUndo()` on it, so the flag names the intent the cursor position only
+approximated. Regression coverage: [`tests/undo-navigation.spec.ts`](web/apps/editor/tests/undo-navigation.spec.ts:1)
+(added to the native harness list), driving the real host `UndoStack` over the
+`--test-host` CDP bridge.
+
+**Issues encountered and resolutions.** The bug is invisible to both the web suite
+(MockBridge has no real `UndoStack`) and the existing native specs (which only covered a
+single `edit → undo`, never `redo → undo`) — found only by driving `edit → undo → redo →
+undo` over CDP and reading `emitters/get-properties` at each step. Spurious co-failures
+in `splitters` and `a11y-dialogs-composition` during the full native run were confirmed
+pre-existing/environmental (window-size + localStorage; golden drift) by stash-reverting
+the fix, rebuilding the baseline binary, and reproducing them without it — they exercise
+no code the fix touches. The literal Ctrl+Z keystroke could not be auto-verified: the host
+intercepts accelerators via the native `AcceleratorKeyPressed` event, which CDP's
+renderer-level key injection bypasses; the host-side undo logic is verified over
+`window.bridge`, leaving the keystroke itself to an on-screen pass.
+
+---
+
 ### Decimal numeric fields now display a consistent 2 decimal places
 
 *2026-06-03 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

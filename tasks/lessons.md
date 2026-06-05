@@ -3864,3 +3864,54 @@ in the C++ (`if (targets.size() >= 2) CreateLinkGroup`).
   lives in the gap between "the DOM says the right thing" and "a human can read it" — the user's
   lane. Raw Tailwind color classes (`text-amber-200`) do NOT adapt to a `data-theme` token system;
   use self-contained high-contrast fills or theme tokens for anything that must read in both themes.
+
+## L-064
+
+**A positional proxy (`cursor == depth`) standing in for an intent ("a fresh edit left live
+skewed ahead of the stack tip") silently aliases other states that share the position — here, a
+Redo().**
+
+**Context.** VPT-2 verify-existing-undo. The new-UI captures undo snapshots PRE-mutation (legacy
+captured POST), so after a fresh edit the live ParticleSystem sits one step ahead of the stack
+tip. `undo/perform`'s head-of-history auto-capture snapshotted live before stepping back, gated on
+`m_undo->Cursor() == m_undo->Depth()`. That condition is ALSO true immediately after `Redo()`
+(redo to the tip leaves `cursor == size`) — but there live is already IN SYNC with the tip. The
+auto-cap fired spuriously, pushed a duplicate of the current state, and the following `Undo()`
+returned that duplicate → a silent no-op. User-visible: **undo → redo → undo loses the second
+undo**, and the duplicate entry corrupts the stack so later navigation drifts too.
+
+**How found.** A CDP driver against `--new-ui --test-host` exercising `edit → undo → redo → undo`,
+reading `emitters/get-properties` at each step. The web suite (MockBridge, no real UndoStack) and
+the existing native specs (only `edit → undo`, never `redo → undo`) both missed it — a textbook
+[L-057] native-only gap. Root cause confirmed by a hand-trace of `UndoStack.cpp`'s cursor model
+(`entries[cursor-1]` is current; `Redo` does `cursor++`; `Capture` sets `cursor = size`) BEFORE any
+fix (systematic-debugging Iron Law). Exonerated the fix against pre-existing splitter/a11y-dialog
+spec failures by stash-reverting source, rebuilding baseline, and reproducing them without the fix.
+
+**Fix.** An explicit `bool m_liveAhead` on `UndoStack`: set in `Capture()` (every editing capture
+precedes a mutation, so live becomes skewed), cleared in `Undo()`/`Redo()` (navigation re-syncs
+live to the restored entry). Gate BOTH the auto-cap condition and `ComputeCanUndo()` on it. The
+flag names the actual intent the position only approximated. Regression: `tests/undo-navigation.spec.ts`
+(added to the native harness list).
+
+**Rules.**
+- When a boolean test stands in for an intent, enumerate EVERY state that satisfies the test, not
+  just the one you had in mind. If two semantically different states share the position
+  (`cursor==depth` after an edit vs after a redo), the position is the wrong signal — track the
+  intent explicitly.
+- Undo/redo NAVIGATION needs its own coverage. "edit → undo" passing does NOT imply
+  "edit → undo → redo → undo" works; the bug lived entirely in the transition the happy-path specs
+  never walked. Add multi-step navigation cycles (undo→redo→undo, repeated) to undo tests.
+- State-corruption bugs spread downstream (one bad `Capture` poisoned the whole stack). When a
+  later assertion is off by exactly one operation's worth, suspect a corrupting WRITE upstream, not
+  the READ that surfaced it.
+- The native accelerator path (`AcceleratorKeyPressed` → `accelerator/pressed` → React) is NOT
+  reachable by CDP `page.keyboard.press` (CDP injects at the renderer; the host intercept runs in
+  the native message loop). Verify host-undo logic via `window.bridge` over CDP; leave the literal
+  Ctrl+Z keystroke to the user's on-screen pass.
+- Drive the faithful `--new-ui` for verification via the existing CDP seam (`--test-host`,
+  `chromium.connectOverCDP("http://127.0.0.1:9222")`, real `window.bridge`), NOT computer-use:
+  the React UI is a separate `msedgewebview2.exe` process masked in screenshots, and CDP gives
+  exact state reads (extends the L-041/L-062 preview lane to the REAL host). Probe CDP from node,
+  not PowerShell `Invoke-WebRequest` (no `-NoProxy` in PS 5.1; `localhost`→IPv6 misses the IPv4
+  bind — use `127.0.0.1`). request_access resolves this custom exe as `ParticleEditor.exe`.

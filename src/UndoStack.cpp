@@ -6,6 +6,7 @@
 UndoStack::UndoStack()
     : m_cursor(0)
     , m_applying(false)
+    , m_liveAhead(false)
 {
 }
 
@@ -65,6 +66,14 @@ bool UndoStack::Capture(const ParticleSystem& sys, size_t selectedIndex,
                          DWORD coalesceKey)
 {
     if (m_applying) return false;
+
+    // Any non-applying capture is immediately followed by a mutation in
+    // the calling handler, so the live system is now (about to be) one
+    // step ahead of the snapshot we're recording. Mark it so the
+    // head-of-history auto-capture in undo/perform knows live is skewed
+    // and fires; Undo()/Redo() clear it once live is re-synced to a tip.
+    // Applies to both the coalesce-in-place and push paths below.
+    m_liveAhead = true;
 
     // New edit invalidates redo branch.
     if (m_cursor < m_entries.size())
@@ -130,6 +139,9 @@ bool UndoStack::Undo(const std::vector<char>** outSnapshot,
                      size_t* outSelectedIndex)
 {
     if (!CanUndo()) return false;
+    // Live will be restored to the returned snapshot by the caller, so it
+    // is back in sync with the tip — no pending edit ahead.
+    m_liveAhead = false;
     m_cursor--;
     const Entry& e = m_entries[m_cursor - 1];
     if (outSnapshot)         *outSnapshot         = &e.snapshot;
@@ -141,6 +153,9 @@ bool UndoStack::Redo(const std::vector<char>** outSnapshot,
                      size_t* outSelectedIndex)
 {
     if (!CanRedo()) return false;
+    // Live will be restored to the returned snapshot by the caller, so it
+    // is back in sync with the tip — no pending edit ahead.
+    m_liveAhead = false;
     const Entry& e = m_entries[m_cursor];
     m_cursor++;
     if (outSnapshot)         *outSnapshot         = &e.snapshot;
@@ -152,6 +167,7 @@ void UndoStack::Clear()
 {
     m_entries.clear();
     m_cursor = 0;
+    m_liveAhead = false;
 }
 
 void UndoStack::MarkSaved()

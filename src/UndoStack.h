@@ -90,6 +90,23 @@ public:
     size_t Depth()  const { return m_entries.size(); }
     size_t Cursor() const { return m_cursor; }
 
+    // True when the live ParticleSystem holds an un-snapshotted edit
+    // sitting one step AHEAD of the stack tip (entries[cursor-1]).
+    // Set by Capture() (every editing capture is immediately followed by
+    // a mutation, so live becomes skewed ahead), cleared by Undo()/Redo()
+    // (navigation re-syncs live to the entry it just restored).
+    //
+    // The new-UI captures PRE-mutation, so after a fresh edit cursor ==
+    // Depth() AND live is skewed — undo/perform's head-of-history
+    // auto-capture relies on that to snapshot live before stepping back.
+    // But cursor == Depth() is ALSO true right after a Redo() (redo to
+    // the tip leaves cursor == size) where live is already IN SYNC. An
+    // auto-cap there is spurious: it duplicates the tip and the following
+    // Undo() returns that duplicate, silently swallowing the undo. Gate
+    // the auto-cap (and ComputeCanUndo) on this flag to tell the two
+    // cursor==Depth() states apart.
+    bool IsLiveAhead() const { return m_liveAhead; }
+
     // Compose a coalesce key from a notification code and a
     // sub-discriminator (typically the selected emitter index, or for
     // TE_CHANGE the (track << 16 | emitterIdx) combo). Two captures
@@ -118,6 +135,8 @@ private:
     // truncate any redo branch above N before pushing.
     size_t            m_cursor;
     bool              m_applying;
+    // See IsLiveAhead(): tracks whether live is skewed ahead of the tip.
+    bool              m_liveAhead;
 };
 
 #endif

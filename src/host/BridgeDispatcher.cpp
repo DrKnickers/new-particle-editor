@@ -1683,11 +1683,17 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
     // most recent mutation — not the current live state. UndoStack's
     // Undo() is built around the legacy POST-mutation convention
     // (cursor-- ; return entries[cursor-1] = the previous live state).
-    // To reconcile: at the head of history (cursor == size), snapshot
-    // the current live state once before stepping back. That auto-
-    // capped entry IS the live state, so Undo's math now returns the
-    // PRE-mutation snapshot — which is exactly what Ctrl+Z should
-    // restore. Skip the auto-cap mid-redo-branch (the post-state is
+    // To reconcile: at the head of history (cursor == size) AND only
+    // when live is genuinely skewed ahead of the tip (IsLiveAhead),
+    // snapshot the current live state once before stepping back. That
+    // auto-capped entry IS the live state, so Undo's math now returns
+    // the PRE-mutation snapshot — exactly what Ctrl+Z should restore.
+    // The IsLiveAhead() guard matters: cursor == size is ALSO true right
+    // after a Redo() (redo to the tip leaves cursor == size), but there
+    // live is already IN SYNC with entries[cursor-1]. Auto-capping in
+    // that case duplicated the tip and the following Undo() returned the
+    // duplicate, silently swallowing the undo (undo→redo→undo lost the
+    // second undo). Skip the auto-cap mid-redo-branch (the post-state is
     // already at entries[cursor]) or on an empty stack (CanUndo would
     // be false anyway). See tasks/todo.md §3 for the full trace.
     if (kind == "undo/perform")
@@ -1698,7 +1704,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             if (dir == "undo"
                 && m_undo->Cursor() == m_undo->Depth()
-                && m_undo->Depth() > 0)
+                && m_undo->Depth() > 0
+                && m_undo->IsLiveAhead())
             {
                 const ParticleSystem* sys = m_pParticleSystem->get();
                 size_t selIdxNow = SIZE_MAX;
@@ -4540,15 +4547,17 @@ void BridgeDispatcher::EmitEngineStateChanged()
 bool BridgeDispatcher::ComputeCanUndo() const
 {
     // Auto-cap-aware: undo/perform inserts a snapshot of the current
-    // live state when cursor==depth, then calls Undo(). The Undo()
-    // succeeds when the post-auto-cap stack has cursor>=2, which
-    // requires depth>=1 (one captureUndo-bearing mutation has run).
-    // Mid-redo-branch (cursor<depth), no auto-cap fires and Undo()'s
-    // own CanUndo (cursor>=2) gates the call.
+    // live state when cursor==depth AND live is skewed ahead of the tip
+    // (IsLiveAhead), then calls Undo(). With the auto-cap, Undo() needs
+    // a post-cap cursor>=2, i.e. depth>=1 (one captureUndo-bearing
+    // mutation has run). WITHOUT the auto-cap (cursor==depth but live is
+    // in sync, e.g. right after a Redo()), Undo()'s own CanUndo (cursor>=2)
+    // gates the call, so canUndo needs depth>=2. Mid-redo-branch
+    // (cursor<depth) no auto-cap fires and cursor>=2 gates as well.
     if (m_undo == nullptr) return false;
     const size_t cursor = m_undo->Cursor();
     const size_t depth  = m_undo->Depth();
-    if (cursor == depth) return depth >= 1;
+    if (cursor == depth) return m_undo->IsLiveAhead() ? (depth >= 1) : (depth >= 2);
     return cursor >= 2;
 }
 

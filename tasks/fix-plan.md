@@ -136,7 +136,25 @@ user at phase boundaries.
     zero golden change. User verifies real missing/broken textures in `--new-ui`.
 
 ## Separate track (after P1–P8, native/host)
-- **Undo capture wiring (VPT-2).** Wire `Capture()` into every new-UI host mutation.
+- **Undo capture wiring (VPT-2). ✅ verified + 1 bug fixed (2026-06-05).** The plan title
+  ("wire `Capture()` into every new-UI host mutation") was stale (L-022): `Capture()` was
+  ALREADY wired across every *document* mutation (~25 `captureUndo()` sites — emitter props,
+  duplicate/import, track keys, clipboard, link groups) with a working `undo/perform`
+  (head-of-history auto-cap), accelerators, and menu enable-state. Engine/preview edits
+  (lighting/bloom/camera) are NOT undoable — they live on `m_engine`, not the
+  `ParticleSystem` snapshot, matching legacy (NOT a defect, out of scope).
+  - **Verified over the `--test-host` CDP bridge** (real host `UndoStack`): single-edit
+    auto-cap round-trip, import/link-group atomic undo, redo-branch truncation, dirty +
+    canUndo/canRedo flags. See `tests/undo-navigation.spec.ts`.
+  - **🐛 Fixed:** `undo → redo → undo` lost the second undo — the auto-cap fired spuriously
+    after a `Redo()` (both leave `cursor == size`). Added an `m_liveAhead` flag to gate it.
+    See **L-064** + CHANGELOG.
+  - **Pending user check (CDP can't drive the native accelerator):** literal Ctrl+Z / Ctrl+Y
+    on-screen.
+  - **Deferred (genuine VPT-2 remainder, lower priority):** spinner hold-to-repeat (arrow held
+    ~50ms/tick) pushes one undo entry per tick — `captureUndo` always passes `coalesceKey=0`,
+    so no coalescing; reinstate legacy-style 1500ms coalescing if it proves annoying. Plain
+    spinner drag already commits once on release (Spinner.tsx:18), so this is an edge case.
 - **Autosave port (VPT-3).** Port the 30s/5min tiers + orphan recovery to `src/host`.
 - **Verify Reset-Camera vectors (MNU-7)** against legacy engine default.
 
