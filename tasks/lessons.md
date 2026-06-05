@@ -3816,3 +3816,51 @@ micro/macro task first (`await new Promise(r => setTimeout(r))`). NEVER conclude
 a synchronous post-event read. Cross-ref [L-041] (preview is the React-behaviour surface)
 and [L-057] (preview vs native divergence) — this is a third preview caveat: preview vs
 *itself* across the flush boundary.
+
+
+## L-063 — A user "X doesn't work" report can be (a) correct behaviour misread as a bug, (b) a SILENT failure from a host invariant the UI never enforces, or (c) a real defect — distinguish the three BEFORE coding, because "fixing" (a) or chasing (c) when it's (b) both waste time and risk regressions; a GREEN reproduction is evidence too
+
+**The incident (2026-06-04, session post-P8).** User reported the link-group work had
+three problems: an unreadable warning, "dissenters don't get overridden", and "creating the
+second group took three tries". Systematic triage split them into all three categories:
+
+1. **(a) Correct-behaviour misread.** "Color texture not overridden + no warning" was CORRECT:
+   `colorTexture` is exempt-by-default ([LinkGroup.cpp:13] `colorTexture(true)`), exactly like
+   legacy, so a new group neither shares nor warns about it. The tempting "fix" (force textures
+   to sync) would have REGRESSED against legacy. Verifying the default-exempt set is what
+   prevented it. The first group "worked" only because the user happened to pick a
+   shared-by-default field (`nParticlesPerSecond`).
+2. **(b) Silent failure from an unenforced invariant.** "OK did nothing / three tries" was a
+   real bug, but not a logic defect: the host invariant "a link group needs >=2 members"
+   (`CreateLinkGroup` returns 0 below 2, no error) was never mirrored in the dialog's
+   enabled/disabled state. When the right-click promoted a 2-selection down to 1 (targeting a
+   row not in the selection), OK stayed enabled and fired a no-op `set-membership` -> "nothing
+   happened". Fix: disable OK + show "Select at least 2 emitters to create a group" when <2 are
+   selected for a new group. UI-enforces-host-invariant, the canonical fix for "I clicked it and
+   nothing happened".
+3. **(c) Real contrast/theme defect.** The warning used a fixed light-amber text (`text-amber-200`)
+   readable only on dark; the theme is light and the app has NO `dark:` variant support (it
+   themes via `data-theme` + CSS-var tokens). Fix: a self-contained high-contrast amber chip
+   (dark text on light-amber fill) that reads in either theme.
+
+**Method that worked.** (1) Read the whole clobber chain (`set-membership` -> `CreateLinkGroup`
+-> `copySharedParamsFrom`, which does `*this = src` then restores only exempt fields) and PROVED
+it correct before touching it. (2) Reproduced the selection->dialog flow in the browser preview
+(L-041): click+ctrl-click reliably gave 2, right-click on a selected row kept 2, dialog captured
+"All 2 selected". **A GREEN repro is evidence** — it eliminated "selection is broken" and
+redirected to "an invalid 1-selection is silently actionable". (3) Confirmed the host invariant
+in the C++ (`if (targets.size() >= 2) CreateLinkGroup`).
+
+**Rules.**
+- For a "doesn't work" report, FIRST classify (a)/(b)/(c). Check whether the observed behaviour
+  is actually correct (compare to legacy / the default config) before assuming a defect.
+- When a backend has an invariant (min size, required field, valid range), the frontend must
+  mirror it as disabled/hinted state. An unenforced invariant surfaces as a silent no-op the user
+  reads as a bug. Grep the host for the guard (`>= 2`, `return 0`, `return false`) and reflect it.
+- A passing reproduction is as informative as a failing one — it rules out hypotheses. Don't only
+  look for red.
+- Contrast/theme regressions are web-lane-invisible (extends [L-057]): unit tests assert text
+  CONTENT (`/lifetime/i`), never rendered contrast, and jsdom has no theme cascade. Readability
+  lives in the gap between "the DOM says the right thing" and "a human can read it" — the user's
+  lane. Raw Tailwind color classes (`text-amber-200`) do NOT adapt to a `data-theme` token system;
+  use self-contained high-contrast fills or theme tokens for anything that must read in both themes.

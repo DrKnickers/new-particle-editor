@@ -79,6 +79,47 @@ describe("SetLinkGroupDialog", () => {
     expect(membership.params).toEqual({ ids: [0, 1], groupId: -1 });
   });
 
+  it("disables OK with a hint when fewer than 2 emitters are selected for a new group", async () => {
+    const bridge = makeStubBridge(fixtureTree());
+    // Only ONE emitter selected — a group needs >= 2 (host CreateLinkGroup
+    // silently no-ops below 2). The dialog must not let OK fire a no-op.
+    useEmitterSelectionStore.getState().setIds([0], 0);
+    useTreeContextStore.getState().openDialog("set-link-group", 0);
+    render(<SetLinkGroupDialog bridge={bridge} />);
+    await screen.findByTestId("set-link-group-radio-new");
+
+    const ok = screen.getByRole("button", { name: "OK" });
+    expect(ok).toBeDisabled();
+    expect(screen.getByText(/at least 2 emitters/i)).toBeInTheDocument();
+
+    fireEvent.click(ok);
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "linkGroups/set-membership")).toBeUndefined();
+  });
+
+  it("allows OK for 'Join existing' with a single selected emitter", async () => {
+    // Joining ONE emitter to an existing group is valid (>= 2 members result).
+    const tree: EmitterTreeDto = {
+      root: {
+        id: -1, name: "", role: "root", linkGroup: 0, visible: true,
+        children: [
+          { id: 0, name: "A", role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 1, name: "B", role: "root", linkGroup: 3, visible: true, children: [] },
+        ],
+      },
+    };
+    const bridge = makeStubBridge(tree);
+    useEmitterSelectionStore.getState().setIds([0], 0);
+    useTreeContextStore.getState().openDialog("set-link-group", 0);
+    render(<SetLinkGroupDialog bridge={bridge} />);
+    await screen.findByTestId("set-link-group-radio-existing");
+    // Switch to join mode (group 3 exists).
+    fireEvent.click(screen.getByTestId("set-link-group-radio-existing"));
+
+    const ok = screen.getByRole("button", { name: "OK" });
+    await waitFor(() => expect(ok).not.toBeDisabled());
+  });
+
   // ─── LNK-10 — inline join-conflict note (one-click join) ─────────
 
   function makeConflictBridge(

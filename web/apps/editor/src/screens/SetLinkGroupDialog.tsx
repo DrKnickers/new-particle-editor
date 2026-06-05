@@ -88,6 +88,10 @@ export function SetLinkGroupDialog({ bridge }: Props) {
   // (defensive — the radio is also disabled in that case).
   const okDisabled = useMemo(() => {
     if (selectedIds.length === 0) return true;
+    // A new group needs >= 2 members — the host's CreateLinkGroup silently
+    // no-ops below 2, which read as "OK did nothing". Block it here so the
+    // requirement is visible instead of failing silently.
+    if (mode === "new" && selectedIds.length < 2) return true;
     if (mode === "existing" && chosenGroup === null) return true;
     return false;
   }, [mode, chosenGroup, selectedIds]);
@@ -179,17 +183,23 @@ export function SetLinkGroupDialog({ bridge }: Props) {
             ))}
             {!hasExisting && <option value="">(none)</option>}
           </select>
-          <p className="text-[11px] leading-relaxed text-text-3">
-            All {selectedIds.length} selected
-            {selectedIds.length === 1 ? " emitter" : " emitters"} will be linked.
-          </p>
+          {mode === "new" && selectedIds.length < 2 ? (
+            <p className="text-[11px] font-medium leading-relaxed text-text-2">
+              Select at least 2 emitters to create a group.
+            </p>
+          ) : (
+            <p className="text-[11px] leading-relaxed text-text-3">
+              All {selectedIds.length} selected
+              {selectedIds.length === 1 ? " emitter" : " emitters"} will be linked.
+            </p>
+          )}
           {/* LNK-10: inline disagreement note. Shows which shared fields the
               join would overwrite, so the user decides BEFORE the single OK
               — no separate confirm step. */}
           {conflictFields.length > 0 && (
             <div
               data-testid="link-conflict-inline"
-              className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-200"
+              className="rounded border border-amber-500/70 bg-amber-200 px-2 py-1.5 text-[11px] leading-relaxed text-amber-900"
             >
               <p className="font-medium">
                 Joining overwrites {conflictFields.length}{" "}
@@ -198,7 +208,7 @@ export function SetLinkGroupDialog({ bridge }: Props) {
                 {conflictEmitterCount === 1 ? "emitter" : "emitters"} with the
                 group's values:
               </p>
-              <p className="mt-0.5 text-amber-300/90">
+              <p className="mt-0.5 font-medium text-amber-800">
                 {conflictFields.join(", ")}
               </p>
             </div>

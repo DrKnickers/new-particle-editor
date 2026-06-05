@@ -398,14 +398,14 @@ export function LinkGroupSettingsDialog({ bridge }: Props) {
               return (
                 <div
                   data-testid="link-settings-conflict-inline"
-                  className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-200"
+                  className="mb-2 rounded border border-amber-500/70 bg-amber-200 px-2 py-1.5 text-[11px] leading-relaxed text-amber-900"
                 >
                   <p className="font-medium">
                     Sharing {n} {n === 1 ? "field" : "fields"} will overwrite{" "}
                     {m} {m === 1 ? "emitter" : "emitters"} with the canonical
                     (first-in-tree-order) value:
                   </p>
-                  <p className="mt-0.5 text-amber-300/90">
+                  <p className="mt-0.5 font-medium text-amber-800">
                     {conflictFields.map((f) => FIELD_LABELS[f] ?? f).join(", ")}
                   </p>
                 </div>
