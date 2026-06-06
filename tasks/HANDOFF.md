@@ -1,5 +1,74 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-06 (session 20) — **Doc drift-audit + reconcile (`489c10c`) + VPT-6/7/8 status-bar parity shipped (`d7d78f1`)**. NEXT: remaining small items (MNU-12 / Paste-As-Child) / native parity / wrap
+
+**`origin/lt-4` = `d7d78f1`** (was `f3b2284` at session start; **2 commits**, FF-pushed). Tree clean
+on `claude/sleepy-buck-bc7cc7`. **No `master` changes.** Web vitest **500 / 0** (was 497; +3 StatusBar);
+`tsc --noEmit` 0. Native harness **168 / 0** (re-confirmed this session via the a11y re-baseline run).
+Native lane **restored this session** (NuGet WebView2 1.0.3967.48 → `packages/`, MSBuild Debug x64 →
+`x64\Debug\ParticleEditor.exe`, `pnpm build` → `dist/`) so future golden re-baselines are cheap.
+
+### The 2 commits (newest first)
+- `d7d78f1` **feat(new-ui)** — VPT-6/7/8 status-bar parity (render-only, `StatusBar.tsx`). VPT-6 always-on
+  "⇧ Shift: spawn instance" hint pinned far-right (`ml-auto`; shortened from legacy `main.cpp:2036`,
+  user choice). VPT-7 amber "PAUSED" shown only while paused — reuses the Toolbar's `engine/state`
+  snapshot + `engine/state/changed` signal (`EngineStateDto.paused`), no new bridge command. VPT-8
+  cursor `toFixed(1)`→`toFixed(2)`. TDD +3 tests; **live-verified in browser** (hint always on; PAUSED
+  toggles via Play/Pause). a11y re-baseline = **19 composition goldens**, one identical `contentinfo`
+  delta each (`… Cursor — PAUSED ⇧ Shift: spawn instance`; capture spec pauses for determinism →
+  PAUSED correctly present → free VPT-7 coverage). New **L-068** (below).
+- `489c10c` **docs** — drift-audit + reconcile. Verified the fix-plan's DONE claims against the actual
+  code (L-022): P1–P8 + undo/autosave all shipped; the ui-delta-report's open-questions list was stale
+  (**SPN-4 and CRV-14 were already fixed** in earlier sessions — the HANDOFF/report had drifted). Added
+  a dated STATUS banner + code-verified open-items table atop `ui-delta-report.md`, rewrote its
+  open-questions section, corrected HANDOFF next-task option 2, and fixed a contradictory SPN-4 comment
+  in `Spinner.tsx` (the scrub modifier comment claimed the opposite of the code).
+
+### ⚠️ Read first — L-068 (the costly miss this session)
+`pnpm a11y:update --rebuild` rebuilds `dist/` **only on a hosting-MODE mismatch, NOT on source change**.
+A stale-but-right-mode `dist/` silently serves the OLD UI; the run passes green with ZERO golden diff —
+a confident false "no a11y impact." First VPT-6 re-baseline did exactly this. **Rule:** `pnpm --filter
+@particle-editor/editor build` (and `grep "<new string>" dist/assets/*.js` to confirm it took) BEFORE
+running the native harness after any web change. Full text: `tasks/lessons.md` L-068.
+
+### Verification this session
+- vitest **500/0**; `tsc --noEmit` 0.
+- **Browser live** (preview, MockBridge): VPT-6 hint always visible; VPT-7 PAUSED appears on Pause,
+  clears on Play; no console errors. (VPT-8 2dp unit-proven — cursor is the `—` placeholder without
+  viewport hover.)
+- **Native harness 168/0**; golden diff reviewed — surgical, 19 surfaces, one shared cause (L-053).
+- **Audit:** code-verified the fix-plan DONE claims (marquee.ts, displayScale, 35 captureUndo sites,
+  ColorButton cancel/revert) + the genuinely-open set (MNU-12, Paste-As-Child).
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **MNU-12** — add the legacy "Clear" button to `ImportEmittersDialog` (has "Select All" only). Small,
+   web-only, touches one a11y golden (native lane already restored this session).
+2. **SEL-5 / MNU-4 Paste-As-Child** — "Paste As ▸ Child" needs a NEW host paste-into-slot command
+   (`emitters/paste` splices at root only). Native-lane work; scope it first.
+3. **Native-parity items** — pick from `tasks/ui-delta-report.md` (most are shipped — see the STATUS
+   banner; few remain).
+4. **Wrap** — both the deferred-polish queue and the status-bar grab-bag are now cleared.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `d7d78f1` or newer, 0/0, clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter @particle-editor/editor test`
+  → **500**; `tsc --noEmit` 0.
+- native (CDP/host or a11y work): lane is restored in THIS worktree, but a FRESH worktree needs it again
+  (L-039 NuGet copy + L-046 MSBuild Debug x64 + L-040 `pnpm build`). **After any web change, `pnpm build`
+  before the harness (L-068).** `pnpm test:native` → **168/0** (exit 2 + FATAL banner = environmental,
+  re-run, L-066).
+- **Drag/pointer features:** verify with Playwright real input, NOT `preview_eval` (L-067).
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 20) + `tasks/lessons.md` (esp.
+> **L-068** dist-rebuild gotcha, L-067 synthetic-drag, L-022 doc-drift). VERIFY against code. Pre-flight:
+> `origin/lt-4` = `d7d78f1`, 0/0, clean; `pnpm --filter @particle-editor/editor test` → **500**, tsc 0.
+> Session 20 shipped a doc drift-audit (`489c10c`) + VPT-6/7/8 status-bar parity (`d7d78f1`). Native lane
+> restored; harness **168/0**. **After any web change, `pnpm build` before the native harness (L-068).**
+> Pick next WITH the user: MNU-12 / Paste-As-Child / native parity / wrap.
+
+---
+
 ## 2026-06-05 (session 19) — **3 deferred items shipped (web-only): MNU-7 reset-camera parity+dedupe / SEL-12/13 drag polish / curve marquee-from-gutters**. Deferred-polish queue now CLEARED. NEXT: native-parity items / small bugs (SPN-4, CRV-14) / wrap
 
 **`origin/lt-4` = `81c9d04`** (was `1df4ad7` at session start; **3 commits**, FF-pushed). Tree clean,
