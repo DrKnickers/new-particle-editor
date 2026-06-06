@@ -64,8 +64,13 @@ synthetic drive. Full text: `tasks/lessons.md` L-067.
 1. **Native-parity items** — needs the native-lane restore (L-039 robocopy packages/ + L-046 MSBuild
    Debug x64 + L-040 `pnpm build` dist) + `pnpm test:native` → expect 168/0; scope a specific item from
    `tasks/fix-plan.md` / `ui-delta-report.md`.
-2. **Small web bugs** — SPN-4 (drag modifier inverted vs keyboard/wheel + wrong comment), CRV-14 (stale
-   "1.2× headroom" comment). Quick, web-only.
+2. **Genuinely-open small items** (drift-audited + code-verified 2026-06-06 — SPN-4 and CRV-14 were
+   ALREADY fixed in earlier sessions; the HANDOFF/ui-delta-report had drifted, now reconciled): the
+   real open web items are the status-bar grab-bag **VPT-6** (shift-to-spawn hint), **VPT-7** (PAUSED
+   indicator), **VPT-8** (cursor 1dp→2dp, possibly intentional) and **MNU-12** (Import dialog "Clear"
+   button) — all fell between fix-plan P3 and P4 and touch a11y goldens. **SEL-5/MNU-4 Paste-As-Child**
+   needs a NEW host paste-into-slot command (native lane, not web). See the STATUS UPDATE banner atop
+   `tasks/ui-delta-report.md`.
 3. **Wrap** — deferred-polish queue (SEL-12/13 + curve marquee) is now fully cleared.
 
 ### Verified baseline (run before changing anything)

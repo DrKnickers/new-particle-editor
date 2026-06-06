@@ -9,6 +9,41 @@ before any implementation.
 
 ---
 
+## ⚠️ STATUS UPDATE — 2026-06-06 @ `f3b2284` (read this first)
+
+This catalog was the **planning input**. Nearly every defect in it has since been
+**remediated and shipped on `lt-4`**. The authoritative DONE log is
+[`fix-plan.md`](fix-plan.md) (P1–P8 + the undo/autosave native track, all ✅);
+the claims there were re-verified against the actual code on 2026-06-06 (L-022).
+Already shipped: PRM-4/5 rotation scaling, VPT-2 undo + VPT-3 autosave, SEL-1
+marquee (+ SEL-12/13 drag polish), MNU-2 accelerators, MNU-1/SEL-5 clipboard
+menus, CRV-1/2/7/8 curve fixes + marquee-from-gutters, LNK-2/6/8/10 link groups,
+PAL-2/3 colour picker + PAL-14 thumbnails, SPN-4/5/6/7 spinner fixes, MNU-7
+reset-camera.
+
+**The per-row tables below are NOT updated row-by-row.** Treat any row without a
+`✅` marker as *"see `fix-plan.md` for current status,"* NOT *"still open."*
+
+### Genuinely still open (code-verified 2026-06-06)
+
+| ID | Sev | What | Why still open |
+|---|---|---|---|
+| **VPT-6** | LOW | "Press SHIFT to spawn an instance" status-bar hint absent ([StatusBar.tsx](web/apps/editor/src/components/StatusBar.tsx)) | fell between fix-plan P3 (status-bar grab-bag) and P4 (menus) — never circled back |
+| **VPT-7** | LOW | PAUSED indicator absent from the status bar | same P3→P4 gap |
+| **VPT-8** | COSMETIC | cursor readout is 1dp; legacy was 2dp — `toFixed(1)` at [StatusBar.tsx:61](web/apps/editor/src/components/StatusBar.tsx:61) | same gap; may be an intentional keep — confirm |
+| **MNU-12** | LOW | Import Emitters dialog has "Select All" but no "Clear" ([ImportEmittersDialog.tsx:240](web/apps/editor/src/screens/ImportEmittersDialog.tsx:240)) | same P3→P4 gap |
+| **SEL-5 / MNU-4** (Paste-As-Child) | LOW | no "Paste As ▸ Child" — `emitters/paste` splices at root only | needs a NEW host paste-into-slot command — **native lane**, not a web quick-win |
+| **VPT-2 follow-up** | LOW | per-tick undo coalescing for streaming track-key / curve edits not done | deferred — only if a user reports per-tick undo there (fix-plan VPT-2) |
+
+Everything else is either ✅ shipped (fix-plan) or an **intentional keep**:
+docking (VPT-9/10), multi-channel curves (CRV-4/5/10/11), single-click texture
+apply (PAL-9), popover palette (PAL-8), custom picker (PAL-1), dark link palette
+(LNK-3/4/5), scrub-on-arrows-only (SPN-2), commit-on-blur (SPN-9), `[L<n>]`
+prefix dropped (LNK-1), batch-delete (SEL-17), About rebrand (MNU-8) — see
+fix-plan's "Explicitly KEEPING."
+
+---
+
 ## How to read this
 
 Each finding has an ID (`SEL-`, `SPN-`, `PRM-`, `LNK-`, `PAL-`, `CRV-`, `MNU-`,
@@ -253,36 +288,22 @@ Model and field set are byte-identical to legacy (host `kLinkFieldTable` mirrors
 
 ## Open questions for you (legacy feel / pixels / intent)
 
-These I deliberately did **not** guess — they need your call or your eye on the
-legacy build:
+**These were resolved in the 2026-06-03 planning decision** ("defects only; keep
+intentional redesigns; undo + autosave on a separate track" — see
+[`fix-plan.md`](fix-plan.md) header) and the resulting items have since shipped.
+The data-correctness, missing-interaction, link-group, colour/texture, and
+"likely bugs" questions are all closed — SPN-4 and CRV-14 are fixed in code
+(verified 2026-06-06). See the **STATUS UPDATE** banner at the top.
 
-**Data-correctness (please confirm priority):**
-1. **PRM-4 / PRM-5 (rotation scaling)** — this writes wrong values to `.alo` files
-   the moment a user edits rotation average/variance in the new UI. Is this a
-   launch-blocker to fix now, or are these fields rarely touched?
-2. **VPT-2 / VPT-3 (undo + autosave)** — confirmed intentionally deferred (you still
-   daily-drive legacy), or should they be treated as blocking before any wider use?
+The only residual judgement calls:
 
-**Missing interactions — keep or restore?**
-3. **Marquee box-select (SEL-1)** — required parity, or acceptable to drop?
-4. **Global accelerators (MNU-2)** — is full keyboard wiring (esp. Ctrl+S, F7,
-   F8–F10, Ctrl+Space) a tracked follow-up or expected to ship?
-5. **Clipboard in menus + "Paste As child" (SEL-5/MNU-1/MNU-4)** and **curve-key
-   copy/paste (CRV-2)** — restore, or keyboard-only/dropped?
-6. **Spinner hold-to-repeat (SPN-5)** and **scrub-on-number (SPN-2)** — wanted back?
-7. **Link-group: Dissolve action (LNK-8), bracket click/hover (LNK-6), `[L<n>]`
-   prefix / dot (LNK-1/2), join-conflict warning (LNK-10)** — which matter to you?
-8. **Color picker live-preview + cancel/revert (PAL-2/3)** and **texture
-   single-click-applies (PAL-9)** — acceptable simplifications?
-
-**Likely bugs — want fixes?**
-9. **SPN-4** drag modifier inverted vs keyboard/wheel (and the wrong comment).
-10. ~~**MNU-7** Reset-Camera vectors — verify they match legacy exactly.~~ ✅ Verified (exact match) + vectors consolidated into one shared constant.
-11. **CRV-14** stale "1.2× headroom" comment that doesn't match the code.
-
-**Intentional evolution — thumbs up/down?**
-12. Docking model (VPT-9/10), multi-channel curve overlay (CRV-4), single-click
-    texture apply (PAL-9), dark-bg link palette (LNK-3).
+- **VPT-8** — the cursor readout is 1dp in the new UI; legacy was 2dp. Restore
+  2dp, or is 1dp acceptable? (Cosmetic; bundled with the kept "Cursor" rename +
+  ~30 Hz throttle.)
+- **Intentional-evolution sign-off** (thumbs up/down — none are bugs): docking
+  model (VPT-9/10), multi-channel curve overlay (CRV-4), single-click texture
+  apply (PAL-9), dark-bg link palette (LNK-3). These shipped as-is; flag any you
+  want reverted.
 
 ---
 

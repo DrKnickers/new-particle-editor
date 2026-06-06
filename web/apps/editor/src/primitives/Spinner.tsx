@@ -207,8 +207,9 @@ export function Spinner({
   // edits (the old behaviour scrubbed the value from the input and blocked
   // selection). A plain click on an arrow still steps by ±step (the
   // buttons' onClick); a vertical drag past the threshold scrubs
-  // continuously. Shift = fine (step/10), Ctrl = coarse (step*10), to
-  // match the keyboard arrows. `scrubbedRef` suppresses the trailing
+  // continuously. Shift = coarse (step*10), Ctrl = fine (step/10), to
+  // match the keyboard arrows + wheel (see the scrub handler below).
+  // `scrubbedRef` suppresses the trailing
   // click so a drag that ends on the button doesn't also step.
   const scrubbedRef = useRef(false);
   const clearHoldTimers = useCallback(() => {
