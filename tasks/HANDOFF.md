@@ -1,5 +1,108 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-05 (session 19) — **3 deferred items shipped (web-only): MNU-7 reset-camera parity+dedupe / SEL-12/13 drag polish / curve marquee-from-gutters**. Deferred-polish queue now CLEARED. NEXT: native-parity items / small bugs (SPN-4, CRV-14) / wrap
+
+**`origin/lt-4` = `81c9d04`** (was `1df4ad7` at session start; **3 commits**, FF-pushed). Tree clean,
+on `claude/tender-heyrovsky-5ad997` (== `lt-4`). **No `master` changes.** Web vitest **497 / 0**;
+`tsc --noEmit` exit 0. **Native harness NOT run this session** (all three items are pure web/React) —
+still **168/0** per session-18 but UNVERIFIED here; restore the native lane + run before trusting it
+for any native work.
+
+### The 3 commits (newest first)
+- `81c9d04` **feat(new-ui)** — CRV curve marquee-from-axis-gutters. A rubber-band selection can now
+  BEGIN in the axis-label margins (left Y-numbers / bottom time-labels), starting at the press point
+  (no snap). `MultiChannelCurves` (the editor the app actually renders) exposes imperative
+  `startMarquee(clientX,clientY,shift,pointerId)` via a `marqueeRef` prop threaded through
+  `CurveEditor` ([CurveEditor.tsx:~1505](web/apps/editor/src/screens/CurveEditor.tsx)); maps client→viewBox
+  **un-clamped** (gutter origin renders into the margin via the SVG `overflow="visible"`), seeds the
+  marquee, `setPointerCapture`s the SVG so the EXISTING move/up/Esc handlers run. `CanvasWithAxisLabels`
+  gained `onGutterPointerDown` (fires when a primary press lands outside `[data-testid="curve-editor-svg"]`),
+  routed by `CurveEditorPanel` to `startMarquee` in Select mode. Single-track `CurveEditor` branch (app
+  never renders it) untouched.
+- `e168ba9` **feat(new-ui)** — SEL-12 proportional edge-autoscroll (pure `lib/drag-autoscroll.ts` +
+  rAF loop in `EmitterTree.tsx`'s pointer-drag controller) + SEL-13 Esc/right-click cancel of an
+  in-progress reorder drag (+ right-click suppresses the Radix row context menu; listeners attach on
+  drag activation). Hit-test splits by path: `onMove` uses `ev.target`; the autoscroll loop uses
+  `elementFromPoint` (jsdom can't, so live-verified).
+- `9f8a7d0` **refactor(new-ui)** — MNU-7. Verified the new-UI Reset-Camera vectors EQUAL the legacy
+  default at every hop (both new-UI paths → same `Engine::SetCamera` as `ID_VIEW_RESETCAMERA`); the
+  two duplicated literals consolidated into one `RESET_CAMERA` const (`lib/reset-camera.ts`), pinned by
+  a unit test. The delta-report's "No Ctrl+Home" note was STALE (it's wired) — corrected.
+
+### ⚠️ Read first — L-067 (the costly miss this session)
+The curve marquee took **THREE** corrections, all because **synthetic events (`preview_eval` /
+`dispatchEvent`) CANNOT validate pointer-capture or the browser's trailing synthetic `click`** — they
+gave a confident false "verified" twice and shipped a broken feature to the user.
+1. First hand-off: "cannot begin a click drag outside the grid." Root cause (found via **Playwright
+   real `browser_drag` + console instrumentation**): the gutter marquee captures the SVG, so the
+   post-drag synthetic `click` lands on the SVG, whose `onClick` guarded only `dragConsumedClickRef` →
+   fell through to `onCanvasClick` → cleared the just-made selection. Fix: SVG `onClick` now also honours
+   `marqueeConsumedClickRef` (mirrors the backdrop).
+2. Second: "it snaps my marquee to the grid." The design CLAMPED the start to the plot edge. Dropped the
+   clamp → begins at the raw press point.
+**Rule (now L-067):** for ANY drag / pointer-capture / click-vs-drag feature, REAL input (Playwright)
+is the authoritative gate; synthetic dispatch is for inspection only. Never report "verified" off a
+synthetic drive. Full text: `tasks/lessons.md` L-067.
+
+### Verification this session
+- vitest **497/0** (was 481 at session start; +1 MNU-7, +9 SEL, +6 CRV across the run). `tsc --noEmit` 0.
+- **Live (Playwright real input)** the parts jsdom can't reach: SEL-12 autoscroll (scroll/clamp/stop),
+  curve gutter marquee (begins at press point `rectX=-18`, selects, persists, Esc cancels).
+- Code review (subagent) on the SEL & CRV diffs: no blockers.
+- **NOT verified:** native harness (no native work); the multi-channel curve marquee under non-Chromium
+  (only Playwright Chromium + the user's browser exercised).
+
+### Files touched (by commit)
+- `81c9d04`: `screens/CurveEditor.tsx`, `components/CurveEditorPanel.tsx`, `screens/__tests__/CurveEditor.test.tsx`,
+  NEW `components/__tests__/CanvasWithAxisLabels.test.tsx`.
+- `e168ba9`: NEW `lib/drag-autoscroll.ts` (+ test), `screens/EmitterTree.tsx`, `screens/__tests__/EmitterTree.test.tsx`.
+- `9f8a7d0`: NEW `lib/reset-camera.ts` (+ test), `components/MenuBar.tsx`, `lib/use-app-accelerators.ts`.
+- Docs each commit: `CHANGELOG.md`, `tasks/{fix-plan,todo,lessons,ui-delta-report}.md`. CHANGELOG entries
+  carry `TODO` hashes (lt-4 convention) — backfill on master merge.
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **Native-parity items** — needs the native-lane restore (L-039 robocopy packages/ + L-046 MSBuild
+   Debug x64 + L-040 `pnpm build` dist) + `pnpm test:native` → expect 168/0; scope a specific item from
+   `tasks/fix-plan.md` / `ui-delta-report.md`.
+2. **Small web bugs** — SPN-4 (drag modifier inverted vs keyboard/wheel + wrong comment), CRV-14 (stale
+   "1.2× headroom" comment). Quick, web-only.
+3. **Wrap** — deferred-polish queue (SEL-12/13 + curve marquee) is now fully cleared.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `81c9d04` or newer, 0 ahead / 0 behind, clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter @particle-editor/editor test`
+  → **497**; `pnpm --filter @particle-editor/editor lint` (`tsc --noEmit`) exit 0.
+- native (only for CDP/host work): restore `packages/` (L-039) + MSBuild Debug x64 (L-046) +
+  `pnpm --filter @particle-editor/editor build` (L-040); `pnpm test:native` → **168/0** (exit 2 + a
+  `*** FATAL: host process died MID-RUN ***` banner = environmental, RE-RUN, L-066).
+- **Drag/pointer features:** verify with Playwright real input (`browser_drag`), NOT `preview_eval` (L-067).
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-DComp
+> particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 19), `tasks/lessons.md`
+> (esp. **L-067** new this session — synthetic events can't validate pointer-capture/drag; L-066 native
+> phantom-crash; L-039/L-046/L-040 native-lane restore; L-022 doc-drift), `tasks/fix-plan.md`,
+> `tasks/ui-delta-report.md`. **VERIFY claims against the actual code before acting** (docs drift here).
+> Pre-flight: `git fetch origin lt-4`; confirm `origin/lt-4` = `81c9d04`, 0/0, clean; from `web/`
+> `pnpm install` then `pnpm --filter @particle-editor/editor test` → **497**, `tsc --noEmit` 0. **Shipped
+> session 19 (all web-only, FF-pushed):** MNU-7 reset-camera parity + dedupe (`9f8a7d0`), SEL-12/13 drag
+> polish (`e168ba9`), curve marquee-from-gutters (`81c9d04`) — the deferred-polish queue is now CLEARED.
+> For native/CDP work restore the native lane (L-039/L-046/L-040) then `pnpm test:native` → **168/0**
+> (NOT verified this session). **For any drag / pointer-capture feature, verify with Playwright real
+> input — `preview_eval`/synthetic dispatch gave false positives this session (L-067).** Default next
+> task: pick WITH the user from native-parity items / small bugs (SPN-4, CRV-14) / wrap. Summarize your
+> understanding + confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 19) + `tasks/lessons.md` (esp.
+> **L-067**), VERIFY against code. Pre-flight: `origin/lt-4` = `81c9d04`, 0/0, clean;
+> `pnpm --filter @particle-editor/editor test` → **497**, tsc 0. Session 19 shipped MNU-7 + SEL-12/13 +
+> curve marquee-from-gutters (all web-only) — deferred-polish queue cleared. Native harness **168/0** but
+> NOT re-verified this session. **Drag/pointer features: verify with Playwright real input, not
+> `preview_eval` (L-067).** Pick next WITH the user: native parity / small bugs (SPN-4, CRV-14) / wrap.
+
+---
+
 ## 2026-06-05 (session 18) — **Native-harness green-up (160/5 → 165/0) + mid-run host-death guard + VPT-3 autosave port (shipped, live-smoke verified → 168/0)**. NEXT: MNU-7 reset-camera / deferred web polish (SEL-12/13, curve marquee) / native parity
 
 **`origin/lt-4` = `3b589a4`** (was `dd757b5` at session start; **3 commits**, FF-pushed). Tree
