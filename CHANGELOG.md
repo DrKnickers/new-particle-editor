@@ -16,6 +16,39 @@ Conventions:
 
 ## Changelog
 
+### Status-bar parity: shift-to-spawn hint, PAUSED indicator, 2dp cursor (new-UI)
+
+*2026-06-06 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The new-UI status bar regains three elements the legacy Win32 bar had and the React port had
+dropped (VPT-6/7/8). A persistent **"⇧ Shift: spawn instance"** hint now sits pinned to the far
+right of the bar — the on-screen cue for the hold-Shift-over-the-viewport spawn gesture. A
+**PAUSED** indicator (amber) appears just left of it whenever the preview is paused, mirroring the
+toolbar's Play/Pause state so the paused state is legible without hunting for the button. And the
+viewport **cursor readout** now shows 2 decimal places (e.g. `0.00, 0.00, 0.00`) to match legacy,
+up from the 1dp the port had used.
+
+**How tackled.** All three are render-only changes in
+[`StatusBar.tsx`](web/apps/editor/src/components/StatusBar.tsx). PAUSED reuses the exact pause
+signal the toolbar already consumes — an `engine/state/snapshot` read plus the
+`engine/state/changed` subscription, off `EngineStateDto.paused` (the host's `IsPreviewPaused()`) —
+so no new bridge command was needed and the two indicators can never disagree. The hint is pinned
+right with a single `ml-auto` flex wrapper, reproducing legacy's rightmost-pane intent
+([`main.cpp`](src/main.cpp:2036)). The hint shortens legacy's "Press SHIFT to spawn an instance"
+to fit the denser dark bar (user choice).
+
+**Issues encountered and resolutions.** The a11y composition goldens capture the status bar as a
+`contentinfo` landmark, so the new always-on hint cascaded into 19 surface goldens (one identical
+`contentinfo` text delta each — L-053). Re-baselining surfaced a native-harness gotcha (now
+**L-068**): `pnpm a11y:update --rebuild` only rebuilds `dist/` when its baked *hosting mode*
+mismatches — it does **not** detect source changes, so a matching-mode-but-stale `dist/` silently
+serves the old UI and the run falsely passes with no golden diff. The fix is to `pnpm build`
+manually before the harness. Because the capture spec pauses the preview for determinism
+(`engine/set/paused {paused:true}`), the re-baselined goldens now lock in *both* the hint and the
+PAUSED indicator rendering, rather than just the hint.
+
+---
+
 ### Curve-editor marquee can start from the axis-label gutters (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

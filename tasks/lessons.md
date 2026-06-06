@@ -4044,3 +4044,40 @@ Confirmed via Playwright real `browser_drag` + console instrumentation; the orde
   `MultiChannelCurves`), not just `dragConsumedClickRef`.
 - A passing jsdom/synthetic test for a pointer feature proves the pure logic, not the capture/click
   routing. Add the real-input pass to the verification checklist for drag features.
+
+---
+
+## L-068 — `pnpm a11y:update --rebuild` rebuilds dist only on a hosting-MODE mismatch, NOT on source change; a stale-but-right-mode dist silently serves the OLD UI and the run passes green with zero golden diff
+
+**Rule.** Before running the native a11y harness (`pnpm a11y` / `a11y:update` /
+`test:native`) after ANY web source change, rebuild the served bundle yourself with
+`pnpm --filter @particle-editor/editor build`. Do NOT rely on the harness's `--rebuild`
+flag to pick up source edits — it won't.
+
+**Why.** `run-native-tests.mjs`'s `ensureDistMode(requestedMode, allowRebuild)` only
+rebuilds `dist/` when the baked hosting mode in `dist/build-meta.json` *mismatches* the
+requested mode (composition vs legacy), or when `dist/` is missing/unmarked. `--rebuild`
+merely *permits* that mode-driven rebuild; it does not diff source. So if `dist/` already
+matches the mode but is stale (built before your edit), the host serves the OLD UI, every
+spec runs against it, and `--update` writes NO golden change — a confident false green that
+looks like "my change had no a11y impact."
+
+**The tell.** After `a11y:update` for a change you KNOW alters a captured surface, `git
+status` shows zero golden changes. Confirm by timestamp/content: `ls dist/assets/*.js`
+mtime predates your edit, and `grep "<new string>" dist/assets/*.js` returns nothing. Both
+mean the served bundle is stale.
+
+**How to apply.**
+1. `pnpm --filter @particle-editor/editor build` (rebuilds `dist/` from current source).
+2. Verify it took: `grep "<a string only your change introduces>" dist/assets/*.js`.
+3. THEN `pnpm a11y:update` (no `--rebuild` needed once dist is fresh + right-mode) →
+   `git diff` the goldens (L-053: confirm one shared cause across surfaces).
+
+**Source incident (2026-06-06, session 20, VPT-6/7/8 status-bar).** Added an always-on
+status-bar hint cell (a new `contentinfo` node captured by 19 composition goldens). First
+`a11y:update --rebuild` passed 168/0 with ZERO golden diff — the dist was from a pre-edit
+`pnpm build` (same composition mode), so `--rebuild` skipped it and the host served the old
+status bar. Manual `pnpm build` (confirmed `grep "spawn instance" dist/` → 1) + re-run then
+produced the expected surgical 19-surface `contentinfo` delta. Cross-reference [L-040]
+(dist must be built to serve `--new-ui` at all) and [L-053] (status-bar/toolbar changes
+fan out across goldens).

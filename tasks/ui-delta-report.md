@@ -19,7 +19,8 @@ Already shipped: PRM-4/5 rotation scaling, VPT-2 undo + VPT-3 autosave, SEL-1
 marquee (+ SEL-12/13 drag polish), MNU-2 accelerators, MNU-1/SEL-5 clipboard
 menus, CRV-1/2/7/8 curve fixes + marquee-from-gutters, LNK-2/6/8/10 link groups,
 PAL-2/3 colour picker + PAL-14 thumbnails, SPN-4/5/6/7 spinner fixes, MNU-7
-reset-camera.
+reset-camera, VPT-6/7/8 status-bar parity (shift hint + PAUSED + 2dp cursor,
+shipped 2026-06-06).
 
 **The per-row tables below are NOT updated row-by-row.** Treat any row without a
 `✅` marker as *"see `fix-plan.md` for current status,"* NOT *"still open."*
@@ -28,12 +29,11 @@ reset-camera.
 
 | ID | Sev | What | Why still open |
 |---|---|---|---|
-| **VPT-6** | LOW | "Press SHIFT to spawn an instance" status-bar hint absent ([StatusBar.tsx](web/apps/editor/src/components/StatusBar.tsx)) | fell between fix-plan P3 (status-bar grab-bag) and P4 (menus) — never circled back |
-| **VPT-7** | LOW | PAUSED indicator absent from the status bar | same P3→P4 gap |
-| **VPT-8** | COSMETIC | cursor readout is 1dp; legacy was 2dp — `toFixed(1)` at [StatusBar.tsx:61](web/apps/editor/src/components/StatusBar.tsx:61) | same gap; may be an intentional keep — confirm |
-| **MNU-12** | LOW | Import Emitters dialog has "Select All" but no "Clear" ([ImportEmittersDialog.tsx:240](web/apps/editor/src/screens/ImportEmittersDialog.tsx:240)) | same P3→P4 gap |
+| **MNU-12** | LOW | Import Emitters dialog has "Select All" but no "Clear" ([ImportEmittersDialog.tsx:240](web/apps/editor/src/screens/ImportEmittersDialog.tsx:240)) | fell between fix-plan P3 and P4; touches one a11y golden |
 | **SEL-5 / MNU-4** (Paste-As-Child) | LOW | no "Paste As ▸ Child" — `emitters/paste` splices at root only | needs a NEW host paste-into-slot command — **native lane**, not a web quick-win |
 | **VPT-2 follow-up** | LOW | per-tick undo coalescing for streaming track-key / curve edits not done | deferred — only if a user reports per-tick undo there (fix-plan VPT-2) |
+
+*(VPT-6/7/8 status-bar parity shipped 2026-06-06 — see "Already shipped" above.)*
 
 Everything else is either ✅ shipped (fix-plan) or an **intentional keep**:
 docking (VPT-9/10), multi-channel curves (CRV-4/5/10/11), single-click texture

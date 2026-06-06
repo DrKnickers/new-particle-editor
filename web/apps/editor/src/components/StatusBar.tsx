@@ -13,8 +13,19 @@ type Cursor3D = { x: number; y: number; z: number };
 export function StatusBar({ bridge }: { bridge: Bridge }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [cursor, setCursor] = useState<Cursor3D | null>(null);
+  // VPT-7: PAUSED indicator. Mirrors the Toolbar's pause signal
+  // (engine/state snapshot + changed → EngineStateDto.paused) so the
+  // status bar shows the paused state without a new bridge command.
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
+    bridge
+      .request({ kind: "engine/state/snapshot", params: {} })
+      .then((s) => setPaused(s.paused))
+      .catch(() => {});
+    const offState = bridge.on("engine/state/changed", (e) => {
+      setPaused(e.payload.paused);
+    });
     const offStats = bridge.on("stats/tick", (e) => {
       setStats(e.payload);
     });
@@ -34,6 +45,7 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
       }
     });
     return () => {
+      offState();
       offStats();
       offCursor();
       offFreeze();
@@ -56,9 +68,10 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
     </span>
   );
 
+  // VPT-8: 2dp cursor readout, matching legacy ("Mouse: x, y, z" at 2dp).
   const cursorText = cursor === null
     ? "—"
-    : `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)}, ${cursor.z.toFixed(1)}`;
+    : `${cursor.x.toFixed(2)}, ${cursor.y.toFixed(2)}, ${cursor.z.toFixed(2)}`;
 
   return (
     <footer className="flex h-7 shrink-0 items-center gap-3 border-t border-border bg-bg px-4 text-xs">
@@ -71,6 +84,16 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
       {cell("Instances", placeholder ? "—" : s!.instances.toString())}
       <span className="text-text-3">·</span>
       {cell("Cursor", cursorText, cursor === null)}
+      {/* Right-aligned group: PAUSED state (VPT-7) + always-on spawn hint
+          (VPT-6, legacy main.cpp:2036's permanent rightmost pane). */}
+      <div className="ml-auto flex items-center gap-3">
+        {paused && (
+          <span className="font-mono font-semibold tracking-wide text-amber-400">
+            PAUSED
+          </span>
+        )}
+        <span className="text-text-3">⇧ Shift: spawn instance</span>
+      </div>
     </footer>
   );
 }

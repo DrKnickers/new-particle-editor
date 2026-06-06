@@ -148,7 +148,7 @@
   - button "Decrement": ▼
   - group: Jitter position
   - group: Jitter velocity
-- contentinfo: FPS — · Emitters — · Particles — · Instances — · Cursor —
+- contentinfo: "FPS — · Emitters — · Particles — · Instances — · Cursor — PAUSED ⇧ Shift: spawn instance"
 - menu "Mods":
   - menuitem "Unmodded"
   - separator
