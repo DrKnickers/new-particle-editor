@@ -16,6 +16,50 @@ Conventions:
 
 ## Changelog
 
+### Curve-editor marquee can start from the axis-label gutters (new-UI)
+
+*2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+You can now begin a rubber-band selection in the curve editor's axis-label margins — the 36px
+column of Y-axis numbers on the left and the 22px row of time labels along the bottom — not just
+inside the plot itself. A marquee that starts in a gutter begins right at the press point — the
+selection rectangle extends from the margin into the plot, with no snapping to the grid edge — and
+then sweeps and selects exactly as before. Esc still
+cancels an in-progress marquee, and the behaviour is scoped to Select mode (a gutter press in
+Insert mode does nothing).
+
+**How tackled.** The interactive curve editor is `MultiChannelCurves`
+([`CurveEditor.tsx`](web/apps/editor/src/screens/CurveEditor.tsx:1071)), whose marquee already
+tracks everywhere via `setPointerCapture` once started — so the only gap was *starting* from a
+gutter, which lies outside the plot `<svg>`. The fix is additive: `MultiChannelCurves` exposes an
+imperative `startMarquee(clientX, clientY, shift, pointerId)` (via a `marqueeRef` prop threaded
+through `CurveEditor`) that maps the client point into the plot's viewBox (kept **un-clamped**, so
+a gutter origin renders into the margin via the SVG's `overflow="visible"` rather than snapping to
+the edge), seeds the marquee, and captures the pointer to the SVG — so the existing, unchanged
+move/up/Esc machinery drives the rest. `CanvasWithAxisLabels`
+([`CurveEditorPanel.tsx`](web/apps/editor/src/components/CurveEditorPanel.tsx:263)) gains an
+`onGutterPointerDown` that fires when a primary press lands outside `[data-testid="curve-editor-svg"]`,
+which `CurveEditorPanel` routes to `startMarquee` in Select mode.
+
+**Issues encountered and resolutions.** The original deferral note assumed a risky
+"margin-inclusive viewBox" rework to fight `preserveAspectRatio="none"` — but that described the
+*single-track* `CurveEditor` branch, which the app never renders. The real editor
+(`MultiChannelCurves`) already uses a CSS-pixel-measured viewBox (no aspect distortion) and a
+`svgRef`, so the rework was unnecessary; reusing its existing pointer-capture marquee made the
+change purely additive and left the delicate (and previously unit-untested) state machine
+intact. This task also added the first marquee unit coverage for the multi-channel editor.
+A second bug surfaced only under REAL mouse input (a synthetic `dispatchEvent` check was a false
+positive): because the gutter marquee captures the SVG rather than the backdrop, the browser's
+trailing synthetic `click` lands on the SVG, whose `onClick` guarded only the key-drag flag
+(`dragConsumedClickRef`) and so fell through to `onCanvasClick`, clearing the just-made selection.
+Fix: the SVG `onClick` now also honours `marqueeConsumedClickRef`, mirroring the backdrop
+([`CurveEditor.tsx`](web/apps/editor/src/screens/CurveEditor.tsx:1631)); verified with Playwright
+real-input drag (see L-067). A third pass dropped the original start-point clamp: anchoring a
+gutter origin to the plot edge read as the marquee "snapping to the grid" instead of beginning in
+the margin, so `startMarquee` now keeps the raw press coordinate.
+
+---
+
 ### Emitter-tree reorder-drag polish: edge autoscroll + Esc/right-click cancel (new-UI)
 
 *2026-06-05 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

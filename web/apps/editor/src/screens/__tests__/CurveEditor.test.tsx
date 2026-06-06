@@ -14,9 +14,10 @@
 
 import type { InterpolationType, TrackDto } from "@particle-editor/bridge-schema";
 import type * as React from "react";
+import { createRef } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
-import { CurveEditor } from "../CurveEditor";
+import { act, fireEvent, render } from "@testing-library/react";
+import { CurveEditor, type ChannelDef, type CurveMarqueeHandle } from "../CurveEditor";
 
 function fixtureTrack(
   keyCount: number,
@@ -445,5 +446,99 @@ describe("CurveEditor", () => {
     expect(pts).toHaveLength(5);
     // Sanity: the linear <path> isn't drawn here.
     expect(stepContainer.querySelector("[data-testid='curve-path']")).toBeNull();
+  });
+});
+
+// ─── CRV: gutter-initiated marquee on the multi-channel editor ───────
+//
+// The panel renders the MULTI-CHANNEL editor (focusChannel set). Its
+// marquee already tracks everywhere via pointer capture; these tests
+// cover the NEW imperative `startMarquee` entry point that lets a
+// marquee begin from the axis-label gutters, anchored at the plot edge.
+// jsdom rejects the live measurement, so width/height fall back to the
+// 600×300 props (deterministic).
+const GUTTER_CHANNELS: ChannelDef[] = [
+  { id: "red", label: "Red", color: "red", defaultOn: true, trackName: "red" },
+];
+
+function gutterTrack(): TrackDto {
+  // 5 keys at times 0/25/50/75/100, all value 0.5 → y=150 on 600×300.
+  return {
+    name: "red",
+    keys: [0, 25, 50, 75, 100].map((time) => ({ time, value: 0.5 })),
+    interpolation: "linear",
+    lockedTo: null,
+  };
+}
+
+function renderGutterMarquee(
+  onMarquee: ReturnType<typeof vi.fn>,
+  extra: Partial<React.ComponentProps<typeof CurveEditor>> = {},
+) {
+  const ref = createRef<CurveMarqueeHandle>();
+  const result = render(
+    <CurveEditor
+      marqueeRef={ref}
+      tracks={[gutterTrack()]}
+      channels={GUTTER_CHANNELS}
+      visibleChannels={{ red: true }}
+      focusChannel="red"
+      valueRange={{ min: 0, max: 1 }}
+      width={600}
+      height={300}
+      onCanvasMarqueeSelect={onMarquee}
+      {...extra}
+    />,
+  );
+  const svg = result.container.querySelector(
+    "[data-testid='curve-editor-svg']",
+  ) as SVGSVGElement;
+  svg.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+  return { ...result, svg, ref };
+}
+
+describe("CurveEditor — gutter-initiated marquee (CRV multi-channel)", () => {
+  it("startMarquee from a left-gutter origin sweeps and selects the covered keys", () => {
+    const onMarquee = vi.fn();
+    const { svg, ref } = renderGutterMarquee(onMarquee);
+    // Begin in the left Y-gutter (clientX negative) at the bottom edge.
+    act(() => ref.current!.startMarquee(-50, 300, false, 20));
+    // Sweep up and right, past slop, covering times 0..75 (x ≤ 480; x=600 out).
+    fireEvent.pointerMove(svg, { pointerId: 20, clientX: 480, clientY: 0 });
+    fireEvent.pointerUp(svg, { pointerId: 20, clientX: 480, clientY: 0 });
+    expect(onMarquee).toHaveBeenCalledTimes(1);
+    expect([...onMarquee.mock.calls[0]![0]].sort((a, b) => a - b)).toEqual([0, 25, 50, 75]);
+    expect(onMarquee.mock.calls[0]![1]).toBe(false);
+  });
+
+  it("begins a gutter-origin marquee AT the press point, not snapped to the plot edge", () => {
+    const onMarquee = vi.fn();
+    const { container, svg, ref } = renderGutterMarquee(onMarquee);
+    // Press in the left Y-gutter (clientX -50 → viewBox x -50 on the 600px stub).
+    act(() => ref.current!.startMarquee(-50, 150, false, 21));
+    // Move past slop so the marquee rectangle renders.
+    fireEvent.pointerMove(svg, { pointerId: 21, clientX: 300, clientY: 150 });
+    const rect = container.querySelector("[data-testid='curve-marquee']");
+    expect(rect).not.toBeNull();
+    // The rectangle starts at the raw gutter x (-50) — it does NOT snap to 0.
+    // The SVG's overflow="visible" renders that into the margin.
+    expect(rect!.getAttribute("x")).toBe("-50");
+  });
+
+  it("a trailing click after a gutter marquee does NOT clear the selection (suppresses onCanvasClick)", () => {
+    const onMarquee = vi.fn();
+    const onCanvasClick = vi.fn();
+    const { svg, ref } = renderGutterMarquee(onMarquee, { onCanvasClick });
+    act(() => ref.current!.startMarquee(-50, 300, false, 22));
+    fireEvent.pointerMove(svg, { pointerId: 22, clientX: 480, clientY: 0 });
+    fireEvent.pointerUp(svg, { pointerId: 22, clientX: 480, clientY: 0 });
+    expect(onMarquee).toHaveBeenCalledTimes(1);
+    // A real browser fires a synthetic click on the captured SVG right after a
+    // drag. Because the gutter marquee captures the SVG (not the backdrop),
+    // that click lands on the SVG element — whose onClick must honour the
+    // marquee's click-suppression flag, or it clears the just-made selection.
+    fireEvent.click(svg);
+    expect(onCanvasClick).not.toHaveBeenCalled();
   });
 });

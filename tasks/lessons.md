@@ -4013,3 +4013,34 @@ or a locked/dirty SHARED WebView2 user-data folder (L-030) poisoning the first r
   clamps to ~26%. Fix the TEST (the floor is intentional UI): compute the expected % from the
   MEASURED group width — `max(defaultPct, floorPx/widthPx*100)` — so it's correct at every window
   size, falling back to the flat default on a window wide enough that the floor doesn't bind.
+
+## L-067 — Synthetic pointer events can't validate pointer-capture or the trailing synthetic click; verify drag features with REAL input (Playwright)
+
+The gutter-initiated curve marquee (CRV) "passed" a browser `preview_eval` check — I dispatched
+`pointermove`/`pointerup` directly on the `<svg>` and saw keys select. It was a FALSE POSITIVE that
+handed a broken feature to the user ("I cannot begin a click drag outside the grid still"). Two
+things synthetic `dispatchEvent` does NOT reproduce, both of which broke the real gesture:
+
+1. **Pointer capture.** `startMarquee` calls `svg.setPointerCapture(pointerId)` for a pointer whose
+   `pointerdown` fired on a sibling GUTTER element. Real captured events route to the capture
+   target; synthetic events go to whatever element you dispatch on — so capture is never exercised.
+2. **The trailing synthetic `click`.** After a REAL drag the browser fires a `click` on the capture
+   target. The normal in-plot marquee captures the BACKDROP rect, whose `onClick` honours
+   `marqueeConsumedClickRef` and swallows it. The gutter marquee captured the SVG, whose `onClick`
+   only guarded `dragConsumedClickRef` — so the trailing click fell through to `onCanvasClick` and
+   CLEARED the selection the marquee had just made. The synthetic test never fired that click.
+
+Confirmed via Playwright real `browser_drag` + console instrumentation; the order was
+`commit hits=[30]` → `handleCanvasMarqueeSelect [30]` → `handleCanvasClick CLEAR`.
+
+**Rules.**
+- For ANY drag / pointer-capture / click-vs-drag feature, the authoritative verification is REAL
+  input — Playwright (`browser_drag`, real mouse) against the dev server. `preview_eval` /
+  `dispatchEvent` is fine for INSPECTION (DOM, rects, console) but is NOT proof a capture-dependent
+  gesture works. Never report "verified" off a synthetic drive alone.
+- When the captured element is NOT the one that started the gesture, EVERY `onClick` path that can
+  receive the trailing click must honour the same click-suppression flag. Fix here: the SVG
+  `onClick` now mirrors the backdrop's `marqueeConsumedClickRef` check (CurveEditor.tsx
+  `MultiChannelCurves`), not just `dragConsumedClickRef`.
+- A passing jsdom/synthetic test for a pointer feature proves the pure logic, not the capture/click
+  routing. Add the real-input pass to the verification checklist for drag features.

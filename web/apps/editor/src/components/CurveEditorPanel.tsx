@@ -50,7 +50,7 @@ import type {
   TrackDto,
   TrackName,
 } from "@particle-editor/bridge-schema";
-import { CurveEditor, type ChannelDef } from "@/screens/CurveEditor";
+import { CurveEditor, type ChannelDef, type CurveMarqueeHandle } from "@/screens/CurveEditor";
 import { Spinner } from "@/primitives/Spinner";
 import {
   getCurveKeysClipboard,
@@ -260,14 +260,18 @@ function fmtAxis(n: number): string {
  *  the value=0 baseline easy to find visually.
  *
  *  X labels: 0 / 25 / 50 / 75 / 100 (time percentage), fixed. */
-function CanvasWithAxisLabels({
+export function CanvasWithAxisLabels({
   yMin,
   yMax,
   children,
+  onGutterPointerDown,
 }: {
   yMin: number;
   yMax: number;
   children: React.ReactNode;
+  /** CRV: a primary pointerdown landing in a label gutter (outside the plot
+   *  SVG) routes here so the curve marquee can start from the margins. */
+  onGutterPointerDown?: (e: React.PointerEvent) => void;
 }) {
   // pct = fraction of the grid box height measured from the TOP.
   // value=yMax → pct=0 (top), value=yMin → pct=1 (bottom).
@@ -287,6 +291,15 @@ function CanvasWithAxisLabels({
     <div
       data-testid="curve-canvas-with-axes"
       className="grid h-full w-full"
+      onPointerDown={(e) => {
+        // CRV gutter-marquee: a primary press landing OUTSIDE the plot SVG
+        // (in a label gutter) starts a marquee via the parent. A press inside
+        // the SVG belongs to the plot's own handlers (whose backdrop also
+        // stopPropagations, so this guard is belt-and-suspenders).
+        if (e.button !== 0) return;
+        if ((e.target as Element).closest('[data-testid="curve-editor-svg"]') !== null) return;
+        onGutterPointerDown?.(e);
+      }}
       // Wider Y-label column (36 → 36px, was 32px) gives endpoint-key
       // circles that extend past the grid via `overflow="visible"`
       // (≈5px radius) breathing room before they crowd the labels.
@@ -384,6 +397,9 @@ export function CurveEditorPanel({ bridge }: Props) {
   // visible channel avoids that one-tick churn.
   const [focusChannel, setFocusChannel] = useState<string>("red");
   const [mode, setMode] = useState<EditMode>("select");
+  // CRV: handle to start a marquee from the axis-label gutters (see
+  // CanvasWithAxisLabels.onGutterPointerDown wiring below).
+  const curveRef = useRef<CurveMarqueeHandle>(null);
   // Selection state — keyed by key TIME (not array index). Per focus
   // channel; cleared on focus change.
   const [selectedKeyTimes, setSelectedKeyTimes] = useState<Set<number>>(
@@ -1446,8 +1462,16 @@ export function CurveEditorPanel({ bridge }: Props) {
               <CanvasWithAxisLabels
                 yMin={unifiedRange.min}
                 yMax={unifiedRange.max}
+                onGutterPointerDown={(e) => {
+                  // Gutter press starts a marquee only in Select mode (Insert
+                  // needs an in-plot coordinate, so a gutter press is a no-op).
+                  if (mode === "select") {
+                    curveRef.current?.startMarquee(e.clientX, e.clientY, e.shiftKey, e.pointerId);
+                  }
+                }}
               >
                 <CurveEditor
+                  marqueeRef={curveRef}
                   tracks={tracks}
                   channels={CHANNELS}
                   visibleChannels={visible}

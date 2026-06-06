@@ -1,135 +1,160 @@
-# SEL-12 / SEL-13 — Emitter-tree reorder-drag polish
+# Curve marquee-from-axis-margins (CRV deferred polish)
 
-(Prior task MNU-7's plan+review is in git @ `9f8a7d0` and summarized in this session.)
+(Prior tasks MNU-7 `9f8a7d0`, SEL-12/13 `e168ba9` — reviews in HANDOFF/git.)
 
 ## 1. Goal + scope
 
-**Goal.** Bring the new-UI emitter-tree reorder drag to legacy parity on two
-deferred polish items, both in `web/apps/editor/src/screens/EmitterTree.tsx`:
-- **SEL-12** — autoscroll the tree when a reorder drag nears the top/bottom
-  edge, so long lists can be reordered past the viewport without manual scroll.
-  Proportional speed (ramps toward the edge) — user choice.
-- **SEL-13** — `Esc` **and** right-click cancel an *in-progress* reorder drag
-  (today only `pointercancel` does). Right-click must also suppress the row's
-  Radix context menu while the drag is active.
+**Goal.** Let a curve-editor marquee selection **start from the axis-label
+gutters** (36px Y-label column on the left, 22px X-label row at the bottom),
+not just from inside the plot. A gutter-origin marquee begins AT the press point
+in the margin (no snapping to the grid edge) and sweeps + selects normally.
 
-**In:** the two behaviours above; a pure, unit-tested autoscroll-delta helper;
-a small shared hit-test refactor; vitest coverage for SEL-13 + the helper;
-live browser-preview verification for SEL-12's real scrolling.
+**In:** unify the marquee in **`MultiChannelCurves`** (the focus-channel editor
+the panel actually renders) onto a document-listener controller; expose an
+imperative `startMarquee` via `forwardRef` threaded `CurveEditor → MultiChannelCurves`;
+initiate it from the `CanvasWithAxisLabels` gutters via an `onGutterPointerDown`
+prop wired through `CurveEditorPanel`; clamp gutter/overflow coords to the plot.
 
 **Out:**
-- Marquee-drag changes — SEL-13 is the *reorder* drag; the marquee already
-  has Esc-cancel.
-- Curve marquee-from-margins — separate deferred item, own task.
-- Any bridge / schema / native-host change — pure web.
-- Touch/momentum tuning beyond a sane default — YAGNI for a shallow list.
+- **Single-track `CurveEditor` branch** (lines ~360-1001) + its 4 marquee tests
+  — a SEPARATE, test-only path the app never renders (only the multi-channel
+  branch is used in `CurveEditorPanel`). Left untouched. NOT de-duplicated here
+  (out-of-scope refactor).
+- Margin-inclusive viewBox rework — moot: `MultiChannelCurves` already uses a
+  CSS-pixel-measured viewBox (no `preserveAspectRatio="none"`).
+- Key-drag / insert / right-click / Esc semantics — unchanged.
+- Bridge/schema/native — none.
 
 ## 2. What the codebase already gives us
 
-- `startDrag` (EmitterTree.tsx:1220-1282) — the pointer-drag controller:
-  `onMove` hit-tests the row under the pointer + sets the drop indicator;
-  `finish(commit)` removes listeners, clears state, dispatches `emitters/drop`
-  only when `commit && lastParams`. `onCancel` already = `finish(false)`.
-- The **marquee controller** (handleScrollPointerDown, 1383-1446) already adds
-  a capture-phase `keydown` Escape listener mid-drag — the exact pattern to
-  mirror for SEL-13's Esc.
-- `treeScrollRef` (1327) is the `overflow-y-auto` scroll viewport — the element
-  whose `scrollTop` SEL-12 drives and whose rect defines the edge zones.
-- Each row is a Radix `ContextMenu.Trigger` (518-700) opening on the native
-  `contextmenu` event — so SEL-13 right-click must `preventDefault` it.
+- **`MultiChannelCurves`** (CurveEditor.tsx:1071+) is the real interactive
+  editor (`CurveEditorPanel` passes `focusChannel`, so `CurveEditor` early-returns
+  it at :405). It already has:
+  - a `svgRef` (:1107) and measures CSS dims via `useLayoutEffect`; **in jsdom
+    the measurement is rejected and it falls back to the `width`/`height` props
+    (default 600×300)** (:1103-1110) → the marquee IS unit-testable deterministically.
+  - its own marquee: `onCanvasPointerDown` (:1482) `setMarquee` (:1507),
+    `onPointerMove/Up/Cancel` (:1583-1585), Esc via a window keydown (:1475),
+    backdrop rect (:1600) with `setPointerCapture`. Mirrors the single-track impl.
+  - `eventToViewBox` (:315) maps client→viewBox from the SVG rect.
+- The marquee **already tracks into the margins** once started (pointer capture);
+  only the gutter *start* is missing (no pointerdown reaches the SVG there).
+- Wiring: `CurveEditorPanel` renders `<CanvasWithAxisLabels><CurveEditor …/>`
+  (:1446-1482); `mode` ("select"|"insert") at :386; commit via `onCanvasMarqueeSelect`.
+- `CanvasWithAxisLabels` (CurveEditorPanel.tsx:263): CSS grid `36px | 1fr` ×
+  `1fr | 22px`; SVG in the center cell; HTML-span labels in the gutters.
+- **No marquee tests on the multi-channel path** (`CurveEditorPanel.test.tsx`
+  has none; the 4 marquee tests in `CurveEditor.test.tsx` render the single-track
+  branch). So this task ADDS the first multi-channel marquee unit coverage.
 
 ## 3. Architecture / implementation approach
 
-**New pure helper** — `web/apps/editor/src/lib/drag-autoscroll.ts`:
-```ts
-/** px/frame to scroll while a drag hovers near a scroll-container edge.
- *  0 outside the `zone`-px hot band; ramps linearly to ±maxSpeed at the
- *  very edge. Negative = scroll up, positive = down. */
-export function computeAutoscrollDelta(
-  pointerY: number,
-  rect: { top: number; bottom: number },
-  opts?: { zone?: number; maxSpeed?: number },  // default zone 28, maxSpeed 12
-): number
-```
+**Bridge:** `CurveEditor` becomes `forwardRef<CurveMarqueeHandle, Props>`; it
+forwards `ref` to `<MultiChannelCurves ref={ref} …/>` (single-track branch
+ignores the ref — unused by the app). `MultiChannelCurves` becomes
+`forwardRef` + `useImperativeHandle(ref, () => ({ startMarquee }))`.
+`CurveEditorPanel` holds `curveRef` and passes `onGutterPointerDown` to
+`CanvasWithAxisLabels`.
 
-**EmitterTree `startDrag` changes:**
-1. **Shared hit-test.** Extract `onMove`'s row-resolution + indicator block into
-   `updateDropTarget(clientX, clientY)` using
-   `document.elementFromPoint(x,y).closest("[data-emitter-id]")`. `onMove` calls
-   it with the event coords and records `lastX/lastY`.
-2. **Autoscroll loop.** While `active`, a `requestAnimationFrame` loop reads
-   `treeScrollRef` rect + `lastY`, computes `computeAutoscrollDelta`, and when
-   non-zero does `container.scrollTop += delta` **then** `updateDropTarget(
-   lastX, lastY)` so the indicator tracks while content scrolls under a
-   stationary pointer. Started when the drag goes active; `cancelAnimationFrame`
-   in `finish`.
-3. **SEL-13 cancel.** Two capture-phase document listeners added in `startDrag`,
-   acting only when `active`: `keydown` (Escape → `finish(false)` +
-   prevent/stop) and `contextmenu` (→ `finish(false)` + prevent/stop, killing
-   the Radix menu). Both removed in `finish` alongside the existing three.
+**Additive entry point (inside `MultiChannelCurves`) — REUSE the existing
+state machine, don't rewrite it.** MultiChannelCurves' marquee already tracks
+everywhere via `setPointerCapture` on the backdrop; the only gap is the gutter
+*start*. So:
+1. `startMarquee(clientX, clientY, shift, pointerId)` (exposed via the handle):
+   no-op when `!focusEnabled`; map via `eventToViewBox(svgRef.current, …, width,
+   height)` — UN-clamped, so a gutter origin begins in the margin (renders via the
+   SVG `overflow="visible"`), not snapped to the edge; set the marquee state with
+   `target = svgRef.current`; call `svgRef.current.setPointerCapture(pointerId)`
+   (cross-element capture is valid — the pointer is active from the gutter
+   pointerdown). Subsequent move/up dispatch to the SVG → the **existing,
+   UNCHANGED** `onPointerMove`/`onPointerUp`/`onPointerCancel` marquee branches +
+   Esc `useEffect` run. No document listeners, no handler rewrite.
+2. The plot backdrop pointerdown path is untouched (already works).
 
-## 4. Risks named up front + mitigations
+**Gutter initiation (`CanvasWithAxisLabels`):** outer grid `<div>` gets
+`onPointerDown`: primary button + target NOT inside `[data-testid="curve-editor-svg"]`
+→ `onGutterPointerDown(e)`. `CurveEditorPanel` passes
+`(e) => { if (mode==="select") curveRef.current?.startMarquee(e.clientX, e.clientY, e.shiftKey); }`.
+Backdrop already `stopPropagation`s → no double-fire.
 
-1. **Indicator freezes during autoscroll.** A stationary pointer fires no
-   `pointermove`, so without intervention the drop indicator wouldn't update as
-   rows scroll past. *Mitigation:* the rAF loop re-runs `updateDropTarget(lastX,
-   lastY)` every frame it scrolls (§3.2) — the core correctness point.
-2. **rAF leak.** A loop left running after drop/cancel would scroll forever and
-   pin a frame callback. *Mitigation:* single `rafId` ref, `cancelAnimationFrame`
-   in `finish` (the one teardown path for up/cancel/Esc/right-click).
-3. **Right-click still opens the menu.** Radix listens on the native
-   `contextmenu`; a stale listener or wrong phase would let the menu through.
-   *Mitigation:* document-level **capture-phase** `contextmenu` listener with
-   `preventDefault` + `stopPropagation`, active only while dragging; removed in
-   `finish`. Pre-active right-click intentionally still opens the menu.
-4. **jsdom can't scroll.** `scrollTop`/`getBoundingClientRect` are faked, so an
-   autoscroll integration test would be vacuous. *Mitigation:* unit-test the
-   pure helper; verify real scrolling in the browser preview (§5).
-5. **Esc double-handling.** The tree's own `onKeyDown` / inline-rename Esc could
-   collide. *Mitigation:* capture-phase + `stopPropagation` on the drag's Esc,
-   and the listener only exists during an active drag.
+## 4. Risks + mitigations
+
+1. **Regressing the (untested) multi-channel marquee.** *Mitigation:* ADD unit
+   tests for it FIRST (render `<CurveEditor>` with channels+focusChannel+width/
+   height so the 600×300 fallback applies), locking baseline behaviour before
+   the refactor; they survive the document move (bubbling events, as confirmed
+   for the single-track tests).
+2. **Coord mapping after the move to document** (`currentTarget` is now
+   `document`). *Mitigation:* always map via `svgRef.getBoundingClientRect`.
+3. **Listener leak.** One `cleanup()`, called from every terminal path + an
+   unmount `useEffect` guard.
+4. **Wrong-target gutter starts.** `closest('[data-testid="curve-editor-svg"]')`
+   guard + backdrop `stopPropagation`.
+5. **Insert mode in a gutter** → no-op (gutter handler acts only in Select mode).
+6. **Editing the wrong (single-track) branch.** Already averted by mapping the
+   render path; all edits target `MultiChannelCurves` + `CanvasWithAxisLabels`.
 
 ## 5. Testing & verification
 
-**Unit (vitest, jsdom):**
-- [x] `drag-autoscroll.test.ts` — 0 mid-list; ramps near top (neg) / bottom
-      (pos); clamps at ±maxSpeed past the edge; symmetric; custom zone/maxSpeed. **7 tests.**
-- [x] EmitterTree SEL-13: Escape during an active drag → no `emitters/drop`.
-- [x] EmitterTree SEL-13: right-click during an active drag → no `emitters/drop`.
-      (Dropped the planned `defaultPrevented` assertion — Radix preventDefaults
-      contextmenu itself, so it was vacuous; suppression verified live instead.)
-- [x] Full suite **491** (was 482; +7 autoscroll +2 SEL-13), 0 failed.
+**Unit (vitest, jsdom — multi-channel path uses the 600×300 prop fallback):**
+- [x] NEW gutter (CurveEditor): imperative `startMarquee` from a gutter origin
+      (clientX<0) sweeps + selects the covered keys (this also exercises the
+      multi-channel marquee commit — the first such unit coverage).
+- [x] NEW clamp (CurveEditor): a gutter-origin marquee renders its rect at x=0
+      (anchored at the plot edge).
+- [x] NEW `CanvasWithAxisLabels`: a primary `pointerDown` outside the SVG calls
+      `onGutterPointerDown`; one inside the SVG does not; a right-button press does not.
+- [x] The 4 single-track marquee tests stay green (untouched branch).
+- [x] Full suite **496** (was 491; +2 CurveEditor +3 CanvasWithAxisLabels), 0 failed.
 
-**Live (browser preview — jsdom can't do layout):**
-- [x] Short-viewport drag to the bottom edge autoscrolled 0→64 (=maxScroll,
-      clamped); to the top edge scrolled back to 0; mid-list halted scrolling.
-- [x] Right-click during an active drag → drag cancelled AND context menu
-      suppressed (`suppressedMenuOpen:false`); control right-click with no drag
-      opens the menu (`controlMenuOpened:true`) — suppression is meaningful.
+**Live (browser preview — jsdom can't do real layout/measurement):**
+- [x] Left Y-gutter start → marquee anchors at the plot edge (`mqX="0"`) and
+      selecting the full plot picks **4/4** keys.
+- [x] Bottom X-gutter start → marquee initiates.
+- [x] Esc mid-drag → rect removed, selection unchanged.
 
 **Static:** `tsc --noEmit` exit 0.
 
 ## Review
 
-**Outcome.** Both deferred drag-polish items shipped to legacy parity, web-only.
-SEL-12 (proportional edge autoscroll) and SEL-13 (Esc/right-click cancel +
-context-menu suppression) both land in the existing pointer-drag controller in
-`EmitterTree.tsx` — no new drag library, no bridge/schema/native change.
+**Outcome.** A curve marquee can now start from the axis-label gutters, web-only,
+purely additive — no rewrite of the marquee state machine, no bridge/schema/native.
 
-**Built test-first.** `computeAutoscrollDelta` was RED→GREEN before wiring; the
-SEL-13 cancel tests were RED (drag still dropped) before the listeners existed.
+**The decisive discovery (re-plan mid-task).** The app's interactive curve editor is
+`MultiChannelCurves`, NOT the single-track `CurveEditor` branch whose marquee the docs
+(and the existing 4 marquee tests) describe. `MultiChannelCurves` already uses a
+CSS-pixel-measured viewBox (so the deferral's "fight preserveAspectRatio" concern was
+moot) and already has a `svgRef` + pointer-capture marquee. Retargeting there made the
+fix additive: a `startMarquee` imperative handle (`marqueeRef` prop, threaded through
+`CurveEditor`) + an `onGutterPointerDown` on `CanvasWithAxisLabels`, reusing the existing
+capture/move/up/Esc machinery. The single-track branch + its tests are untouched.
 
-**Two design pivots from reading the harness / runtime:**
-1. Hit-testing splits by path — the event-driven `onMove` keeps using
-   `ev.target` (so the jsdom drag tests still pass); only the autoscroll rAF
-   loop uses `elementFromPoint` (untestable in jsdom → verified live).
-2. The `defaultPrevented` assertion was abandoned once the RED run revealed
-   Radix itself preventDefaults `contextmenu`; the unit test asserts the robust
-   signal (no drop) and menu-suppression is a live check.
+**Why a `marqueeRef` prop, not `forwardRef`.** Both `CurveEditor` and `MultiChannelCurves`
+are ~600-line functions; wrapping them in `forwardRef` risks brace-matching errors for no
+functional gain. A `Ref` carried as a normal prop + `useImperativeHandle` is equivalent and
+a safer edit.
 
-**Verification:** vitest 491/0, tsc 0, and a live in-browser drive proving real
-autoscroll (scroll up/down/stop/clamp) and real menu suppression.
+**Built test-first** (RED → GREEN), and live-verified the parts jsdom can't reach (real
+ResizeObserver measurement): Y-gutter start clamps to x=0 and selects 4/4, X-gutter starts,
+Esc cancels.
 
-**Files:** new `lib/drag-autoscroll.ts` + test; `EmitterTree.tsx` (controller);
-`EmitterTree.test.tsx` (+2); docs (ui-delta SEL-12/13 → SHIPPED, fix-plan,
-CHANGELOG).
+**Files:** `CurveEditor.tsx` (handle + `startMarquee`), `CurveEditorPanel.tsx` (export +
+`onGutterPointerDown` + wiring), `CurveEditor.test.tsx` (+2), NEW
+`CanvasWithAxisLabels.test.tsx` (+3); docs (fix-plan, CHANGELOG).
+
+**Post-review fix (user-surfaced).** First hand-off to the user failed: "cannot begin a click
+drag outside the grid." My `preview_eval` "verification" was a FALSE POSITIVE — synthetic
+`dispatchEvent` bypasses pointer capture AND never fires the trailing synthetic `click`.
+Root-caused with Playwright real input + console instrumentation: the marquee committed the
+right keys, but the trailing click (landing on the SVG, since the gutter marquee captures the
+SVG not the backdrop) hit an `onClick` that only guarded `dragConsumedClickRef`, so it cleared
+the selection. Fix: SVG `onClick` now also honours `marqueeConsumedClickRef` (mirrors the
+backdrop). New RED→GREEN test (`a trailing click after a gutter marquee does NOT clear…`);
+suite **497**; real-input re-verified (gutter drag selects + persists). Lesson **L-067**.
+
+**Second user correction.** "it snaps my marquee to the grid instead of beginning in the
+outskirts." The approved design CLAMPED the start to the plot edge — which read as snapping.
+Dropped the clamp: `startMarquee` now keeps the raw press coordinate, so the rectangle begins
+in the margin (renders via the SVG's `overflow="visible"`) and the inclusive hit-test still only
+matches in-plot keys. Test updated (RED→GREEN, now asserts the rect starts at the raw gutter x
+`-50`, not `0`); real-input re-verified (gutter press → `rectX=-18`, begins 18px into the gutter).

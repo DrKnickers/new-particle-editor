@@ -55,7 +55,7 @@
 //     mode is unchanged: empty-canvas pointer-down still fires
 //     `onCanvasAdd` and marquee is suppressed.
 
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type Ref } from "react";
 import type { InterpolationType, TrackDto, TrackName } from "@particle-editor/bridge-schema";
 
 /** Channel definition for the multi-channel overlay branch (Task 2.6).
@@ -191,6 +191,18 @@ type Props = {
    *  marquee is treated as a click and `onCanvasClick` fires
    *  instead. */
   onCanvasMarqueeSelect?: (times: number[], shift: boolean) => void;
+  /** CRV: ref to drive the marquee imperatively so it can be STARTED from
+   *  outside the plot SVG (the axis-label gutters). Only the multi-channel
+   *  focus editor implements it; the single-track branch ignores it. */
+  marqueeRef?: Ref<CurveMarqueeHandle>;
+};
+
+/** Imperative handle exposed via `marqueeRef` for starting a marquee
+ *  selection from a client point outside the plot SVG (gutter-initiated).
+ *  Coordinates are clamped to the plot; the existing pointer-capture marquee
+ *  machinery drives the rest. */
+export type CurveMarqueeHandle = {
+  startMarquee: (clientX: number, clientY: number, shiftKey: boolean, pointerId: number) => void;
 };
 
 const DEFAULT_WIDTH = 600;
@@ -378,6 +390,7 @@ export function CurveEditor({
   channels,
   visibleChannels,
   focusChannel,
+  marqueeRef,
   width = DEFAULT_WIDTH,
   height = DEFAULT_HEIGHT,
   timeMin = DEFAULT_TIME_MIN,
@@ -427,6 +440,7 @@ export function CurveEditor({
         onKeyDragCancel={onKeyDragCancel}
         onGroupDragEnd={onGroupDragEnd}
         onCanvasMarqueeSelect={onCanvasMarqueeSelect}
+        marqueeRef={marqueeRef}
       />
     );
   }
@@ -1066,6 +1080,7 @@ type MultiProps = {
    *  selection by (dTime, dValue). The parent applies it via applyGroupShift. */
   onGroupDragEnd?: (dTime: number, dValue: number) => void;
   onCanvasMarqueeSelect?: (times: number[], shift: boolean) => void;
+  marqueeRef?: Ref<CurveMarqueeHandle>;
 };
 
 function MultiChannelCurves({
@@ -1091,6 +1106,7 @@ function MultiChannelCurves({
   onKeyDragCancel,
   onGroupDragEnd,
   onCanvasMarqueeSelect,
+  marqueeRef,
 }: MultiProps) {
   // Live-measured SVG dimensions. We can't simply pass a fixed 600×300
   // viewBox to a stretchy SVG (`preserveAspectRatio="none"`) without
@@ -1479,6 +1495,35 @@ function MultiChannelCurves({
     return () => { window.removeEventListener("keydown", handler); };
   }, [marquee]);
 
+  // CRV: imperative entry so a marquee can BEGIN from outside this SVG (the
+  // axis-label gutters). Maps the client point into viewBox space, CLAMPS it
+  // to the plot edges (a left-gutter start anchors at time 0; a bottom-gutter
+  // start at value min), seeds the marquee, and captures the pointer to this
+  // SVG so the existing onPointerMove/Up/Cancel + Esc machinery drives the
+  // rest. Cross-element capture is valid — the pointer is active from the
+  // gutter pointerdown. No-op in the read-only (non-focus) overlay.
+  const startMarquee = (clientX: number, clientY: number, shiftKey: boolean, pointerId: number) => {
+    if (!focusEnabled) return;
+    const svg = svgRef.current;
+    if (svg === null) return;
+    const { x, y } = eventToViewBox(svg, clientX, clientY, width, height);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (typeof svg.setPointerCapture === "function") {
+      try { svg.setPointerCapture(pointerId); } catch { /* swallow — capture is best-effort */ }
+    }
+    // Begin the marquee AT the press point, even when it's in a gutter
+    // (x < 0 / y > height). The SVG's overflow="visible" renders the rectangle
+    // into the margin, so it visibly starts where the user pressed — NOT
+    // snapped to the plot edge. The inclusive hit-test still only matches
+    // in-plot keys the rectangle covers, so an over-range origin is harmless.
+    setMarquee({
+      startX: x, startY: y, currX: x, currY: y,
+      clientStartX: clientX, clientStartY: clientY,
+      shift: shiftKey, pointerId, target: svg, movedPastSlop: false,
+    });
+  };
+  useImperativeHandle(marqueeRef, () => ({ startMarquee }));
+
   const onCanvasPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
     if (!focusEnabled) return;
     if (event.button !== 0) return;
@@ -1586,6 +1631,14 @@ function MultiChannelCurves({
       onClick={focusEnabled ? (e) => {
         if (e.target !== e.currentTarget) return;
         if (insertMode) return;
+        // A gutter-initiated marquee captures THIS svg, so the synthetic
+        // trailing click after the drag lands here (not on the backdrop).
+        // Honour the marquee's click-suppression flag — otherwise the click
+        // clears the selection the marquee just made (mirrors the backdrop).
+        if (marqueeConsumedClickRef.current) {
+          marqueeConsumedClickRef.current = false;
+          return;
+        }
         if (dragConsumedClickRef.current) {
           dragConsumedClickRef.current = false;
           return;

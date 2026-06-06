@@ -48,12 +48,20 @@ user at phase boundaries.
     `applyGroupShift`. Committed the `fround`ed engineTime so moved keys keep their
     selected highlight (float-precision drift fix). Live-verified: 30/60 → 40/70 as a
     group, borders fixed, selection persists. Build clean; 428 tests.
-  - **#2 marquee-from-axis-margin (user request): DEFERRED.** The plot SVG occupies
-    only the center grid cell of `CanvasWithAxisLabels`; the axis margins (36px Y-label
-    col, 22px X-label row) are outside the interactive SVG. Starting a marquee there
-    needs the curve canvas's coordinate/layout system reworked to fold the margins into
-    the SVG (e.g. a margin-inclusive viewBox) — a larger, riskier change to do
-    carefully on its own, not alongside the bug fix.
+  - **#2 marquee-from-axis-margin (user request): ✅ DONE.** A marquee can now START
+    from the axis-label gutters. The "margin-inclusive viewBox" rework was NOT needed —
+    that concern was about the single-track branch (`preserveAspectRatio="none"`); the
+    app renders **`MultiChannelCurves`**, which already uses a CSS-pixel-measured viewBox
+    and pointer capture. Fix = additive: a `startMarquee` imperative handle on
+    `MultiChannelCurves` (exposed via a `marqueeRef` prop, threaded through `CurveEditor`),
+    invoked from a new `onGutterPointerDown` on `CanvasWithAxisLabels` (fires when a
+    primary press lands outside `[data-testid="curve-editor-svg"]`). `startMarquee` maps +
+    maps the client point to the plot viewBox (kept UN-clamped so the rect begins at the
+    press point in the margin, not snapped to the grid), seeds the marquee, and `setPointerCapture`s
+    the SVG so the EXISTING (unchanged) move/up/Esc machinery drives the rest — no handler
+    rewrite. Tests: +2 CurveEditor (gutter start + clamp) +3 CanvasWithAxisLabels (routing);
+    live-verified (Y-gutter → 4/4 keys, X-gutter start, Esc-cancel). Single-track branch
+    untouched.
   - **CRV-2/7/8 ✅ DONE (session 14, `e5bd7e3`).** Key Copy/Cut/Paste (Ctrl+C/X/V via a
     new in-app `lib/curve-key-clipboard.ts`; window-scoped with TYPING_TAGS + emitter-tree
     origin guards); right-click empty canvas clears selection in Select mode / drops to
@@ -289,5 +297,5 @@ Handoff: HANDOFF.md (session 13) + next-session-prompt.md refreshed + L-057 adde
 
 **Remaining queue:** P6-rest (CRV-2 copy/paste, CRV-7 right-click deselect, CRV-8 decimal
 time) · P7 link-groups (LNK-1/2/6/8/10) · P8 color/texture (PAL-2/3/14) · deferred
-(curve marquee-from-margins; SEL-12/13 ✅ done) · native track
+(curve marquee-from-margins ✅ done; SEL-12/13 ✅ done) · native track
 (VPT-2 undo capture-wiring, VPT-3 autosave). Full catalog: ui-delta-report.md.
