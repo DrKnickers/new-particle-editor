@@ -59,10 +59,30 @@ running the native harness after any web change. Full text: `tasks/lessons.md` L
   re-run, L-066).
 - **Drag/pointer features:** verify with Playwright real input, NOT `preview_eval` (L-067).
 
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-DComp
+> particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 20), `tasks/lessons.md`
+> (esp. **L-068** — `a11y:update --rebuild` rebuilds dist only on a hosting-MODE mismatch, NOT on source
+> change, so `pnpm build` BEFORE the native harness after any web edit; **L-067** — synthetic events can't
+> validate pointer-capture/drag, use Playwright real input; **L-022** — handoff/report claims drift, verify
+> against code; L-039/L-046/L-040 native-lane restore; L-066 native phantom-crash re-run), `tasks/fix-plan.md`,
+> `tasks/ui-delta-report.md` (the STATUS banner atop it is the authoritative open-items list — most findings
+> shipped). **VERIFY claims against the actual code before acting** (docs drift here). Pre-flight:
+> `git fetch origin lt-4`; confirm `origin/lt-4` = `d7d78f1` or newer, 0/0, clean; from `web/` `pnpm install`
+> if `node_modules` absent, then `pnpm --filter @particle-editor/editor test` → **500**, `tsc --noEmit` 0.
+> **Shipped session 20 (FF-pushed):** a doc drift-audit + reconcile (`489c10c`) and VPT-6/7/8 status-bar
+> parity — shift-to-spawn hint + PAUSED indicator + 2dp cursor (`d7d78f1`). Native lane restored in this
+> worktree (a FRESH worktree needs it again: L-039 NuGet copy + L-046 MSBuild Debug x64 + L-040 `pnpm build`);
+> `pnpm test:native` → **168/0**. For any drag / pointer-capture feature verify with Playwright real input
+> (L-067); after any web change `pnpm build` before the native harness (L-068). Default next task: pick WITH
+> the user from MNU-12 (Import "Clear" button, web) / SEL-5+MNU-4 Paste-As-Child (needs a host
+> paste-into-slot command, native lane) / remaining native parity / wrap. Summarize your understanding +
+> confirm scope before changing anything.
+
 ### Kickoff (short)
 > Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 20) + `tasks/lessons.md` (esp.
 > **L-068** dist-rebuild gotcha, L-067 synthetic-drag, L-022 doc-drift). VERIFY against code. Pre-flight:
-> `origin/lt-4` = `d7d78f1`, 0/0, clean; `pnpm --filter @particle-editor/editor test` → **500**, tsc 0.
+> `origin/lt-4` = `d7d78f1` or newer, 0/0, clean; `pnpm --filter @particle-editor/editor test` → **500**, tsc 0.
 > Session 20 shipped a doc drift-audit (`489c10c`) + VPT-6/7/8 status-bar parity (`d7d78f1`). Native lane
 > restored; harness **168/0**. **After any web change, `pnpm build` before the native harness (L-068).**
 > Pick next WITH the user: MNU-12 / Paste-As-Child / native parity / wrap.
