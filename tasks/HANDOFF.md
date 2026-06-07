@@ -1,5 +1,79 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-07 (session 21) — **MNU-12 Import dialog "Clear" button shipped (`f5f265d`)**. NEXT: SEL-5/MNU-4 Paste-As-Child (native lane) / remaining native parity / wrap
+
+**`origin/lt-4` = `0e462e6` at session start (== HEAD, 0/0, clean).** This session's
+commit `f5f265d` is on `claude/flamboyant-zhukovsky-38a3ff`, **NOT yet FF-pushed**
+to `lt-4` (awaiting user OK — see below). **No `master` changes.** Web vitest
+**502 / 0** (was 500; +2 ImportEmittersDialog); `tsc --noEmit` 0. Native harness
+**168 / 0**. **Native lane restored this session** in this fresh worktree (L-039
+NuGet copy → `packages/`, L-046 MSBuild **VS18** Debug x64 → `x64\Debug\ParticleEditor.exe`,
+L-040 `pnpm build` → `dist/`).
+
+### The commit
+- `f5f265d` **feat(new-ui)** — MNU-12. "Clear" button added to the Import Emitters
+  dialog footer, right of "Select All" (legacy `IDC_IMPORT_CLEAR` order,
+  `main.cpp:7326`; `ParticleEditor.en.rc` "Select all" x=170 / "Clear" x=226).
+  `handleClear = () => setPicks(new Set())` mirrors `handleSelectAll`
+  ([ImportEmittersDialog.tsx:132](web/apps/editor/src/screens/ImportEmittersDialog.tsx)).
+  `disabled={picks.size === 0}` (user OK'd disabling-when-empty over legacy's
+  always-enabled). `mr-auto` moved from Select All → Clear to keep the pair
+  grouped left. TDD +2 tests; **live-verified** footer order/geometry in preview;
+  a11y golden re-baseline = **1 surgical line** (`dialog-import-emitters.composition.golden.yaml`
+  gains `button "Clear selection" [disabled]: Clear`; YAML goldens don't capture
+  className → no spurious diff from the `mr-auto` move).
+
+### ⚠️ Read first — L-046 addendum (this session's small friction)
+MSBuild on this box is under **VS "18" Community**:
+`C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+`vswhere -find MSBuild\**\Bin\MSBuild.exe` returned **empty** — use `vswhere -all
+-property installationPath` to get the `…\18\Community` root instead. Full text: L-046 addendum.
+
+### Verification this session
+- vitest **502/0**; `tsc --noEmit` 0.
+- **Live (preview, MockBridge):** footer DOM order + pixel x-edges `Select All
+  (117) │ Clear (204) … Cancel (588) │ Import (661)`; `mr-auto` → 319px on Clear;
+  both selection buttons disabled on the empty (no-tree) state; screenshot captured.
+  (Enable-on-selection + clear-on-click are jsdom-unit-proven — MockBridge can't
+  load a preview tree.)
+- **Native harness 168/0** (true comparison after `a11y:update`); golden diff
+  reviewed — single file, single added node (L-053 shared-cause trivially satisfied).
+- L-068 guard honoured: `pnpm build` + `grep "Clear selection" dist/assets/*.js` → 1
+  BEFORE the harness.
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **FIRST: FF-push `f5f265d` → `lt-4`** (pending OK; standard end-of-session flow).
+2. **SEL-5 / MNU-4 Paste-As-Child** — "Paste As ▸ Child" needs a NEW host
+   paste-into-slot command (`emitters/paste` splices at root only). Native-lane
+   work; scope it first. Now the largest genuinely-open item.
+3. **Native-parity items** — pick from `tasks/ui-delta-report.md` (most shipped —
+   see the STATUS banner; few remain).
+4. **Wrap** — the open-items list is down to Paste-As-Child + the deferred VPT-2
+   per-tick undo follow-up.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `0e462e6` or newer; if `f5f265d`
+  was FF-pushed, expect that. Lineage 0/0, clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter
+  @particle-editor/editor test` → **502**; `tsc --noEmit` 0.
+- native: lane restored in THIS worktree, but a FRESH worktree needs it again
+  (L-039 NuGet copy + L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`).
+  **After any web change, `pnpm build` before the harness (L-068).** `pnpm
+  test:native` → **168/0** (exit 2 + FATAL banner = environmental, re-run, L-066).
+- **Drag/pointer features:** verify with Playwright real input, NOT `preview_eval` (L-067).
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 21) +
+> `tasks/lessons.md` (esp. **L-068** dist-rebuild gotcha, L-067 synthetic-drag, L-046
+> MSBuild-on-VS18, L-022 doc-drift). VERIFY against code. Pre-flight: `origin/lt-4` =
+> `f5f265d` or newer (or `0e462e6` if MNU-12 not yet FF-pushed), 0/0, clean; `pnpm
+> --filter @particle-editor/editor test` → **502**, tsc 0. Session 21 shipped MNU-12
+> Import "Clear" button (`f5f265d`). Native lane restored; harness **168/0**. **After
+> any web change, `pnpm build` before the native harness (L-068).** Pick next WITH the
+> user: FF-push MNU-12 if pending / Paste-As-Child / native parity / wrap.
+
+---
+
 ## 2026-06-06 (session 20) — **Doc drift-audit + reconcile (`489c10c`) + VPT-6/7/8 status-bar parity shipped (`d7d78f1`)**. NEXT: remaining small items (MNU-12 / Paste-As-Child) / native parity / wrap
 
 **`origin/lt-4` = `d7d78f1`** (was `f3b2284` at session start; **2 commits**, FF-pushed). Tree clean
