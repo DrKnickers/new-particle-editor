@@ -218,8 +218,13 @@ labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-de
   >1 is legit super-elastic + round-trip on edit); stale curve y-range comment fixed
   (CRV-14). **Kept** weather/tail `min=0` (PRM-10) — negative cube/tail is meaningless,
   legacy's allowance was incidental, load still preserves; removing gives no benefit.
-  Remaining P3 (status bar VPT-6/7/8, Import "Clear" MNU-12) touch a11y goldens →
-  batched with P4.
+- **P3 (golden-touching) ✅ DONE** — status bar VPT-6/7/8 (shift hint + PAUSED +
+  2dp cursor, session 20) and the Import dialog **"Clear" button (MNU-12)**,
+  session 21: a `handleClear = () => setPicks(new Set())` mirror of Select All,
+  placed right of it (legacy `IDC_IMPORT_CLEAR`, `main.cpp:7326`), disabled when
+  the selection is empty. 2 new tests (suite 502); surgical single-line golden
+  delta (`dialog-import-emitters.composition.golden.yaml` gains the Clear node);
+  native harness 168/0; footer layout pixel-verified in preview.
 - **P4a ✅ DONE** (global accelerators — MNU-2, VPT-1, SEL-14). New
   `lib/use-app-accelerators.ts` wires every legacy accelerator to its existing
   action: file (Ctrl+N/O/S), clear (Ctrl+Del), undo/redo (Ctrl+Z / **Ctrl+Y** /

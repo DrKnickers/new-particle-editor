@@ -3191,6 +3191,17 @@ Always run MSBuild via the **PowerShell** tool with the `&` call operator
 switches pass verbatim. Cross-reference [L-039](#l-039) (fresh-worktree NuGet
 restore) and [L-040](#l-040) (dist build before `--new-ui`).
 
+**Finding MSBuild on this box (2026-06-07 addendum).** This machine has **VS 2022
+"version 18" Community** at `C:\Program Files\Microsoft Visual Studio\18\Community\`
+— so the MSBuild path is
+`C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+`vswhere -find MSBuild\**\Bin\MSBuild.exe` returned **empty** here (don't trust it),
+and the usual `…\2022\…` / `…\2019\…` guesses miss the `18\` folder. The reliable
+locator: `vswhere -all -property installationPath` (gives the `…\18\Community` root),
+then `MSBuild\Current\Bin\MSBuild.exe` under it. The Debug-x64 build of
+`ParticleEditor.sln` completes in ~45 s clean (only the pre-existing expat C4244 +
+LNK4098 LIBCMTD warnings).
+
 ## L-047 — When verifying a CSS layout reorder, measure BOTH axes (a child can be horizontally correct but wrapped onto a new row); and beware CSS-Grid sparse auto-placement bumping a definite-column item to the next row
 
 **Rule.** A "move element X next to element Y" reorder is only verified when you've

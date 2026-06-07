@@ -7,5 +7,6 @@
   - checkbox "Auto-include children" [checked]
   - text: Auto-include children
   - button "Select all emitters" [disabled]: Select All
+  - button "Clear selection" [disabled]: Clear
   - button "Cancel"
   - button "Import" [disabled]

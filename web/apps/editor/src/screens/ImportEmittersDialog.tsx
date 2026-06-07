@@ -130,6 +130,8 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
   };
 
   const handleSelectAll = () => setPicks(new Set(allIds));
+  // Legacy IDC_IMPORT_CLEAR (main.cpp:7326): deselect every node.
+  const handleClear = () => setPicks(new Set());
 
   const handleOk = async () => {
     if (!sourcePath || picks.size === 0) return;
@@ -242,9 +244,18 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
           onClick={handleSelectAll}
           disabled={!tree || allIds.length === 0}
           aria-label="Select all emitters"
-          className="mr-auto rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
           Select All
+        </button>
+        <button
+          type="button"
+          onClick={handleClear}
+          disabled={picks.size === 0}
+          aria-label="Clear selection"
+          className="mr-auto rounded border border-border-2 bg-panel-2 px-3 py-1 text-xs text-text hover:bg-panel-3 outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Clear
         </button>
         <Modal.CancelButton>Cancel</Modal.CancelButton>
         <Modal.OkButton

@@ -16,6 +16,36 @@ Conventions:
 
 ## Changelog
 
+### Import Emitters dialog "Clear" button (new-UI · MNU-12)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The new-UI **Import Emitters** dialog regains the legacy **"Clear"** button. Legacy ships two
+selection buttons in that dialog's footer — "Select all" and "Clear" — but the React port had only
+"Select All". "Clear" sits immediately to its right and deselects every emitter in one click (the
+inverse of Select All), so you can drop a full multi-select and re-pick without unticking nodes one
+at a time. It's disabled while nothing is selected — matching how the dialog already greys "Select
+All" on an empty tree and "Import" on an empty selection.
+
+**How tackled.** A two-line change in
+[`ImportEmittersDialog.tsx`](web/apps/editor/src/screens/ImportEmittersDialog.tsx:132):
+`handleClear = () => setPicks(new Set())` mirrors the existing `handleSelectAll`, reproducing legacy
+`IDC_IMPORT_CLEAR` → `SetCheckRecursive(…, FALSE)` ([`main.cpp`](src/main.cpp:7326)). Footer layout
+keeps both selection buttons grouped at the left by moving the `mr-auto` flex spacer from "Select
+All" onto the new "Clear" — so the row reads `Select All │ Clear … Cancel │ Import`, the legacy
+left-to-right order (`Select all` x=170, `Clear` x=226 in `ParticleEditor.en.rc`).
+
+**Issues encountered and resolutions.** The one a11y composition golden that captures this dialog
+(`dialog-import-emitters.composition.golden.yaml`) had to be re-baselined — it gains exactly one
+node, `button "Clear selection" [disabled]: Clear`, inserted after "Select all emitters". The YAML
+goldens key on role + accessible name + state (not `className`), so dropping `mr-auto` from Select
+All produced no spurious diff. Regenerating required restoring the native lane in a fresh worktree
+(L-039 NuGet copy + L-046 MSBuild Debug x64 + L-040 dist build) and rebuilding `dist` before the
+harness so it served the new bundle rather than a stale one (L-068). Suite 502 web tests; native
+harness 168/0.
+
+---
+
 ### Status-bar parity: shift-to-spawn hint, PAUSED indicator, 2dp cursor (new-UI)
 
 *2026-06-06 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
