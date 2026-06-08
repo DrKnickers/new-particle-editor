@@ -17,7 +17,7 @@ Spec: [`docs/superpowers/specs/2026-06-08-ui-polish-batch-design.md`](../specs/2
 | File | Responsibility | Tasks |
 |---|---|---|
 | `web/apps/editor/src/screens/EmitterPropertyTabs.tsx` | inspector tabs — drop Physics double-pad | 1 |
-| `web/apps/editor/src/styles/components.css` | `.tree-actions` padding; unify `.form-row` spinner column | 2, 3 |
+| `web/apps/editor/src/styles/components.css` | `.toolbar` vertical padding; unify `.form-row` spinner column | 2, 3 |
 | `web/apps/editor/src/components/CurveEditorPanel.tsx` | widen Time/Value spinner cells | 3 |
 | `web/apps/editor/src/screens/CurveEditor.tsx` | curve key drop-shadow (replace black outline) | 4 |
 | `web/apps/editor/src/screens/EmitterTree.tsx` | row density + `ROW_HEIGHT_PX` | 5 |
@@ -85,30 +85,47 @@ git commit -m "fix(inspector): remove Physics tab double-padding (match Basic/Ap
 
 ---
 
-## Task 2: Emitter-tree toolbar vertical padding
+## Task 2: Main toolbar vertical padding (breathing room above the viewport)
 
-> **Check-in item — resolve the element first.** The obvious target, `.tree-actions` ([components.css:419](web/apps/editor/src/styles/components.css:419)), *already* has `padding: 4px 8px`. So either (a) the user means a different bar, or (b) they want the 4px changed. Confirm against the running UI before editing (a screenshot at the pre-execution check-in settles it).
+> **Resolved (user, 2026-06-08):** the target is the **main toolbar directly above the preview viewport** (`.toolbar`), NOT the emitter-tree button row. The problem: a pressed/active toolbar button (`.tb-btn[aria-pressed="true"]`, filled `accent-soft`) sits flush against the viewport pixels — the toolbar's current `padding: 1px 8px` leaves only ~2px (1px pad + 1px `border-bottom`) between the colored button and the viewport, which reads as jarring.
 
 **Files:**
-- Modify: `web/apps/editor/src/styles/components.css` (the confirmed toolbar rule)
+- Modify: `web/apps/editor/src/styles/components.css:121-124` (`.toolbar` padding)
 
-- [ ] **Step 1: Identify the exact element in the preview**
+- [ ] **Step 1: Increase the toolbar's vertical padding**
 
-Start the dev preview, locate the toolbar directly above the emitter list, read its computed top/bottom padding. Confirm whether it's `.tree-actions` (already 4px) or another element with 0 vertical padding. Record the selector + current padding.
+The current rule ([components.css:121](web/apps/editor/src/styles/components.css:121)):
+```css
+.toolbar {
+  display: flex;
+  align-items: center;
+  padding: 1px 8px;
+  …
+}
+```
+Bump the vertical padding so pressed buttons clear the viewport (and, symmetrically, the menu bar above). Start at `4px` and tune visually with the user:
+```css
+  padding: 4px 8px;
+```
+(The horizontal 8px stays.)
 
-- [ ] **Step 2: Apply the padding**
+- [ ] **Step 2: Note the viewport-offset coupling**
 
-If `.tree-actions` is the target and the user wants it tighter/looser, set its `padding` to the agreed value (e.g. `padding: 1px 8px;`). If a different element, add `padding-top: 1px; padding-bottom: 1px;` to that rule. (Exact value confirmed with the user; "1px first.")
+The arch-C composition viewport is positioned from the React layout's reported rect, so a taller toolbar shifts the viewport down automatically (the layout re-reports `SetSceneViewport`). No manual host math to change — but this is why the change must be verified against the native harness + the user's eye, not just vitest.
 
-- [ ] **Step 3: Verify + screenshot**
+- [ ] **Step 3: Rebuild dist + run the native harness**
 
-Run: `pnpm --filter @particle-editor/editor test` (expect green — CSS only). Capture a before/after screenshot of the toolbar for the user.
+Run: `pnpm --filter @particle-editor/editor build` then `pnpm --filter @particle-editor/editor test:native`. Expect green (padding doesn't change the a11y tree). If any viewport-rect/splitter spec asserts a pixel offset that moved, confirm it's the expected toolbar-height shift and update if it's a hardcoded expectation.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Screenshot the fix**
+
+Start the preview, activate a toggle button (e.g. Spawner — `aria-pressed="true"`), and screenshot to confirm the colored button now has clear breathing room above the viewport. Tune the px value with the user if 4px is too much/little.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add web/apps/editor/src/styles/components.css
-git commit -m "style(emitter-tree): adjust toolbar vertical padding"
+git commit -m "style(toolbar): add vertical padding so pressed buttons clear the viewport"
 ```
 
 ---

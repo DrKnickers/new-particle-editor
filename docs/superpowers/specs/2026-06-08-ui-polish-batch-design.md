@@ -27,11 +27,16 @@ alone). **Fix:** delete `p-3` from the Physics `Tabs.Content`; update the now-
 stale comment at lines 274–278 (it claims Physics "keeps p-3 until B2 wires it
 through .inspector" — already done).
 
-**(4) Emitter-tree toolbar vertical padding.**
-The toolbar above the emitter list (`.tree-actions`, used by `EmitterTreeToolbar`
-in EmitterTree.tsx) has no top/bottom padding. **Fix:** add `padding-top: 1px;
-padding-bottom: 1px;` to `.tree-actions` in components.css. Start at 1px; tune
-visually with the user.
+**(4) Main toolbar vertical padding (breathing room above the viewport).**
+*(User-clarified: the main toolbar above the preview viewport, `.toolbar` —
+NOT the emitter-tree button row.)* A pressed/active toolbar button
+(`.tb-btn[aria-pressed="true"]`, filled `accent-soft`) sits flush against the
+viewport: `.toolbar` has only `padding: 1px 8px` ([components.css:121](../../../web/apps/editor/src/styles/components.css:121)),
+leaving ~2px (1px pad + 1px border) between the colored button and the viewport
+pixels. **Fix:** bump `.toolbar` vertical padding (start ~4px, tune visually).
+Note: a taller toolbar shifts the arch-C viewport down via the layout's
+reported rect — verify against the native harness + the user's eye, not just
+vitest.
 
 ### Group B — curve editor
 
