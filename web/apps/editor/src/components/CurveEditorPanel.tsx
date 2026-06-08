@@ -90,8 +90,9 @@ export const CHANNELS: readonly ChannelDef[] = [
 // Channels that are mutually exclusive with all others: turning one on
 // (via row click or checkbox) hides every other channel ("solo mode"),
 // and selecting any non-exclusive curve exits solo. F9 added Index to
-// the set that previously held only Scale.
-const EXCLUSIVE_CHANNELS: ReadonlySet<string> = new Set(["scale", "index"]);
+// the set that previously held only Scale; Rotation joined later (its
+// degrees/sec scale, like Index and Scale, doesn't share the 0..1 band).
+const EXCLUSIVE_CHANNELS: ReadonlySet<string> = new Set(["scale", "index", "rotation"]);
 
 /** DOM tag names that own their own keyboard handling. Delete events
  *  originating inside these MUST NOT be intercepted — typing Delete in

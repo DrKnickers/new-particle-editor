@@ -333,6 +333,65 @@ describe("CurveEditorPanel", () => {
     ).toBe(true);
   });
 
+  // Rotation is exclusive too (matches Index/Scale).
+  it("enabling Rotation via its checkbox hides every other channel (rotation-exclusive)", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("curve-channel-checkbox-rotation"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-rotation") as HTMLInputElement).checked,
+    ).toBe(true);
+    for (const id of ["red", "green", "blue", "alpha", "scale", "index"]) {
+      expect(
+        (screen.getByTestId(`curve-channel-checkbox-${id}`) as HTMLInputElement).checked,
+      ).toBe(false);
+    }
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-rotation")).toBeInTheDocument();
+    });
+  });
+
+  it("clicking Rotation while Index is solo swaps solo to Rotation", () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    fireEvent.click(screen.getByTestId("curve-channel-row-index"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("curve-channel-row-rotation"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-rotation") as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-index") as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      screen.getByTestId("curve-editor-panel").dataset.focusChannel,
+    ).toBe("rotation");
+  });
+
+  it("clicking a non-Rotation row while Rotation is solo exits solo", async () => {
+    const { bridge } = makeStubBridge(0);
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("curve-channel-row-rotation"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-rotation") as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-rotation") as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (screen.getByTestId("curve-channel-checkbox-green") as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
   // ── Hybrid focus-channel restoration ─────────────────────────────
 
   describe("focus channel", () => {
