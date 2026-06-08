@@ -1,5 +1,129 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-08 (session 26) — **`lt-4 → master` integration COMPLETE (new-UI-default LIVE on `master`) + UI-polish batch (7 items) + recovery-modal fix + a pre-existing `xtree:181` link-group crash root-caused & fixed. Polish/crash work is PR [#94](https://github.com/DrKnickers/new-particle-editor/pull/94) (OPEN into `master`, MERGEABLE, CI running — NOT merged).** NEXT: continue UI polish
+
+**`origin/master` = `e902344`** (the integration end-state). Working branch
+**`claude/ui-polish-batch` = `8094b5a`** (tree clean, pushed); **PR #94** open into
+`master` (MERGEABLE; `lt-4.yml` x64+web CI running). **`master` is the trunk now —
+`lt-4` is RETIRED** (CLAUDE.md "Branch workflow" rewritten this session). Web vitest
+**514/0**; `tsc -b` 0; native harness **174/0** (run twice post-changes); host Debug x64
+clean. Native lane restored in THIS worktree; a FRESH worktree needs L-039 (NuGet copy)
++ L-046 (MSBuild **VS18** Debug x64) + L-040 (`pnpm build`).
+
+### Part A — `lt-4 → master` integration (steps 2–4 of the proposal) — DONE, on `master`
+- **Step 2 default-flip** (`cf59ce7`): `src/main.cpp` arg block — x64-gated `bool newUi = true`
+  (`#ifdef _WIN64`) + net-new `--legacy` (alias `--legacy-ui`) opt-out; x86 stays legacy
+  (the `#else` dispatch hard-returns). `--new-ui` is now a no-op.
+- **Step 3 scaffolding** (`cf59ce7`): `CONTRIBUTING.md` / `SECURITY.md` /
+  `.github/ISSUE_TEMPLATE/bug_report.md` / `DEVELOPMENT_LOG.md` ported byte-identical from
+  master; "Forked from Mike.NL's GlyphX Particle Editor v1.5" added to `AboutDialog.tsx`.
+- **Step 4 supersede** : `git merge -s ours master` (`b5915a8`) → **PR #92** merged to master
+  (`f05fa36`) → post-merge backfill **PR #93** (`e902344`, CHANGELOG/ROADMAP hashes →
+  `f05fa36`/#92, NT-5/NT-6 marked master-shipped). `lt-4` + two stale `claude/*` remote
+  branches retired. **Memory updated: MT-13 (legacy/arch-A removal) is now GREENLIT** (user
+  decided to remove legacy, not keep it as a permanent opt-out — sequenced AFTER this merge).
+
+### Part B — UI-polish batch (PR #94, branched off `master`) — user-validated in the host
+Spec: [`docs/superpowers/specs/2026-06-08-ui-polish-batch-design.md`](../docs/superpowers/specs/2026-06-08-ui-polish-batch-design.md);
+plan: [`docs/superpowers/plans/2026-06-08-ui-polish-batch.md`](../docs/superpowers/plans/2026-06-08-ui-polish-batch.md).
+Seven items + the recovery modal, all committed + verified (web 514, native 174/0) + the
+user confirmed the visuals in the real host:
+- **T1** `56ce63d` Physics tab padding (removed stale `p-3` double-pad).
+- **T2+T3a** `88ebd9d` `.toolbar` vertical padding 1px→4px (pressed buttons clear the
+  viewport) + `.form-row` spinner column unified 58→73px (stop 2-decimal clipping).
+- **T3b** `34d8245` curve Time/Value spinner cells widened (`w-16`→84px).
+- **T4** `28b2322` curve keys: CSS `.curve-key-marker { filter: drop-shadow(0 1px 1.2px rgba(0,0,0,.5)) }`
+  + stroke `none` (replaces the black `#0a0a0a` outline) at both interactive `<circle>` sites
+  in `CurveEditor.tsx`.
+- **T5** `284f04a` emitter-list density: row `py-1`→`py-0.5` + `ROW_HEIGHT_PX 24→20`
+  (kept in lockstep so the link-group bracket gutter stays aligned).
+- **T6** `cb3e01d` + `19698b1` Edit → Preferences… modal with 3-way Dark/Light/System theme
+  (`lib/theme.ts` + `PreferencesDialog.tsx`); ThemeToggle removed from the toolbar; 19 chrome
+  a11y goldens rebaselined (every composition snapshot includes the toolbar) + `toolbar.spec`
+  assertion updated.
+- **T7** `df8efb9` `file/open` host handler (`BridgeDispatcher.cpp:1986`) defaults to the
+  selected mod's `Data\Art\Models`, gated on `filterId.empty()` (so skydome/ground TEXTURE
+  variants are untouched; covers Import, which reuses `file/open`). Pattern mirrors the
+  existing `textures/browse` default. **Texture Browse dialog deliberately unchanged.**
+- **Recovery modal** `580b696` `AutosaveRecoveryDialog` size `sm`→`md` + `break-all` on the
+  path (was clipping long mod paths into a horizontal scrollbar).
+
+### Part C — `xtree:181` link-group crash (pre-existing engine bug) — root-caused & fixed (`5853491`)
+**Symptom:** Ctrl+scroll **Burst delay** on a member of a link group (with live particles)
+→ Debug assert *"cannot dereference value-initialized map/set iterator"* (`xtree:181`).
+**Root cause (proven):** `BridgeDispatcher::propagateLinkGroup` → `copySharedParamsFrom`
+reassigns each sibling's track multisets → orphans their live particles' cached cursor
+iterators; it then calls `Engine::OnParticleSystemChanged(-1)` to reseat them — **but the
+`-1` branch of `EmitterInstance::onParticleSystemChanged` only recomputed
+composites/textures/blend; the cursor reseat lived solely in the per-track (`track >= 0`)
+branch.** So the orphaned cursors stayed singular → next `Engine::Update` derefs → assert.
+The L-059 mitigation had relied on `-1` reseating cursors, which it never did.
+**Fix:** run the cursor reseat for BOTH branches — `track == -1` now reseats EVERY track
+(a `track != -1` guard also short-circuits the otherwise OOB `tracks[-1]` read). Verified by
+the user's deterministic repro (no longer crashes) + native harness 174/0. **L-059 addendum
+added** documenting the contract gap (`tasks/lessons.md`).
+
+### NEXT — continue UI polish (the user's stated direction)
+1. **Merge PR #94** once CI is green (master gate — needs explicit user OK). Then **backfill**
+   the two provisional CHANGELOG date-lines (`TODO` hash → the #94 merge-commit hash; PR # is
+   already `#94`).
+2. **More UI polish** — open-ended (the user is doing a polish pass on the now-default new UI).
+   Candidate areas to ask about: continued visual-consistency / motion / theming sweeps (the
+   three broader passes from the original brainstorm), and any new gripes from daily use. Tune
+   values with the user in the real host (L-033) — current values are starting points
+   (toolbar 4px, shadow `0 1px 1.2px/.5`, density `py-0.5`/20px, modal `md`).
+3. **MT-13 (legacy/arch-A removal)** is greenlit but is its OWN ★★★★+ effort (touches the
+   legacy WNDCLASS, `RenderWindowProc`, `.rc` resources, the `--legacy` flag, x86 build) —
+   plan it separately, not folded into polish.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin master`; `origin/master` = `e902344` or newer; **master is the trunk**
+  (branch fresh work off master). PR #94 may be merged by next session — check
+  `gh pr view 94`.
+- web: from `web/`, `pnpm install` if `node_modules` absent (install from **`web/`**, not
+  per-app); `pnpm --filter @particle-editor/editor test` → **514**; **`tsc -b`** (NOT
+  `--noEmit` — L-070) → 0.
+- native: lane restored here; FRESH worktree needs L-039 + L-046 (**VS18**) + L-040. After any
+  web change, `pnpm build` before the harness (L-068). `pnpm --filter @particle-editor/editor
+  test:native` → **174/0** (exit-1 + "browser closed" first run can be an L-066/L-071 phantom —
+  re-run). Browser-mode preview for visuals: `preview_start "editor"` then **hide the arch-C
+  `<canvas>`** (`document.querySelectorAll('canvas').forEach(c=>c.style.visibility='hidden')`)
+  or screenshots time out; Radix menubar needs a **real** click (`preview_click #radix-id`),
+  not a synthetic `.click()`.
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-
+> DComp particle editor for SW:EaW). **`master` is the trunk now** (the `lt-4 → master`
+> integration completed in session 26: new-UI is the x64 DEFAULT, `--legacy`/`--legacy-ui` opts
+> out; `lt-4` is retired). Read `tasks/HANDOFF.md` top (session 26) and the UI-polish spec/plan
+> in `docs/superpowers/`. Read `tasks/lessons.md` (esp. **L-022** trust-but-verify code over
+> comments; **L-033** arch-C visuals need the user's eye / agent-launched native misrenders;
+> **L-059 + its 2026-06-08 addendum** the track-cursor-reseat invariant and the
+> `OnParticleSystemChanged(-1)`-was-a-no-op gap; **L-070** `tsc -b` is the type gate; **L-068**
+> `pnpm build` before the native harness; **L-066/L-071** native phantom re-run; **L-046**
+> MSBuild **VS18**; **L-039/L-040** fresh-worktree restore). **VERIFY claims against actual
+> code.** Pre-flight: `git fetch origin master`; from `web/` `pnpm install` if needed, then
+> `pnpm --filter @particle-editor/editor test` → **514**, `tsc -b` 0; native **174/0** (fresh
+> worktree needs L-039/L-046/L-040). Check `gh pr view 94` — if still open + CI green, merging
+> it (with user OK) is the first step, then backfill the two CHANGELOG `TODO` merge-hashes.
+> Session 26 shipped the lt-4→master integration, a 7-item UI-polish batch + recovery-modal fix
+> (PR #94), and fixed a pre-existing `xtree:181` link-group-edit crash (the `-1` cursor-reseat
+> gap). NEXT: **continue UI polish** (open-ended — brainstorm the next items WITH the user;
+> tune values in the real host). MT-13 (legacy removal) is greenlit but is its own effort.
+> Summarize your understanding + confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor. **`master` is the trunk** (lt-4 retired; new-UI is the x64
+> default). Read `tasks/HANDOFF.md` top (session 26) + the UI-polish spec/plan in
+> `docs/superpowers/`. VERIFY against code (L-022). Pre-flight: `git fetch origin master`;
+> `pnpm --filter @particle-editor/editor test` → **514**, `tsc -b` 0; native **174/0** (fresh
+> worktree needs L-039/L-046/L-040; install pnpm from `web/`). PR **#94** (UI polish + an
+> `xtree:181` link-group crash fix) is OPEN into master — merge it (user OK + CI green) +
+> backfill its CHANGELOG `TODO` hashes, then **continue UI polish** with the user (tune values
+> in the real host, L-033). MT-13 (legacy removal) greenlit but separate.
+
+---
+
 ## 2026-06-08 (session 25) — **VPT-2 undo coalescing SHIPPED (last parity item) + stray lockfile fixed + `lt-4 → master` GREENLIT as new-UI-DEFAULT (arch-C now trusted) + audit-P2 F12–F16 ported (integration step 1/4). FF-pushed, `origin/lt-4 = f6ba926`.** NEXT: integration steps 2–4 (default-flip → scaffolding docs → `merge -s ours` + PR)
 
 **`origin/lt-4` = `f6ba926`** (HEAD == origin, 0/0, tree clean). **No `master`
