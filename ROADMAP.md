@@ -30,16 +30,17 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-### 1.1 [NT-5] ~~Engine-side single-member link-group enforcement~~ ✅ Shipped on lt-4 (`5d4a9ba`, 2026-05-25)
+### 1.1 [NT-5] ~~Engine-side single-member link-group enforcement~~ ✅ Shipped (#92)
 
 > **Shipped on `lt-4`** — `BridgeDispatcher::EnforceSingleMemberLinkGroups()`
 > ([src/host/BridgeDispatcher.cpp:4305](src/host/BridgeDispatcher.cpp:4305)) wired into
 > `emitters/delete`, `linkGroups/set-membership`, and file-open bind; contract test at
 > `emitter-mutations.spec.ts` ("NT-5: leaving a 2-member link group demotes the
-> survivor"). Left in §1 with a strikethrough rather than moved to §5 because §5 tracks
-> *master*-landed items and this is lt-4-only; it takes its §5 slot at the LT-4→master
-> integration (same as the [MT-11]/[MT-12] lt-4 entries already shown in §5 with
-> `#TODO`). The `[NT-5]` tag is retired.
+> survivor"). Developed on `lt-4` (`5d4a9ba`, 2026-05-25); landed on `master`
+> via the LT-4→master supersede (PR [#92](https://github.com/DrKnickers/new-particle-editor/pull/92),
+> `f05fa36`). Still shown in §1 with a strikethrough; physically relocating it
+> (and NT-6) into §5 is a deferred cosmetic ROADMAP tidy — the position numbers
+> are purely visual. The `[NT-5]` tag is retired.
 
 *Estimate: small.*
 
@@ -62,7 +63,7 @@ end-to-end. Touches `BridgeDispatcher::DispatchRequest`'s three
 named handlers + the corresponding mock cases + their playwright
 contract specs.
 
-### 1.2 [NT-6] ~~Visual-stability lane assignment for bracket gutter~~ ✅ Shipped on lt-4 (`44f9e81`, 2026-06-02)
+### 1.2 [NT-6] ~~Visual-stability lane assignment for bracket gutter~~ ✅ Shipped (#92)
 
 > **Shipped on `lt-4`** — `computeLinkGroupBrackets`' greedy first-fit lane
 > assignment ([link-group-colors.ts](web/apps/editor/src/lib/link-group-colors.ts))
@@ -70,10 +71,11 @@ contract specs.
 > stronger than the originally-sketched `(groupId - 1) % maxLanes` — no modulus
 > collisions; the gutter simply widens with the group count. Landed in the same
 > pass as two non-roadmap bracket-polish items (per-member stubs + name-hugging
-> brackets). Tests in `link-group-colors.test.ts`. Left in §1 with a
-> strikethrough rather than moved to §5 (lt-4-only; it takes its §5 slot at the
-> LT-4→master integration, per the NT-5 precedent above). The `[NT-6]` tag is
-> retired.
+> brackets). Tests in `link-group-colors.test.ts`. Developed on `lt-4`
+> (`44f9e81`, 2026-06-02); landed on `master` via the LT-4→master supersede
+> (PR [#92](https://github.com/DrKnickers/new-particle-editor/pull/92), `f05fa36`).
+> Still shown in §1 with a strikethrough; the §5 relocation is a deferred
+> cosmetic tidy (per the NT-5 note above). The `[NT-6]` tag is retired.
 >
 > *Actual: small (~1 sitting, bundled with the stub + name-hug work).*
 
@@ -288,35 +290,35 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-12] ~~Flip default to architecture C + retire env-var dual-toggle~~ ✅ Shipped (#TODO)
+### 5.1 [MT-12] ~~Flip default to architecture C + retire env-var dual-toggle~~ ✅ Shipped (#92)
 
 *Estimate: ★★★ (3/5), ~3-5 hours.*
 *Actual: ~4 hours, single dispatch on session branch `claude/mt12-flip-default-archc`. Tactical conditional inversion at two parallel sites (C++ host at `HostWindow.cpp:520-575` + React at `ViewportSlot.tsx:29-77`) plus a test-harness flip (`run-native-tests.mjs` adds `--legacy`; `package.json` adds `test:native:legacy` / `a11y:legacy` / `a11y:update:legacy` scripts) and a spec mode-gate migration across 17 spec files (`process.env.ALO_WEBVIEW2_HOSTING === "composition"` → `process.env.ALO_HOSTING_MODE !== "legacy"`). Two pre-MT-12 ViewportSlot vitest tests asserting an unreachable intermediate state (canvas-jpeg without composition) collapsed into a single positive assertion that default mode skips the frame-ready subscription; net vitest count 348 → 347. Mode-consistency banner deferred to a follow-up per R2 scope-trim — log-only diagnosis (`[host] hosting mode:` + `[mode] React build mode:`) is enough for the self-evident broken-viewport symptom. Architecture A code paths intentionally preserved per user requirement ("only delete A once C is confirmed stable") — filed as future architecture-A-deletion dispatch in HANDOFF "Known follow-ups" item 11.*
 
 Default editor launch is architecture C: cold `ParticleEditor.exe --new-ui` boots into DXGI composition + DComp engine visual + WebView2 composition hosting, no env vars required, no special build. Architecture A (legacy AlphaCompositor popup + HWND-hosted WebView2 + JPEG decode into `<img>`) is opt-in via a single `ALO_HOSTING_MODE=legacy` runtime env var + a matching `VITE_HOSTING_MODE=legacy` build-time bake. The four pre-MT-12 env vars (`ALO_WEBVIEW2_HOSTING` + `ALO_VIEWPORT_TRANSPORT` + their VITE_* twins) are retired — the host emits a loud deprecation warning at startup if any is still set in the environment, naming the migration path. Boot-time log lines on both runtime (`[host] hosting mode: ...`) and React build (`[mode] React build mode: ...`) bracket the active mode so issue reports include it in their first log line. Test-harness default profile flipped to match: `pnpm test:native` runs the composition lane (`~157 / 0 / 31`), new `pnpm test:native:legacy` runs the legacy HWND lane (`~132 / 0 / 56`). HANDOFF "How to run modes locally" section inverts the dance — composition is now default; the env-var path is for the legacy opt-out. The follow-on "delete architecture A" is queued as a future dispatch contingent on default-mode stability confirmation in daily use.
 
-### 5.2 [MT-11] ~~Migrate engine rendering to DOM `<canvas>` (architecture C)~~ ✅ Shipped (#TODO)
+### 5.2 [MT-11] ~~Migrate engine rendering to DOM `<canvas>` (architecture C)~~ ✅ Shipped (#92)
 
 *Estimate: medium (~16-32 h post-spike).*
 *Actual: spans Apr–May 2026 across the `lt-4` integration branch, executed as Phase 1 (D3D9Ex + shared-handle infrastructure) → Phase 2 (canvas-jpeg viewport transport behind `ALO_VIEWPORT_TRANSPORT=canvas-jpeg`) → Phase 3 (WebView2 composition hosting via `ALO_WEBVIEW2_HOSTING=composition`, Stages 0–5 + a11y close-out). Total scope vastly exceeded the medium-tier estimate — the migration touched the engine's device-creation path, AlphaCompositor's render-target topology, a new DXGI bridge (engine pixels reach screen via shared D3D9 texture → D3D11 alias → DXGI composition swapchain → DComp engine visual), a per-pixel-FoV scene-rect transform (variant B-γ — chrome panels no longer bleed engine pixels and pane/window resize cleanly reveals more scene), and a dual-mode Playwright a11y regression gate (HWND Win32 UIA + composition DOM snapshot, ~58 committed goldens across ~29 surfaces × 2 modes). Phase 0's a11y cross-mode spike initially read composition-mode UIA as zero-descendant; T9.3 discovered `--force-renderer-accessibility` + a `GetFocusedElement` warmup makes the React tree reachable via Win32 UIA at depth 20 — the dual-API design was kept (DOM snapshot is faster + more stable) but T11 was re-shaped from negative-contract into positive backbone-reachability. Six lessons.md entries surfaced (L-016 MSDN AddVisual naming inversion, L-017 DXGI ALPHA_MODE_IGNORE vs PREMULTIPLIED for legacy engines, L-018 verify-before-acting, L-019 DXSDK linker-twin, L-020 spike-config-vs-production audit, L-021 verify rendered geometry, L-022 handoff-claim verification, L-023 MSBuild `$(SolutionDir)`, L-024 UIA non-determinism: source-side fix vs normalizer concept).*
 
 Engine pixels now reach screen via a WebView2-hosted DComp visual instead of the legacy top-level layered popup. Under default new-UI mode the editor still uses architecture A (visible AlphaCompositor popup with UpdateLayeredWindow + per-frame band-mask occlusion driven by React's `layout/scene-rect`), but the architecture-C pipeline is wired end-to-end behind `ALO_WEBVIEW2_HOSTING=composition` + `ALO_VIEWPORT_TRANSPORT=canvas-jpeg` and verified by Playwright's `dxgi-transport.spec.ts` + sibling specs. Under composition mode the engine renders to its D3D9Ex shared-handle texture; AlphaCompositor stays the engine's RT origin; a parallel D3D11 device opens the shared handle, the DXGI composition swapchain carries the pixels to a DComp engine visual inserted behind the WebView2 visual, and a scene-rect transform (variant B-γ, per-pixel-FoV) clips the engine visual to the centre quadrant on screen + scopes the engine's viewport / projection to the same rect — chrome panel backgrounds become visible (no more popup overlay) and pane/window resize reveals more world content at the widened edges without distortion. Phase 3 also added the dual-API a11y regression gate (HWND Win32 UIA via standalone `uia_inspector.cpp` C++ exe + composition `page.accessibility.snapshot()` over CDP) covering ~29 interactive surfaces in each mode, the `a11y-uia-composition-reachable.spec.ts` backbone-reachability contract, Stage 3i manual checklist + Narrator-speech recording. LT-4's UI overhaul (the umbrella) continues; this entry closes the MT-11 piece (engine rendering migration + a11y acceptance hygiene). Many PRs landed across Phase 1/2/3; the close-out PR is the FF of `lt-4` after this docs commit.
 
-### 5.3 [NT-8] ~~Resizable splitters for left / centre / right column boundaries~~ ✅ Shipped (#TODO)
+### 5.3 [NT-8] ~~Resizable splitters for left / centre / right column boundaries~~ ✅ Shipped (#92)
 
 *Estimate: small.*
 *Actual: ~6 hours across two sessions. Session 1 (T0–T5, 5 commits) installed `react-resizable-panels@4.11.1` and built the `PanelLayout` component with four drag handles (left↔centre, centre↔spawner, viewport↔curve, tree↔tabs). Persistence is DIY in 4.x — `autoSaveId` was removed in the major rewrite — so a small `usePersistedLayout(key, defaults)` hook reads/writes the four `alo:layout:*` keys with defensive parse + ratio validation. Session 2 (T4b → T4c.5 + T6, 7 commits) hit a regression where the engine viewport popup overlapped panels mid-drag because per-frame `Engine::Reset` stacked under the splitter's ResizeObserver bursts. A first fix attempt (T4b) parked the popup offscreen during drag via pointerdown/pointerup capture; the timing was structurally unreliable (Win32 layout commits arrive after React's synchronous pointerup handler reads the post-drag rect) and reverted. The architectural redirect (T4c) keeps the popup HWND sized to the main client area at all times and dispatches a per-frame `layout/scene-rect` that drives an `AlphaCompositor` band mask outside the centre quadrant — splitter drag now updates an alpha mask, not a device Reset. T4c.5 cropped the modal-snapshot PNG to the scene rect (post-T4c the popup spans the main row, so encoding the full DIB stretched outside-scene pixels into the centre quadrant's `<img>`). T6 added the View → Reset panel layout menu item (clears the four `alo:layout:*` keys + bumps an epoch counter that remounts `PanelLayout` with defaults). 4.x quirks recorded as `tasks/lessons.md` L-014: numeric `Panel.defaultSize` props are PIXELS not percentages (use `"NN%"` strings); `Group.defaultLayout` is an SSR-hydration hint only, `Panel.defaultSize` is the canonical client knob.*
 
 Drag any of four boundaries in the editor shell — left column ↔ centre column, centre column ↔ Spawner column (when Spawner is visible), viewport ↔ curve editor, and emitter tree ↔ property tabs — and the new sizes survive a page reload via `localStorage`. Min/max constraints per pane (e.g. left column clamped between 15 % and 40 % of window width) prevent dragging any pane to unusable widths. The handles ship full keyboard a11y from the library (arrow keys nudge, double-click resets the splitter's two panels to their default size). Spawner toggle uses two separate persistence keys (`alo:layout:outer:2col` / `:3col`) so the 2-column and 3-column states keep independent ratios. A new **View → Reset panel layout** menu item clears all four keys and remounts the layout at the in-code defaults (20/60/20 outer 3-col, 25/75 left, 75/25 centre). No bridge schema changes; no C++ touched (the engine popup's existing `ResizeObserver`-driven scene-rect dispatch picks up splitter drags for free through `AlphaCompositor`'s band-mask path). 12 commits + this docs commit. Replaces the previous fixed-width column layout that had been the structural skeleton since B1.
 
-### 5.4 [NT-9] ~~Frosted-glass modal backdrop via engine-snapshot capture~~ ✅ Shipped (#TODO)
+### 5.4 [NT-9] ~~Frosted-glass modal backdrop via engine-snapshot capture~~ ✅ Shipped (#92)
 
 *Estimate: small.*
 *Actual: ~3 hours, 4 commits (snapshot bridge surface squashed with the dispatcher handler + Modal rewiring + smoke-test polish + modal-mask cleanup) plus docs. Two smoke-test rounds caught structural issues that reshaped the implementation: the first surfaced opaque engine pixels leaking outside the modal occlude during a drag-resize (root cause: the Win32 modal sizing loop on the host thread runs WM_SIZING / WM_SIZE inside a sub-pump that calls `LayoutBroker::PredictAndApply` synchronously but does NOT pump WebView2 IPC, so renderer→host bridge messages can't land during the drag); the second surfaced visible stutter caused by per-frame GDI+ PNG re-encodes during the same drag. Both fixed by host-state-durable design: the React Modal sends ONE occlude with a deliberately-enormous sentinel rect (-1e5, -1e5, 2e5, 2e5) that `ApplyOcclusion` clips to the current popup bounds regardless of resize timing, and ONE capture on modal open with no re-capture during the modal's lifetime (the snapshot img scales via CSS, and the dim+blur in `Dialog.Overlay` hides any content staleness). Captured as L-013 in lessons.md.*
 
 Engine viewport pixels are captured to a base64-encoded PNG by `AlphaCompositor::CaptureSnapshotPng` (Gdiplus zero-copy Bitmap ctor over the cached pre-stamp DIB → PNG-encoded into an in-memory IStream → 30-line inline base64). React Modal portals the snapshot as an `<img position:absolute; inset:0>` into the viewport-quadrant DOM, then full-alpha-cuts the engine popup so `Dialog.Overlay`'s `bg-black/60 backdrop-blur-sm` blurs panels + snapshot uniformly — no visible popup boundary because both sides of it are now WebView2-rendered. Replaces the modal-mask server-side compositor pipeline that B1.3.1 polish round 9 landed as interim work (deleted in P6: `SetModalMask`, `BoxBlurDibBgra`, `MultiplyDibAlphaBgra`, `FadePopupEdges`, `Smoothstep01Edge`, the `viewport/set-modal-mask` bridge surface — replaced by `viewport/capture-snapshot`). The new `<img>` approach has a clean architectural property: CSS effects can sample the snapshot natively because it lives in the WebView2 DOM tree, sidestepping the cross-layer compositing limit that defeated the modal-mask approach (L-011).
 
-### 5.5 [NT-7] ~~Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow~~ ✅ Shipped (#TODO)
+### 5.5 [NT-7] ~~Inspector layout follow-ups — tabs always visible + tab strip height + emitter list flex-grow~~ ✅ Shipped (#92)
 
 *Estimate: small.*
 *Actual: ~1 hour, 4 commits (plan + bundled implementation + docs + a post-smoke-test polish round). Two architectural decisions confirmed up-front via a question chip (initially 50/50 over biased ratios; free tab clicking over disabled-when-no-selection); the polish round bumped the default to 25/75 favouring tabs after the user smoke-tested the build, matching the "tab strip dominates the visual hierarchy" brief.*

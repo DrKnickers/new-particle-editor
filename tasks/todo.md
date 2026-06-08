@@ -143,9 +143,19 @@ regen). Arg-logic walk: no-flag→newUi (x64) · `--legacy`/`--legacy-ui`→lega
 (capture clamp wins) · x86→legacy by gate · fixture-gen paths return before
 dispatch (unaffected).
 
-**Not done (deferred, as agreed):** step 4 (`merge -s ours master` + PR +
-CHANGELOG/ROADMAP backfill) — needs explicit user OK. Pending user smoke:
-`--legacy` F12/F16 visual paths (L-033, the user's lane).
+**Step 4 — DONE (user OK'd, then merged).** `git merge -s ours master`
+(`b5915a8`) → PR [#92](https://github.com/DrKnickers/new-particle-editor/pull/92)
+→ merged to `master` (`f05fa36`, 2026-06-08). New-UI-default is **live on
+master**. Post-merge: CHANGELOG/ROADMAP provisional placeholders backfilled
+uniformly to `f05fa36`/`#92` (supersede landed everything in one merge);
+`lt-4` + two stale `claude/*` remote branches retired; CLAUDE.md branch-workflow
+rewritten for master-as-trunk. The `--legacy` F12/F16 smoke was **dropped** —
+legacy is being removed (MT-13 greenlit), so F12 (legacy-only) is moot and F16
+(shared engine) gets a new-UI eyeball instead.
+
+**Next (separate efforts):** MT-13 legacy removal (now greenlit; its own
+★★★★+ plan); optional `.github/PULL_REQUEST_TEMPLATE.md` to fix CONTRIBUTING's
+dangling link.
 
 **Open question for step 4 / user:** master's ported `CONTRIBUTING.md` links to
 `.github/PULL_REQUEST_TEMPLATE.md`, which exists on neither branch (a dangling
