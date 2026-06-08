@@ -1,5 +1,94 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-08 (session 24) — **Animated dock SHIPPED + root-caused the "native host hang" as a FALSE diagnosis (it was a test-harness actionability race). FF-pushed, `origin/lt-4 = a273d19`, user-tested in the real host.** NEXT: VPT-2 / wrap / propose `lt-4 → master`
+
+**`origin/lt-4` = `a273d19`** (HEAD == origin, 0/0, tree clean). **No `master` changes**
+(`origin/master = ab120d0`). Web vitest **510 / 0**; `tsc -b` clean; native harness
+**169 / 0** (stable across **3** consecutive full runs). Native lane restored in THIS
+worktree (`x64\Debug\ParticleEditor.exe` + composition `dist/` present; a FRESH worktree
+needs L-039 NuGet copy + L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`).
+
+### What shipped this session (`f7af376`..`a273d19`, FF-pushed + user-verified in the real host)
+- **`f7af376` feat(new-ui)** — the **animated in-layout dock** (re-applied the reverted
+  `ddb0777`) + the fix that makes it pass the native harness. Dock is now a single
+  always-mounted `collapsible collapsedSize={0}` Panel (`usePanelRef`), so toggling never
+  remounts the outer Group → no left-pane flicker → the column tweens open/closed
+  (toggle-scoped `flex-grow` transition; drags/resizes instant) with a ~260ms `displayDock`
+  content-lag for the slide-out. **The fix:** a *closing* panel no longer presents as an open
+  interactive dialog — `ToolPanel` `closing` prop → `data-state="closing"` (leaves the
+  `[role="dialog"]:not([data-state])` selector); `PanelLayout` marks the closing `<aside>`
+  `inert`. `splitters.spec` rewritten (collapse-not-remount; left-pane marker proves no
+  remount); `ToolPanel.test` guards `closing`→`data-state`.
+- **`a273d19` docs** — corrected the findings doc, CHANGELOG entry, lesson **L-071**.
+
+### ⚠️ The headline — the "native host hang" was a MISDIAGNOSIS (read before any dock work)
+Session 23's findings doc declared the dock animation caused a *cumulative native host hang
+needing a debugger* and reverted it. **That was wrong on every structural claim.** Evidence
+(all reproduced): host.log clean across the whole run (0 `[COMP-engine-fail]`, healthy fps,
+runs through `dxgi-resize-stress` ~20 specs AFTER the "death"); **no crash dumps** (host or
+WebView2 renderer); 170+ specs PASS *after* the failure; harness exits **1** (ordinary
+failure) not **2** (`hostDiedMidRun`); no `ECONNREFUSED` cascade. A Playwright trace
+(`--trace retain-on-failure`) pinned the REAL cause: the harness helper `closeAnyPanel`
+clicks a panel's Close button, and during the ~260ms close slide-out the panel is still
+mounted but collapsing-to-0 and detaching → the click is "intercepted by the animating
+group" then "detached" → Playwright retries 30s. Surfaces **only in the full ordered run**
+(a prior test's dock-close still animating when the next test's `closeAnyPanel` fires);
+**never in isolation**; **real users unaffected** (a human doesn't click a panel sliding
+shut). Full write-up: corrected
+[`docs/superpowers/specs/2026-06-07-dock-animation-findings.md`](../docs/superpowers/specs/2026-06-07-dock-animation-findings.md);
+diagnostic playbook: **L-071**.
+
+### NEXT options
+1. **VPT-2 follow-up** — per-tick undo coalescing for streaming track-key / curve edits (the
+   only genuinely-open `ui-delta-report.md` item; deferred — do only if a user reports it).
+2. **Wrap** — every HIGH/MED parity gap from the original audit is closed; the dock animation
+   (the last UX-polish ask) now ships.
+3. **Propose `lt-4 → master`** — `lt-4` has absorbed a long run of shipped, user-tested
+   features. Needs explicit user OK + CHANGELOG TODO-hash/PR backfill on merge. (Memory:
+   user still daily-drives legacy/arch-A; confirm arch-C trust before pushing a master merge.)
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `a273d19` or newer; lineage 0/0; tree clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter
+  @particle-editor/editor test` → **510**; **`tsc -b`** (NOT `--noEmit` — L-070) → 0.
+- native: lane restored in THIS worktree; a FRESH worktree needs L-039 + L-046 (**VS18**) +
+  L-040. **After any web change, `pnpm build` before the harness (L-068).** `pnpm test:native`
+  → **169/0** (exit 1/2 + "browser closed" can be an L-066/L-071 phantom — re-run; a SPECIFIC
+  test failing consistently is real).
+- **Drag/pointer/menu/curve + dock-animation features:** verify with Playwright real input
+  (L-067); arch-C *visuals* need the user's eye (L-033).
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-
+> DComp particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 24),
+> `tasks/lessons.md` (esp. **L-071** full-run-only Playwright 30s-timeout = actionability race/
+> phantom, not a host hang — trace it; **L-070** `tsc -b` is the real type gate not `--noEmit`;
+> **L-068** `pnpm build` before the native harness; **L-067** Playwright real input;
+> **L-066** native phantom re-run; **L-046** MSBuild-on-VS18; **L-033** arch-C visuals need the
+> user; **L-022** docs drift — verify against code), `tasks/fix-plan.md`, `tasks/ui-delta-report.md`
+> (STATUS banner = authoritative open list — only VPT-2 left). **VERIFY claims against actual
+> code.** Pre-flight: `git fetch origin lt-4`; `origin/lt-4` = `a273d19` or newer, 0/0, clean;
+> from `web/` `pnpm install` if needed, then `pnpm --filter @particle-editor/editor test` →
+> **510**, `tsc -b` 0. Native lane restored in this worktree (a FRESH worktree needs
+> L-039+L-046+L-040); `pnpm test:native` → **169/0**. Session 24 shipped the animated in-layout
+> dock + flicker fix (re-applied `ddb0777` + a closing-panel `inert`/`data-state` fix) and
+> proved the reverted "native host hang" was a misdiagnosed test-harness actionability race
+> (real users unaffected — see the corrected dock-animation findings doc + L-071). Default next:
+> pick WITH the user from VPT-2 / wrap / propose `lt-4→master`. Summarize your understanding +
+> confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 24) + `tasks/lessons.md`
+> (esp. **L-071** full-run 30s-timeout = actionability race not host hang; **L-070** `tsc -b` gate;
+> L-068 dist-before-harness; L-067 real-input; L-066 phantom re-run; L-033 arch-C needs the user).
+> VERIFY against code. Pre-flight: `origin/lt-4` = `a273d19` or newer, 0/0, clean; `pnpm --filter
+> @particle-editor/editor test` → **510**, `tsc -b` 0; native **169/0** (lane restored here; fresh
+> worktree needs L-039/L-046/L-040). Session 24 shipped the animated dock + fix; the reverted
+> "host hang" was a misdiagnosed test-harness race (see findings doc + L-071). Pick next WITH the
+> user: VPT-2 / wrap / propose `lt-4→master`.
+
+---
+
 ## 2026-06-07 (session 23) — **Shipped MNU-12 + Paste-As-Child + 2 UI-polish batches (all FF-pushed, `origin/lt-4 = 460883a`, user-tested). Dock-animation task ATTEMPTED then REVERTED (native host hang).** NEXT: VPT-2 / wrap / retry dock via overlay
 
 **`origin/lt-4` = `460883a`** (HEAD == origin, 0/0, tree clean). **No `master` changes.** Web
@@ -22,6 +111,11 @@ L-039 NuGet copy + L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`).
   `--noEmit` — it skips test files).
 
 ### Dock entrance/exit animation + flicker — attempted, reverted
+> **CORRECTED (session 24, 2026-06-08):** the "native host hang" diagnosis below was WRONG.
+> The host never hangs — it was a test-harness Playwright actionability race vs the close
+> slide-out (real users unaffected). Re-applied + fixed + shipped this session
+> (`origin/lt-4 = a273d19`). See the session-24 entry at the top + L-071.
+
 Tried to animate the spawner/lighting dock open/close + fix the left-pane flicker. **Worked in
 the browser** (flicker fixed via always-mounted collapsible Panel; smooth slide; drags instant)
 but **hung the native host** in the full a11y harness — a cumulative C++-side hang on the
