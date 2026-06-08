@@ -1,18 +1,11 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-07 (session 22) — **SEL-5/MNU-4 Paste As ▸ Child shipped (native lane)**. NOT YET FF-pushed — awaiting user review. NEXT: FF-push / VPT-2 follow-up / wrap
+## 2026-06-07 (session 22) — **SEL-5/MNU-4 Paste As ▸ Child shipped + FF-pushed (`origin/lt-4 = 859d628`)**. User launched the native `--new-ui` host, tested it, approved. NEXT: VPT-2 follow-up / wrap
 
-**`origin/lt-4` = `3ba8ae7`** (session 21's MNU-12, FF-pushed earlier this same session/worktree).
-The session-22 paste-as-child commits stack cleanly on top — **verified `git merge-base
---is-ancestor origin/lt-4 HEAD` → YES; 7 ahead, 0 behind → clean `--ff-only`**. The work is on
-`claude/flamboyant-zhukovsky-38a3ff`, **held for user review** before the FF-push. **No `master`
-changes.** Web vitest **510 / 0** (was 502; +8 paste-as-child); `tsc --noEmit` 0. Native harness
-**169 / 0** (was 168; +1 real-host paste-as-child round-trip). **Native lane restored + rebuilt
-this session** (Debug x64 + dist).
-
-> Lineage is clean (same continuous worktree as session 21 — this branch already contains
-> `f5f265d`/`3ba8ae7`). Still, per L-022, `git fetch origin lt-4` and re-confirm `origin/lt-4`
-> = `3ba8ae7` (0 behind) immediately before the FF-push.
+**`origin/lt-4` = `859d628`** (FF-pushed `3ba8ae7..859d628`, 8 commits this session segment; user
+tested the live native build first). **No `master` changes.** Web vitest **510 / 0** (was 502; +8
+paste-as-child); `tsc --noEmit` 0. Native harness **169 / 0** (was 168; +1 real-host paste-as-child
+round-trip). **Native lane restored + rebuilt this session** (Debug x64 + dist).
 
 ### The commits (newest first; `765821d`..`df7ee16` = the feature)
 - `df7ee16` **test(native)** — real-host paste-as-child round-trip (copy → paste-as-child into a
@@ -47,11 +40,12 @@ surfaced it; the host engine was never affected (it assigns sequential indices).
   `a11y-surfaces.ts`).
 
 ### ⭐ NEXT TASK options (pick with the user)
-1. **FF-push session 22 → `lt-4`** (held for review; lineage verified clean — 7 ahead, 0 behind
-   of `origin/lt-4 = 3ba8ae7`. `git branch -f lt-4 HEAD && git push origin lt-4`).
-2. **VPT-2 follow-up** — per-tick undo coalescing for streaming track-key / curve edits. The
+1. **VPT-2 follow-up** — per-tick undo coalescing for streaming track-key / curve edits. The
    ONLY genuinely-open delta-report item left; deferred — do only if a user reports it.
-3. **Wrap** — the UI delta report's open list is now empty but for the deferred VPT-2.
+2. **Wrap** — the UI delta report's open list is now empty but for the deferred VPT-2. All
+   HIGH/MED parity items shipped; remaining divergences are intentional keeps.
+3. **`master` merge** — `lt-4` has accumulated many shipped features; consider proposing an
+   `lt-4 → master` merge (needs explicit user OK; backfill CHANGELOG TODO hashes/PRs on merge).
 
 ### Verified baseline (run before changing anything)
 - `git fetch origin lt-4`; confirm the tip (see reconcile note). Lineage may be non-zero — read
