@@ -76,3 +76,10 @@ input[type="radio"] {
 [data-testid="tab-basic-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-appearance-content"]::-webkit-scrollbar-thumb:hover,
 [data-testid="tab-physics-content"]::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* Reserve the scrollbar gutter so a panel whose collapsible section is
+   expanded (and overflows into a scrollbar) doesn't shove its content
+   sideways by the scrollbar's width — the layout stays put whether the
+   scrollbar is present or not. Applied to the panels that host the
+   animated collapsible sections (inspector tabs + tool panels). */
+.scrollbar-stable { scrollbar-gutter: stable; }

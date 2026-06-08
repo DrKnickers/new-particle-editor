@@ -96,7 +96,7 @@ export function ToolPanel({
           height. The 48 px subtraction keeps the scrollbar inside the
           body so the header stays pinned to the top. */}
       <div
-        className="flex-1 overflow-y-auto p-3"
+        className="flex-1 overflow-y-auto p-3 scrollbar-stable"
         style={{ height: `calc(100% - ${HEADER_HEIGHT_PX}px)` }}
       >
         {children}
