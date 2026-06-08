@@ -583,6 +583,33 @@ export function addDeathChildEmitter(
   return { tree: next, newId };
 }
 
+/** Paste the first clipboard buffer entry as a child of `parentId` in the
+ *  given slot (legacy Paste As ▸ Lifetime/Death — one emitter into one
+ *  slot). Returns null on an empty buffer, an unknown parent, or an
+ *  already-occupied slot (slot single-occupancy — same refusal as the
+ *  add-child helpers). The seeded child keeps the copied subtree but is
+ *  re-id'd to the next free id and re-roled to the target slot. */
+export function pasteAsChildFromClipboard(
+  tree: EmitterTreeDto,
+  buffer: EmitterTreeNode[],
+  parentId: number,
+  slot: "lifetime" | "death",
+): { tree: EmitterTreeDto; newId: number } | null {
+  if (parentId === -1 || buffer.length === 0) return null;
+  const parent = findEmitterNode(tree, parentId);
+  if (parent === null) return null;
+  if (parent.children.some((c) => c.role === slot)) return null;
+  const newId = maxIdIn(tree) + 1;
+  const seed = cloneNode(buffer[0]);
+  const child: EmitterTreeNode = { ...seed, id: newId, role: slot };
+  const next = mapNode(tree, parentId, (n) => ({
+    ...n,
+    // Lifetime renders before death (during-life before on-death).
+    children: slot === "lifetime" ? [child, ...n.children] : [...n.children, child],
+  }));
+  return { tree: next, newId };
+}
+
 /** Swap the emitter at `id` with its adjacent sibling in `direction`.
  *  Returns null on missing id, non-root emitter, or move past edge —
  *  matches `ParticleSystem::moveEmitter` semantics (children can't be

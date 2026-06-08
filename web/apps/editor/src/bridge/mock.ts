@@ -41,6 +41,7 @@ import {
   makeDefaultEngineState,
   moveEmitterInTree,
   pasteEmittersFromClipboard,
+  pasteAsChildFromClipboard,
   renameEmitter,
   reorderRootEmitter,
   reparentEmitterInTree,
@@ -109,6 +110,7 @@ function isMutating(kind: Request["kind"]): boolean {
   // host's per-handler `SetDirty` rule.
   if (kind === "emitters/cut") return true;
   if (kind === "emitters/paste") return true;
+  if (kind === "emitters/paste-as-child") return true;
   if (kind === "linkGroups/set-exempt-fields") return true;
   if (kind === "linkGroups/reset-exempt-fields") return true;
   // Screen 5 / Screen 6 Batch B-α — track key deletion + interpolation
@@ -1100,6 +1102,25 @@ export class MockBridge implements Bridge {
         this.emit({ kind: "emitters/tree/changed", payload: result.tree });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         return { newIds: result.newIds };
+      }
+
+      case "emitters/paste-as-child": {
+        const cur = useMockEmitterTree.getState().tree;
+        const buf = useMockEmitterClipboard.getState().buffer;
+        const result = pasteAsChildFromClipboard(
+          cur,
+          buf,
+          req.params.parentId,
+          req.params.slot,
+        );
+        if (result === null) {
+          // Empty clipboard or occupied slot — emit nothing, no dirty flip.
+          return { newId: -1 };
+        }
+        useMockEmitterTree.getState().setTree(result.tree);
+        this.emit({ kind: "emitters/tree/changed", payload: result.tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { newId: result.newId };
       }
 
       case "linkGroups/set-membership": {

@@ -750,6 +750,14 @@ export type Request =
   | { kind: "emitters/cut";    params: { ids: number[] } }
   | { kind: "emitters/paste";  params: { afterId?: number } }
 
+  //   - `emitters/paste-as-child { parentId, slot }` deserialises the
+  //     FIRST clipboard buffer and attaches it into the parent's
+  //     lifetime/death child slot (legacy Paste As ▸). Refused
+  //     (newId -1) when the slot is filled or the clipboard is empty.
+  //     One emitter per slot — a multi-buffer clipboard pastes only
+  //     buffer[0].
+  | { kind: "emitters/paste-as-child"; params: { parentId: number; slot: "lifetime" | "death" } }
+
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1 — Screen-8 sub-dialog)
   | { kind: "engine/action/rescale-emitter";  params: { id: number; durationScalePercent: number; sizeScalePercent: number } }
 
@@ -1012,6 +1020,7 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/copy" }  ? Record<string, never> :
   R extends { kind: "emitters/cut" }   ? Record<string, never> :
   R extends { kind: "emitters/paste" } ? { newIds: number[] } :
+  R extends { kind: "emitters/paste-as-child" } ? { newId: number } :
 
   // Per-emitter rescale (Phase 3 Screen 4 Batch B1)
   R extends { kind: "engine/action/rescale-emitter" } ? Record<string, never> :
