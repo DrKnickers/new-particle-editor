@@ -116,6 +116,9 @@ renders.
 
 ## Review
 
+**Landed:** commit `cf59ce7`, FF-pushed `lt-4` (`5c5c76c..cf59ce7`); local +
+`origin/lt-4` synced, 0/0, tree clean.
+
 **Scope delivered (steps 2 + 3; stopped before step 4 merge as agreed).**
 
 What changed: `src/main.cpp` (default-flip + dual legacy flag), `README.md`
