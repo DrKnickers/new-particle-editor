@@ -31,12 +31,12 @@ context submenu, shipped 2026-06-07).
 
 | ID | Sev | What | Why still open |
 |---|---|---|---|
-| **VPT-2 follow-up** | LOW | per-tick undo coalescing for streaming track-key / curve edits not done | deferred — only if a user reports per-tick undo there (fix-plan VPT-2) |
+| **VPT-2 follow-up** | LOW | per-tick undo coalescing for streaming track-key / curve edits | ✅ **Shipped 2026-06-08** — per-track `set-track-key` coalescing; see fix-plan + CHANGELOG |
 
 *(VPT-6/7/8 status-bar parity shipped 2026-06-06; MNU-12 Import "Clear" button
-shipped 2026-06-07; SEL-5/MNU-4 Paste-As-Child shipped 2026-06-07 — all in
-"Already shipped" above. The only genuinely-open item left is the deferred
-VPT-2 per-tick undo follow-up.)*
+shipped 2026-06-07; SEL-5/MNU-4 Paste-As-Child shipped 2026-06-07; the VPT-2
+per-tick undo follow-up shipped 2026-06-08 — all in "Already shipped" above.
+**The open list is now empty.**)*
 
 Everything else is either ✅ shipped (fix-plan) or an **intentional keep**:
 docking (VPT-9/10), multi-channel curves (CRV-4/5/10/11), single-click texture

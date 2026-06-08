@@ -16,6 +16,44 @@ Conventions:
 
 ## Changelog
 
+### Per-tick undo coalescing for curve-key spinner edits
+
+*2026-06-08 · [`dd3db53`](https://github.com/DrKnickers/new-particle-editor/commit/dd3db53) · [#NN](https://github.com/DrKnickers/new-particle-editor/pull/NN)* <!-- TODO: backfill merge hash + PR number on lt-4→master merge -->
+
+Streaming a curve key's **Time** / **Value** spinner — by wheel, hold-arrow, or
+arrow-column scrub — now records a **single** undo step per gesture instead of one per
+tick, and a multi-key group shift records one step instead of N-per-tick. One Ctrl+Z
+reverts the whole gesture, matching how the emitter-property spinners already behave.
+This closes the last open item in the UI delta report.
+
+**How we tackled it.** Host-only: [`src/host/BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:3605)'s
+`emitters/set-track-key` handler now computes a per-track/per-emitter `coalesceKey`
+(`0x80000000 | (trackIdx << 16) | id`) and passes it to the existing `captureUndo` →
+[`UndoStack::CapturePreCoalesced`](src/UndoStack.cpp:126) (PRE-mutation skip-coalescing,
+1500 ms window) — previously it captured with `coalesceKey = 0` (never coalesce). The key
+layout mirrors the shipped emitter-property coalescing, substituting `trackIdx` for the
+field-name hash. **Per-track** keying (legacy's `track<<16|emitterIdx`) is the only stable
+choice: a Time spinner's `oldTime` changes every tick, so a per-key scheme can't match
+tick-to-tick. No React changes — the spinners already dispatch one `set-track-key` per
+tick; only the host's undo bookkeeping changed. Every other track-mutating command
+(add / delete / interpolation / lock / duplicate-index / rescale) deliberately stays
+`coalesceKey = 0` so each remains its own undo step.
+
+**Issues encountered and resolutions.** *Granularity is a conscious divergence from the
+emitter path.* The emitter spinners coalesce per-**field**; track keys coalesce
+per-**track**, so editing two different keys on one track within 1.5 s folds into one
+undo. This is legacy-faithful and unavoidable for the Time spinner (its key identity
+drifts per tick); a finer Value-only scheme is a possible future follow-up. *Accepted
+bit-collision (negligible).* Track keys put `trackIdx` (0–6) in the same bits the
+emitter path fills with a 15-bit field hash; a cross-type fold needs the hash to land in
+{0..6} on the same emitter within the window (≈1/4681) and its worst case is one extra
+fold — whole-system snapshots + per-entry `selectedIndex` mean no data loss. *Tests need
+no key seeding:* the `--test-host` default fixture pre-seeds every track with border keys
+at t=0/t=100, so the regressions move the distinct `scale` / `rotationSpeed` tracks
+directly (Green/Blue/Alpha alias Red and are avoided).
+
+---
+
 ### Animated dock open/close + left-pane flicker fix (new-UI)
 
 *2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
