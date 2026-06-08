@@ -1,10 +1,25 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-07 (session 23) — **Both polish batches FF-pushed (`origin/lt-4 = 9c531e1`, user-tested). Dock-animation task ATTEMPTED then REVERTED (native host hang).** NEXT: VPT-2 / wrap / retry dock via overlay
+## 2026-06-07 (session 23) — **Shipped MNU-12 + Paste-As-Child + 2 UI-polish batches (all FF-pushed, `origin/lt-4 = 460883a`, user-tested). Dock-animation task ATTEMPTED then REVERTED (native host hang).** NEXT: VPT-2 / wrap / retry dock via overlay
 
-**`origin/lt-4` = `9c531e1`** — the two polish batches (Paste-As-Child + the 8-item and 4-item
-UI batches) are all FF-pushed and user-tested. **No `master` changes.** Web vitest **513 / 0**;
-native harness **169 / 0** at this tip. `dist` rebuilt to match. Tree clean (matches origin/lt-4).
+**`origin/lt-4` = `460883a`** (HEAD == origin, 0/0, tree clean). **No `master` changes.** Web
+vitest **513 / 0**; `tsc -b` clean; native harness **169 / 0**. Native lane restored in THIS
+worktree (`x64\Debug\ParticleEditor.exe` + composition `dist/` present; a FRESH worktree needs
+L-039 NuGet copy + L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`).
+
+### What shipped this session (`f5f265d`..`460883a`, all pushed + user-tested)
+- **MNU-12** (`f5f265d`) — Import Emitters dialog "Clear" button.
+- **Paste As ▸ Child / SEL-5+MNU-4** (`765821d`..`df7ee16`) — new `emitters/paste-as-child`
+  host+mock command + context submenu (Lifetime/Death). User launched the native host, tested,
+  approved. Spec/plan in `docs/superpowers/`.
+- **UI-polish batch 1** (`59238a6`..`3dee70b`) — "Color:"/"Bump:" labels; Rotation curve
+  exclusive; click link-group bracket → select members; animated expand/collapse for all caret
+  sections (`<details>`→controlled, 19-golden re-baseline).
+- **UI-polish batch 2** (`3f55c63`..`9c531e1`) — scrollbar-gutter (no section-expand pop);
+  curve keys easier to click (bigger hit-pad + axis labels click-through); wider texture field;
+  splitter 8px visible == cursor zone.
+- **New lessons:** L-069 (mock subtree re-id), L-070 (`tsc -b` is the real type gate, not
+  `--noEmit` — it skips test files).
 
 ### Dock entrance/exit animation + flicker — attempted, reverted
 Tried to animate the spawner/lighting dock open/close + fix the left-pane flicker. **Worked in
@@ -18,11 +33,50 @@ overlay drawer that doesn't resize the viewport):
 [`docs/superpowers/specs/2026-06-07-dock-animation-findings.md`](../docs/superpowers/specs/2026-06-07-dock-animation-findings.md).
 
 ### NEXT options
-1. **VPT-2 follow-up** — per-tick undo coalescing (the last genuinely-open delta-report item;
-   deferred unless a user reports it).
-2. **Wrap** — the UI delta report's open list is empty but for VPT-2.
+1. **VPT-2 follow-up** — per-tick undo coalescing for streaming track-key / curve edits (the
+   last genuinely-open delta-report item; deferred — do only if a user reports per-tick undo
+   there). The UI delta report's open list is otherwise empty.
+2. **Wrap** — every HIGH/MED parity gap from the original audit is closed.
 3. **Retry the dock animation** as an OVERLAY drawer (sidesteps the viewport-resize host hang),
-   OR with native host instrumentation to root-cause the in-layout hang.
+   OR with native host instrumentation to root-cause the in-layout hang. See the findings doc.
+4. **Consider an `lt-4 → master` merge** — `lt-4` has absorbed a long run of shipped features;
+   needs explicit user OK + CHANGELOG TODO-hash/PR backfill on merge.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `460883a` or newer; lineage 0/0; tree clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter
+  @particle-editor/editor test` → **513**; **`tsc -b`** (NOT `--noEmit` — L-070) → 0.
+- native: lane restored in THIS worktree; a FRESH worktree needs the restore (L-039 NuGet copy
+  + L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`). **After any web change, `pnpm build`
+  before the harness (L-068).** `pnpm test:native` → **169/0** (exit 1/2 + "browser closed" can
+  be an L-066 phantom — re-run; but if a SPECIFIC test fails consistently, it's real).
+- **Drag/pointer/menu/curve features:** verify with Playwright real input (L-067).
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-
+> DComp particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 23),
+> `tasks/lessons.md` (esp. **L-070** `tsc -b` is the real type gate not `--noEmit`; **L-069**
+> mock subtree re-id; **L-068** `pnpm build` before the native harness; **L-067** Playwright real
+> input for drag/menu/curve; **L-066** native phantom re-run; **L-046** MSBuild-on-VS18; **L-022**
+> docs drift — verify against code), `tasks/fix-plan.md`, `tasks/ui-delta-report.md` (STATUS
+> banner = authoritative open list — only VPT-2 left). **VERIFY claims against actual code.**
+> Pre-flight: `git fetch origin lt-4`; `origin/lt-4` = `460883a` or newer, 0/0, clean; from `web/`
+> `pnpm install` if needed, then `pnpm --filter @particle-editor/editor test` → **513**, `tsc -b`
+> 0. Native lane restored in this worktree (a FRESH worktree needs L-039+L-046+L-040);
+> `pnpm test:native` → **169/0**. Session 23 shipped MNU-12 + Paste-As-Child + 2 UI-polish
+> batches (all pushed); the dock entrance/exit animation was attempted then REVERTED (native host
+> hang — see `docs/superpowers/specs/2026-06-07-dock-animation-findings.md`). Default next: pick
+> WITH the user from VPT-2 / wrap / retry-dock-as-overlay / propose `lt-4→master`. Summarize your
+> understanding + confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 23) + `tasks/lessons.md`
+> (esp. **L-070** `tsc -b` gate, L-068 dist-before-harness, L-067 real-input, L-066 phantom re-run).
+> VERIFY against code. Pre-flight: `origin/lt-4` = `460883a` or newer, 0/0, clean; `pnpm --filter
+> @particle-editor/editor test` → **513**, `tsc -b` 0; native **169/0** (lane restored here; fresh
+> worktree needs L-039/L-046/L-040). Session 23 shipped MNU-12 + Paste-As-Child + 2 polish batches;
+> dock animation attempted+reverted (native hang — see findings doc). Pick next WITH the user:
+> VPT-2 / wrap / retry-dock-as-overlay.
 
 ---
 
