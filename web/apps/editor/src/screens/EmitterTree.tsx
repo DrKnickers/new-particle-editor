@@ -280,6 +280,32 @@ function OccludingContextMenuContent({
   );
 }
 
+// A submenu (e.g. "Paste As ▸") renders in its OWN portal at a different
+// screen location than its parent menu, so it needs its OWN viewport
+// occlusion rect — otherwise the layered D3D viewport popup overpaints the
+// part of the submenu that crosses the viewport, exactly as it would the
+// top-level menu without OccludingContextMenuContent. Same pad/feather.
+function OccludingContextSubContent({
+  bridge,
+  occlusionId,
+  children,
+  ...rest
+}: ComponentProps<typeof ContextMenu.SubContent> & {
+  bridge: Bridge;
+  occlusionId: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useViewportOcclusion(bridge, occlusionId, ref, 24, 24);
+  return (
+    <ContextMenu.SubContent
+      className="z-50 min-w-[200px] rounded-md border border-border-2 bg-bg-2 p-1 shadow-xl"
+      {...rest}
+    >
+      <div ref={ref}>{children}</div>
+    </ContextMenu.SubContent>
+  );
+}
+
 function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
   draggingId, indicator, startDrag,
@@ -411,6 +437,22 @@ function EmitterRow({
   };
   const handleContextPaste = () => {
     void bridge.request({ kind: "emitters/paste", params: {} });
+  };
+  // Paste As ▸ Lifetime/Death Child — paste the clipboard into this
+  // emitter's child slot (legacy ID_PASTEAS_LIFETIME / ID_PASTEAS_DEATH).
+  const handlePasteAsLifetime = () => {
+    resolveTargetIds();
+    void bridge.request({
+      kind: "emitters/paste-as-child",
+      params: { parentId: node.id, slot: "lifetime" },
+    });
+  };
+  const handlePasteAsDeath = () => {
+    resolveTargetIds();
+    void bridge.request({
+      kind: "emitters/paste-as-child",
+      params: { parentId: node.id, slot: "death" },
+    });
   };
   const handleLinkGroupSettings = () => {
     resolveTargetIds();
@@ -728,6 +770,35 @@ function EmitterRow({
             >
               Paste
             </ContextMenu.Item>
+            <ContextMenu.Sub>
+              <ContextMenu.SubTrigger
+                disabled={!hasClipboard}
+                className={menuItemClass}
+              >
+                Paste As
+              </ContextMenu.SubTrigger>
+              <ContextMenu.Portal>
+                <OccludingContextSubContent
+                  bridge={bridge}
+                  occlusionId="context-menu:emitter-tree:paste-as"
+                >
+                  <ContextMenu.Item
+                    onSelect={handlePasteAsLifetime}
+                    disabled={!hasClipboard || hasLifetimeChild}
+                    className={menuItemClass}
+                  >
+                    Lifetime Child
+                  </ContextMenu.Item>
+                  <ContextMenu.Item
+                    onSelect={handlePasteAsDeath}
+                    disabled={!hasClipboard || hasDeathChild}
+                    className={menuItemClass}
+                  >
+                    Death Child
+                  </ContextMenu.Item>
+                </OccludingContextSubContent>
+              </ContextMenu.Portal>
+            </ContextMenu.Sub>
             <ContextMenu.Separator className={separatorClass} />
             <ContextMenu.Item onSelect={handleIncrement} className={menuItemClass}>
               Increment Index…
