@@ -20,7 +20,9 @@ marquee (+ SEL-12/13 drag polish), MNU-2 accelerators, MNU-1/SEL-5 clipboard
 menus, CRV-1/2/7/8 curve fixes + marquee-from-gutters, LNK-2/6/8/10 link groups,
 PAL-2/3 colour picker + PAL-14 thumbnails, SPN-4/5/6/7 spinner fixes, MNU-7
 reset-camera, VPT-6/7/8 status-bar parity (shift hint + PAUSED + 2dp cursor,
-shipped 2026-06-06), MNU-12 Import dialog "Clear" button (shipped 2026-06-07).
+shipped 2026-06-06), MNU-12 Import dialog "Clear" button (shipped 2026-06-07),
+SEL-5/MNU-4 Paste As ▸ Lifetime/Death Child (new host paste-into-slot command +
+context submenu, shipped 2026-06-07).
 
 **The per-row tables below are NOT updated row-by-row.** Treat any row without a
 `✅` marker as *"see `fix-plan.md` for current status,"* NOT *"still open."*
@@ -29,11 +31,12 @@ shipped 2026-06-06), MNU-12 Import dialog "Clear" button (shipped 2026-06-07).
 
 | ID | Sev | What | Why still open |
 |---|---|---|---|
-| **SEL-5 / MNU-4** (Paste-As-Child) | LOW | no "Paste As ▸ Child" — `emitters/paste` splices at root only | needs a NEW host paste-into-slot command — **native lane**, not a web quick-win |
 | **VPT-2 follow-up** | LOW | per-tick undo coalescing for streaming track-key / curve edits not done | deferred — only if a user reports per-tick undo there (fix-plan VPT-2) |
 
 *(VPT-6/7/8 status-bar parity shipped 2026-06-06; MNU-12 Import "Clear" button
-shipped 2026-06-07 — both in "Already shipped" above.)*
+shipped 2026-06-07; SEL-5/MNU-4 Paste-As-Child shipped 2026-06-07 — all in
+"Already shipped" above. The only genuinely-open item left is the deferred
+VPT-2 per-tick undo follow-up.)*
 
 Everything else is either ✅ shipped (fix-plan) or an **intentional keep**:
 docking (VPT-9/10), multi-channel curves (CRV-4/5/10/11), single-click texture

@@ -1,5 +1,79 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-07 (session 22) — **SEL-5/MNU-4 Paste As ▸ Child shipped (native lane)**. NOT YET FF-pushed — awaiting user review. NEXT: FF-push / VPT-2 follow-up / wrap
+
+**`origin/lt-4` = `3ba8ae7`** (session 21's MNU-12, FF-pushed earlier this same session/worktree).
+The session-22 paste-as-child commits stack cleanly on top — **verified `git merge-base
+--is-ancestor origin/lt-4 HEAD` → YES; 7 ahead, 0 behind → clean `--ff-only`**. The work is on
+`claude/flamboyant-zhukovsky-38a3ff`, **held for user review** before the FF-push. **No `master`
+changes.** Web vitest **510 / 0** (was 502; +8 paste-as-child); `tsc --noEmit` 0. Native harness
+**169 / 0** (was 168; +1 real-host paste-as-child round-trip). **Native lane restored + rebuilt
+this session** (Debug x64 + dist).
+
+> Lineage is clean (same continuous worktree as session 21 — this branch already contains
+> `f5f265d`/`3ba8ae7`). Still, per L-022, `git fetch origin lt-4` and re-confirm `origin/lt-4`
+> = `3ba8ae7` (0 behind) immediately before the FF-push.
+
+### The commits (newest first; `765821d`..`df7ee16` = the feature)
+- `df7ee16` **test(native)** — real-host paste-as-child round-trip (copy → paste-as-child into a
+  free lifetime slot → assert attach + suffixed name through the real engine). Harness 169/0.
+- `8f53755` **feat(host)** — `emitters/paste-as-child` handler (`BridgeDispatcher.cpp:4605`):
+  deser splice + `addLifetimeEmitter`/`addDeathEmitter`; refuses (newId -1) on missing
+  parent/system, empty clipboard, occupied slot, deser throw. Debug x64 clean.
+- `9635200` **fix(mock)** — re-id the WHOLE pasted subtree (the L-069 bug: top-only re-id →
+  duplicate React keys; caught live).
+- `3e8ec8b` **feat(new-ui)** — `Paste As ▸ Lifetime/Death Child` context submenu, gated on
+  hasClipboard && slot-free, with its own `OccludingContextSubContent` occlusion wrapper.
+- `765821d` **feat(bridge)** — schema + MockBridge dispatch + `pasteAsChildFromClipboard` helper.
+- `eb27a36` / `61ddccb` **docs** — design spec + implementation plan (`docs/superpowers/`).
+
+### ⚠️ Read first — L-069 (the bug caught live this session)
+A mock tree helper that splices a copied subtree must re-id the **whole** subtree, not just the
+top node — else descendant ids collide with existing ids and React throws duplicate-key. Unit
+tests only catch it if the clipboard ids **overlap** the tree's ids. Live Playwright (L-067)
+surfaced it; the host engine was never affected (it assigns sequential indices). Full text: L-069.
+
+### Verification this session (rigorous, per user request)
+- vitest **510/0**; `tsc --noEmit` 0; mock-state helper has 6 unit tests incl. the id-collision
+  regression; MockBridge round-trip + occupied-slot refusal.
+- **Live (Playwright real input, L-067):** Paste As trigger greyed with empty clipboard →
+  enabled after copy; submenu opens; **Lifetime** paste (found+fixed the key-collision bug here)
+  AND **Death** paste both attach the full subtree with **zero console errors**; after a slot
+  fills, that slot's item + the matching Add-child item both grey out. Screenshots:
+  `paste-as-submenu.png`, `paste-as-gated.png`.
+- **Native:** host Debug x64 clean (0/0); `pnpm build` + `grep "Paste As" dist` (L-068);
+  harness **169/0** incl. the new real-host spec; **zero a11y golden change** (the tree context
+  menu is opened only transiently to reach dialogs — never a captured surface; confirmed in
+  `a11y-surfaces.ts`).
+
+### ⭐ NEXT TASK options (pick with the user)
+1. **FF-push session 22 → `lt-4`** (held for review; lineage verified clean — 7 ahead, 0 behind
+   of `origin/lt-4 = 3ba8ae7`. `git branch -f lt-4 HEAD && git push origin lt-4`).
+2. **VPT-2 follow-up** — per-tick undo coalescing for streaming track-key / curve edits. The
+   ONLY genuinely-open delta-report item left; deferred — do only if a user reports it.
+3. **Wrap** — the UI delta report's open list is now empty but for the deferred VPT-2.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm the tip (see reconcile note). Lineage may be non-zero — read
+  the note. Clean tree.
+- web: from `web/`, `pnpm install` if `node_modules` absent; `pnpm --filter
+  @particle-editor/editor test` → **510**; `tsc --noEmit` 0.
+- native: lane restored in THIS worktree; a FRESH worktree needs it again (L-039 NuGet copy +
+  L-046 MSBuild **VS18** Debug x64 + L-040 `pnpm build`). **After any web change, `pnpm build`
+  before the harness (L-068).** `pnpm test:native` → **169/0**.
+- **Drag/pointer/menu features:** verify with Playwright real input (L-067).
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 22) + `tasks/lessons.md`
+> (esp. **L-069** mock-subtree-reid, L-068 dist-rebuild, L-067 synthetic-drag, L-046 MSBuild-VS18,
+> L-022 doc-drift). VERIFY against code. Pre-flight: `git fetch origin lt-4`; `origin/lt-4` =
+> `3ba8ae7` or newer (if the session-22 FF-push happened, the paste-as-child docs commit); 0/0,
+> clean. `pnpm --filter @particle-editor/editor test` → **510**, tsc 0; `pnpm test:native` →
+> **169/0** (native lane needs restore in a fresh worktree). Session 22 shipped SEL-5/MNU-4
+> Paste As ▸ Child. Pick next WITH the user: FF-push (if still held) / VPT-2 follow-up / wrap.
+
+---
+
 ## 2026-06-07 (session 21) — **MNU-12 Import dialog "Clear" button shipped (`f5f265d`)**. NEXT: SEL-5/MNU-4 Paste-As-Child (native lane) / remaining native parity / wrap
 
 **`origin/lt-4` = `0e462e6` at session start (== HEAD, 0/0, clean).** This session's

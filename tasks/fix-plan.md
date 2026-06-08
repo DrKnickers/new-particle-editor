@@ -256,10 +256,14 @@ off-machine.
     state). **Toggle Visibility** needs the primary node's current `visible` → MenuBar
     must subscribe to `emitters/tree/changed` to find it (moderate); or defer (per-row
     eye already covers it).
-  - **GAP to flag:** "Paste As ▸ Child (Lifetime/Death)" — `emitters/paste` only
-    splices at root level; no paste-into-slot param exists. Per "wire what exists,
-    flag gaps," list Paste-As as a follow-up unless a host paste-as-child command is
-    added.
+  - **~~GAP: "Paste As ▸ Child (Lifetime/Death)"~~ ✅ SHIPPED 2026-06-07 (SEL-5/MNU-4).**
+    Added the missing host paste-into-slot command `emitters/paste-as-child {parentId,
+    slot}` (BridgeDispatcher.cpp — deser splice + addLifetime/DeathEmitter, self-guarding
+    on occupied slot) + MockBridge `pasteAsChildFromClipboard` + a `Paste As ▸ Lifetime/
+    Death Child` context submenu (own viewport-occlusion wrapper). Gated on hasClipboard
+    && slot-free. Web 510; native harness **169** (new real-host round-trip spec). No a11y
+    golden change — the tree context menu is opened only transiently to reach dialogs, so
+    it's never itself a captured surface (unlike the Edit-menu items in the rest of P4b).
   - Golden re-baseline expectation: `disabled` attrs flip on Edit/Emitters items + new
     context-menu nodes. Aggregate-diff to confirm only-intended (L-053).
 

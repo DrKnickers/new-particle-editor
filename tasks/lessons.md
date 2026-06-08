@@ -4092,3 +4092,34 @@ status bar. Manual `pnpm build` (confirmed `grep "spawn instance" dist/` → 1) 
 produced the expected surgical 19-surface `contentinfo` delta. Cross-reference [L-040]
 (dist must be built to serve `--new-ui` at all) and [L-053] (status-bar/toolbar changes
 fan out across goldens).
+
+## L-069 — A mock tree helper that splices a copied subtree must re-id the WHOLE subtree, not just its top node; and a unit test only catches it when the clipboard ids collide with existing tree ids
+
+**Rule.** When a MockBridge tree mutation clones a subtree into the tree (paste,
+paste-as-child, duplicate), reassign ids across the **entire** cloned subtree
+(`reassignIdsInPlace(node, maxIdIn(tree)+1)`), not just the root node. The mock's
+emitter ids double as React keys; a descendant that keeps its original id collides
+with an existing node of the same id and React throws *"Encountered two children with
+the same key."*
+
+**Why it slips past unit tests.** A helper unit test that seeds the clipboard with
+ids far from the tree's ids (e.g. clipboard ids 99/100 vs tree ids 0–5) passes even
+when only the top node is re-id'd — the descendants happen not to collide. The test
+must use a clipboard subtree whose **descendant ids overlap** the tree's existing ids,
+then assert global id-uniqueness across the whole result tree
+(`new Set(allIds).size === allIds.length`).
+
+**The native engine is NOT affected.** The C++ engine assigns sequential `index`
+values on insert (`pEmitter->index = m_emitters.size()`), so the host paste path never
+had this bug — it's purely an artifact of the mock's flat id-as-key model. Don't
+"fix" the host for a mock-only defect.
+
+**Source incident (2026-06-07, session 22, Paste As ▸ Child / SEL-5/MNU-4).**
+`pasteAsChildFromClipboard` re-id'd only the top node (`{...cloneNode(buf[0]), id:
+newId, role: slot}`). The 5 helper unit tests passed (clipboard ids 99/100). **Live**
+Playwright (L-067) surfaced it on the first real paste: copying "Smoke" (children ids
+1, 2) onto the default tree (which already has ids 1, 2) logged four React duplicate-key
+errors. Fix: `reassignIdsInPlace(child, newId)` (the helper the root-paste already used)
++ a regression test with colliding ids. Cross-reference [L-067] (real input catches what
+synthetic/unit can't) and the existing `pasteEmittersFromClipboard` (root paste already
+did this correctly — the new helper should have reused its id-reassignment from the start).

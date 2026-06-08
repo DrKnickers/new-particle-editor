@@ -16,6 +16,40 @@ Conventions:
 
 ## Changelog
 
+### Paste As ▸ Lifetime / Death Child (new-UI · SEL-5 / MNU-4)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The emitter-tree context menu regains the legacy **"Paste As ▸ Child"** capability. After
+copying or cutting an emitter, right-click another emitter and choose **Paste As ▸ Lifetime
+Child** or **Death Child** to drop the clipboard emitter (with its whole subtree) into that
+emitter's child slot, instead of pasting it as a new root. Each item is greyed unless the
+clipboard has content **and** that slot is free — the same single-occupancy rule as the
+existing "Add Lifetime/Death Child" items and legacy's `spawnDuringLife/spawnOnDeath == -1`
+gates. The "Paste As" submenu itself greys out while nothing is copied.
+
+**How tackled.** A new `emitters/paste-as-child { parentId, slot }` bridge command,
+implemented in both the C++ host ([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp:4605))
+and the MockBridge. The host handler is a splice of two paths already in the file — the
+`emitters/paste` deserialise (`MemoryFile` + `ChunkReader` + `GenerateDuplicateName`) and the
+`emitters/add-lifetime-child` attach (`addLifetimeEmitter`/`addDeathEmitter`, which self-guard
+by returning `NULL` on an occupied slot). The tree submenu uses Radix `ContextMenu.Sub` with
+its own `OccludingContextSubContent` wrapper, so the submenu — rendered in a separate portal —
+registers its own viewport-occlusion rect and isn't overpainted by the layered D3D viewport
+popup. A multi-emitter clipboard pastes only the first buffer (a slot holds one child).
+
+**Issues encountered and resolutions.** The mock's `pasteAsChildFromClipboard` first re-id'd
+only the *top* pasted node, so copying an emitter whose descendant ids collided with existing
+emitters produced duplicate React keys (caught live: pasting "Smoke" — children ids 1, 2 — over
+a tree that already had ids 1, 2). Fixed by re-id'ing the *whole* subtree via the existing
+`reassignIdsInPlace`, with a regression test asserting global id-uniqueness. The native engine
+was never affected (it assigns sequential indices on insert), but the bug is a good reminder
+that mock tree helpers must re-id entire subtrees. No a11y golden change — the tree context
+menu is opened only transiently to reach dialogs and is never itself a captured surface. Web
+suite 510; native harness 169 (incl. a new real-host round-trip spec).
+
+---
+
 ### Import Emitters dialog "Clear" button (new-UI · MNU-12)
 
 *2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
