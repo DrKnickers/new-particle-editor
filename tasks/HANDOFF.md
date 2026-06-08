@@ -1,11 +1,37 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-07 (session 22) — **SEL-5/MNU-4 Paste As ▸ Child shipped + FF-pushed (`origin/lt-4 = 859d628`)**. User launched the native `--new-ui` host, tested it, approved. NEXT: VPT-2 follow-up / wrap
+## 2026-06-07 (session 22b) — **4-item polish batch shipped (web + native re-baseline)**. On the branch, NOT yet FF-pushed beyond `859d628`. NEXT: FF-push the polish batch / VPT-2 / wrap
 
-**`origin/lt-4` = `859d628`** (FF-pushed `3ba8ae7..859d628`, 8 commits this session segment; user
-tested the live native build first). **No `master` changes.** Web vitest **510 / 0** (was 502; +8
-paste-as-child); `tsc --noEmit` 0. Native harness **169 / 0** (was 168; +1 real-host paste-as-child
-round-trip). **Native lane restored + rebuilt this session** (Debug x64 + dist).
+**`origin/lt-4` = `859d628`** (Paste-As-Child, FF-pushed + user-tested earlier this session). The
+**polish batch** (`59238a6`..`d621fca`, 6 commits) is on `claude/flamboyant-zhukovsky-38a3ff`, a
+clean descendant of `859d628` — **held pending FF-push**. **No `master` changes.** Web vitest
+**513 / 0** (was 510; +3 rotation, label/bracket tests swapped in place); `tsc -b` clean (L-070:
+use the build's `tsc -b`, NOT `--noEmit`, after touching tests). Native harness **169 / 0**;
+**19 a11y goldens re-baselined** (one shared cause — the `<details>`→button section conversion in
+the Spawner panel that every full-page golden captures + the Lighting dialog).
+
+### Polish batch commits (newest first)
+- `d621fca` **test(a11y)** — 19-golden re-baseline for the `<details>`→button conversion + 2 native
+  `summary`→`[role=button]` Bloom-selector fixes.
+- `e5898b3` **fix(test)** — loosen a bracket-select `mock.calls` annotation that `tsc -b` rejected
+  (L-070).
+- `0f0e4d3` **feat(new-ui)** — animated expand/collapse for ALL caret sections. Shared
+  `.collapse-anim` grid-rows utility (no dep); ToolPanel.Section converted `<details>`→controlled.
+  Collapsed bodies leave the a11y tree via `visibility:hidden`. Live-verified the tween.
+- `84a6d79` **feat(new-ui)** — click a link-group bracket to select all members (10px hit-zone,
+  LNK-6 guarded; live-verified via `elementFromPoint`).
+- `fea98d2` **feat(new-ui)** — Rotation curve exclusive (like Index/Scale); one `EXCLUSIVE_CHANNELS`
+  entry + 3 tests.
+- `59238a6` **feat(new-ui)** — Appearance labels "Color:" / "Bump:".
+
+### ⚠️ New lesson — L-070
+`tsc --noEmit` does NOT type-check the test files; only the build's `tsc -b` (`pnpm build`) does.
+A test-file type error passed `--noEmit` + vitest green and failed the next `pnpm build`. After
+editing any test, gate on `pnpm build` / `tsc -b`. Full text: L-070.
+
+### — Paste-As-Child (session 22, already FF-pushed at `859d628`) —
+
+**Web vitest 510 / 0 at that point; native 169 / 0.** Native lane restored + rebuilt this session.
 
 ### The commits (newest first; `765821d`..`df7ee16` = the feature)
 - `df7ee16` **test(native)** — real-host paste-as-child round-trip (copy → paste-as-child into a

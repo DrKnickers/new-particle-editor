@@ -4123,3 +4123,30 @@ errors. Fix: `reassignIdsInPlace(child, newId)` (the helper the root-paste alrea
 + a regression test with colliding ids. Cross-reference [L-067] (real input catches what
 synthetic/unit can't) and the existing `pasteEmittersFromClipboard` (root paste already
 did this correctly — the new helper should have reused its id-reassignment from the start).
+
+## L-070 — The editor's `tsc --noEmit` does NOT type-check the test files; only the build's `tsc -b` (or `pnpm build`) does — so a type error in a `*.test.tsx` passes the quick check and fails the dist build
+
+**Rule.** After editing any `*.test.tsx` / `*.spec.ts`, the authoritative type gate is
+`pnpm --filter @particle-editor/editor build` (which runs `tsc -b && vite build`) or
+`tsc -b` directly — NOT `tsc --noEmit`. `--noEmit` runs against the app tsconfig, whose
+`include`/references don't cover the test project, so test-file type errors slip through
+green. The dist build (and therefore the native a11y harness, which serves `dist`) runs
+`tsc -b`, which builds the test project and WILL fail.
+
+**The tell.** `pnpm --filter @particle-editor/editor exec tsc --noEmit` → exit 0, but
+`pnpm --filter @particle-editor/editor build` → `error TSxxxx` in a `*.test.tsx` then
+`Command failed with exit code 2: tsc -b`. The vitest run still PASSES (vitest transpiles
+per-file without full project type-checking), so a bad test type annotation is green in
+both `vitest` and `tsc --noEmit` yet red in the build.
+
+**How to apply.** Treat `tsc --noEmit` as a fast smoke check only. Before claiming "tsc
+clean" on any change that touches tests — and ALWAYS before the L-068 `pnpm build` that
+precedes the native harness — run the real build or `tsc -b`. If `pnpm build` dies on a
+test-file type error, fix the test annotation; don't loosen the app tsconfig.
+
+**Source incident (2026-06-07, session 22 polish batch).** A bracket-select test annotated
+`bridge.request.mock.calls.some((c: [{...}]) => …)` — a tuple type that `.some()` rejects.
+`tsc --noEmit` passed and the commit shipped; the next `pnpm build` (for the a11y rebuild)
+failed at `tsc -b` with `TS2345 … Target requires 1 element(s) but source may have fewer`.
+Fix: drop the tuple annotation, cast `c[0]` instead. Cross-reference [L-068] (build dist
+before the harness) — this gate sits right before that one.

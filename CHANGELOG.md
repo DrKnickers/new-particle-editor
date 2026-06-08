@@ -16,6 +16,63 @@ Conventions:
 
 ## Changelog
 
+### Animated expand/collapse for collapsible sections (new-UI)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Every caret/disclosure section in the new UI now opens and closes with a smooth height
+animation instead of snapping. This covers the inspector property-tab sections, the Lighting
+and Spawner tool-panel sections, and the Link Group Settings category groups — all the
+"groups with a caret."
+
+**How tackled.** A single shared CSS utility, `.collapse-anim`
+([`components.css`](src/styles/components.css)), animates a one-row grid's track from `1fr`
+to `0fr` (the modern dependency-free collapse trick); a padding-free clip div inside it lets
+the body reach a true `0`, and the collapsed body is pulled out of the a11y tree + tab order
+via `visibility:hidden` applied *after* the collapse finishes (transition-delay), so the
+content is still visible while it slides shut. `prefers-reduced-motion` disables the tween.
+All three disclosure patterns route through it. The tool-panel sections
+([`ToolPanel.tsx`](src/components/ToolPanel.tsx)) were converted from native `<details>` to a
+controlled `useState` header (matching `Section.tsx`) because native `<details>` toggles
+content instantly and can't tween.
+
+**Issues encountered and resolutions.** Two things surfaced during the native re-baseline. (1)
+The body's `6px+2px` vertical padding kept the collapsed grid track at ~8px until the
+padding-free clip div was added — padding can't be clipped by `min-height:0`. (2) The
+`<details>`→`button` conversion re-baselined 19 composition goldens under one shared cause
+(the Spawner panel, present in every full-page golden, plus the Lighting dialog), and broke
+two native specs that clicked `summary:has-text("Bloom")` — updated to
+`[role="button"]:has-text("Bloom")`. Collapsed sections correctly stay out of the a11y tree
+(the real browser honours `visibility:hidden`), matching the prior unmount behaviour.
+
+---
+
+### Curve, link-group, and Appearance polish (new-UI)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Three small parity/usability tweaks. The Appearance tab's texture labels shorten from "Color
+texture:" / "Bump texture:" to **"Color:" / "Bump:"**. The curve editor's **Rotation** channel
+is now **exclusive** like Index and Scale — soloing it hides the others (its degrees/sec scale
+doesn't share the 0..1 RGBA band). And clicking a **link-group bracket** in the emitter tree
+now **selects every member of that group** (it was visual-only before).
+
+**How tackled.** Labels: two `label=` props in
+[`EmitterPropertyTabs.tsx`](src/screens/EmitterPropertyTabs.tsx). Rotation: one entry added to
+the central `EXCLUSIVE_CHANNELS` set ([`CurveEditorPanel.tsx`](src/components/CurveEditorPanel.tsx)),
+which three call-sites already read. Bracket selection: the bracket gained a one-lane-wide
+(10px) clickable hit-zone wrapping the visible 2px line, dispatching `setIds(members, members[0])`
++ an `emitters/select` primary sync ([`EmitterTree.tsx`](src/screens/EmitterTree.tsx)).
+
+**Issues encountered and resolutions.** The bracket was deliberately `pointer-events-none`
+(LNK-6: a clickable bracket once "wiped an in-progress selection" because it overlays the
+full-width row buttons). The fix keeps pointer events on *only* the 10px hit-zone (the gutter
+stays inert) and `stopPropagation`s the click + pointerdown so the press never reaches the row
+or starts a marquee. Verified live via `elementFromPoint` — the bracket owns only its 10px
+band; the row owns every other x.
+
+---
+
 ### Paste As ▸ Lifetime / Death Child (new-UI · SEL-5 / MNU-4)
 
 *2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
