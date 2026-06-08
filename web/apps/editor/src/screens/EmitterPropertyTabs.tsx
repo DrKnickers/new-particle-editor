@@ -1069,7 +1069,7 @@ export function AppearanceTab({
             button (host native dialog via textures/browse) + palette
             button (frequently-used per-mod pinned/recent popup). */}
         <TexturePickerField
-          label="Color texture:"
+          label="Color:"
           slot="color"
           value={properties.colorTexture}
           onCommit={(v) => onCommit({ colorTexture: v })}
@@ -1077,7 +1077,7 @@ export function AppearanceTab({
           bridge={bridge}
         />
         <TexturePickerField
-          label="Bump texture:"
+          label="Bump:"
           slot="bump"
           value={properties.normalTexture}
           onCommit={(v) => onCommit({ normalTexture: v })}

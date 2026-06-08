@@ -176,8 +176,8 @@ describe("EmitterPropertyTabs", () => {
     // P6).
     const expectedLabels = [
       // Textures
-      "Color texture:",
-      "Bump texture:",
+      "Color:",
+      "Bump:",
       "Texture elements:",
       "Minimum scale:",
       // Random color addition
