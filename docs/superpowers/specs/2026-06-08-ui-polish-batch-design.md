@@ -49,9 +49,12 @@ column is too narrow. `100.00` needs ≈64px (text + arrows + left pad).
   (mid 73 / wide 87 / x2 116px, lines 707–709). The **unmitigated** risk is
   2-decimal values ≥ 3 integer digits (`100.00`, `-50.00`) in **Appearance/
   Physics** non-boosted spinners (Gravity, Inward accel/speed, Bounciness, Tail
-  length, Weather distance/size at 100+). *Secondary fix (recommended, elegant):*
-  unify the default `.form-row` spinner column to **73px** (matching Basic) so
-  the whole inspector is consistently safe in one rule. The `sim-speed-stepper`
+  length, Weather distance/size at 100+). *Secondary fix (CONFIRMED in scope):*
+  unify the default `.form-row` spinner column from 58px to **73px** (matching
+  Basic, [components.css:570](../../../web/apps/editor/src/styles/components.css:570))
+  so the whole inspector is consistently safe in one rule; Basic's explicit 73px
+  override (line 615) then becomes redundant and can be dropped. The
+  `sim-speed-stepper`
   (56px, overflow:hidden) stays ≤ `4.00×` → low risk, no change. Label ellipsis
   (with `title` tooltips) is intentional and excluded.
 
