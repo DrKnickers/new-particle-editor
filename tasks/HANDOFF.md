@@ -1,6 +1,32 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-07 (session 22b) — **TWO polish batches shipped (8 + 4 items)**. On the branch, NOT yet FF-pushed beyond `859d628`. NEXT: FF-push both batches / VPT-2 / wrap
+## 2026-06-07 (session 23) — **Both polish batches FF-pushed (`origin/lt-4 = 9c531e1`, user-tested). Dock-animation task ATTEMPTED then REVERTED (native host hang).** NEXT: VPT-2 / wrap / retry dock via overlay
+
+**`origin/lt-4` = `9c531e1`** — the two polish batches (Paste-As-Child + the 8-item and 4-item
+UI batches) are all FF-pushed and user-tested. **No `master` changes.** Web vitest **513 / 0**;
+native harness **169 / 0** at this tip. `dist` rebuilt to match. Tree clean (matches origin/lt-4).
+
+### Dock entrance/exit animation + flicker — attempted, reverted
+Tried to animate the spawner/lighting dock open/close + fix the left-pane flicker. **Worked in
+the browser** (flicker fixed via always-mounted collapsible Panel; smooth slide; drags instant)
+but **hung the native host** in the full a11y harness — a cumulative C++-side hang on the
+in-place viewport-resize-per-dock-toggle path (NOT the animation, NOT raw resize — every test
+passes in isolation; `dxgi-resize-stress` 50× passes). Root cause needs a native debugger /
+host-side logging, not driveable remotely. **Reverted to `9c531e1`** (the dock commit was local,
+never pushed). Full write-up + next-attempt guidance (add host instrumentation, OR pivot to an
+overlay drawer that doesn't resize the viewport):
+[`docs/superpowers/specs/2026-06-07-dock-animation-findings.md`](../docs/superpowers/specs/2026-06-07-dock-animation-findings.md).
+
+### NEXT options
+1. **VPT-2 follow-up** — per-tick undo coalescing (the last genuinely-open delta-report item;
+   deferred unless a user reports it).
+2. **Wrap** — the UI delta report's open list is empty but for VPT-2.
+3. **Retry the dock animation** as an OVERLAY drawer (sidesteps the viewport-resize host hang),
+   OR with native host instrumentation to root-cause the in-layout hang.
+
+---
+
+## 2026-06-07 (session 22b) — **TWO polish batches shipped (8 + 4 items)**. FF-pushed (`9c531e1`). NEXT: FF-push both batches / VPT-2 / wrap
 
 **`origin/lt-4` = `859d628`** (Paste-As-Child, FF-pushed + user-tested earlier this session).
 **Both polish batches** (`59238a6`..`27ff116`, ~12 commits) are on
