@@ -9,11 +9,18 @@ describe("Section", () => {
     expect(screen.getByText("child")).toBeInTheDocument();
   });
 
-  it("clicking the header collapses the section (children hidden)", () => {
-    render(<Section title="Generation"><div>child</div></Section>);
+  it("clicking the header collapses the section (animated wrapper flips data-open)", () => {
+    // Post-animation: the body stays mounted and collapses via the
+    // .collapse-anim grid + CSS visibility (jsdom can't see the CSS hide,
+    // so we assert the state attribute that drives it). Content presence
+    // is no longer the collapse signal.
+    const { container } = render(<Section title="Generation"><div>child</div></Section>);
     const header = screen.getByTestId("section-generation");
+    const anim = container.querySelector(".collapse-anim");
+    expect(anim).toHaveAttribute("data-open", "true");
     fireEvent.click(header);
-    expect(screen.queryByText("child")).not.toBeInTheDocument();
+    expect(anim).toHaveAttribute("data-open", "false");
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
   it("clicking again expands the section back", () => {
@@ -27,15 +34,17 @@ describe("Section", () => {
   it("pressing Enter on the focused header toggles", () => {
     render(<Section title="Render"><div>child</div></Section>);
     const header = screen.getByTestId("section-render");
+    expect(header).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(header, { key: "Enter" });
-    expect(screen.queryByText("child")).not.toBeInTheDocument();
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
   it("pressing Space on the focused header toggles", () => {
     render(<Section title="Texture"><div>child</div></Section>);
     const header = screen.getByTestId("section-texture");
+    expect(header).toHaveAttribute("aria-expanded", "true");
     fireEvent.keyDown(header, { key: " " });
-    expect(screen.queryByText("child")).not.toBeInTheDocument();
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
   it("aria-expanded reflects open/closed state", () => {
@@ -59,9 +68,11 @@ describe("Section", () => {
   });
 
   it("respects defaultOpen=false", () => {
-    render(<Section title="Turbulence" defaultOpen={false}><div>child</div></Section>);
-    expect(screen.queryByText("child")).not.toBeInTheDocument();
+    const { container } = render(
+      <Section title="Turbulence" defaultOpen={false}><div>child</div></Section>,
+    );
     const header = screen.getByTestId("section-turbulence");
     expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector(".collapse-anim")).toHaveAttribute("data-open", "false");
   });
 });

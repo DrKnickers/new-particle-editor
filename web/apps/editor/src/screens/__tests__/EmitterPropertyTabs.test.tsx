@@ -491,11 +491,20 @@ describe("EmitterPropertyTabs", () => {
     // Post-B1.3-P3: Lifetime moved into Generation, so test the
     // collapse via an Emitter Timing field that still lives there
     // (Initial spawn delay).
+    const header = screen.getByTestId("section-emitter-timing");
     expect(screen.getByLabelText("Initial spawn delay:")).toBeInTheDocument();
-    // Collapse Emitter Timing.
-    fireEvent.click(screen.getByTestId("section-emitter-timing"));
-    // Initial spawn delay field is no longer in the DOM.
-    expect(screen.queryByLabelText("Initial spawn delay:")).not.toBeInTheDocument();
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    // Collapse Emitter Timing. Post-animation the body stays mounted and
+    // collapses via the .collapse-anim wrapper (CSS height + visibility,
+    // which jsdom can't observe) — so assert the collapsed STATE, not the
+    // field's absence.
+    fireEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    const section = header.closest(".panel-section");
+    expect(section?.querySelector(".collapse-anim")).toHaveAttribute(
+      "data-open",
+      "false",
+    );
   });
 
   it("Name row uses the .name-row modifier class for its custom grid", async () => {

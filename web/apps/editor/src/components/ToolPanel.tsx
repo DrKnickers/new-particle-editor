@@ -26,7 +26,7 @@
 // Background pill again, picking a different Tools-menu entry).
 
 import { ChevronDown, X } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { useViewportOcclusion } from "@/lib/viewport-occlusion";
 
@@ -136,14 +136,50 @@ function ToolPanelSection({
       </section>
     );
   }
+  // Controlled (was native <details>) so the body can animate — native
+  // details toggles content instantly and can't tween. Header matches
+  // Section.tsx (div role=button) so both controlled disclosures expose
+  // the same a11y shape + chevron behaviour.
+  return <CollapsibleSection title={title} defaultOpen={defaultOpen}>{children}</CollapsibleSection>;
+}
+
+function CollapsibleSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen: boolean;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const toggle = () => setOpen((o) => !o);
   return (
-    <details className="panel-section" open={defaultOpen}>
-      <summary className="panel-section-header">
+    <section className="panel-section" data-open={open}>
+      <div
+        className="panel-section-header"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        aria-expanded={open}
+      >
         <span>{title}</span>
         <ChevronDown className="chev size-3" />
-      </summary>
-      <div className="panel-section-body">{children}</div>
-    </details>
+      </div>
+      <div className="collapse-anim" data-open={open}>
+        {/* padding-free clip div so collapse reaches a true 0 (the body's
+            vertical padding would otherwise leave a sliver). */}
+        <div>
+          <div className="panel-section-body">{children}</div>
+        </div>
+      </div>
+    </section>
   );
 }
 

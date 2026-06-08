@@ -510,17 +510,43 @@
   flex-shrink: 0;
   transition: transform 0.12s;
 }
-/* Collapsed state: chevron points right. Two selectors bridge the two
- * consumer state shapes — `[data-open="false"]` for the controlled
- * <div> in Section.tsx; `details…:not([open])` for native <details>
- * (ToolPanel.Section). The details arm MUST be scoped to `details`:
- * a bare `.panel-section:not([open])` also matches Section.tsx's
- * <div> (a div can never carry an `open` attribute), which pinned the
- * property-tab chevrons at -90° in BOTH states so they never animated.
- * Scoping to `details` lets the <div> rotate solely off `data-open`. */
-.panel-section[data-open="false"] .chev,
-details.panel-section:not([open]) .chev {
+/* Collapsed state: chevron points right. Every collapsible consumer is
+ * now controlled (Section.tsx + ToolPanel.Section + CategorySection all
+ * use a `data-open` attribute), so one selector covers them — the native
+ * `<details>` arm was retired when ToolPanel.Section became controlled to
+ * enable the body collapse animation below. */
+.panel-section[data-open="false"] .chev {
   transform: rotate(-90deg);
+}
+
+/* Animated expand/collapse body. Self-contained utility (independent of
+ * `.panel-section`) so all three disclosure patterns can share it. The
+ * body lives in a one-row grid whose track tweens 1fr↔0fr; the single
+ * child clips via overflow:hidden + min-height:0. Content stays MOUNTED
+ * so it can animate — but a collapsed body is pulled OUT of the a11y tree
+ * and tab order via `visibility:hidden`, applied only AFTER the collapse
+ * finishes (transition-delay) so the content is still visible while it
+ * slides shut. Expand makes it visible immediately, then the height
+ * animates open. */
+.collapse-anim {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.2s ease;
+}
+.collapse-anim > * {
+  overflow: hidden;
+  min-height: 0;
+}
+.collapse-anim[data-open="false"] {
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows 0.2s ease, visibility 0s linear 0.2s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .collapse-anim,
+  .collapse-anim[data-open="false"] {
+    transition: none;
+  }
 }
 
 .panel-section-body {

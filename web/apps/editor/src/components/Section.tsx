@@ -43,7 +43,16 @@ export function Section({ title, defaultOpen = true, children }: Props) {
         <span>{title}</span>
         <ChevronDown className="chev size-3" />
       </div>
-      {open && <div className="panel-section-body">{children}</div>}
+      {/* Body stays mounted (animated collapse via .collapse-anim); the
+          grid wrapper drives the height tween off data-open. The inner
+          padding-free clip div is the grid item that collapses to a true
+          0 — the padded body must be its child, or the body's vertical
+          padding would leave an ~8px sliver when collapsed. */}
+      <div className="collapse-anim" data-open={open}>
+        <div>
+          <div className="panel-section-body">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }

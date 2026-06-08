@@ -197,7 +197,7 @@ function CategorySection({
           onChange={(e) => onToggleCategory(fields, e.target.checked)}
         />
       </div>
-      {!collapsed && (
+      <div className="collapse-anim" data-open={!collapsed}>
         <div className="pl-4">
           {fields.map((field) => (
             <label
@@ -216,7 +216,7 @@ function CategorySection({
             </label>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
