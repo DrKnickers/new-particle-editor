@@ -3767,6 +3767,22 @@ caller can forget). **Rule extension:** the reseat invariant applies to EVERY op
 that reassigns a track container, including bulk copies between emitters — and when a copy
 can touch many tracks on many emitters, use the broad `-1` reseat, not a per-track one.
 
+**Addendum (2026-06-08) — the `-1` reseat was a NO-OP for cursors; this rule
+relied on a contract the code didn't honor.** The Ctrl+scroll-Burst-delay-on-a-
+linked-emitter crash (`xtree:181`) re-surfaced this exact class. Root cause:
+`EmitterInstance::onParticleSystemChanged(track)` split into
+`if (track == -1) { recompute composites/textures/blend } else { reseat cursors }`
+— so the broad `OnParticleSystemChanged(-1)` this lesson prescribes (and that
+`propagateLinkGroup` dutifully calls after `copySharedParamsFrom`) **never
+reseated cursors at all**; only the per-track `track >= 0` branch did. The
+composites got recomputed, the siblings' orphaned cursors stayed singular →
+crash on the next `Engine::Update`. Fix: run the cursor reseat for BOTH branches
+— `track == -1` now reseats EVERY track (a `track != -1` guard also short-
+circuits the otherwise out-of-bounds `tracks[-1]` read). **Lesson within the
+lesson:** a comment claiming "`OnParticleSystemChanged(-1)` reseats cursors" is
+not proof — verify the `-1` branch actually contains the reseat loop. Trust the
+code, not the prescription (L-022).
+
 ## L-060 — An interactive (`pointer-events:auto`) overlay positioned OVER a full-width clickable row steals the row's clicks in its band; there is no z-order "click priority" — the topmost element wins, so an interactive overlay and a full-width row click cannot coexist, one must yield
 
 **The trap.** LNK-6 made the link-group bracket gutter click-to-select-a-group. The
