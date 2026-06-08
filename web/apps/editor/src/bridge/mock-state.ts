@@ -600,8 +600,11 @@ export function pasteAsChildFromClipboard(
   if (parent === null) return null;
   if (parent.children.some((c) => c.role === slot)) return null;
   const newId = maxIdIn(tree) + 1;
-  const seed = cloneNode(buffer[0]);
-  const child: EmitterTreeNode = { ...seed, id: newId, role: slot };
+  // Clone + re-id the WHOLE subtree from newId (depth-first) so no pasted
+  // node collides with an existing id; then re-role the top to the slot.
+  const child = cloneNode(buffer[0]);
+  reassignIdsInPlace(child, newId);
+  child.role = slot;
   const next = mapNode(tree, parentId, (n) => ({
     ...n,
     // Lifetime renders before death (during-life before on-death).

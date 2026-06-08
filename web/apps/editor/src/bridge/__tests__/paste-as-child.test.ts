@@ -66,6 +66,24 @@ describe("pasteAsChildFromClipboard", () => {
   it("returns null for an unknown parent", () => {
     expect(pasteAsChildFromClipboard(freshTree(), clip, 999, "lifetime")).toBeNull();
   });
+
+  it("re-ids the WHOLE pasted subtree so no id collides with the tree", () => {
+    // Clipboard subtree whose descendant ids (1, 2) collide with the
+    // fresh tree's existing ids — the pasted nodes must all be re-id'd,
+    // or React renders duplicate keys.
+    const colliding: EmitterTreeNode[] = [
+      node(0, "Src", "root", [
+        node(1, "Src life", "lifetime"),
+        node(2, "Src death", "death"),
+      ]),
+    ];
+    const r = pasteAsChildFromClipboard(freshTree(), colliding, 1, "lifetime");
+    expect(r).not.toBeNull();
+    const ids: number[] = [];
+    const walk = (n: EmitterTreeNode) => { ids.push(n.id); n.children.forEach(walk); };
+    walk(r!.tree.root);
+    expect(new Set(ids).size).toBe(ids.length); // all unique
+  });
 });
 
 describe("MockBridge emitters/paste-as-child", () => {
