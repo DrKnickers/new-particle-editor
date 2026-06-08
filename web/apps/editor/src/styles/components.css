@@ -648,9 +648,11 @@
    widens (the filename is the useful content); the label is a fixed
    width so both rows align, and the Browse button sizes to content. The
    Browse button opens the host-side native file dialog (textures/browse).
-   [LT-4 feature-parity A] */
+   The label column is sized to the shortened "Color:" / "Bump:" labels
+   (was 96px for the old "Color texture:" labels) so the freed width flows
+   into the filename input. [LT-4 feature-parity A] */
 .form-row.form-row-texture {
-  grid-template-columns: 96px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
 }
 .form-row.form-row-texture .text-input {
   min-width: 0;
@@ -1190,7 +1192,10 @@
 /* react-resizable-panels 4.x emits `data-separator` on the handle.
    Active-drag styling piggybacks on the `:active` pseudo-class
    (4.x dropped the `data-resize-handle-active` attribute that 2.x
-   exposed). 4 px hit area matches the existing border affordance;
+   exposed). 8 px visible band == the hit/cursor zone (the Groups set
+   `resizeTargetMinimumSize.fine = 8`, so the library no longer inflates
+   a thin 4px handle to its 10px default — which used to spill the resize
+   cursor ~3px onto the viewport where no splitter was visible);
    --accent-soft hover preview is a tactile but quiet signal. */
 [data-separator].ce-splitter {
   /* Opaque app-shell colour, NOT transparent. In arch-C the engine DComp
@@ -1207,11 +1212,11 @@
   background: var(--accent-soft);
 }
 [data-separator].ce-splitter-v {
-  width: 4px;
+  width: 8px;
   cursor: col-resize;
 }
 [data-separator].ce-splitter-h {
-  height: 4px;
+  height: 8px;
   cursor: row-resize;
 }
 [data-separator].ce-splitter:focus-visible {

@@ -53,6 +53,13 @@ import { SpawnerPanel } from "@/screens/SpawnerPanel";
 
 export type { Layout };
 
+// Splitter hit/cursor zone. The visible `.ce-splitter` band is 8px; we pin
+// the library's mouse (`fine`) resize-target minimum to the same 8px so it
+// stops inflating a thin handle to its 10px default — which spilled the
+// resize cursor ~3px onto the viewport where no splitter was visible.
+// `coarse` (touch) stays generous; this is a mouse-driven desktop app.
+const RESIZE_HIT_MIN = { coarse: 20, fine: 8 } as const;
+
 // In-code defaults. Each map's keys must match the id= attributes on
 // the corresponding Panel components below.
 const OUTER_3COL_DEFAULTS: Layout = { left: 20, center: 60, spawner: 20 };
@@ -245,6 +252,7 @@ export function PanelLayout({ bridge }: Props) {
       orientation="horizontal"
       defaultLayout={outerDefaultLayout}
       onLayoutChanged={onOuterLayoutChanged}
+      resizeTargetMinimumSize={RESIZE_HIT_MIN}
       style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
     >
       {/* Pixel (not %) minSize: inspector `.form-row` labels live in a
@@ -271,6 +279,7 @@ export function PanelLayout({ bridge }: Props) {
               orientation="vertical"
               defaultLayout={left.defaultLayout}
               onLayoutChanged={left.onLayoutChanged}
+              resizeTargetMinimumSize={RESIZE_HIT_MIN}
               style={{ flex: 1, minHeight: 0 }}
             >
               <Panel
@@ -314,6 +323,7 @@ export function PanelLayout({ bridge }: Props) {
           orientation="vertical"
           defaultLayout={center.defaultLayout}
           onLayoutChanged={center.onLayoutChanged}
+          resizeTargetMinimumSize={RESIZE_HIT_MIN}
           style={{ flex: 1, minHeight: 0, width: "100%" }}
         >
           <Panel
