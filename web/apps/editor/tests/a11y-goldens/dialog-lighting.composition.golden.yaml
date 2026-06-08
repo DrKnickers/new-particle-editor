@@ -152,25 +152,25 @@
   - dialog "Lighting":
     - text: Lighting
     - button "Close"
-    - group:
-      - text: Sun Intensity
-      - textbox "Sun intensity": "0.50"
-      - button "Increment": ▲
-      - button "Decrement": ▼
-      - text: Azimuth
-      - textbox "Sun azimuth": "0.00"
-      - button "Increment": ▲
-      - button "Decrement": ▼
-      - text: Altitude
-      - textbox "Sun altitude": "45.00"
-      - button "Increment": ▲
-      - button "Decrement": ▼
-      - text: Diffuse
-      - button "Sun diffuse colour": "#B4B4BE"
-      - text: Specular
-      - button "Sun specular colour": "#BEBEC8"
-    - group: Fill 1
-    - group: Fill 2
+    - button "Sun" [expanded]
+    - text: Intensity
+    - textbox "Sun intensity": "0.50"
+    - button "Increment": ▲
+    - button "Decrement": ▼
+    - text: Azimuth
+    - textbox "Sun azimuth": "0.00"
+    - button "Increment": ▲
+    - button "Decrement": ▼
+    - text: Altitude
+    - textbox "Sun altitude": "45.00"
+    - button "Increment": ▲
+    - button "Decrement": ▼
+    - text: Diffuse
+    - button "Sun diffuse colour": "#B4B4BE"
+    - text: Specular
+    - button "Sun specular colour": "#BEBEC8"
+    - button "Fill 1"
+    - button "Fill 2"
     - checkbox "Force Align Fill Lights" [checked]
     - text: Force Align Fill Lights Ambient Colour
     - button "Ambient colour": "#282832"
@@ -178,5 +178,5 @@
     - button "Shadow colour": "#64646E"
     - button "Mirror Sun" [disabled]
     - button "Reset"
-    - group: Bloom
+    - button "Bloom"
 - contentinfo: "FPS — · Emitters — · Particles — · Instances — · Cursor — PAUSED ⇧ Shift: spawn instance"

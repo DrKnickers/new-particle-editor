@@ -275,8 +275,10 @@ test("keyboard input via CDP reaches focused React input under composition", asy
     timeout: 2000,
   });
   // Expand the collapsible Bloom section so its checkbox is actionable.
+  // (Section header is a controlled div[role="button"] since the
+  // <details>→controlled conversion that enabled the collapse animation.)
   await page
-    .locator('[role="dialog"][aria-label="Lighting"] summary:has-text("Bloom")')
+    .locator('[role="dialog"][aria-label="Lighting"] [role="button"]:has-text("Bloom")')
     .first()
     .click();
 

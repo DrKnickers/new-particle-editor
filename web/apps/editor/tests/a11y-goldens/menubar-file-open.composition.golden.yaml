@@ -103,51 +103,51 @@
     - text: Auto
   - checkbox "Enable spawner"
   - text: Enabled
-  - group:
-    - text: Burst Burst size
-    - textbox "Burst size": "1"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Spacing
-    - textbox "Burst spacing": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Interval
-    - textbox "Burst interval": "10.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-  - group:
-    - text: Position X
-    - textbox "Position X": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: "Y"
-    - textbox "Position Y": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Z
-    - textbox "Position Z": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-  - group:
-    - text: Velocity X
-    - textbox "Velocity X": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: "Y"
-    - textbox "Velocity Y": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
-    - text: Z
-    - textbox "Velocity Z": "0.00"
-    - button "Increment": ▲
-    - button "Decrement": ▼
+  - button "Burst" [expanded]
+  - text: Burst size
+  - textbox "Burst size": "1"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: Spacing
+  - textbox "Burst spacing": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: Interval
+  - textbox "Burst interval": "10.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - button "Position" [expanded]
+  - text: X
+  - textbox "Position X": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: "Y"
+  - textbox "Position Y": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: Z
+  - textbox "Position Z": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - button "Velocity" [expanded]
+  - text: X
+  - textbox "Velocity X": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: "Y"
+  - textbox "Velocity Y": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
+  - text: Z
+  - textbox "Velocity Z": "0.00"
+  - button "Increment": ▲
+  - button "Decrement": ▼
   - text: Lifetime Max lifetime
   - textbox "Max lifetime": "5.00"
   - button "Increment": ▲
   - button "Decrement": ▼
-  - group: Jitter position
-  - group: Jitter velocity
+  - button "Jitter position"
+  - button "Jitter velocity"
 - contentinfo: "FPS — · Emitters — · Particles — · Instances — · Cursor — PAUSED ⇧ Shift: spawn instance"
 - menu "File":
   - menuitem "New Ctrl+N"

@@ -117,7 +117,7 @@ test("Toggling Enable Bloom fires engine/set/bloom (observed via state/changed)"
   await openMenuItem(page, "View", "Lighting");
   await waitForPanel(page, "Lighting");
   await page
-    .locator('[role="dialog"][aria-label="Lighting"] summary:has-text("Bloom")')
+    .locator('[role="dialog"][aria-label="Lighting"] [role="button"]:has-text("Bloom")')
     .first()
     .click();
 
