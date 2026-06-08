@@ -133,6 +133,10 @@ function dragSeparator(
 // flat 20% — this stays correct at any window size (wide → falls back to 20%).
 const LEFT_MIN_PX = 330;
 const SPAWNER_MIN_PX = 260;
+// Visible/​hit width of a `.ce-splitter` handle (components.css). The outer
+// 3-col group has two of them (left|center, center|spawner); they're not
+// part of the panels' percentage budget.
+const SPLITTER_PX = 8;
 
 /** Width (px) of the horizontal outer Group whose `> [data-panel]` id set
  *  joins to `key` (e.g. "left,center,spawner"). 0 if not found. */
@@ -161,9 +165,14 @@ test("defaults render at 20/60/20 (outer, floor-clamped) + 25/75 (left) + 75/25 
   expect(outer).toBeDefined();
   // Floor-aware: left (330px) + spawner (260px) clamp upward at the narrow
   // test window; center takes the remainder. (±1 %.)
+  // react-resizable-panels' percentages are of the AVAILABLE space (the
+  // group width MINUS the resize handles), so subtract the two 8px outer
+  // splitters before applying the pixel-floor formula — otherwise the
+  // approximation drifts past 1% at the wider 8px handle width.
   const w3 = await outerGroupWidthPx("left,center,spawner");
-  const expLeft = flooredPct(LEFT_MIN_PX, w3, 20);
-  const expSpawner = flooredPct(SPAWNER_MIN_PX, w3, 20);
+  const avail3 = w3 - 2 * SPLITTER_PX;
+  const expLeft = flooredPct(LEFT_MIN_PX, avail3, 20);
+  const expSpawner = flooredPct(SPAWNER_MIN_PX, avail3, 20);
   const expCenter = 100 - expLeft - expSpawner;
   expect(Math.abs(outer.left - expLeft)).toBeLessThan(1);
   expect(Math.abs(outer.center - expCenter)).toBeLessThan(1);
