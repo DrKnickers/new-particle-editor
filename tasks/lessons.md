@@ -4150,3 +4150,55 @@ test-file type error, fix the test annotation; don't loosen the app tsconfig.
 failed at `tsc -b` with `TS2345 … Target requires 1 element(s) but source may have fewer`.
 Fix: drop the tuple annotation, cast `c[0]` instead. Cross-reference [L-068] (build dist
 before the harness) — this gate sits right before that one.
+
+## L-071 — A Playwright 30s timeout / "page closed" in the FULL native run that PASSES in isolation is a test-harness actionability race (often vs an animation), NOT a host hang — capture a trace before blaming C++
+
+**Rule.** When `pnpm test:native` fails with a 30s `Test timeout` /
+`Target page, context or browser has been closed` on ONE spec that passes in
+isolation, do NOT conclude "native host hang." First confirm the host is even
+implicated, then capture a Playwright trace to see the actual hung action.
+
+**The host-is-fine checklist (all cheap, all decisive):**
+- Harness exit code: **1** = ordinary spec failure; **2** = `hostDiedMidRun`
+  (the real host-death signal, with an `ECONNREFUSED ::1:9222` cascade). Exit 1
+  + later specs PASSING = the host never died (it pumps WebView2 on the same
+  thread, so a true host hang freezes CDP for ALL subsequent specs).
+- `host.log`: 0 `[COMP-engine-fail]`, healthy `[PERF]` fps, and entries from
+  specs that run AFTER the "failed" one = host alive throughout.
+- Crash dumps: no new `ParticleEditor.exe` in `%LOCALAPPDATA%\CrashDumps` and no
+  WebView2 `…\WebView2\EBWebView\Crashpad\reports\*` = neither host nor renderer
+  crashed.
+
+**Then trace it.** `pnpm test:native --trace retain-on-failure` (the harness
+forwards unknown args to Playwright). Extract `test-results/<spec>/trace.zip` (a
+zip; the action log is `0-trace.trace`, JSONL). Filter `"type":"(before|after|
+log)"`: the call with a `before` but no `after` is the hung action, and its `log`
+lines say WHY (`"… intercepts pointer events"`, `"element was detached from the
+DOM, retrying"`, `"waiting for element to be stable"`). That converts an opaque
+30s timeout into the exact element + reason.
+
+**The full-run-only tell = a cross-test race.** If it only reproduces in the
+FULL ordered run (never in isolation, never via `--grep` of just that spec), the
+trigger is state from a PRIOR test, not the spec itself. With the test-host
+harness specifically: pages cycle per spec (`browser.close()` over CDP), so
+in-memory renderer state does NOT persist across specs — look at host-side state
+OR, as here, a timing race where a prior test's UI ANIMATION is still in flight
+when the next test's helper clicks.
+
+**Design corollary — a transient/animating UI element must not present as a
+stable, actionable target.** A panel mid-exit-animation that's still a
+`role="dialog"` with a Close button is an un-clickable, vanishing target that
+Playwright (and a fast user) retry against. Mark it out of the
+interactive/queryable set while it animates (`data-state="closing"` to leave the
+"open" selector + `inert`), don't just hide it visually.
+
+**Source incident (2026-06-07, session 24, dock animation).** A prior handoff
+doc declared the re-applied dock animation a "native host hang needing a
+debugger" and reverted it. Every host-is-fine check above said otherwise; a
+trace showed the hung action was `closeAnyPanel`'s `closeBtn.click()` retrying
+30s because the Lighting dock's ~260ms close slide-out (`displayDock` lag) left
+its Close button collapsing-then-detaching. Fix = `closing` prop →
+`data-state="closing"` + `inert` (test-harness-only bug; real users unaffected).
+The animated dock then shipped green. Cross-reference [L-022] (handoff claims are
+not facts — verify against code), [L-066] (native phantom re-run), [L-067] (real
+input for drag/click features), [L-033] (arch-C visuals need the user's eye).

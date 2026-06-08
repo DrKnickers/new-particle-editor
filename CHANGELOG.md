@@ -16,6 +16,48 @@ Conventions:
 
 ## Changelog
 
+### Animated dock open/close + left-pane flicker fix (new-UI)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+The right-dock (Spawner / Lighting) now **slides open and closed** instead of snapping, and
+toggling it no longer **flickers the left pane**. Opening tweens the column out (0→~260px);
+closing slides it back. Splitter drags and window resizes stay instant (the transition is
+armed only for the duration of a toggle). Spawner↔Lighting swaps are an instant content swap
+(the column is already open).
+
+**How tackled.** The outer Group in [`PanelLayout.tsx`](src/components/PanelLayout.tsx) used to
+carry `key={dockVisible ? "3col" : "2col"}`, so every toggle **remounted the whole layout —
+left pane included** (the flicker, and the reason animation was impossible). It's now a single
+always-mounted `collapsible collapsedSize={0}` Panel driven by an imperative `usePanelRef()`
+(collapse/expand), with a toggle-scoped `flex-grow` transition (`.dock-animating` in
+[`components.css`](src/styles/components.css)) and a ~260ms `displayDock` content-lag so the
+pane slides out rather than popping. One persistence key replaces the old 2col/3col dual-key
+machinery. (Original work re-applied from the reverted `ddb0777`.)
+
+**Issues encountered and resolutions.** The animation was reverted once with a misdiagnosis —
+"native host hang needing a debugger." It is **not** a host hang: the host stays healthy across
+the whole native run (clean `host.log`, no crash dumps, 170+ specs pass *after* the failure,
+harness exit 1 not 2). A Playwright trace (`--trace retain-on-failure`) pinned the real cause:
+the harness helper `closeAnyPanel` clicks a panel's Close button, and during the ~260ms close
+slide-out the panel is still mounted (for the animation) but collapsing-to-zero and about to
+unmount — so the click is "intercepted by the animating group" then "detached," and Playwright
+retries the full 30s. It only surfaces in the *full ordered* run (a prior test's dock-close is
+still animating when the next test's `closeAnyPanel` fires) and never in isolation; **real
+users are unaffected** (a human doesn't click a panel sliding shut). Fix: a closing panel no
+longer presents as an open, interactive dialog — [`ToolPanel.tsx`](src/components/ToolPanel.tsx)
+takes a `closing` prop that stamps `data-state="closing"` (so it leaves the
+`[role="dialog"]:not([data-state])` selector), [`LightingPanel.tsx`](src/screens/LightingPanel.tsx)
+forwards it, and [`PanelLayout.tsx`](src/components/PanelLayout.tsx) computes
+`dockClosing = dock===null && displayDock!==null`, passes it down, and marks the closing
+`<aside>` `inert` (also an a11y correctness win — a sliding-out panel isn't interactive).
+`splitters.spec.ts` was rewritten to assert the new collapse-not-remount behaviour (a marker
+on the left pane survives the toggle = the flicker fix), and `ToolPanel.test.tsx` guards the
+`closing`→`data-state` contract. Native harness **175/0** (a11y goldens unchanged — the
+always-mounted dock is a11y-equivalent in the default open state); web vitest **510/0**.
+
+---
+
 ### Interaction polish: stable scrollbar gutter, wider texture field, clickable curve keys, splitter cursor (new-UI)
 
 *2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*

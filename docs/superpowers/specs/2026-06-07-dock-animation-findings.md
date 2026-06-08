@@ -1,65 +1,96 @@
-# Dock panel entrance/exit animation + left-pane flicker — attempt + findings (REVERTED)
+# Dock panel entrance/exit animation + left-pane flicker — root cause + fix (SHIPPED)
 
-*2026-06-07 · new-particle-editor / lt-4 · attempted then reverted to `9c531e1`*
+*2026-06-07 · new-particle-editor / lt-4*
+
+> **Correction (session 24).** An earlier pass on this doc concluded the dock
+> animation caused a **native host hang** needing a debugger, and reverted to
+> `9c531e1`. That diagnosis was **wrong on every structural claim** (see
+> "What the host-hang theory got wrong" below). Session 24 re-applied the dock,
+> root-caused the real failure with a Playwright trace, fixed it, and the
+> animated dock now ships green. This doc is rewritten to record what actually
+> happened.
 
 ## Goal
 Animate the spawner/lighting right-dock open/close, and fix the left-pane flicker
 when it appears. User chose the **in-layout push** behaviour (not an overlay).
 
-## Root cause of BOTH symptoms (confirmed live)
+## The implementation (commit `ddb0777`, re-applied + fixed in session 24)
 The outer Group in [`PanelLayout.tsx`](../../web/apps/editor/src/components/PanelLayout.tsx)
-carries `key={dockVisible ? "3col" : "2col"}`. Opening/closing the dock flips that key,
-which **remounts the entire outer Group — left pane included** (proven: a custom property
-set on the `quadrant-emitter-tree` DOM node is destroyed on toggle). That remount is the
-flicker AND the reason there's no animation (can't tween across a remount). The key exists
-to switch the 2col/3col layout-persistence state; `splitters.spec.ts` even asserts the
-remount.
+used to carry `key={dockVisible ? "3col" : "2col"}`. Toggling the dock flipped
+that key, **remounting the entire outer Group — left pane included** (the flicker;
+also why no animation was possible — you can't tween across a remount). Rework:
+the dock is now an **always-mounted `collapsible collapsedSize={0}` Panel** driven
+by an imperative `usePanelRef()` (collapse when closed, expand when open). No key
+change → no remount → no flicker. A `flex-grow` transition (`.dock-animating`,
+~200ms) animates the open/close only during a toggle so splitter drags + window
+resizes stay instant. The dock CONTENT lags `dock` by ~260ms on close
+(`displayDock`) so the pane slides out instead of popping. Single persistence key.
 
-## Approach taken (worked in the browser, broke the native host)
-Rewrote the dock as an **always-mounted `collapsible collapsedSize={0}` Panel** driven by an
-imperative `usePanelRef()` (collapse when closed, expand when open). No key change → no
-remount → **no flicker** (verified: the DOM marker survives a toggle). Single persistence
-key; dropped `deriveOuterLayoutOnToggle` + the 2col key. Animated via a `flex-grow`
-transition enabled only during the toggle (`.dock-animating`, ~200ms) so splitter drags +
-window resizes stayed instant. Lagged the dock CONTENT (`displayDock`) by the anim duration
-on close so the pane slides out instead of popping. Separator hidden while collapsed.
+## The real failure (and why "host hang" was wrong)
+Re-applying `ddb0777` made `tools.spec.ts` fail in the **full** native a11y run
+(but pass in isolation). The earlier doc called this a cumulative **native host
+hang**. It is not — the host is provably healthy:
 
-**Browser verification (all good):** left pane survives toggle (no remount); open tweens
-0→260px, close ~150ms, both smooth; splitter drag instant; zero console errors; web 509/0;
-`tsc -b` clean.
+- `host.log` is clean across the whole run (0 `[COMP-engine-fail]`, healthy fps),
+  and continues normally through `dxgi-resize-stress` which runs ~20 specs AFTER
+  the "death".
+- No crash dumps (no `ParticleEditor.exe` WER dump, no WebView2 Crashpad report).
+- 170+ specs PASS *after* the "failed" one; the harness exits **1** (ordinary
+  failure), not **2** (`hostDiedMidRun`), with no `ECONNREFUSED` cascade.
+- A 60× real dock-toggle storm, a 400+/480 `layout/scene-rect` flood, and a
+  standalone replay of the tools.spec sequence all PASS — none reproduce it.
+- Disabling the CSS transition did NOT help (the earlier doc's one true
+  observation) — because the trigger is JS state, not the CSS tween.
 
-## Why it was reverted — NATIVE HOST HANG
-The native a11y harness (`pnpm test:native`) failed: a test (`tools.spec.ts:112` Bloom)
-timed out 30s with "page closed" — the **host process hung mid-run**. Diagnosis:
-- **Cumulative, not any single test.** Every test passes in ISOLATION (`--grep`); the host
-  dies only partway through the full ordered run, after the early dock-toggling specs
-  (`toolbar.spec.ts` toggles the dock; `background-picker` opens an occlusion panel).
-- **NOT the animation.** Disabling the CSS transition (instant collapse/expand) still hung.
-- **NOT raw viewport resize.** The existing `dxgi-resize-stress.spec.ts` cycles
-  `layout/viewport-rect` 50× and passes — the host's resize path is robust to discrete resizes.
-- The structural change that matters: before, a dock toggle **remounted** the viewport
-  (`ViewportSlot`) — a clean teardown/rebuild; after, the viewport stays mounted and
-  **resizes in place** on every toggle. Something in the host's in-place-resize-on-dock-toggle
-  path accumulates and hangs after enough cycles. `host.log` ends abruptly mid
-  `[COMP-engine-transform]` scene-rect flood with NO crash signature (a hang, not an
-  exception) — consistent with a deadlock/resource issue in the C++ host.
+**Actual root cause (Playwright trace, `--trace retain-on-failure`).** The hung
+action is `closeAnyPanel`'s `closeBtn.click()`. Its log:
+`element is visible, enabled and stable` → `scrolling… done` →
+`<div class="dock-animating" data-group="true"> intercepts pointer events` →
+retry ×N → `element was detached from the DOM, retrying` → 30s timeout. No
+console errors; ~120 screenshots span the 30s (page live throughout).
 
-Root-causing this needs a **native debugger or host-side logging of the hang location**,
-which couldn't be driven through the agent interface. Reverted to keep `lt-4` clean.
+It is a **race between the dock close-animation and Playwright's strict click
+actionability** — a *test-harness artifact, not a product bug*. On close,
+`displayDock`'s ~260ms lag keeps the panel mounted (still a `role="dialog"` with
+a Close button) while it collapses to width 0 and then unmounts; the outer Group
+wears `.dock-animating`. A `closeAnyPanel` click landing in that window finds the
+Close button simultaneously squeezed (click point lands on the animating group →
+"intercepts pointer events") and detaching (`displayDock`→null). `closeAnyPanel`
+runs at the START of many tests; in the FULL run the prior test's dock-close is
+still animating → race; in ISOLATION the prior close never happened → no window.
+This explains all of it: full-run-only, intermittent, wandering point
+(`:112`/`:167`), timing/Heisenbug-sensitive, self-recovering (next test = fresh
+page). **Real users are unaffected** — a human doesn't click a panel sliding
+shut, and would re-click; the window is 260ms. Playwright's retry-until-actionable
+turns it into a 30s timeout.
 
-## For the next attempt
-1. **Add host-side instrumentation first** (C++): log entry/exit of the scene-rect /
-   viewport-resize handler + any locks it takes, and the WebMsg queue depth, so a full-run
-   repro shows WHERE it hangs. Consider whether repeated in-place shared-texture resizes leak
-   or deadlock vs the remount path that released them.
-2. **OR pivot to an overlay drawer** (dock slides OVER the viewport, outside
-   react-resizable-panels). The viewport then does NOT resize on toggle → very likely
-   sidesteps the host hang entirely, and animates cleanly via a CSS transform. Cost: changes
-   UX (overlay vs push) + needs a custom resize handle. This is the lower-risk path to a
-   shipping animated dock if the native hang proves hard to fix.
-3. The flicker fix alone (always-mounted collapsible, instant open/close) ALSO hit the hang,
-   so it can't ship independently of solving the native issue.
+## The fix (session 24)
+A closing dock panel must not present as an open, interactive dialog while it
+slides out:
+- [`ToolPanel.tsx`](../../web/apps/editor/src/components/ToolPanel.tsx): new
+  `closing` prop → stamps `data-state="closing"` on the `role="dialog"` div, so
+  it no longer matches `[role="dialog"]:not([data-state])` (the "open ToolPanel"
+  selector).
+- [`LightingPanel.tsx`](../../web/apps/editor/src/screens/LightingPanel.tsx):
+  accepts + forwards `closing` to ToolPanel.
+- [`PanelLayout.tsx`](../../web/apps/editor/src/components/PanelLayout.tsx):
+  `dockClosing = dock === null && displayDock !== null`; passes `closing` to the
+  panel and marks the dock `<aside>` `inert` during the close window (React 19) —
+  a sliding-out panel is genuinely non-interactive (a11y correctness too).
+- `splitters.spec.ts` (`:303`→`:306`) rewritten: asserts the new behaviour
+  (toggle collapses the always-mounted dock to width 0 and restores it, WITHOUT
+  remounting the outer Group — proven by a marker that survives the toggle = the
+  flicker fix), replacing the old remount/2col assertion.
+- Regression guard: `ToolPanel.test.tsx` asserts `closing` → `data-state="closing"`.
 
-## Files the attempt touched (all reverted)
-`PanelLayout.tsx`, `styles/components.css` (`.collapse-anim`/`.dock-animating`),
-`components/__tests__/PanelLayout.test.tsx`, `tests/splitters.spec.ts`.
+## Verification
+- Browser (preview): open → `data-state` absent, matches open-selector, not inert;
+  during close → `data-state="closing"`, does NOT match open-selector, aside inert,
+  dialog still present (slide-out preserved); after close → clean.
+- Native a11y harness: **175 / 0** (all 5 `tools.spec` tests pass, incl. the two
+  that hung; rewritten `splitters` passes; a11y goldens unchanged — the
+  always-mounted dock is a11y-equivalent in the default open state).
+- Web vitest **510 / 0**; `tsc -b` clean.
+- Smooth-tween *visual* is the user's eye (arch-C, L-033) — the animation logic is
+  unchanged from `ddb0777`'s live-verified tween; the fix only gates interactivity
+  during close.
