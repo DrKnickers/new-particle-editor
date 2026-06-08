@@ -281,63 +281,49 @@ header wins.
 
 ## Branch workflow
 
-The new-UI (LT-4) work lives on a long-lived integration branch
-separate from `master`:
+**`master` is the trunk.** The new-UI (LT-4) work shipped: the long-lived
+`lt-4` integration branch was superseded into `master` via PR
+[#92](https://github.com/DrKnickers/new-particle-editor/pull/92)
+(`git merge -s ours`, merge-commit `f05fa36`, 2026-06-08), making the new
+WebView2/React UI the **x64 default** (legacy → opt-out `--legacy`). `lt-4`
+is **retired** — don't recreate or target it.
 
-- **`master`** — stable, user-tested code. Merges happen only with
-  explicit user OK.
-- **`lt-4`** — long-lived integration branch for all LT-4 / new-UI
-  work. Tracks `origin/lt-4` (the canonical off-machine backup).
-  Default merge target for LT-4 dispatches.
+- **`master`** — the trunk; all stable, user-tested code. Merges happen
+  only with **explicit user OK**, via PR (so CI runs before landing).
 - **`claude/<random>`** — per-session branches the desktop app
   auto-provisions on every new session. Throwaway containers for
-  in-flight work; not pushed to origin.
+  in-flight work.
 
-### End-of-session flow for LT-4 dispatches
+### Standard flow
 
-Fast-forward the session branch into `lt-4` and push:
-
-```
-git switch lt-4
-git merge --ff-only claude/<session-name>
-git push
-```
-
-Fast-forward only — keeps history linear and matches the commit
-sequence the session branch already showed. If the FF fails, STOP and
-reconcile: it means `lt-4` has commits the session branch doesn't,
-which usually means the session was branched from a stale tip rather
-than the current `lt-4` HEAD. Don't paper over it with a merge commit
-or a rebase without understanding what diverged.
-
-After the FF, the old `claude/<random>` branch can stay (safety net)
-or be deleted; no rush.
-
-### When NOT to use `lt-4`
-
-- Small fixes to legacy code (anything not in `web/`, `src/host/`,
-  the React tests) — PR directly against `master`.
-- Docs-only changes that don't touch LT-4 architecture — `master` is
-  fine.
-- Out-of-scope items spawned during LT-4 work (the "spawn-a-task"
-  pattern) — those typically get their own branch and their own PR
-  against `master`.
-
-Default to `lt-4` only for LT-4 dispatches; everything else goes
-through the standard `master` PR flow.
+1. Work on the session branch (`claude/<random>`).
+2. When complete and verified, open a PR against `master` with `gh`.
+3. Merge **only with explicit user OK** (the master-touching gate).
 
 ### Pre-flight lineage check for a fresh session
 
 Run this after the standard pre-flight (build + tests):
 
 ```
-git log --oneline lt-4..HEAD   # 0 if fresh session branched cleanly from lt-4
-git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
+git log --oneline master..HEAD   # commits the session adds on top of master
+git log --oneline HEAD..master    # 0 if the session has all of master's work
 ```
 
-Both should be 0 at session start. Non-zero means the harness
-branched from somewhere other than the current `lt-4` tip — reconcile
-before committing new work or you'll end up with a divergent stack.
+`HEAD..master` should be 0 at session start (the session branched from
+the current `master` tip). Non-zero means the harness branched from a
+stale tip — reconcile before committing new work.
+
+### CI topology (what gates a PR)
+
+- **`lt-4.yml`** (active) — web (pnpm + Vitest) on ubuntu + a C++ **x64**
+  Debug/Release build. Fires on pushes to `claude/**` and PRs, so it gates
+  session branches and PRs. Intentionally **skips x86** (the host is
+  x64-only).
+- **`build.yml`** (currently `disabled_manually`, history red) — the only
+  workflow that builds **x86**. The editor's x86 leg is legacy-only and
+  slated for removal (MT-13), so x86 is presently assured by the
+  `#ifdef _WIN64` source gates, not by CI. Re-enable/fix it only if x86
+  coverage matters before MT-13 lands.
 
 ---
 
@@ -433,4 +419,4 @@ These principles are not license to:
 | Simple fix                                 | Don't over-engineer; skip the elegance pass      |
 | Marking a task done                        | Quote proof. *"Would a staff engineer approve?"* |
 | Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `CHANGELOG.md` (description + how-we-tackled-it + issues) |
-| LT-4 / new-UI dispatch ready to integrate  | Fast-forward into `lt-4` and push; never to `master` without explicit OK |
+| Work ready to integrate                    | PR the session branch against `master`; never merge to `master` without explicit OK |
