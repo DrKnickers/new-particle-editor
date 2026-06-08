@@ -21,7 +21,7 @@ nobody re-litigates this in six months.
   Cross-validate the two — they should agree.
 - Update `BLOOM_BLUR_ITERATIONS` in `engine.cpp` with the discovered
   value plus a one-line provenance comment.
-- One DEVELOPMENT_LOG paragraph: what we found, how we found it.
+- One CHANGELOG paragraph: what we found, how we found it.
 
 **Out of scope (and why):**
 - *UI for iteration count.* Canonical Terrain Editor doesn't expose
@@ -143,7 +143,7 @@ Whatever value approach A or B yields, confirm by:
    counts.** Plausible — preview tools sometimes ship with shorter
    loops. *Mitigation:* capture both. If they diverge, the Terrain
    Editor count is what we want (it's our calibration target by user
-   instruction). Document the divergence in DEVELOPMENT_LOG so a future
+   instruction). Document the divergence in CHANGELOG so a future
    reader doesn't assume the constants are interchangeable.
 
 3. **The loop bound is a runtime config, not an immediate.** The game
@@ -208,7 +208,7 @@ Whatever value approach A or B yields, confirm by:
 - `engine.cpp` constant updated with a one-line comment citing the
   source ("from PIX capture of EAW Terrain Editor.exe, frame N" or
   "from disassembly of StarWarsG.exe at offset 0x…").
-- DEVELOPMENT_LOG entry under `## Log` describing the investigation
+- CHANGELOG entry under `## Changelog` describing the investigation
   outcome (date, tool used, value found, any cross-validation notes).
 - If user corrections happen during this investigation, append a
   preventing rule to `tasks/lessons.md` (file doesn't exist yet —
@@ -216,7 +216,7 @@ Whatever value approach A or B yields, confirm by:
 
 **Refused inputs / nothing-to-do cases:**
 - If the discovered value happens to equal `4`, no code change beyond
-  the comment is needed -- but we still ship the DEVELOPMENT_LOG note saying
+  the comment is needed -- but we still ship the CHANGELOG note saying
   "validated empirically; the guess was right."
 
 ---

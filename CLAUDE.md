@@ -160,14 +160,10 @@ failure of pre-handoff discipline, not a normal collaboration cost.
 - When given a bug report, just fix it. Zero context-switching required
   from the user beyond the original report.
 
-### Roadmap items: update `ROADMAP.md` and `DEVELOPMENT_LOG.md` when a feature ships
+### Roadmap items: update `ROADMAP.md` and `CHANGELOG.md` when a feature ships
 
 Whenever a `ROADMAP.md` item lands, update both files — same PR if
-practical, immediate follow-up otherwise. Per-PR engineering detail
-goes in `DEVELOPMENT_LOG.md`; the public-facing version-grouped
-release history in `CHANGELOG.md` is touched only at release time
-(see [Releases](#releases-update-changelogmd-when-a-version-ships)
-below).
+practical, immediate follow-up otherwise.
 
 **`ROADMAP.md`**: when an item ships, do all five:
 
@@ -222,7 +218,7 @@ different stability semantics:
     it as vacating the old tag and taking a fresh one in the new
     tier.
 
-**`DEVELOPMENT_LOG.md`**: add a section covering three things, in this order:
+**`CHANGELOG.md`**: add a section covering three things, in this order:
 
 1. **What ships** — one-paragraph user-facing description. What the user
    can now do that they couldn't before, what shortcuts / modifiers
@@ -236,17 +232,17 @@ different stability semantics:
    errors and forward-declaration shuffles; record the gotchas a future
    contributor would otherwise step on.
 
-Skip the DEVELOPMENT_LOG addition only when the change is purely cosmetic with
+Skip the CHANGELOG addition only when the change is purely cosmetic with
 no behavioural or architectural pattern worth remembering. When in
 doubt, write the section — every entry costs five minutes today and
 saves an hour of rediscovery later.
 
-#### DEVELOPMENT_LOG formatting conventions
+#### CHANGELOG formatting conventions
 
 Match the existing entries — readers and tooling rely on the shape:
 
 - **Reverse chronological order.** New entries go at the *top* of the
-  `## Log` section, immediately under the heading. Within a single
+  `## Changelog` section, immediately under the heading. Within a single
   day, the most recently merged entry sits above older ones from the
   same day.
 - **Date line format.** Italicised line directly under the `### Title`,
@@ -264,7 +260,7 @@ Match the existing entries — readers and tooling rely on the shape:
     for prior art on the backfill pattern.
 - **Section title** is plain prose, not a Conventional-Commit prefix.
   Commit *messages* still use `feat:` / `fix:` / `docs:`; the heading
-  in the development log reads naturally (e.g. *"Move Up / Move Down buttons
+  in the changelog reads naturally (e.g. *"Move Up / Move Down buttons
   for root emitters"*, not *"feat(emitter-list): …"*).
 - **Section delimiter.** End every entry with a `---` on its own line
   before the next entry.
@@ -277,50 +273,71 @@ Match the existing entries — readers and tooling rely on the shape:
   period — they're sentence-leading run-in headers, not separate
   blocks.
 
-The header (top of `DEVELOPMENT_LOG.md`) is the authoritative
+The changelog header (top of `CHANGELOG.md`) is the authoritative
 short-form of these rules; if it ever drifts from this section, the
 header wins.
 
-### Releases: update `CHANGELOG.md` when a version ships
+---
 
-`CHANGELOG.md` is the public-facing version-grouped release history —
-the document a downstream user reads to find out what's new in a
-release. It's updated at release time only, not per PR.
+## Branch workflow
 
-When a new tagged release ships:
+The new-UI (LT-4) work lives on a long-lived integration branch
+separate from `master`:
 
-1. **Add a `## vX.Y.Z — YYYY-MM-DD` section** at the top of the
-   reverse-chronological list, immediately under the file's intro
-   block.
-2. **Italic metadata line** directly under the heading, with three
-   pieces separated by ` · `:
-   ```
-   *Tag [`vX.Y.Z`](https://github.com/DrKnickers/new-particle-editor/releases/tag/vX.Y.Z) · Merge [`<short-hash>`](https://github.com/DrKnickers/new-particle-editor/commit/<short-hash>) · PR [#NN](https://github.com/DrKnickers/new-particle-editor/pull/NN)*
-   ```
-   - **Tag** links to the GitHub release page.
-   - **Merge** is the 7-character merge-commit hash on `master` for
-     the release PR. Wrap in backticks inside the link text.
-   - **PR** is the release PR. If the entry is being written before
-     the tag exists, leave `TODO` placeholders and backfill in a
-     small docs PR after the release goes live — same pattern as
-     `DEVELOPMENT_LOG.md` per-PR entries.
-3. **Lead with a one-or-two-sentence intro** naming the themes of the
-   release in matter-of-fact prose. No PR counts, no roadmap-tag IDs
-   (NT-N / MT-N / LT-N belong in `ROADMAP.md` and `DEVELOPMENT_LOG.md`,
-   not user-facing).
-4. **List headline additions grouped by category** (typical:
-   *New features*, *Emitter management*, *Viewport & preview*,
-   *Input*, *Bug fixes*, *Known issues*). Bullet-per-item, prose
-   tone, bold lead-in for each bullet's name.
-5. **Don't duplicate engineering detail.** Source paths, line numbers,
-   architectural rationale, "how we tackled it", "issues encountered"
-   all stay in `DEVELOPMENT_LOG.md`. `CHANGELOG.md` is the summary
-   readers find from the release page; `DEVELOPMENT_LOG.md` is what
-   they click through to for depth.
+- **`master`** — stable, user-tested code. Merges happen only with
+  explicit user OK.
+- **`lt-4`** — long-lived integration branch for all LT-4 / new-UI
+  work. Tracks `origin/lt-4` (the canonical off-machine backup).
+  Default merge target for LT-4 dispatches.
+- **`claude/<random>`** — per-session branches the desktop app
+  auto-provisions on every new session. Throwaway containers for
+  in-flight work; not pushed to origin.
 
-The GitHub release body for the same version typically expands the
-`CHANGELOG.md` section with installation instructions, credits, and
-any version-specific notes — it's not a verbatim copy.
+### End-of-session flow for LT-4 dispatches
+
+Fast-forward the session branch into `lt-4` and push:
+
+```
+git switch lt-4
+git merge --ff-only claude/<session-name>
+git push
+```
+
+Fast-forward only — keeps history linear and matches the commit
+sequence the session branch already showed. If the FF fails, STOP and
+reconcile: it means `lt-4` has commits the session branch doesn't,
+which usually means the session was branched from a stale tip rather
+than the current `lt-4` HEAD. Don't paper over it with a merge commit
+or a rebase without understanding what diverged.
+
+After the FF, the old `claude/<random>` branch can stay (safety net)
+or be deleted; no rush.
+
+### When NOT to use `lt-4`
+
+- Small fixes to legacy code (anything not in `web/`, `src/host/`,
+  the React tests) — PR directly against `master`.
+- Docs-only changes that don't touch LT-4 architecture — `master` is
+  fine.
+- Out-of-scope items spawned during LT-4 work (the "spawn-a-task"
+  pattern) — those typically get their own branch and their own PR
+  against `master`.
+
+Default to `lt-4` only for LT-4 dispatches; everything else goes
+through the standard `master` PR flow.
+
+### Pre-flight lineage check for a fresh session
+
+Run this after the standard pre-flight (build + tests):
+
+```
+git log --oneline lt-4..HEAD   # 0 if fresh session branched cleanly from lt-4
+git log --oneline HEAD..lt-4   # 0 if session has all the lt-4 work
+```
+
+Both should be 0 at session start. Non-zero means the harness
+branched from somewhere other than the current `lt-4` tip — reconcile
+before committing new work or you'll end up with a divergent stack.
 
 ---
 
@@ -367,7 +384,7 @@ where it will be seen again so the same check is never repeated. Valid
 targets:
 
 - This `CLAUDE.md` (for tooling-level conventions)
-- `DEVELOPMENT_LOG.md` (for "we tried X, it failed because Y, now we do Z" notes)
+- `CHANGELOG.md` (for "we tried X, it failed because Y, now we do Z" notes)
 - `tasks/lessons.md` (for collaboration corrections)
 - Code comments (for why a non-obvious line exists)
 - READMEs / ADRs / guides (for cross-cutting decisions)
@@ -415,5 +432,5 @@ These principles are not license to:
 | Bug report                                 | Fix it; don't ask permission                     |
 | Simple fix                                 | Don't over-engineer; skip the elegance pass      |
 | Marking a task done                        | Quote proof. *"Would a staff engineer approve?"* |
-| Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `DEVELOPMENT_LOG.md` (description + how-we-tackled-it + issues) |
-| New tagged release ships                   | Add `## vX.Y.Z — YYYY-MM-DD` section to `CHANGELOG.md` (intro + headline additions grouped by category) |
+| Roadmap item ships                         | Update `ROADMAP.md` (strikethrough + ✅ Shipped) **and** `CHANGELOG.md` (description + how-we-tackled-it + issues) |
+| LT-4 / new-UI dispatch ready to integrate  | Fast-forward into `lt-4` and push; never to `master` without explicit OK |

@@ -1,0 +1,85 @@
+# LT-4 integration-branch CI.
+#
+# Scope: the new-UI / WebView2 work lives on `lt-4` and per-session
+# `claude/*` branches; the legacy `build.yml` only covers master pushes
+# and the C++ matrix. This workflow gates the web stack (pnpm/Vitest)
+# and the lt-4 C++ build before changes reach master.
+#
+# What this workflow does NOT do:
+#   * native Playwright (test:native). The harness launches
+#     ParticleEditor.exe + WebView2 CDP and takes ~minutes; it also
+#     needs the DirectX SDK install for the underlying x64 build. Run
+#     it manually via workflow_dispatch when a viewport/host-bridge
+#     change warrants it.
+#   * x86 builds. lt-4 is x64-only (new-UI host bridge + WebView2);
+#     skip the x86 leg the legacy workflow runs.
+
+name: lt-4
+
+on:
+  push:
+    branches: [ "lt-4", "claude/**" ]
+  pull_request:
+    branches: [ "lt-4" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: web (pnpm + Vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (tsc --noEmit)
+        run: pnpm --filter @particle-editor/editor lint
+
+      - name: Build
+        run: pnpm --filter @particle-editor/editor build
+
+      - name: Vitest
+        run: pnpm --filter @particle-editor/editor test
+
+  cpp:
+    name: C++ (x64)
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        build_config: ['Debug', 'Release']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Install DirectX SDK (June 2010)
+        shell: pwsh
+        run: |
+          choco install directx-sdk -y --no-progress
+          "DXSDK_DIR=C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\" >> $env:GITHUB_ENV
+
+      - name: Restore NuGet packages
+        run: nuget restore .
+
+      - name: Build ${{ matrix.build_config }}|x64
+        run: msbuild /m /p:Configuration=${{ matrix.build_config }} /p:Platform=x64 .

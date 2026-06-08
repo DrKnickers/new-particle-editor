@@ -1,0 +1,6 @@
+﻿- Name='AloParticleEditor' Type=ControlType.Window Class='AloHostMain' AutoId=''
+  - Name='' Type=ControlType.Pane Class='AloHostViewport' AutoId=''
+  - Name='AloParticleEditor' Type=ControlType.Pane Class='Chrome_WidgetWin_1' AutoId=''
+    - Name='' Type=ControlType.Pane Class='Intermediate D3D Window' AutoId=''
+    - Name='AloParticleEditor - Web content' Type=ControlType.Pane Class='BrowserRootView' AutoId=''
+      - Name='' Type=ControlType.Pane Class='NonClientView' AutoId=''

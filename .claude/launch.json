@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "editor",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "web", "--filter", "@particle-editor/editor", "exec", "vite", "--port", "5173"],
+      "port": 5173
+    }
+  ]
+}

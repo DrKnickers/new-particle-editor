@@ -1,0 +1,316 @@
+# Fix plan — UI delta remediation (defects only)
+
+Source: [ui-delta-report.md](ui-delta-report.md). User decisions (2026-06-03):
+**defects only** (keep intentional new-UI redesigns + new-only extras); **undo +
+autosave on a separate track** (after the web-side defects).
+
+Each phase: implement (TDD where infra exists) → `pnpm --filter @particle-editor/editor test`
+→ `build` → re-baseline a11y composition goldens if chrome changed (L-053) → native
+`.sln` build only if host code touched (L-039/L-046) → commit on `lt-4`. Check in with
+user at phase boundaries.
+
+## Phases (web-side first)
+
+- **P1 — CRITICAL rotation scaling (PRM-4/5).** `FieldSpinner` gains a `displayScale`
+  transform; rotation average ×360 (−180..180°), variance ×100 (0..100). Web-only.
+- **P2 — Spinner bugs (SPN-4/5/6/7).** `primitives/Spinner.tsx`: fix drag-modifier to
+  match keyboard/wheel (Shift=coarse, Ctrl=fine) + fix comment; add up/down
+  hold-to-repeat; wheel honors `step` magnitude; wheel Ctrl=fine. Web-only.
+- **P3 — Low-risk grab-bag.** Status bar shift-hint (VPT-6) + PAUSED (VPT-7) + cursor
+  2dp (VPT-8); relax bounciness/weather clamps for round-trip (PRM-6/10); Import
+  dialog "Clear" button (MNU-12); stale curve comment (CRV-14).
+- **P4 — Menus, clipboard, accelerators.** Enable + wire Edit Cut/Copy/Paste/Delete
+  (MNU-1); wire Emitters Toggle-Vis/Show-All/Hide-All (MNU-3); context-menu
+  Cut/Copy/Paste/Paste-As + New Root (SEL-5/6); wire global accelerators —
+  Ctrl+S/N/O/Del/G/H/Home, F5/6/7/8/9/10, Ctrl+Space, Alt+Up/Down, Ctrl+Y
+  (MNU-2/VPT-1/SEL-14). Cascades into goldens.
+- **P5 — Marquee (SEL-1) ✅ DONE.** Rubber-band select on EmitterTree: drag on empty
+  space sweeps a rectangle; intersecting rows become the selection; Ctrl/Cmd = additive
+  (union with prior); Esc cancels + restores the pre-marquee selection. New
+  `lib/marquee.ts` (pure geometry, 6 unit tests) + pointer handling on the scroll
+  container + an overlay rect that renders only mid-drag → NO static DOM / NO golden
+  change. **Bug caught + fixed in review:** Esc-restore target = the prior selection,
+  separate from the (empty-for-fresh-sweep) merge-base. Live-verified: correct spatial
+  rows; Esc restores prior. Build clean; 428 tests.
+  - ~~**Deferred polish:** SEL-12 drag autoscroll past the viewport edge; SEL-13
+    Esc/right-click cancel of the *reorder* drag (distinct from marquee).~~ ✅ DONE —
+    SEL-12 proportional edge autoscroll (rAF loop + pure `drag-autoscroll.ts`, 7 tests,
+    live-verified) + SEL-13 Esc/right-click cancel with context-menu suppression (2 tests +
+    live). Web-only, no native lane.
+- **P6 — Curve editor (CRV-1/2/7/8/14).** Key copy/cut/paste; right-click deselect;
+  time decimals.
+  - **CRV-1 ✅ DONE (user-surfaced during testing).** Multi-key canvas drag: grabbing
+    a key that's part of a multi-selection now shifts the WHOLE selection by the same
+    delta (was: only the grabbed key moved). Root cause: `handleKeyDragStart` collapsed
+    the selection on grab. Fix: keep a multi-selection intact on grab; CurveEditor
+    computes a group delta (border keys pinned in time, interior clamped to the global
+    endpoints) and previews all selected keys moving; commit reuses the proven
+    `applyGroupShift`. Committed the `fround`ed engineTime so moved keys keep their
+    selected highlight (float-precision drift fix). Live-verified: 30/60 → 40/70 as a
+    group, borders fixed, selection persists. Build clean; 428 tests.
+  - **#2 marquee-from-axis-margin (user request): ✅ DONE.** A marquee can now START
+    from the axis-label gutters. The "margin-inclusive viewBox" rework was NOT needed —
+    that concern was about the single-track branch (`preserveAspectRatio="none"`); the
+    app renders **`MultiChannelCurves`**, which already uses a CSS-pixel-measured viewBox
+    and pointer capture. Fix = additive: a `startMarquee` imperative handle on
+    `MultiChannelCurves` (exposed via a `marqueeRef` prop, threaded through `CurveEditor`),
+    invoked from a new `onGutterPointerDown` on `CanvasWithAxisLabels` (fires when a
+    primary press lands outside `[data-testid="curve-editor-svg"]`). `startMarquee` maps +
+    maps the client point to the plot viewBox (kept UN-clamped so the rect begins at the
+    press point in the margin, not snapped to the grid), seeds the marquee, and `setPointerCapture`s
+    the SVG so the EXISTING (unchanged) move/up/Esc machinery drives the rest — no handler
+    rewrite. Tests: +2 CurveEditor (gutter start + clamp) +3 CanvasWithAxisLabels (routing);
+    live-verified (Y-gutter → 4/4 keys, X-gutter start, Esc-cancel). Single-track branch
+    untouched.
+  - **CRV-2/7/8 ✅ DONE (session 14, `e5bd7e3`).** Key Copy/Cut/Paste (Ctrl+C/X/V via a
+    new in-app `lib/curve-key-clipboard.ts`; window-scoped with TYPING_TAGS + emitter-tree
+    origin guards); right-click empty canvas clears selection in Select mode / drops to
+    Select in Insert mode (CRV-7); Time spinner step 1→0.1 + 2dp display (CRV-8). vitest
+    440 (+12); 1 composition golden re-baselined (Time spinner `"0"`→`"0.00"`). TDD.
+    User-verified in the faithful `--new-ui`.
+  - **🐛 Engine crash fix (session 14, `5ba2bd5`) — surfaced while testing P6-rest.**
+    Editing a track with a lock group + live particles asserted in
+    `EmitterInstance::UpdateTrackCursors` (orphaned cached cursor iterator). Arch-C bridge
+    handlers never reseated cursors after key edits (legacy did via
+    `OnParticleSystemChanged`), and the reseat wasn't lock-alias-aware. Fixed both halves;
+    user-verified crash-gone. See **L-059** (incl. the MSVC "value-initialized" ==
+    orphaned-iterator wording trap + the assert-hook/DbgHelp debugging technique).
+- **P7 — Link groups (LNK-2/6/8/10) ✅ DONE (user-verified in `--new-ui`).** User chose
+  **dot-only** (LNK-1 `[L<n>]` text prefix DROPPED — redundant with the kept bracket
+  gutter) and **include LNK-10**. Several round-2 fixes landed from user testing (below).
+  - **LNK-2** per-row link dot — decorative `aria-hidden` dot, **Option A**: a fixed
+    col-3 slot LEFT of the name (grid `18px 18px 10px 1fr`), **coloured to match the row's
+    bracket** (`colorForGroup`). Web-only, no golden change.
+  - **LNK-6** bracket gutter — **visual-only** (NOT click-interactive). An interactive
+    overlay over the full-width rows stole row-selection clicks (the "kept deselecting"
+    bug — confirmed in the preview: clicking a bracket wiped the selection to the group).
+    Kept the "group lights up" affordance by driving the tint from **row hover**
+    (`onPointerEnter` sets `hoveredLinkGroup` → member rows tint + bracket thickens);
+    **dropped** bracket click-to-select-group. Web-only, brackets `aria-hidden`.
+  - **LNK-8** Dissolve Link Group context action — gathers all members from `flatRows`,
+    fires one `set-membership {ids:<all>, groupId:null}`. `disabled` when `!isLinked`. Web-only.
+  - **LNK-10** join-conflict warning — new read-only `linkGroups/diff-membership
+    {ids, groupId} → {conflicts:{id,fields[]}[]}` (schema + mock + host wrapping
+    `DiffNonExemptParams`, mirroring set-membership's canonical/exempt selection).
+    **INLINE, one-click**: `SetLinkGroupDialog` runs the diff in a read-only effect and
+    shows the differing fields as an amber note BEFORE a single synchronous OK joins
+    (legacy showed fields in the same dialog). The first design (async diff-on-OK +
+    separate "Join Anyway" confirm) caused a "first OK does nothing" bug — decoupling the
+    join from the diff fixed it. Host C++ + native Debug x64 rebuilt clean.
+  - **🐛 Engine crash fix (L-059, link-group paths).** Setting/joining a link group with
+    live particles asserted in `UpdateTrackCursors` (orphaned cursors). `copySharedParamsFrom`
+    REASSIGNS each member's non-exempt track multisets; `set-membership` and
+    `propagateLinkGroup` never reseated. Fixed: `OnParticleSystemChanged(-1)` after the
+    membership mutation + inside `propagateLinkGroup` (single choke point). Extends L-059
+    (session 14 covered only the lock-alias + key-edit paths).
+  - **🐛 Right-click context menu** — faithful WebView2 showed its NATIVE menu (masking the
+    Radix menu, so Dissolve/Set-Link-Group were unreachable). `HostWindow` now calls
+    `put_AreDefaultContextMenusEnabled(FALSE)` for all launches (L-057 — jsdom couldn't catch it).
+  - **🐛 Shift-click anchor** (SEL, pre-existing) — `range` pivoted on the moving `primary`,
+    so consecutive shift-clicks lost the origin row. Added a stable `anchor` to the
+    selection store.
+  - **Settings-OK disagreement warning (2nd surface) ✅ DONE (web + host compile verified; user
+    native-verify pending).** **Verified `diff-membership` did NOT fit** (L-022 — it diffs joiners
+    under the stored exempt set; settings needs existing members under the *proposed* set), so
+    added a NEW read command `linkGroups/diff-exempt-change {groupId, exempt[]}` +
+    `MakeNewlySharedMask` helper, and **extended `set-exempt-fields` to faithfully resolve**
+    (clobber dissenters to canonical for newly-shared fields + L-059 reseat, one undo entry).
+    Inline amber warning in LinkGroupSettingsDialog (LNK-10 pattern). vitest **469** (+3, TDD);
+    build + `tsc` clean; native Debug x64 compiles clean; zero golden change. User verifies
+    warn + resolve + no-crash with live particles in `--new-ui`.
+  - vitest **454**. `pnpm build` + `tsc --noEmit` clean. TDD throughout.
+  - **a11y:** P7 caused **zero** golden change (dot + brackets `aria-hidden`, dialog not a
+    captured surface — proven by `git diff` + `emitter-tree` golden re-matching). Re-baselined
+    **18 composition goldens** for a *pre-existing* session-14 CRV-8 cascade
+    (`Selected key time "0"`→`"0.00"`, surfaced now the native harness runs — L-053/L-058).
+    Legacy `.json` untouched (L-052).
+- **P8 — Color/texture (PAL-2/3/14).** Split into P8a (color picker, web) + P8b (thumbnails,
+  host/native).
+  - **P8a — Color picker (PAL-2/3) ✅ DONE (web-verified; user native-verify pending).**
+    Live-preview + cancel/revert as a faithful port of `ColorButton.cpp`'s two-phase
+    transaction (snapshot `originalColor` on open → stream `onChange` live → OK/click-outside
+    keep, Cancel/Escape revert). Controlled `Popover` via one `onOpenChange` funnel. **Plus 3
+    user-approved UX extras:** Original/New before-after swatches, editable R/G/B number
+    inputs (narrows the PAL-1 gap), Enter-in-hex commits+closes. One file
+    ([ColorButton.tsx](web/apps/editor/src/primitives/ColorButton.tsx)) + test. vitest **463**
+    (+9, TDD red→green); build + `tsc` clean; **zero golden change** (grep-proven — no open
+    popover captured). Browser-preview verified live preview + Cancel/OK/Escape in the real
+    app. See **L-062** (preview-eval stale-DOM read).
+  - **P8b — Texture thumbnails (PAL-14) ✅ DONE (web + host compile verified; user native-verify
+    pending).** Distinguish broken (decode-failed) vs missing (file-not-found) — arch-C had
+    flattened both (and loading) to one blank block. `enum ThumbStatus` + `struct
+    ThumbnailResult` in the host; `DecodeToPngBytes` surfaces the 3-state verdict;
+    `GetThumbnailDataUri`→`GetThumbnail` (cache holds the result); bridge emits
+    `{dataUri,status}`; schema + both mocks updated; React renders **softer tinted + icon +
+    label** placeholders (user choice over legacy's literal magenta/grey-X). vitest **466**
+    (+3, TDD); build + `tsc` clean; **native Debug x64 compiles clean** (MSBUILD EXIT=0);
+    zero golden change. User verifies real missing/broken textures in `--new-ui`.
+
+## Separate track (after P1–P8, native/host)
+- **Undo capture wiring (VPT-2). ✅ verified + 1 bug fixed (2026-06-05).** The plan title
+  ("wire `Capture()` into every new-UI host mutation") was stale (L-022): `Capture()` was
+  ALREADY wired across every *document* mutation (~25 `captureUndo()` sites — emitter props,
+  duplicate/import, track keys, clipboard, link groups) with a working `undo/perform`
+  (head-of-history auto-cap), accelerators, and menu enable-state. Engine/preview edits
+  (lighting/bloom/camera) are NOT undoable — they live on `m_engine`, not the
+  `ParticleSystem` snapshot, matching legacy (NOT a defect, out of scope).
+  - **Verified over the `--test-host` CDP bridge** (real host `UndoStack`): single-edit
+    auto-cap round-trip, import/link-group atomic undo, redo-branch truncation, dirty +
+    canUndo/canRedo flags. See `tests/undo-navigation.spec.ts`.
+  - **🐛 Fixed:** `undo → redo → undo` lost the second undo — the auto-cap fired spuriously
+    after a `Redo()` (both leave `cursor == size`). Added an `m_liveAhead` flag to gate it.
+    See **L-064** + CHANGELOG.
+  - **Pending user check (CDP can't drive the native accelerator):** literal Ctrl+Z / Ctrl+Y
+    on-screen.
+  - **🐛 Fixed (user-reported 2026-06-05):** scroll-wheel / rapid spinner edits recorded one undo
+    entry PER TICK (`captureUndo` passed `coalesceKey=0` → no coalescing). Added 1500ms-window
+    coalescing for `emitters/set-properties` via `UndoStack::CapturePreCoalesced` (PRE-mutation
+    SKIP semantics, vs legacy's POST-mutation REPLACE). One Ctrl+Z now reverts the whole gesture.
+    **Per-FIELD** keying (FNV-1a hash of patch field names + emitter id), finer than legacy's
+    per-emitter — a deliberate user choice: switching field starts a fresh undo step. See **L-065**
+    + CHANGELOG; regressions in `tests/undo-navigation.spec.ts` (same-field folds / different-field
+    separate). Covers hold-to-repeat too (same path). Plain spinner drag already commits once on
+    release (Spinner.tsx:18).
+  - **Follow-up ✅ DONE (2026-06-08).** Applied the same coalescing to streaming
+    track-key/curve edits: `emitters/set-track-key` now passes a per-track|emitter
+    `coalesceKey` (legacy `track<<16|emitterIdx`) to `captureUndo` → `CapturePreCoalesced`,
+    so a wheel/hold-arrow/scrub Value or Time key spinner (and the N-call group shift)
+    fold into one undo step within the 1500ms window. Structural track ops (add / delete /
+    interpolation / lock / duplicate / rescale) deliberately stay `coalesceKey = 0`.
+    5 native CDP regressions in `tests/undo-navigation.spec.ts`. See CHANGELOG + the
+    design spec `docs/superpowers/specs/2026-06-08-track-key-undo-coalescing-design.md`.
+- **Autosave port (VPT-3) ✅ DONE.** Ported the legacy two-tier autosave + orphan recovery to
+  the new UI. Host: timers + dirty-gated `Autosave::Write` in HostWindow `WM_TIMER` (gated OFF
+  under `--test-host` so harness runs leave no orphan files), `DeleteOurSession` on save +
+  clean exit; `autosave/check-recovery` + `autosave/recover` bridge commands (recover reuses
+  `file/open`'s swap+notify → L-059 reseat; restores as the original filename, dirty). React:
+  `AutosaveRecoveryDialog` — React-initiated check-on-mount (no host-push startup race),
+  3-state (both/recent-only/stable-only), dismiss = decide-later. Tests: 10 vitest + a11y
+  golden (`dialog-autosave-recovery` via fixed-orphan `?demo=` route, deterministic age) + 2
+  bridge round-trips (test-host suppression + recover no-op). Native **168/0**, web **481**.
+  Live crash→recover round-trip = manual smoke (suppressed under `--test-host`). CHANGELOG added.
+- ~~**Verify Reset-Camera vectors (MNU-7)** against legacy engine default.~~ ✅ DONE —
+  exact match confirmed (menu item + `Ctrl+Home` accel both dispatch `engine/set/camera`
+  with `[0,-250,125]/[0,0,0]/[0,0,1]` → same `Engine::SetCamera()` as legacy
+  `ID_VIEW_RESETCAMERA`, matching the engine ctor default). The two hard-coded copies were
+  consolidated into one shared `RESET_CAMERA` constant (`lib/reset-camera.ts`); the stale
+  "No `Ctrl+Home`" delta-report note was corrected.
+
+## Explicitly KEEPING (intentional — not defects)
+Docking/splitters (VPT-9/10), multi-channel curve overlay + solo + shift-append +
+ctrl-click (CRV-4/5/10/11), single-click texture apply (PAL-9), popover texture
+palette (PAL-8), custom color picker (PAL-1), dark link palette + lane layout
+(LNK-3/4/5), spinner scrub-on-arrows-only (SPN-2), commit-on-blur (SPN-9), toolbar
+Duplicate / Save-As / Ground-Background dropdowns (SEL-19, MNU-9/10), RGBA short
+labels (PRM-3), About rebrand (MNU-8 — but flag dropped attribution), batch-delete
+(SEL-17), Recent Files submenu, reset-layout. Custom-color registry persistence
+(PAL-4) folds into the native track.
+
+## Progress log
+- **P1 ✅ DONE** (rotation scaling PRM-4/5). `FieldSpinner` gained `displayScale`
+  (×360 average / ×100 variance, display-space clamps −180..180 / 0..100, commit
+  ÷scale). New test `EmitterPropertyTabs.rotationScale.test.tsx` (4 cases, red→green);
+  full suite 410 green; build clean. Web-only, no golden/native impact. Live-drive of
+  the field itself was blocked by post-hot-reload preview selection flakiness (env
+  artifact); transform is deterministically unit-proven.
+- **P2 ✅ DONE** (spinner bugs SPN-4/5/6/7). `primitives/Spinner.tsx`: drag modifier
+  fixed to Shift=coarse/Ctrl=fine (matches wheel+keyboard) + scrub now rounds;
+  wheel base = field `step` (was flat 0.1/1) + Ctrl=fine on decimals; unified
+  arrow-column press handler adds hold-to-repeat (350ms delay, 50ms interval) with a
+  local ramp accumulator + holdingRef resync guard. 6 new Spinner tests; suite 416
+  green; build clean. DOM/a11y tree unchanged (no golden impact). Input-math behaviors
+  are deterministically unit-tested.
+- **P3 (partial) ✅** no-golden quick wins: bounciness max=1 clamp removed (PRM-6 —
+  >1 is legit super-elastic + round-trip on edit); stale curve y-range comment fixed
+  (CRV-14). **Kept** weather/tail `min=0` (PRM-10) — negative cube/tail is meaningless,
+  legacy's allowance was incidental, load still preserves; removing gives no benefit.
+- **P3 (golden-touching) ✅ DONE** — status bar VPT-6/7/8 (shift hint + PAUSED +
+  2dp cursor, session 20) and the Import dialog **"Clear" button (MNU-12)**,
+  session 21: a `handleClear = () => setPicks(new Set())` mirror of Select All,
+  placed right of it (legacy `IDC_IMPORT_CLEAR`, `main.cpp:7326`), disabled when
+  the selection is empty. 2 new tests (suite 502); surgical single-line golden
+  delta (`dialog-import-emitters.composition.golden.yaml` gains the Clear node);
+  native harness 168/0; footer layout pixel-verified in preview.
+- **P4a ✅ DONE** (global accelerators — MNU-2, VPT-1, SEL-14). New
+  `lib/use-app-accelerators.ts` wires every legacy accelerator to its existing
+  action: file (Ctrl+N/O/S), clear (Ctrl+Del), undo/redo (Ctrl+Z / **Ctrl+Y** /
+  Ctrl+Shift+Z), emitter move (**Alt+Up/Down**), spawner trigger (Ctrl+Space),
+  view toggles reading live engine state (Ctrl+G/H, F8), step (F9/F10), spawner
+  dock (F7), reset camera (Ctrl+Home), reload (F5/F6). Replaced the old debug block
+  in App.tsx. **Verified the host `AcceleratorBridge` parser supports all combos**
+  (AcceleratorBridge.cpp:14-51) → no gaps. Deliberately excluded bare Delete/F2
+  (tree-scoped, avoids firing mid-edit). 6 new tests; suite 422 green; build clean;
+  no DOM/golden change. Native key→action needs the native build + user (every link
+  verified to connect).
+### ✅ Backed up to lt-4
+`origin/lt-4` fast-forwarded `a1e8120 → 4f66541` (P1, P2, P3-partial, P4a + audit
+report). Local `lt-4` synced. 0/0. The CRITICAL rotation fix + accelerators are
+off-machine.
+
+- **P4b: NEXT** — enable disabled Edit (Cut/Copy/Paste/Delete) + Emitters
+  (Toggle-Vis/Show-All/Hide-All) menu items, context-menu clipboard/Paste-As/New-Root
+  (MNU-1/3/4, SEL-5/6). **First golden-cascade phase** → `pnpm a11y:update` re-baseline
+  (web-only; uses existing native host, NO MSBuild) + diff review.
+  **Design notes (gathered, ready to implement):**
+  - Commands exist: `emitters/copy {ids}`, `cut {ids}`, `paste {afterId?}`,
+    `set-all-visible {visible}`, `set-visible {id,visible}`, `delete`. Reuse the
+    EmitterTree's existing calls (EmitterTree.tsx:1336-1371) as the single source.
+  - Edit menu: enable Cut/Copy/Delete when selection non-empty (read
+    `getEmitterSelectionSnapshot()`); Paste needs a `hasClipboard` signal (track a
+    flag or always-enable). Wire to the same `emitters/*` calls.
+  - Emitters menu: Show All / Hide All → `set-all-visible {visible:true/false}` (no
+    state). **Toggle Visibility** needs the primary node's current `visible` → MenuBar
+    must subscribe to `emitters/tree/changed` to find it (moderate); or defer (per-row
+    eye already covers it).
+  - **~~GAP: "Paste As ▸ Child (Lifetime/Death)"~~ ✅ SHIPPED 2026-06-07 (SEL-5/MNU-4).**
+    Added the missing host paste-into-slot command `emitters/paste-as-child {parentId,
+    slot}` (BridgeDispatcher.cpp — deser splice + addLifetime/DeathEmitter, self-guarding
+    on occupied slot) + MockBridge `pasteAsChildFromClipboard` + a `Paste As ▸ Lifetime/
+    Death Child` context submenu (own viewport-occlusion wrapper). Gated on hasClipboard
+    && slot-free. Web 510; native harness **169** (new real-host round-trip spec). No a11y
+    golden change — the tree context menu is opened only transiently to reach dialogs, so
+    it's never itself a captured surface (unlike the Edit-menu items in the rest of P4b).
+  - Golden re-baseline expectation: `disabled` attrs flip on Edit/Emitters items + new
+    context-menu nodes. Aggregate-diff to confirm only-intended (L-053).
+
+- **P4b ✅ CODE DONE** (commit pending golden). Implemented:
+  - Edit menu Cut/Copy/Paste/Delete enabled + wired to `emitters/copy|cut|paste|delete`
+    on the live selection (MNU-1); Paste gates on new `lib/emitter-clipboard.ts`
+    session flag (set by both menu + tree copy/cut).
+  - Emitters menu Show All / Hide All → `set-all-visible`; Toggle Visibility → one-shot
+    `emitters/list` + `set-visible` (MNU-3). Removed the dead `todo()` helper.
+  - Context menu: New Root Emitter (SEL-6) + Cut/Copy/Paste (SEL-5).
+  - **GAP flagged:** "Paste As ▸ Child" NOT added — `emitters/paste` has no
+    paste-into-slot param; needs a host command (follow-up).
+  - Build clean; 422 tests green; TS happy.
+  - **✅ a11y re-baselined + backed up.** Native toolchain set up this session
+    (nuget restore WebView2 1.0.3967.48 → `packages/`; MSBuild Debug x64 →
+    `x64/Debug/ParticleEditor.exe`). `pnpm a11y:update` → **155 passed / 4 splitters**
+    (L-033 artifact). Diff was surgical: ONLY `menubar-emitters-open.composition.golden.yaml`
+    (Show/Hide All lose `[disabled]`, 2 lines); legacy `.golden.json` untouched (L-052).
+    P1 left NO golden drift (appearance scenario doesn't populate rotation fields).
+    **`origin/lt-4` = `ff9059a`** (P4a + P4b). Native build now in-worktree → future
+    golden re-baselines are cheap (no re-setup).
+  - **Golden re-baseline PENDING native build:** the a11y harness launches
+    `x64\Debug\ParticleEditor.exe`, which isn't built in this fresh worktree (empty
+    `packages/`). Confirmed change: `menubar-emitters-open` (Show/Hide All lose
+    `[disabled]`). NOTE: **P1 may also have left `property-tabs-appearance` drift** —
+    deferred from P1; the a11y:update will catch both. Requires NuGet restore
+    (WebView2 1.0.3967.48) + MSBuild Debug x64 (L-039/L-046).
+
+### a11y golden status
+P1/P2 don't change the a11y tree (rotation sample value is 0 → ×360 still 0; spinner
+DOM unchanged). Full `pnpm a11y` run deferred to a batch checkpoint before FF to lt-4.
+
+---
+
+## Session 13 end (2026-06-03)
+**`origin/lt-4` = `91f3617`.** Shipped P1, P2, P3, P4a, P4b, P5, P6/CRV-1 (9 commits) +
+the audit report + this plan. Native toolchain set up (WebView2 restored, Debug x64
+built). 428 vitest, 155/4-splitter a11y, all user-confirmed in the faithful build.
+Handoff: HANDOFF.md (session 13) + next-session-prompt.md refreshed + L-057 added.
+
+**Remaining queue:** P6-rest (CRV-2 copy/paste, CRV-7 right-click deselect, CRV-8 decimal
+time) · P7 link-groups (LNK-1/2/6/8/10) · P8 color/texture (PAL-2/3/14) · deferred
+(curve marquee-from-margins ✅ done; SEL-12/13 ✅ done) · native track
+(VPT-2 undo capture-wiring, VPT-3 autosave). Full catalog: ui-delta-report.md.

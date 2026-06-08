@@ -1,0 +1,698 @@
+# LT-4 Phase 4.1 FD6 — WebView2 visual hosting for D3D9 transparency
+
+**Tier:** ★★★★★ (architectural shift; replaces HWND-mode WebView2
+with DComp visual hosting; touches host init, input forwarding,
+resize, and shutdown)
+
+**Status:** Plan-iteration. Awaiting user confirmation of the
+risk list before any code.
+
+---
+
+## 1. Goal + scope
+
+**What the user gets when this ships.** The D3D9 viewport renders
+visibly under the WebView2-hosted React chrome, with menus / modals
+/ tool panels correctly drawn ON TOP of the viewport (i.e. neither
+"viewport over menus" nor "viewport invisible white" — both
+regressions resolved in one shot).
+
+**In:**
+
+- Replace `CreateCoreWebView2Controller(parentHWND, …)` (HWND mode)
+  with `CreateCoreWebView2CompositionController(parentHWND, …)`
+  (visual-hosting mode).
+- Stand up a DirectComposition tree on the host's main HWND:
+  D3D11 device → DXGI factory → DComp device → DComp target →
+  root visual. WebView2's `RootVisualTarget` plugs into the root.
+- Keep the D3D9 viewport as a Win32 child HWND. Because DComp
+  visuals composite OVER the parent HWND content (and the parent
+  HWND's painted content includes any child HWNDs like the viewport
+  sibling), the existing viewport HWND becomes visible the moment
+  WebView2 stops being an opaque sibling HWND.
+- Input forwarding: `WM_MOUSE*` / `WM_POINTER*` on the main HWND
+  → `compositionController->SendMouseInput` /
+  `SendPointerInput`. Mouse events whose cursor is inside the
+  viewport rect skip forwarding so the D3D9 viewport receives
+  them natively (camera tumble, shift-click spawn).
+- Cursor handling: subscribe to
+  `compositionController->add_CursorChanged`, call `SetCursor` in
+  `WM_SETCURSOR`.
+- Resize / DPI: on `WM_SIZE`, update `put_Bounds` AND the DComp
+  visual transform. On `WM_DPICHANGED`, update
+  `put_RasterizationScale`.
+- LayoutBroker — unchanged. Viewport HWND is still a Win32 child
+  with its own swap chain.
+- Shutdown: `compositionController->Close()`; tear down DComp tree
+  AFTER the controller closes.
+- Accelerators: `add_AcceleratorKeyPressed` is on
+  `ICoreWebView2Controller` which `CompositionController`
+  inherits from, so the existing AcceleratorBridge call site moves
+  unchanged.
+
+**Out:**
+
+- `viewport_poc.cpp` — keep the existing HWND-mode PoC untouched
+  as a reference fallback (it's not on the ship path).
+- Touch input — only mouse + pointer for now; touch can be added
+  if the user needs it (no current requirement).
+- DComp animations — the visual tree is static (single visual at
+  the WebView2 root); no animation surface needed.
+- Test-host (Playwright via CDP) — defer to a follow-up PR.
+  Visual-hosting mode is compatible with the host-object bridge
+  (`AddHostObjectToScript`) which is what test-host uses, so it
+  *should* work without changes; verifying is a separate
+  workstream and Risk 3 below.
+
+## 2. What the codebase already gives us
+
+- [src/host/HostWindow.cpp:542-749](src/host/HostWindow.cpp) —
+  current `InitWebView2()`. Sets up env, controller, ctrl2
+  transparency, test-host HostBridgeProxy, AcceleratorBridge,
+  WebMessageReceived, Navigate. The shell to replace is the
+  `CreateCoreWebView2Controller` call at line 542 and the
+  resulting controller-completed callback through line 749.
+- [src/host/HostWindow.cpp:274](src/host/HostWindow.cpp) —
+  `ComPtr<ICoreWebView2Controller> webController` member. Becomes
+  `ComPtr<ICoreWebView2CompositionController>
+  compositionController` PLUS `ComPtr<ICoreWebView2Controller>
+  webController` (the base interface, QueryInterface'd from
+  composition; shared call sites like `Close` and
+  `add_AcceleratorKeyPressed` use this).
+- [src/host/HostWindow.cpp:493-499](src/host/HostWindow.cpp) —
+  `ResizeWebViewToClient` calls `put_Bounds`. With composition
+  controller, `put_Bounds` still exists (inherited) but the
+  visual also needs a Direct2D / DComp transform if scaling is
+  required.
+- [src/host/HostWindow.cpp:838-850](src/host/HostWindow.cpp) —
+  WM_CLOSE / WM_DESTROY shutdown. `webController->Close()` swaps
+  to `compositionController->Close()`.
+- [src/host/AcceleratorBridge.cpp](src/host/AcceleratorBridge.cpp)
+  — driven by `add_AcceleratorKeyPressed` on the base controller
+  interface. No change.
+- [src/host/viewport_poc.cpp](src/host/viewport_poc.cpp) —
+  reference for the HWND-mode path. May serve as fallback if
+  visual-hosting fails on some GPU configs (theoretical, Risk 5).
+- WebView2 SDK already in NuGet
+  (`packages/Microsoft.Web.WebView2/`) — includes `WebView2.h`
+  with `ICoreWebView2CompositionController` declared.
+
+## 3. Architecture / implementation approach
+
+### 3.1 New module: `src/host/Compositor.{h,cpp}`
+
+Encapsulates DComp setup so HostWindow.cpp stays readable.
+
+```cpp
+// Compositor.h
+namespace host {
+
+// Owns the D3D11 + DXGI + DComp scaffolding required to host a
+// WebView2 composition controller as a child visual.
+class Compositor {
+public:
+    explicit Compositor(HWND parent);  // throws on failure
+    ~Compositor();
+
+    // The root visual of the DComp tree — WebView2's
+    // RootVisualTarget becomes this visual's child.
+    IDCompositionVisual* RootVisual() const { return m_rootVisual.Get(); }
+    IDCompositionTarget* Target() const { return m_target.Get(); }
+    IDCompositionDevice* Device() const { return m_device.Get(); }
+
+    // Commit any tree changes (called after attaching the WebView2
+    // visual + after resize).
+    void Commit();
+
+private:
+    Microsoft::WRL::ComPtr<ID3D11Device>          m_d3dDevice;
+    Microsoft::WRL::ComPtr<IDXGIDevice>           m_dxgiDevice;
+    Microsoft::WRL::ComPtr<IDCompositionDevice>   m_device;
+    Microsoft::WRL::ComPtr<IDCompositionTarget>   m_target;
+    Microsoft::WRL::ComPtr<IDCompositionVisual>   m_rootVisual;
+};
+
+} // namespace host
+```
+
+### 3.2 HostWindow.cpp diffs
+
+- Add `std::unique_ptr<host::Compositor> compositor;` member.
+- In `Run()` after main HWND created and before `InitWebView2`,
+  construct `compositor = std::make_unique<Compositor>(hMain);`.
+- `InitWebView2()`:
+  - Replace `env->CreateCoreWebView2Controller(parent, …)` with
+    ```cpp
+    ComPtr<ICoreWebView2Environment3> env3;
+    env->QueryInterface(IID_PPV_ARGS(&env3));
+    env3->CreateCoreWebView2CompositionController(parent, …);
+    ```
+  - In the completion handler, store as `compositionController`
+    AND `webController` (the base `ICoreWebView2Controller`
+    interface, QueryInterface'd from composition; shared call
+    sites use this).
+  - Set `compositionController->put_RootVisualTarget(compositor->RootVisual())`.
+  - Set bounds to full client rect (`put_Bounds`).
+  - `compositor->Commit()`.
+- Replace `ResizeWebViewToClient`:
+  ```cpp
+  void HostWindowImpl::ResizeWebViewToClient()
+  {
+      if (!webController) return;
+      RECT r; GetClientRect(hMain, &r);
+      webController->put_Bounds(r);   // unchanged — inherited
+      if (compositor) compositor->Commit();
+  }
+  ```
+- `WM_DPICHANGED` — call
+  `compositionController->put_RasterizationScale(dpi / 96.0)`.
+- `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP` /
+  `WM_RBUTTONDOWN` / `WM_RBUTTONUP` / `WM_MOUSEWHEEL` — forward
+  via `compositionController->SendMouseInput(eventKind,
+  virtualKeys, mouseData, point)`. Skip forwarding when the
+  cursor is inside the viewport quadrant rect (the engine needs
+  those for camera tumble + shift-click spawn).
+- `WM_POINTER*` (touch) — also forward via `SendPointerInput`.
+  Future scope.
+- `WM_SETCURSOR` — read the cursor cached from
+  `add_CursorChanged` and `SetCursor()`.
+
+### 3.3 Viewport rect tracking
+
+The host already knows the viewport rect — React sends
+`layout/viewport-rect` and `LayoutBroker::Apply` stores `m_lastW`
+/ `m_lastH`. Extend LayoutBroker to also store the rect
+(x, y, w, h) and add a `GetViewportRect()` getter so the WndProc
+input forwarder can check "is this cursor in the viewport?"
+before deciding whether to forward to WebView2 or to let
+`WM_MOUSE*` fall through to the viewport HWND naturally.
+
+### 3.4 Migration of the test-host CDP path
+
+`AddHostObjectToScript` on the CoreWebView2 (not the controller)
+is unchanged. The test-host HostBridgeProxy code at
+[src/host/HostWindow.cpp:594-625](src/host/HostWindow.cpp)
+needs no change. CDP attaching to a composition controller is the
+unknown — Risk 3.
+
+## 4. Risks named up front + mitigations
+
+### Risk 1 — Input forwarding bugs causing UI to feel broken
+
+**Hazard.** `SendMouseInput` is finicky — wrong `eventKind`,
+wrong virtual-key flags, or missed buttons → React UI feels dead
+in spots or double-fires events. Cursor changes via
+`add_CursorChanged` need to be wired or every hover changes
+cursor to default.
+
+**Mitigation.** Implement input forwarding incrementally; smoke
+test each event type (move, l-down, l-up, r-down, r-up, wheel,
+double-click) before moving on. Cache `currentCursor` from
+`add_CursorChanged` and set in `WM_SETCURSOR`. Reference the
+official WebView2 sample
+(`WebView2Samples/SampleApps/WebView2APISample`) for the exact
+event-type mappings.
+
+### Risk 2 — Viewport-vs-chrome hit-testing
+
+**Hazard.** Mouse events inside the viewport rect MUST go to the
+D3D9 viewport HWND (for camera + shift-click spawn) and NOT be
+forwarded to WebView2. Otherwise React tries to handle them and
+the viewport never gets them. But chrome HTML overlays (tool
+panels, menus that DROP DOWN INTO the viewport area) must keep
+going to WebView2 even though they're visually inside the
+viewport rect.
+
+**Mitigation.** Two-step hit test. (a) Get viewport rect from
+LayoutBroker. (b) Send the event to WebView2 first; if WebView2
+"handles" it (we can check via the WebMessage / focus state),
+done. Otherwise forward to viewport HWND. Practical
+implementation: send to WebView2 ALWAYS, then ALSO `PostMessage`
+to viewport HWND if the cursor is in the viewport rect AND no
+HTML element captured the event. This may need iteration once
+real menus are tested in-app.
+
+### Risk 3 — Test-host (Playwright via CDP) flow breaks
+
+**Hazard.** Composition mode may behave differently from HWND
+mode when CDP attaches. The `AddHostObjectToScript` host-object
+bridge may or may not survive the transition. CDP itself may not
+attach to a composition-controller WebView2.
+
+**Mitigation.** Tag the dispatch as not-blocking-on-CDP — run
+the manual smoke tests against the production launch (no
+`--test-host`), confirm the visual fix, and defer Playwright
+verification as a separate `tests/native-cdp-compositionMode/`
+sub-task. The CI test suite still passes via Vitest (the bridge
+side). If CDP breaks, escalate to a follow-up PR.
+
+### Risk 4 — Shutdown order / DComp resource lifetime
+
+**Hazard.** WebView2 composition controller holds a reference to
+the DComp visual. If `Compositor` is destroyed before WebView2 is
+`Close`d, the visual lifetime is reversed and we get a
+use-after-free.
+
+**Mitigation.** Strict ordering in `HostWindowImpl` destructor:
+(1) `compositionController->Close()` → wait for completion via
+synchronous `OnControllerClosed` (or simply drop the controller
+and let WebView2's normal shutdown run on the message pump),
+(2) drop the `compositor` member. Document the ordering invariant
+in HostWindow.h.
+
+### Risk 5 — D3D11 / DXGI feature-level compatibility on the user's GPU
+
+**Hazard.** DComp requires D3D11 feature level 10_0 or higher
+with BGRA support. Modern PCs (incl. user's) have this. Old/no-GPU
+fallback is software rendering, which DComp doesn't support.
+
+**Mitigation.** Try `CreateDevice` with
+`D3D_DRIVER_TYPE_HARDWARE` first; on failure, log and fall back
+to the HWND-mode path (controller, not composition controller) —
+i.e. preserve the current FD4 codepath as a fallback. Probability
+is low on any machine that runs D3D9 EaW, but the fallback is
+cheap to keep.
+
+### Risk 6 — Bundle size for the WebView2 SDK headers
+
+**Hazard.** `ICoreWebView2CompositionController` is in
+`WebView2.h` but requires linking against the runtime DLL which
+is already shipped (`WebView2Loader.dll`). No new linkage needed.
+
+**Mitigation.** Verified — accepted.
+
+### Risk 7 — Window-message subclassing / chrome rendering surprises
+
+**Hazard.** Some Win32 features assume WebView2 is a real HWND
+child (e.g. focus tabbing via `IsDialogMessage`). Composition
+mode removes that HWND.
+
+**Mitigation.** None of our code uses Win32 dialog message
+routing across the WebView2 HWND. Confirmed by grep — no
+`IsDialogMessage` / `TranslateAccelerator` calls in `src/host/`.
+Accepted.
+
+## 5. Testing & verification
+
+### Manual checklist (run via host launch, NOT via Playwright)
+
+**Happy paths**
+
+- Editor launches; viewport visible with dark-purple clear color.
+- Drag a TGA / ALO scene into the viewport — particles render
+  visibly, not under chrome.
+- Move mouse over each chrome region (menu bar, toolbar, sidebar,
+  property tabs, track editor, status bar). Cursors change as
+  expected (text cursor on inputs, hand on buttons).
+- Click each menu, modal, tool panel, context menu. Menus open
+  visually above the viewport (no z-order regression from FD4).
+- Camera tumble works (left-drag in viewport).
+- Shift-click spawn works.
+- Right-click context menus in EmitterTree work.
+
+**Edge cases**
+
+- Resize the host window to 800×600, 1600×1200, 2560×1440.
+  Viewport stays crisp; WebView2 chrome reflows correctly.
+- Move the window across DPI boundaries (laptop + external 4K).
+  WebView2 rasterization scale updates. Viewport text stays
+  sharp.
+- Cursor synchronization: hover from a button to the viewport
+  edge. Cursor should change from hand to arrow at the boundary,
+  no lag.
+
+**Refused inputs**
+
+- Mouse events inside the viewport rect: WebView2 doesn't react
+  to them (verified by checking that `console.log` from a hover
+  listener in the viewport quadrant does NOT fire during camera
+  tumble).
+
+**Cancellation / cleanup**
+
+- Close the editor window. No leaked HWNDs (verified with Spy++
+  — the WebView2 HWND should be gone, the viewport HWND should be
+  gone, the main HWND should be gone).
+- Re-launch — no orphan WebView2 user-data lock errors.
+
+**Debug instrumentation**
+
+- `[host] composition controller created` log line.
+- `[host] compositor root visual = %p` log line.
+- `[host] WM_MOUSEMOVE forwarded to WebView2` (debug-only, gated
+  on `#ifndef NDEBUG` + suppression of high-frequency events).
+
+### Build / type / unit / native test passes
+
+- `MSBuild ParticleEditor.sln` clean.
+- `pnpm build` clean (no React-side changes expected; build for
+  parity).
+- `pnpm test` 180 → 180.
+- `pnpm test:native` — defer; will not pass until Risk 3 is
+  resolved.
+
+---
+
+## 6. Architectural decisions (called out for user review)
+
+1. **DComp scaffolding lives in a new `Compositor` class**, not
+   inline in `HostWindow.cpp`. ~200 LOC of D3D11 + DXGI + DComp
+   setup is its own concern, not part of the host window's
+   life cycle. Keeps `HostWindow.cpp` readable.
+2. **Keep the viewport as a Win32 child HWND**, not a DComp
+   visual. D3D9 doesn't natively integrate with DComp without
+   D3D9Ex shared-resource gymnastics. With WebView2 in
+   composition mode, its DComp visual layers ABOVE the parent
+   HWND content (which includes the viewport child), so
+   HWND-mode viewport "just works" through transparency.
+3. **Skip Playwright migration in this dispatch.** Per Risk 3,
+   it's a follow-up. Manual smoke gate is the user testing in
+   the host. Vitest still passes against MockBridge.
+4. **Keep `viewport_poc.cpp` as-is.** Reference / fallback. Don't
+   migrate it — that's not on the ship path.
+5. **Accept Risk 5 fallback.** If DComp fails to init on a weird
+   GPU, fall back to the FD4 HWND-mode path (white viewport but
+   menus work). Cost: 20 LOC of `if (compositor) { … } else { … }`
+   in `InitWebView2`. User's machine is fine; this is for
+   theoretical robustness.
+
+---
+
+## 7. Plan summary for user check-in
+
+- 1 new module (`Compositor.{h,cpp}`) — ~150 LOC.
+- HostWindow.cpp diff — ~100 LOC (input forwarding +
+  `WM_DPICHANGED` + `WM_SETCURSOR` + fallback branch).
+- LayoutBroker — add 1 getter (~5 LOC).
+- No React-side changes (the CSS chain stays as the May 18
+  commit).
+- 1 build + manual smoke pass.
+- Defer: Playwright CDP migration, touch input.
+
+**Biggest open risk:** input-forwarding correctness (Risk 1, 2).
+Visual hosting input is notoriously fiddly. Plan to land this in
+two commits — (a) compositor + visual hosting wired up, mouse
+forwarding minimal (passive: send to WebView2, viewport gets a
+direct WndProc); (b) cursor + DPI + edge cases.
+
+**Confirm before coding starts:**
+
+- (a) accept the new `Compositor` module location and name?
+- (b) accept deferring Playwright CDP to a separate PR?
+- (c) is the Risk 5 fallback (revert to FD4 white viewport on
+  GPU failure) acceptable, or should we abort init instead?
+
+---
+
+## 8. Postmortem of attempt #1 + attempt #2
+
+**Both attempts on this machine produced a 100% opaque-white client
+area despite every API succeeding (`put_RootVisualTarget`,
+`Commit`, `WebMessageReceived` all fire and React posts messages).
+The visual tree is built, WebView2 is alive and navigating, but its
+rendered surface does not reach the screen.**
+
+### Attempt #1 (FD6 v1, reverted in commit chain leading up to
+6b0d936)
+
+- Used `IDCompositionDevice` (V1) with `IDCompositionVisual` root.
+- Passed root visual directly to `put_RootVisualTarget`.
+- Tried both `topmost=TRUE` and `topmost=FALSE` on
+  `CreateTargetForHwnd`.
+- Tried `NotifyParentWindowPositionChanged()` post-attach.
+- Tried HWND_TOP promotion of viewport (separate experiment).
+- Result: white.
+
+### Attempt #2 (FD6 v2, reverted; uncommitted)
+
+- Switched to `IDCompositionDesktopDevice` (V2) +
+  `IDCompositionVisual2`.
+- Verified against
+  `WebView2Samples/SampleApps/WebView2APISample/ViewComponent.cpp`
+  + `AppWindow.cpp`. Sample fetched via `gh api repos/MicrosoftEdge/WebView2Samples/contents/...`
+  with `Accept: application/vnd.github.v3.raw` and saved to
+  `/tmp/webview2-ref/`.
+- Sample diffs incorporated:
+  - **Intermediate "host" visual** added between root and WebView2
+    (root → host visual ← WebView2). Sample's
+    `BuildDCompTreeUsingVisual`:
+    `CreateVisual(&rootVisual); SetRoot(root);
+    CreateVisual(&webViewVisual); rootVisual->AddVisual(webViewVisual);
+    put_RootVisualTarget(webViewVisual);`
+  - **No D3D11 device, no DXGI device** — pass `nullptr` to
+    `DCompositionCreateDevice2(nullptr, IID_PPV_ARGS(&device))`.
+    Sample doesn't create its own D3D device.
+  - **`SetClip` + `SetOffsetX/Y` on root visual** per resize. Sample
+    `ViewComponent::SetBounds` does this in `if (m_dcompDevice)`.
+  - **Per-frame `Commit()` from render loop.** WebView2 doesn't own a
+    DComp device — host's device must commit for any visual change.
+  - Tried setting WebView2's default background to OPAQUE RED to
+    test whether the visual is rendering at all. **Still saw white.**
+    Definitive proof that the WebView2 surface output is not reaching
+    our visual tree.
+- Result: also white.
+
+### Hypotheses worth testing in the next session
+
+1. **DComp device may need to share GPU adapter / D3D device with
+   WebView2.** Sample passes `nullptr`, but WebView2 might internally
+   bind to whatever IDXGIDevice is available. If our D3D9 device
+   (running on a different adapter) is locking the GPU, WebView2's
+   D3D11 device might pick a different adapter and the DComp tree
+   composites on a third surface. Worth instrumenting via
+   `IDXGIAdapter` enumeration on both sides.
+2. **`WS_EX_NOREDIRECTIONBITMAP` on the main HWND.** The sample
+   doesn't use it, but some visual-hosting tutorials say it's
+   required to disable the GDI redirection bitmap that DComp
+   otherwise has to alpha-blend with. Worth a single-character
+   experiment: add the flag to `CreateWindowExW` line 1422 of
+   HostWindow.cpp.
+3. **WebView2 SDK version.** We're on 1.0.3967.48; the sample
+   targets a newer/older version. Maybe a quirk of this specific
+   build. Try upgrading the NuGet to a recent one and re-run.
+4. **The sample alone may already fail on this machine.** Build
+   the actual `WebView2APISample` from
+   `MicrosoftEdge/WebView2Samples` and confirm its visual-hosting
+   path renders. If it does, port their *exact* DComp init code
+   line-for-line. If it doesn't, this machine has a driver/SDK
+   issue and we should switch strategy.
+5. **Alternative path — option C from the original session:**
+   `SetWindowRgn` to clip WebView2's HWND in HWND-mode to exclude
+   the viewport rect. Bypasses visual hosting entirely, restores
+   menu z-order from FD4, and the viewport sibling becomes visible
+   in the cut-out region. Simpler; ship-ready.
+
+### Code preservation
+
+The v2 Compositor module and HostWindow.cpp diffs were reverted
+from the worktree but the design + every API call is documented
+here. To resurrect:
+
+- Compositor.h + Compositor.cpp: see Section 3.1, then apply the
+  v2 sample-derived corrections — V2 device, intermediate visual,
+  `nullptr` to `DCompositionCreateDevice2`, `SetClip`/`SetOffset`
+  on root visual.
+- HostWindow.cpp: see Section 3.2 — split InitWebView2 into a
+  composition path + HWND fallback, add `FinishControllerSetup`,
+  add `ForwardMouseToWebView2`, add WM_DESTROY teardown order.
+- ParticleEditor.vcxproj: add `d3d11.lib;dxgi.lib;dcomp.lib` to
+  AdditionalDependencies and a per-file `AdditionalIncludeDirectories`
+  override on `host\Compositor.cpp` that omits `$(DXSDK_DIR)Include`
+  so Windows 10 SDK's d3d11.h wins for that TU.
+
+---
+
+## 9. Postmortem of attempt #3 (FD6 v3) — also reverted
+
+**Hypothesis 4 confirmed**: built MicrosoftEdge/WebView2Samples'
+`WebView2APISample.exe` on this machine, ran it with
+`creationmode=visualdcomp`, and the visual-hosting React-style
+chrome rendered beautifully. WebView2 runtime + GPU + Windows
+configuration all support visual hosting fine. **The bug must be
+in my port.**
+
+### v3 changes applied (in order)
+
+All cross-referenced against
+`WebView2Samples/SampleApps/WebView2APISample/{AppWindow,ViewComponent}.cpp`:
+
+1. **Device type**: switched to `IDCompositionDevice` (V1, what
+   the sample uses) — not the V2 `IDCompositionDesktopDevice`
+   that I tried in v2.
+2. **Device IID**: `DCompositionCreateDevice2(nullptr,
+   IID_PPV_ARGS(&IDCompositionDevice))` — V2 factory function
+   with V1 IID. Matches sample.
+3. **Build order**: deferred `CreateTargetForHwnd` + visual-tree
+   creation until INSIDE the composition-controller completion
+   callback. The Compositor ctor now only creates the
+   `IDCompositionDevice`; `BuildVisualTree()` runs after
+   WebView2 controller exists. **This was the most suspicious
+   difference from v2** — the sample creates target/visuals after
+   the controller, and our pre-v3 attempts created them in the
+   Compositor ctor before WebView2 init began.
+4. **Intermediate visual** preserved from v2 (root → host-visual ←
+   WebView2 sub-tree). Sample line 919.
+5. **SetClip + SetOffset** on root visual per resize. Sample
+   ViewComponent::SetBounds.
+6. **Per-frame DComp Commit** from render loop.
+7. **Parent HWND brush** set to `(HBRUSH)(COLOR_WINDOW + 1)` to
+   match the sample. Was `nullptr` before. Hypothesis: DComp
+   surface with topmost=TRUE needs a parent paint to blend
+   against; null brush leaves the parent paint state undefined.
+8. **Window styles** updated to match sample —
+   `WS_EX_CONTROLPARENT` extended style,
+   `WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN`
+   class style (was missing `WS_CLIPSIBLINGS`).
+9. **Diagnostic isolation**: created the D3D9 viewport child HWND
+   WITHOUT `WS_VISIBLE` (hidden) to rule out child-HWND
+   interference with the DComp tree. White persisted, so the
+   viewport sibling is not the cause.
+10. **SDK upgrade**: bumped `Microsoft.Web.WebView2` NuGet from
+    `1.0.3967.48` to `1.0.4015-prerelease` to match the sample.
+    Build clean. White persisted.
+
+### Result
+
+Still 100% opaque white. Every API succeeds (`hr=0x00000000`).
+React loads, posts WebMessages, navigation completes. The
+WebView2 surface is just never visible.
+
+### Things I haven't bisected
+
+- The sample's `Toolbar` component is a real child HWND running
+  Win32 widgets ABOVE the WebView2 visual area. We have an
+  equivalent (the D3D9 viewport child HWND). The sample's WORKS
+  in coexistence with WebView2 visual hosting; mine doesn't.
+  Hypothesis: the sample's `Toolbar` HWND is configured with
+  flags / styles my viewport HWND lacks, and that affects DComp.
+- The sample's `m_appBackgroundImage` rendered via `StretchBlt`
+  in `WM_PAINT` paints opaque pixels on the parent HWND. My
+  parent has a no-op `WM_PAINT` (the legacy idle-render pattern).
+  DComp may require a non-trivial parent paint to bootstrap its
+  blending, or sample's StretchBlt happens to mask a different
+  bug.
+- The sample uses `wil` (Windows Implementation Library) with
+  `wil::com_ptr` and `try_query` rather than raw `Microsoft::WRL::ComPtr`
+  + `QueryInterface`. Identical semantics, but a different ABI
+  path that *could* matter for some interface IDs.
+
+### Recommended next step
+
+Option **A** (bisect the sample) is the only path left that
+yields a definitive answer. Concretely:
+
+1. Take a clean copy of `WebView2APISample` (we have it built
+   locally at `/tmp/WebView2Samples/SampleApps/WebView2APISample`).
+2. Strip the toolbar / scenario / settings components down to
+   the minimal visual-hosting setup.
+3. ADD a `WS_CHILD | WS_VISIBLE` D3D9-style sibling HWND, populate
+   with a colored brush, see if visual hosting still renders.
+4. If it does, port that minimum diff into the host.
+
+**Estimated time**: 2-3 hours focused work.
+
+### FD7 — Option C (SetWindowRgn cut-out) attempted
+
+Pivoted from visual hosting to a simpler cut-out approach. Added
+in commits leading up to checkpoint:
+
+- `LayoutBroker::SetWebViewHWND` + `RefreshWebViewRegion`:
+  builds an `HRGN` = full WebView2 client minus the viewport
+  rect, applies via `SetWindowRgn(webviewHWND, region, TRUE)`.
+- `HostWindow.cpp` post-controller code: walks main HWND
+  children via `EnumChildWindows`, finds WebView2's HWND by
+  matching class-name prefix "Chrome_", hands it to LayoutBroker.
+- `ResizeWebViewToClient` also refreshes the region so the
+  cut-out tracks window resize.
+- `SetWindowPos(hViewport, HWND_TOP, ...)` after WebView2 init,
+  intended to promote viewport above WebView2's HWND in Win32
+  z-order.
+
+**What works (proven):** The cut-out is mechanically applied.
+Verified by setting the main HWND's class brush to RED — the
+viewport area then renders RED (parent peek-through), exactly
+where the WebView2 region's hole is.
+
+**What doesn't work (and why):** The viewport HWND's D3D9
+content doesn't render through the hole. Tested:
+- Viewport on `HWND_TOP` after WebView2 init — no visible
+  effect; viewport area renders white (or the parent brush
+  color when set).
+- Viewport without `WS_CLIPSIBLINGS` — also white.
+- Viewport's `hbrBackground` set to GREEN with
+  `WM_ERASEBKGND` allowed to default-paint — a thin GREEN rim
+  appeared around the cut-out hole, but D3D9 content
+  (dark-purple clear) never showed inside it.
+
+Root cause: DWM composites WebView2's DComp surface above the
+viewport's GDI/D3D9 HWND blit, regardless of Win32 sibling
+z-order. The cut-out punches a hole in WebView2's HWND, but DWM
+doesn't fall through to the viewport HWND — it either shows the
+parent's painted content (whatever the parent's brush paints) or
+nothing (white default) when the parent brush is null.
+
+A proper fix needs the viewport to be composited at the same
+DWM/DComp layer as WebView2. Three paths forward:
+
+1. **WS_EX_LAYERED viewport HWND** — DWM composites layered
+   windows as separate layers; possibly above WebView2's DComp.
+   Constraints: layered windows can't have child HWNDs and
+   `UpdateLayeredWindow` is GDI-based, not D3D9-native. May
+   require a D3D9 + GDI bitmap shim.
+2. **Top-level WS_POPUP viewport** — make the viewport a
+   borderless top-level window, owned by main, positioned over
+   the editor's viewport quadrant. Independent DWM
+   compositing layer. The cleanest path.
+3. **Texture sharing into WebView2** — render D3D9 to a shared
+   texture (DXGI keyed mutex), pass the texture to a
+   `<canvas>` in React via `chrome.webview` host-object. The
+   D3D9 output becomes WebView2 page content. Bigger rewrite.
+
+### Bisect attempt #1 (May 2026)
+
+Approached this **outside-in** instead of inside-out: started
+from the working sample, ADDED our host's three most-suspicious
+patterns one at a time. All three ruled out.
+
+| Step | Change to sample | Result |
+|---|---|---|
+| 1 | `WS_CHILD | WS_VISIBLE` sibling HWND with red brush, at (16,100,320,240) | **Still renders.** Red rectangle visible OVER WebView2 chrome (standard Win32 sibling z-order above DComp surface) |
+| 2 | + Direct3DCreate9 + CreateDevice on the sibling HWND + Clear+Present once | **Still renders.** Dark-purple D3D9 area visible. WebView2 chrome unobscured outside it |
+| 3 | + Replace sample's `GetMessage` main loop with `PeekMessage` idle-spin (the host's render-loop pattern) | **Still renders.** Both WebView2 chrome and the D3D9 rectangle are stable |
+
+Conclusion: none of the obvious "host vs sample" differences
+(sibling HWND, D3D9 device, idle loop) cause the white. The bug
+must be in something more subtle — possibly an interaction
+between the host's `Engine` (which creates render targets,
+loads shaders, etc.) and DComp, or a Win32 setup step that
+happens BEFORE the WebView2 init in the host.
+
+A truly definitive bisect from here would require **inverting
+the direction**: start from the bisect-modified sample and
+incrementally port the host's `Engine` + WebView2 init order
++ window-class setup into it. That's no longer a bisect — it's
+a guided rewrite of the host from a known-good baseline. The
+cost-benefit at that point favours option C (`SetWindowRgn`
+cut-out) which ships today.
+
+**Alternative ship path**: option **C** (`SetWindowRgn` cut-out
+on the HWND-mode WebView2). Keeps FD4's HWND mode, clips
+WebView2's HWND region to exclude the viewport rect so the
+sibling shows through the cut-out. Doesn't fight DComp at all.
+~50 LOC. Ships today. Trade-off: opaque HTML over the viewport
+rect (menu dropdowns) becomes impossible — but that's strictly
+better than today's invisible viewport.
+
+### Code preservation (v3)
+
+Same locations as v2, plus:
+
+- `Compositor::Impl::device` is now `IDCompositionDevice` (V1),
+  not `IDCompositionDesktopDevice`.
+- `Compositor` adds a `BuildVisualTree()` public method, called
+  from `HostWindow.cpp` inside the composition-controller
+  completion callback.
+- Main HWND class brush: `(HBRUSH)(COLOR_WINDOW + 1)`.
+- Main HWND CreateWindowExW: `WS_EX_CONTROLPARENT` extended +
+  `WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN` class
+  style.
