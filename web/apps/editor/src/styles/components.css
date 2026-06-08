@@ -1058,6 +1058,10 @@
 .vp-bottom-right .tool:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 
 /* ========== Curve editor ========== */
+
+/* Curve key markers: soft drop-shadow for depth instead of a hard outline. */
+.curve-key-marker { filter: drop-shadow(0 1px 1.2px rgba(0, 0, 0, 0.5)); }
+
 .curve-editor {
   display: grid;
   /* `minmax(0, 1fr)` instead of bare `1fr` so the body row can
