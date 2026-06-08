@@ -4602,6 +4602,61 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         return res;
     }
+    // -------- emitters/paste-as-child (legacy Paste As ▸) -----------
+    //
+    // Deserialise the FIRST clipboard buffer and attach it into the
+    // parent's lifetime or death child slot — the splice of the
+    // emitters/paste deser (above) and the add-lifetime/death-child
+    // attach. `addLifetimeEmitter`/`addDeathEmitter` self-guard (return
+    // NULL) when the slot is already filled, so a stale menu can't
+    // double-occupy. One emitter per slot: a multi-buffer clipboard
+    // pastes only buffer[0] (matches legacy's single-blob clipboard).
+    if (kind == "emitters/paste-as-child")
+    {
+        int parentId = params.value("parentId", -1);
+        std::string slot = params.value("slot", std::string());
+        ParticleSystem::Emitter* parent = getEmitterById(parentId);
+        if (parent == nullptr || m_pParticleSystem == nullptr || !*m_pParticleSystem
+            || m_emitterClipboard.empty() || m_emitterClipboard.front().empty())
+        {
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        captureUndo();
+        ParticleSystem* sys = m_pParticleSystem->get();
+        ParticleSystem::Emitter* child = nullptr;
+        MemoryFile* memfile = new MemoryFile;
+        try
+        {
+            auto& buf = m_emitterClipboard.front();
+            memfile->write(buf.data(), static_cast<unsigned long>(buf.size()));
+            memfile->seek(0);
+            ChunkReader reader(memfile);
+            ParticleSystem::Emitter staging(reader);
+            staging.name = GenerateDuplicateName(sys, staging.name);
+            child = (slot == "death")
+                ? sys->addDeathEmitter(parent, staging)
+                : sys->addLifetimeEmitter(parent, staging);
+        }
+        catch (...)
+        {
+            // Deser failed — fall through to the null-child refusal.
+        }
+        memfile->Release();
+        if (child == nullptr)
+        {
+            // Slot occupied or deser threw. captureUndo already ran —
+            // parity with add-lifetime-child, which also captures before
+            // this null-check.
+            sendOk(json{{"newId", -1}});
+            return res;
+        }
+        sendOk(json{{"newId", static_cast<int>(child->index)}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
 
     // -------- everything else (emitters/* etc.) ---------------------
     sendErr("not implemented yet (Phase 3+)");
