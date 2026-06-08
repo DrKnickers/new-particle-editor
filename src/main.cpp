@@ -111,18 +111,16 @@ class TextureManager : public ITextureManager
 	IFileManager*		fileManager;
 	IDirect3DTexture9*  pDefaultTexture;
 
-	static IDirect3DTexture9* createTexture(IDirect3DDevice9* pDevice, IFile* file)
+	// Post-audit F13+F14: takes the decoded bytes by reference rather
+	// than an IFile* — file lifetime + exact-byte reads are handled by
+	// ReadAndRelease at the call sites.
+	static IDirect3DTexture9* createTexture(IDirect3DDevice9* pDevice, const std::vector<unsigned char>& bytes)
 	{
 		IDirect3DTexture9* pTexture = NULL;
-		unsigned long size = file->size();
-		char* data = new char[ size ];
-		file->read( (void*)data, size );
-		if (D3DXCreateTextureFromFileInMemory( pDevice, (void*)data, size, &pTexture ) != D3D_OK)
+		if (D3DXCreateTextureFromFileInMemory( pDevice, bytes.data(), (unsigned long)bytes.size(), &pTexture ) != D3D_OK)
 		{
-            delete[] data;
 			return NULL;
 		}
-		delete[] data;
 		return pTexture;
 	}
 
@@ -140,7 +138,16 @@ class TextureManager : public ITextureManager
 		{
 			return NULL;
 		}
-		return createTexture(pDevice, file);
+		// Post-audit F13: ReadAndRelease consumes the IFile* reference
+		// (which the previous code leaked) and enforces exact-byte reads.
+		try
+		{
+			return createTexture(pDevice, ReadAndRelease(file));
+		}
+		catch (ReadException&)
+		{
+			return NULL;
+		}
 	}
 
 public:
@@ -155,8 +162,14 @@ public:
 		try
 		{
 			IFile* file = new PhysicalFile(AnsiToWide(filename));
-			pTexture = createTexture(pDevice, file);
-			delete file;
+			// Post-audit F13/F14/N4: ReadAndRelease handles exact-byte
+			// reads and the IFile Release (was `delete file;` which
+			// violated the refcounted IFile abstraction).
+			try
+			{
+				pTexture = createTexture(pDevice, ReadAndRelease(file));
+			}
+			catch (ReadException&) {}
 		}
 		catch (FileNotFoundException&)
 		{
@@ -251,18 +264,16 @@ class ShaderManager : public IShaderManager
 	IFileManager* fileManager;
 	Effect*       pDefaultShader;
 
-	static Effect* createShader(IDirect3DDevice9* pDevice, IFile* file)
+	// Post-audit F13+F14: takes decoded bytes by reference rather than
+	// an IFile* (file lifetime + exact-byte reads handled by
+	// ReadAndRelease at call sites).
+	static Effect* createShader(IDirect3DDevice9* pDevice, const std::vector<unsigned char>& bytes)
 	{
 		ID3DXEffect* pShader = NULL;
-		unsigned long size = file->size();
-		char* data = new char[ size ];
-		file->read( (void*)data, size );
-		if (FAILED(D3DXCreateEffect( pDevice, (void*)data, size, NULL, NULL, D3DXFX_NOT_CLONEABLE, NULL, &pShader, NULL )))
+		if (FAILED(D3DXCreateEffect( pDevice, bytes.data(), (unsigned long)bytes.size(), NULL, NULL, D3DXFX_NOT_CLONEABLE, NULL, &pShader, NULL )))
 		{
-            delete[] data;
 			return NULL;
 		}
-		delete[] data;
         
         D3DXHANDLE technique;
         pShader->FindNextValidTechnique(NULL, &technique);
@@ -287,7 +298,16 @@ class ShaderManager : public IShaderManager
 		{
 			return NULL;
 		}
-		return createShader(pDevice, file);
+		// Post-audit F13: ReadAndRelease consumes the IFile* reference
+		// (was leaked) and enforces exact-byte reads.
+		try
+		{
+			return createShader(pDevice, ReadAndRelease(file));
+		}
+		catch (ReadException&)
+		{
+			return NULL;
+		}
 	}
 
 public:
@@ -301,8 +321,14 @@ public:
 		try
 		{
 			IFile* file = new PhysicalFile(AnsiToWide(filename));
-			pShader = createShader(pDevice, file);
-			delete file;
+			// Post-audit F13/F14/N4: ReadAndRelease handles exact-byte
+			// reads and the IFile Release (was `delete file;` which
+			// violated the refcounted IFile abstraction).
+			try
+			{
+				pShader = createShader(pDevice, ReadAndRelease(file));
+			}
+			catch (ReadException&) {}
 		}
 		catch (FileNotFoundException&)
 		{
@@ -2893,8 +2919,17 @@ static LRESULT CALLBACK RenderWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
 		}
 
 		case WM_PAINT:
+		{
+			// Post-audit F12: pair Render with BeginPaint/EndPaint so the
+			// update region is validated. Pre-fix the case just called
+			// Render(info), leaving the update region marked dirty so
+			// Windows kept re-posting WM_PAINT (paint storm + spurious CPU).
+			PAINTSTRUCT ps;
+			BeginPaint(hWnd, &ps);
 			Render(info);
-			break;
+			EndPaint(hWnd, &ps);
+			return 0;
+		}
 
 		case WM_LBUTTONUP:
 			if (info->attachedParticleSystem != NULL)

@@ -539,6 +539,15 @@ ParticleSystem::Emitter::Emitter(const Emitter& emitter)
     {
         tracks[i] = trackContents + (emitter.tracks[i] - emitter.trackContents);
     }
+
+    // Post-audit F15: the default operator= just shallow-copied
+    // m_instances (the set of live runtime EmitterInstance pointers),
+    // leaving the cloned Emitter pointing at the source's live
+    // instances. Subsequent destruction or mutation of the clone would
+    // then affect instances that logically belong to the source. Clear
+    // here so the clone starts with no runtime presence; the engine
+    // re-populates m_instances as it spawns instances against the clone.
+    m_instances.clear();
 }
 
 void ParticleSystem::Emitter::detachFromLinkGroup()
