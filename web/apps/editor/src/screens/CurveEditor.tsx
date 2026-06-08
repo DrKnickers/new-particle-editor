@@ -1876,7 +1876,9 @@ function MultiChannelCurves({
               // decorative-only (`pointerEvents="none"`). This
               // makes keys comfortable to click without forcing a
               // larger visual marker that would clutter the curve.
-              const hitR = selected ? 12 : 10;
+              // hitR was bumped (10/12 → 14/16) because the old pad was
+              // still fiddly to hit; visible dot stays at 5/6.
+              const hitR = selected ? 16 : 14;
               const visR = selected ? 6 : 5;
               return (
                 <g key={i}>

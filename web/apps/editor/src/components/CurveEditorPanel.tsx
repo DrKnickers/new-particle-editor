@@ -321,7 +321,14 @@ export function CanvasWithAxisLabels({
           4px left of the SVG edge so an endpoint-key circle (~5px
           radius) extending leftward doesn't sit on top of the label
           text. */}
-      <div className="relative" style={{ gridColumn: 1, gridRow: 1 }}>
+      {/* pointer-events-none: axis labels are decorative — without this an
+          endpoint key (value 0/1, drawn into the label gutter via the SVG's
+          overflow:visible) gets its click stolen by the label span, which
+          (being outside the plot SVG) the grid's onPointerDown treats as a
+          gutter press → starts a marquee instead of selecting the key. With
+          the labels click-through, the press reaches the SVG key; an empty
+          gutter press still falls through to the grid → marquee (unchanged). */}
+      <div className="relative pointer-events-none" style={{ gridColumn: 1, gridRow: 1 }}>
         {yLabels.map((l) => (
           <span
             key={l.key}
@@ -359,7 +366,7 @@ export function CanvasWithAxisLabels({
           time range. End labels (0 and 100) anchor at the cell
           edges so they don't clip; intermediates centre on their
           percentage. */}
-      <div className="relative" style={{ gridColumn: 2, gridRow: 2 }}>
+      <div className="relative pointer-events-none" style={{ gridColumn: 2, gridRow: 2 }}>
         {[0, 25, 50, 75, 100].map((t) => (
           <span
             key={`xl-${t}`}
