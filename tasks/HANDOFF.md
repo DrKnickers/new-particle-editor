@@ -1,14 +1,30 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-07 (session 22b) — **4-item polish batch shipped (web + native re-baseline)**. On the branch, NOT yet FF-pushed beyond `859d628`. NEXT: FF-push the polish batch / VPT-2 / wrap
+## 2026-06-07 (session 22b) — **TWO polish batches shipped (8 + 4 items)**. On the branch, NOT yet FF-pushed beyond `859d628`. NEXT: FF-push both batches / VPT-2 / wrap
 
-**`origin/lt-4` = `859d628`** (Paste-As-Child, FF-pushed + user-tested earlier this session). The
-**polish batch** (`59238a6`..`d621fca`, 6 commits) is on `claude/flamboyant-zhukovsky-38a3ff`, a
-clean descendant of `859d628` — **held pending FF-push**. **No `master` changes.** Web vitest
-**513 / 0** (was 510; +3 rotation, label/bracket tests swapped in place); `tsc -b` clean (L-070:
-use the build's `tsc -b`, NOT `--noEmit`, after touching tests). Native harness **169 / 0**;
-**19 a11y goldens re-baselined** (one shared cause — the `<details>`→button section conversion in
-the Spawner panel that every full-page golden captures + the Lighting dialog).
+**`origin/lt-4` = `859d628`** (Paste-As-Child, FF-pushed + user-tested earlier this session).
+**Both polish batches** (`59238a6`..`27ff116`, ~12 commits) are on
+`claude/flamboyant-zhukovsky-38a3ff`, a clean descendant of `859d628` — **held pending FF-push**.
+**No `master` changes.** Web vitest **513 / 0**; `tsc -b` clean (L-070: use the build's `tsc -b`,
+NOT `--noEmit`, after touching tests). Native harness **169 / 0**.
+
+### Batch 2 (interaction polish — `3f55c63`..`27ff116`, render-only, ZERO golden change)
+User-reported UX fixes, all live-verified (Playwright real input where it mattered):
+- `3f55c63` **scrollbar-gutter: stable** on inspector tabs + tool-panel body — expanding a
+  section no longer shoves the panel sideways when a scrollbar appears.
+- `4cf3aaa` **curve keys easier to click** — hit-pad 10/12→14/16 **+** axis labels
+  `pointer-events:none` (the real fix: endpoint keys drew into the label gutter and the label
+  stole their click → started a marquee instead of selecting; now click-through. Gutter-marquee
+  preserved, real-input verified — L-067).
+- `60fc94b` **texture filename field wider** (label col 96→44px) + **splitter cursor fixed**
+  (visible 4→8px, `resizeTargetMinimumSize.fine=8` so the cursor zone == the 8px band, no more
+  3px spill onto the viewport).
+- `27ff116` **test(native)** — splitters.spec floor formula now subtracts the 8px handle widths
+  (the wider handle drifted the default-layout % past ±1%).
+
+### Batch 1 (first polish batch — labels / rotation-exclusive / bracket-select / animation)
+Web vitest 510→513; **19 a11y goldens re-baselined** (one shared cause — the `<details>`→button
+section conversion in the Spawner panel that every full-page golden captures + the Lighting dialog).
 
 ### Polish batch commits (newest first)
 - `d621fca` **test(a11y)** — 19-golden re-baseline for the `<details>`→button conversion + 2 native

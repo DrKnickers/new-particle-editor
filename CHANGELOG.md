@@ -16,6 +16,41 @@ Conventions:
 
 ## Changelog
 
+### Interaction polish: stable scrollbar gutter, wider texture field, clickable curve keys, splitter cursor (new-UI)
+
+*2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
+
+Four usability fixes. (1) Expanding an inspector/tool-panel section that overflows into a
+scrollbar no longer **shoves the panel sideways** — the scrollbar gutter is reserved. (2) The
+Appearance tab's **texture filename field is wider** now that "Color:" / "Bump:" labels are
+short (the freed space flows into the input). (3) **Curve keys are easier to click** — the
+hit-pad is larger and, crucially, the axis labels no longer steal clicks from endpoint keys.
+(4) The **splitter resize cursor** only appears over the splitter now, not 3px onto the
+viewport.
+
+**How tackled.** (1) `scrollbar-gutter: stable` ([`base.css`](src/styles/base.css)) on the
+inspector tab + tool-panel scrollers. (2) Texture row label column `96px → 44px`
+([`components.css`](src/styles/components.css)), keeping the two rows aligned. (3) Key hit-pad
+radius `10/12 → 14/16` ([`CurveEditor.tsx`](src/screens/CurveEditor.tsx)) **plus**
+`pointer-events: none` on the axis-label containers
+([`CurveEditorPanel.tsx`](src/components/CurveEditorPanel.tsx)). (4) Splitter visible band
+`4px → 8px` and `resizeTargetMinimumSize.fine = 8` on the Groups
+([`PanelLayout.tsx`](src/components/PanelLayout.tsx)) so react-resizable-panels stops inflating
+the thin handle to its 10px default.
+
+**Issues encountered and resolutions.** The curve-key fix turned out to be two bugs in one:
+enlarging the pad helped interior keys, but **endpoint keys (value 0/1) were unclickable** —
+they draw into the label gutter via the SVG's `overflow:visible`, and the label span (being
+outside the plot SVG) made the grid's `onPointerDown` treat the press as a *gutter* press and
+start a marquee instead of selecting the key. Making the labels click-through routes the press
+to the key while still letting an empty-gutter press start a marquee (the session-19
+marquee-from-gutters feature — verified preserved with real Playwright input, L-067). Widening
+the splitter to 8px also drifted the `splitters.spec.ts` default-layout check past its ±1%
+tolerance (its floor formula divided by the full group width instead of the available
+space-minus-handles); corrected the formula. No a11y golden change; native harness 169/0.
+
+---
+
 ### Animated expand/collapse for collapsible sections (new-UI)
 
 *2026-06-07 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)*
