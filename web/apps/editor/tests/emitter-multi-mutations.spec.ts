@@ -240,3 +240,82 @@ test("Ctrl+click on a second emitter row updates data-selected-count to 2", asyn
     }, seededId);
   }
 });
+
+// ── 4. emitters/paste-as-child attaches the clipboard into a slot ────
+//
+// Real-host round-trip for the new Paste As ▸ command (SEL-5/MNU-4):
+// copy a root, then paste-as-child into a parent whose lifetime slot is
+// free, and confirm the engine attaches a lifetime child with the
+// source's suffixed name (GenerateDuplicateName). Exercises the C++
+// handler's deser + addLifetimeEmitter path through the actual engine,
+// not just the mock.
+
+test("emitters/paste-as-child via the bridge attaches a lifetime child", async () => {
+  const result = await page.evaluate(async () => {
+    const bridge = (window as Window & {
+      bridge?: {
+        request: (req: { kind: string; params: unknown }) =>
+          Promise<{ newId?: number; root?: { children: unknown[] } }>;
+      };
+    }).bridge;
+    if (!bridge) throw new Error("bridge missing");
+
+    const before = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    }) as { root: { children: { id: number; name: string; children: { role: string }[] }[] } };
+
+    const srcId = before.root.children[0]?.id ?? -1;
+    if (srcId < 0) return { skipped: true as const };
+    const srcName = before.root.children[0]!.name;
+    // A parent whose lifetime slot is free (legacy gate: spawnDuringLife == -1).
+    const parent = before.root.children.find(
+      (c) => !c.children.some((kid) => kid.role === "lifetime"),
+    );
+    if (!parent) return { skipped: true as const };
+
+    await bridge.request({ kind: "emitters/copy", params: { ids: [srcId] } });
+    const r = await bridge.request({
+      kind: "emitters/paste-as-child",
+      params: { parentId: parent.id, slot: "lifetime" },
+    });
+
+    const after = await bridge.request({
+      kind: "emitters/list",
+      params: {},
+    }) as { root: { children: { id: number; children: { id: number; name: string; role: string }[] }[] } };
+    const parentAfter = after.root.children.find((c) => c.id === parent.id)!;
+    const lifetime = parentAfter.children.find((c) => c.role === "lifetime");
+
+    return {
+      newId: r.newId,
+      hasLifetime: lifetime !== undefined,
+      lifetimeId: lifetime?.id,
+      lifetimeName: lifetime?.name ?? "",
+      srcName,
+    };
+  });
+
+  if ("skipped" in result) {
+    test.skip(true, "no free-lifetime-slot parent in the seed");
+    return;
+  }
+  expect(typeof result.newId).toBe("number");
+  expect(result.newId).toBeGreaterThanOrEqual(0);
+  expect(result.hasLifetime).toBe(true);
+  expect(result.lifetimeId).toBe(result.newId);
+  // Pasted child takes the source name suffixed (GenerateDuplicateName).
+  expect(result.lifetimeName.startsWith(result.srcName)).toBe(true);
+
+  // Cleanup: drop the pasted child.
+  if (typeof result.newId === "number" && result.newId >= 0) {
+    await page.evaluate(async (id) => {
+      const bridge = (window as Window & {
+        bridge?: {
+          request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+        };
+      }).bridge;
+      if (bridge) await bridge.request({ kind: "emitters/delete", params: { id } });
+    }, result.newId);
+  }
+});
