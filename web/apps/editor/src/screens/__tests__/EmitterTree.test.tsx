@@ -720,22 +720,33 @@ describe("EmitterTree", () => {
 
   // ─── P7 LNK-6 — bracket hover-tint (brackets are visual-only) ─────
 
-  it("the bracket gutter is NON-interactive (no click handler steals row selection)", async () => {
+  it("clicking the link-group bracket selects all members of that group", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
 
-    // Pre-select Flash (id=5).
+    // Pre-select Flash (id=5, ungrouped) so we can see the selection change.
     fireEvent.click(screen.getByText("Flash"));
     expect(useEmitterSelectionStore.getState().ids).toEqual([5]);
 
-    // Clicking the bracket must NOT change the selection — it overlays the
-    // full-width rows, so a clickable bracket would steal row-selection
-    // clicks (the "kept deselecting" bug). It's purely visual now.
+    // Click the group-1 bracket → selection becomes ALL group-1 members
+    // (Smoke id=0 and Sparks id=3), primary = the first (top-most) member.
+    // The hit-zone has its own pointer-events (the gutter stays inert); a
+    // real-browser check that it doesn't steal ROW clicks is done live
+    // (jsdom has no hit-testing/z-order — L-067).
     fireEvent.click(screen.getByTestId("link-group-bracket-1"));
-    expect(useEmitterSelectionStore.getState().ids).toEqual([5]);
+    const sel = useEmitterSelectionStore.getState();
+    expect([...sel.ids].sort((a, b) => a - b)).toEqual([0, 3]);
+    expect(sel.primary).toBe(0);
+    // Primary synced to the host.
+    expect(
+      bridge.request.mock.calls.some(
+        (c: [{ kind: string; params?: { id?: number } }]) =>
+          c[0].kind === "emitters/select" && c[0].params?.id === 0,
+      ),
+    ).toBe(true);
   });
 
   it("hovering a LINKED row tints its whole group (data-link-hover), cleared on leave", async () => {

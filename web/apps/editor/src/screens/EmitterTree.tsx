@@ -1422,9 +1422,9 @@ export function EmitterTree({ bridge }: Props) {
 
   // LNK-6: hovering a LINKED row lights up its whole group — the member
   // rows tint and the gutter bracket thickens/brightens. `hoveredLinkGroup`
-  // is the group currently hovered (null = none). The brackets themselves
-  // are NOT click targets (they overlay the full-width rows and would steal
-  // selection clicks), so the hover signal originates from the rows.
+  // is the group currently hovered (null = none). The hover signal comes from
+  // both member rows AND the bracket's own hit-zone (which is now clickable to
+  // select the whole group — see the bracket render + handleSelectLinkGroup).
   const [hoveredLinkGroup, setHoveredLinkGroup] = useState<number | null>(null);
 
   // LNK-8: dissolve a whole link group in one action. Gather every member
@@ -1444,6 +1444,22 @@ export function EmitterTree({ bridge }: Props) {
         kind: "linkGroups/set-membership",
         params: { ids, groupId: null },
       });
+    },
+    [flatRows, bridge],
+  );
+
+  // Clicking a link-group bracket selects every member of that group
+  // (replace, primary = the top-most member). Mirrors the dissolve
+  // enumeration; reads live flatRows. Syncs the new primary to the host.
+  const handleSelectLinkGroup = useCallback(
+    (groupId: number) => {
+      if (groupId === 0) return;
+      const ids = flatRows
+        .filter((r) => r.node.linkGroup === groupId)
+        .map((r) => r.node.id);
+      if (ids.length === 0) return;
+      useEmitterSelectionStore.getState().setIds(ids, ids[0]);
+      void bridge.request({ kind: "emitters/select", params: { id: ids[0] } });
     },
     [flatRows, bridge],
   );
@@ -1781,31 +1797,56 @@ export function EmitterTree({ bridge }: Props) {
                 const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
                 const left   = b.lane * LANE_WIDTH_PX;
                 const hovered = hoveredLinkGroup === b.groupId;
+                // The clickable hit-zone is one lane wide (LANE_WIDTH_PX),
+                // ~5× the visible 2px line, so it's easy to hit yet never
+                // overlaps an adjacent lane. It sits inset 4px so the visible
+                // line keeps its original x. LNK-6 (clicking the bracket wiped
+                // a row selection) is guarded by: (a) pointer-events live ONLY
+                // on this hit-zone, not the whole gutter; (b) stopPropagation
+                // on click + pointerdown so the press never reaches the row
+                // button beneath nor starts a marquee. Hovering the hit-zone
+                // also lights the group (the click affordance).
+                const HITZONE_INSET = 4;
                 return (
-                  // LNK-6: the bracket is VISUAL-ONLY (pointer-events-none,
-                  // inherited from the gutter). It must NOT capture clicks —
-                  // it overlays the full-width row buttons, so a clickable
-                  // bracket steals row-selection clicks that land in its x
-                  // band (confirmed: clicking it wiped an in-progress
-                  // selection). The "light up the whole group" affordance is
-                  // driven by hovering a member ROW instead (sets
-                  // hoveredLinkGroup), which the bracket reads here to
-                  // thicken/brighten.
                   <div
                     key={b.groupId}
                     data-testid={`link-group-bracket-${b.groupId}`}
                     data-link-group={b.groupId}
                     data-lane={b.lane}
-                    className="absolute"
-                    style={{
-                      top,
-                      left,
-                      width: hovered ? 3 : 2,
-                      height,
-                      background: b.color,
-                      opacity: hovered ? 1 : 0.85,
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select link group ${b.groupId}`}
+                    title={`Select link group ${b.groupId}`}
+                    className="pointer-events-auto absolute cursor-pointer"
+                    style={{ top, left: left - HITZONE_INSET, width: LANE_WIDTH_PX, height }}
+                    onPointerEnter={() => setHoveredLinkGroup(b.groupId)}
+                    onPointerLeave={() => setHoveredLinkGroup(null)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSelectLinkGroup(b.groupId);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleSelectLinkGroup(b.groupId);
+                      }
                     }}
                   >
+                    {/* The visible coloured line. */}
+                    <div
+                      aria-hidden
+                      className="absolute"
+                      style={{
+                        left: HITZONE_INSET,
+                        top: 0,
+                        width: hovered ? 3 : 2,
+                        height,
+                        background: b.color,
+                        opacity: hovered ? 1 : 0.85,
+                      }}
+                    />
                     {b.memberRowIndices.map((rowIdx) => (
                       <div
                         key={rowIdx}
@@ -1814,7 +1855,7 @@ export function EmitterTree({ bridge }: Props) {
                         className="absolute"
                         style={{
                           top: (rowIdx - b.firstRowIndex) * ROW_HEIGHT_PX - 1,
-                          left: -4,
+                          left: 0,
                           width: 5,
                           height: 2,
                           background: b.color,
