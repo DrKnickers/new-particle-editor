@@ -209,3 +209,134 @@ test("a same-field burst still coalesces under per-field keying", async () => {
   await undo();
   expect(await getLifetime(id)).toBeCloseTo(p0, 4); // one undo reverts all 3
 });
+
+// ── VPT-2 follow-up: streaming track-key undo coalescing ──────────────
+//
+// The host's emitters/set-track-key folds rapid same-track/same-emitter
+// edits (a wheel/hold-arrow/scrub Value or Time key spinner, plus a
+// multi-key group shift's N per-key calls) into ONE undo step within the
+// 1500ms window — mirroring the emitter-property per-field coalescing above.
+// Per-TRACK keying (legacy's track<<16|emitterIdx). Fixture: --test-host
+// boots a default system whose every track has border keys at t=0 and t=100
+// (ParticleSystem.cpp:824); we move the distinct, non-aliased `scale` (idx 4,
+// default 20) and `rotationSpeed` (idx 6, default 0) tracks — never the
+// Green/Blue/Alpha aliases of Red.
+
+type TrackKey = { time: number; value: number };
+async function getTrackKeys(id: number, trackName: string): Promise<TrackKey[]> {
+  const r = await req<{ tracks: { name: string; keys: TrackKey[] }[] }>(
+    "emitters/get-tracks",
+    { id },
+  );
+  return r.tracks.find((t) => t.name === trackName)?.keys ?? [];
+}
+async function getTrackKeyValue(id: number, trackName: string, time: number): Promise<number> {
+  const k = (await getTrackKeys(id, trackName)).find((x) => Math.abs(x.time - time) < 1e-3);
+  if (k === undefined) throw new Error(`no ${trackName} key near t=${time}`);
+  return k.value;
+}
+// Value-only move (newTime == oldTime): mirrors handleValueSpinner, keeps
+// oldTime stable across ticks. time defaults to the t=0 border key.
+const setTrackKeyValue = (id: number, track: string, time: number, newValue: number) =>
+  req("emitters/set-track-key", { id, track, oldTime: time, newTime: time, newValue });
+const addTrackKey = (id: number, track: string, time: number, value: number) =>
+  req("emitters/add-track-key", { id, track, time, value });
+
+test("a rapid value-spinner burst on ONE track key coalesces into ONE undo step", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const v0 = await getTrackKeyValue(id, "scale", 0);
+
+  // 4 rapid value moves (one per wheel notch), same track + emitter, in-window.
+  for (let i = 1; i <= 4; i++) await setTrackKeyValue(id, "scale", 0, v0 + i);
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(v0 + 4, 3);
+
+  // ONE undo must revert the WHOLE burst — not just the last tick.
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(v0, 3);
+
+  // ONE redo reapplies the whole burst; leave the fixture at baseline.
+  await redo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(v0 + 4, 3);
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(v0, 3);
+});
+
+test("value edits to DIFFERENT tracks are SEPARATE undo steps (per-track keying)", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const s0 = await getTrackKeyValue(id, "scale", 0);
+  const r0 = await getTrackKeyValue(id, "rotationSpeed", 0);
+
+  await setTrackKeyValue(id, "scale", 0, s0 + 5);
+  await setTrackKeyValue(id, "rotationSpeed", 0, r0 + 5);
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 5, 3);
+  expect(await getTrackKeyValue(id, "rotationSpeed", 0)).toBeCloseTo(r0 + 5, 3);
+
+  // ONE undo reverts only the LAST track (rotationSpeed); scale untouched.
+  await undo();
+  expect(await getTrackKeyValue(id, "rotationSpeed", 0)).toBeCloseTo(r0, 3);
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 5, 3);
+
+  // SECOND undo reverts the earlier track (scale) — back to baseline.
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0, 3);
+});
+
+test("a structural add-track-key between two value edits breaks the fold", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const s0 = await getTrackKeyValue(id, "scale", 0);
+
+  await setTrackKeyValue(id, "scale", 0, s0 + 2);  // edit 1
+  await addTrackKey(id, "scale", 50, 30);          // structural (key=0, never folds)
+  await setTrackKeyValue(id, "scale", 0, s0 + 4);  // edit 2
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 4, 3);
+
+  // Undo edit 2 -> s0+2; the added key is still present.
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 2, 3);
+
+  // Undo the structural add -> the t=50 key is gone.
+  await undo();
+  expect((await getTrackKeys(id, "scale")).find((k) => Math.abs(k.time - 50) < 1e-3))
+    .toBeUndefined();
+
+  // Undo edit 1 -> baseline.
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0, 3);
+});
+
+test("a same-track edit after an undo PUSHES (no mid-redo-branch coalesce)", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const s0 = await getTrackKeyValue(id, "scale", 0);
+
+  await setTrackKeyValue(id, "scale", 0, s0 + 3);  // edit A
+  await undo();                                     // -> s0 (cursor below tip)
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0, 3);
+
+  await setTrackKeyValue(id, "scale", 0, s0 + 8);  // edit B must PUSH, truncating redo
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 8, 3);
+
+  await redo();                                     // branch truncated -> no-op
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 8, 3);
+
+  await undo();                                     // reverts B -> s0
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0, 3);
+});
+
+test("two same-track edits MORE than the window apart are SEPARATE undo steps", async () => {
+  const id = await firstEmitterId();
+  await req("emitters/select", { id });
+  const s0 = await getTrackKeyValue(id, "scale", 0);
+
+  await setTrackKeyValue(id, "scale", 0, s0 + 3);  // edit 1
+  await page.waitForTimeout(1600);                 // exceed COALESCE_WINDOW_MS (1500)
+  await setTrackKeyValue(id, "scale", 0, s0 + 6);  // edit 2 — window expired -> new step
+
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0 + 3, 3);
+  await undo();
+  expect(await getTrackKeyValue(id, "scale", 0)).toBeCloseTo(s0, 3);
+});

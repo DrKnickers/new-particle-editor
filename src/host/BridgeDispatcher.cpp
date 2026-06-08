@@ -3591,7 +3591,18 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             return res;
         }
 
-        captureUndo();
+        // Coalesce rapid same-track edits on the same emitter (a wheel/
+        // hold-arrow/scrub Value or Time key spinner, plus a multi-key
+        // group shift's N per-key calls) into a single undo step within the
+        // window. Per-TRACK keying — legacy's exact choice
+        // (track<<16|emitterIdx) and the only stable key for a Time spinner,
+        // whose oldTime moves every tick. Mirrors the emitter-property layout
+        // (set-properties, this file) with trackIdx in place of the field
+        // hash; bit 31 set so the key is never 0 (= structural / never-fold).
+        const DWORD coalesceKey =
+            0x80000000u | ((static_cast<DWORD>(trackIdx) & 0x7FFFu) << 16)
+                        | (static_cast<DWORD>(id) & 0xFFFFu);
+        captureUndo(coalesceKey);
         track->keys.erase(it);
         track->keys.insert(ParticleSystem::Emitter::Track::Key(newTime, newValue));
 
