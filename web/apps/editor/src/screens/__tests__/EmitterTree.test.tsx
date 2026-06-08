@@ -742,10 +742,10 @@ describe("EmitterTree", () => {
     expect(sel.primary).toBe(0);
     // Primary synced to the host.
     expect(
-      bridge.request.mock.calls.some(
-        (c: [{ kind: string; params?: { id?: number } }]) =>
-          c[0].kind === "emitters/select" && c[0].params?.id === 0,
-      ),
+      bridge.request.mock.calls.some((c) => {
+        const req = c[0] as { kind: string; params?: { id?: number } };
+        return req.kind === "emitters/select" && req.params?.id === 0;
+      }),
     ).toBe(true);
   });
 
