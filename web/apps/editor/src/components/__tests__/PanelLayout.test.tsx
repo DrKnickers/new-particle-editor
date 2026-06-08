@@ -29,7 +29,6 @@ import {
   loadLayout,
   saveLayout,
   resetPanelLayoutStorage,
-  deriveOuterLayoutOnToggle,
   PANEL_LAYOUT_KEYS,
   type Layout,
 } from "../PanelLayout";
@@ -128,44 +127,6 @@ describe("PanelLayout — Reset panel layout (T6)", () => {
   });
 });
 
-describe("PanelLayout — spawner-toggle carry-over (no snap)", () => {
-  it("closing carries left's width and lets center absorb the spawner's space", () => {
-    const out = deriveOuterLayoutOnToggle(
-      false,
-      { left: 20, center: 80 }, // cur2col (ignored on close)
-      { left: 30, center: 50, spawner: 20 }, // current 3col
-    );
-    expect(out).toEqual({ left: 30, center: 70 });
-  });
-
-  it("opening carves the spawner (its last 3-col width) out of center, left unchanged", () => {
-    const out = deriveOuterLayoutOnToggle(
-      true,
-      { left: 30, center: 70 }, // current 2col
-      { left: 30, center: 50, spawner: 20 }, // last 3col (for spawner width)
-    );
-    expect(out).toEqual({ left: 30, center: 50, spawner: 20 });
-  });
-
-  it("opening clamps so center never drops below 30%", () => {
-    const out = deriveOuterLayoutOnToggle(
-      true,
-      { left: 65, center: 35 },
-      { left: 20, center: 60, spawner: 20 },
-    );
-    // spawner = min(20, 35 - 30) = 5
-    expect(out).toEqual({ left: 65, center: 30, spawner: 5 });
-  });
-
-  it("result always sums to ~100", () => {
-    const close = deriveOuterLayoutOnToggle(false, { left: 20, center: 80 }, { left: 25, center: 55, spawner: 20 });
-    const open = deriveOuterLayoutOnToggle(true, { left: 25, center: 75 }, { left: 25, center: 55, spawner: 20 });
-    const sum = (l: Layout) => Object.values(l).reduce((a, b) => a + b, 0);
-    expect(sum(close)).toBeCloseTo(100, 5);
-    expect(sum(open)).toBeCloseTo(100, 5);
-  });
-});
-
 describe("PanelLayout — DOM structure", () => {
   it("renders all five quadrant testIDs when Spawner is visible", () => {
     const bridge = makeStubBridge();
@@ -182,7 +143,7 @@ describe("PanelLayout — DOM structure", () => {
     expect(screen.getByTestId("quadrant-spawner")).toBeInTheDocument();
   });
 
-  it("hides the right-dock column when the dock is closed", () => {
+  it("keeps the right-dock slot mounted but empty when the dock is closed", () => {
     // Seed the localStorage-backed dock store with `none`, then reset the
     // in-memory store so it re-reads from localStorage.
     localStorage.setItem("alo:right-dock", "none");
@@ -194,7 +155,12 @@ describe("PanelLayout — DOM structure", () => {
         <PanelLayout bridge={bridge} />
       </BridgeContext.Provider>,
     );
-    expect(screen.queryByTestId("quadrant-spawner")).not.toBeInTheDocument();
+    // The dock is now an ALWAYS-mounted collapsible slot — so the Group
+    // never remounts on open/close (no left-pane flicker) and the slot can
+    // animate. When closed it stays in the DOM but renders no content.
+    const slot = screen.getByTestId("quadrant-spawner");
+    expect(slot).toBeInTheDocument();
+    expect(slot.childElementCount).toBe(0);
     // The other four stay mounted.
     expect(screen.getByTestId("quadrant-viewport")).toBeInTheDocument();
   });

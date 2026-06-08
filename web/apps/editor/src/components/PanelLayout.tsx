@@ -40,8 +40,8 @@
 // the toolbar's Spawner button — the new mount reads from the
 // appropriate key with the appropriate defaults.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
 import type { Bridge } from "@particle-editor/bridge-schema";
 import { useRightDock, setDock } from "@/lib/right-dock";
 import { ViewportSlot } from "./ViewportSlot";
@@ -63,7 +63,6 @@ const RESIZE_HIT_MIN = { coarse: 20, fine: 8 } as const;
 // In-code defaults. Each map's keys must match the id= attributes on
 // the corresponding Panel components below.
 const OUTER_3COL_DEFAULTS: Layout = { left: 20, center: 60, spawner: 20 };
-const OUTER_2COL_DEFAULTS: Layout = { left: 20, center: 80 };
 const LEFT_DEFAULTS: Layout = { tree: 25, tabs: 75 };
 const CENTER_DEFAULTS: Layout = { viewport: 75, curve: 25 };
 
@@ -127,43 +126,6 @@ export function saveLayout(key: string, layout: Layout): void {
   }
 }
 
-// Derive the outer layout when the Spawner pane toggles, carrying the
-// CURRENT widths across instead of snapping to the destination mode's
-// stored preset: `left` keeps its width, and the spawner's space simply
-// transfers to/from `center`. This makes closing the Spawner "absorb"
-// its space into the viewport column (and reopening carve it back out)
-// rather than re-laying-out every pane.
-//
-//   - Closing (3-col → 2-col): center += spawner. Reads the live 3-col
-//     layout (the mode we're leaving).
-//   - Opening (2-col → 3-col): carve the spawner back out of center at
-//     its last 3-col width, clamped so center never drops below 30%
-//     (its minSize). Reads the live 2-col layout for left/center.
-//
-// Every result sums to ~100 by construction.
-const CENTER_MIN_PCT = 30;
-
-export function deriveOuterLayoutOnToggle(
-  nextSpawnerVisible: boolean,
-  cur2col: Layout,
-  cur3col: Layout,
-): Layout {
-  if (!nextSpawnerVisible) {
-    return {
-      left: cur3col.left ?? 0,
-      center: (cur3col.center ?? 0) + (cur3col.spawner ?? 0),
-    };
-  }
-  const desired = cur3col.spawner ?? OUTER_3COL_DEFAULTS.spawner;
-  const headroom = Math.max((cur2col.center ?? 0) - CENTER_MIN_PCT, 0);
-  const spawner = Math.min(desired, headroom);
-  return {
-    left: cur2col.left ?? 0,
-    center: (cur2col.center ?? 0) - spawner,
-    spawner,
-  };
-}
-
 function usePersistedLayout(key: string, defaults: Layout) {
   // useMemo with [key] so a visibility flip (key change) re-reads.
   const defaultLayout = useMemo(() => loadLayout(key, defaults), [key, defaults]);
@@ -186,46 +148,80 @@ export function PanelLayout({ bridge }: Props) {
   const dock = useRightDock();
   const dockVisible = dock !== null;
 
-  const outerKey = dockVisible
-    ? "alo:layout:outer:3col"
-    : "alo:layout:outer:2col";
-  const outerDefaults = dockVisible
-    ? OUTER_3COL_DEFAULTS
-    : OUTER_2COL_DEFAULTS;
-
-  // The outer Group is key'd on dockVisible, so it remounts whenever the
-  // right column opens or closes. Rather than letting it snap to the
-  // destination mode's independently-stored preset, carry the CURRENT
-  // widths across (left stays put; center absorbs / releases the column's
-  // space). Only on the open/close transition — a fresh mount uses the
-  // mode's own layout, and a spawner↔lighting swap is NOT a transition.
-  const prevDockVisible = useRef<boolean | null>(null);
-  const toggled =
-    prevDockVisible.current !== null &&
-    prevDockVisible.current !== dockVisible;
-
-  const outerDefaultLayout = useMemo<Layout>(() => {
-    if (toggled) {
-      return deriveOuterLayoutOnToggle(
-        dockVisible,
-        loadLayout("alo:layout:outer:2col", OUTER_2COL_DEFAULTS),
-        loadLayout("alo:layout:outer:3col", OUTER_3COL_DEFAULTS),
-      );
-    }
-    return loadLayout(outerKey, outerDefaults);
-  }, [toggled, dockVisible, outerKey, outerDefaults]);
-
+  // The outer 3-col layout is ALWAYS mounted: the right-dock is a
+  // collapsible slot, not a conditionally-rendered panel. So the Group
+  // never remounts on open/close — the left pane no longer flickers — and
+  // the slot can animate open/closed. One persisted layout; the library
+  // remembers the dock's expanded size across a collapse, so the old
+  // 2col/3col dual-key carry-over machinery is gone.
+  //
+  // Capture the dock's open/closed state AT MOUNT so the dock Panel's
+  // initial defaultSize matches (mount collapsed when closed); toggles
+  // after mount are driven imperatively via dockPanelRef.
+  const dockVisibleAtMount = useRef(dockVisible).current;
+  const outerDefaultLayout = useMemo<Layout>(
+    () => loadLayout("alo:layout:outer:3col", OUTER_3COL_DEFAULTS),
+    [],
+  );
+  // Persist only while the dock is OPEN, so a closed (collapsed) layout
+  // never overwrites the remembered open widths.
   const onOuterLayoutChanged = useCallback(
-    (l: Layout) => saveLayout(outerKey, l),
-    [outerKey],
+    (l: Layout) => {
+      if (dockVisible) saveLayout("alo:layout:outer:3col", l);
+    },
+    [dockVisible],
   );
 
-  // Persist the carried-over layout to the destination key so the next
-  // toggle reads consistent state; advance the prev-visible marker.
+  // Collapse the dock slot when closed, expand when open. Spawner↔lighting
+  // keeps dockVisible true → no collapse/expand, just a content swap.
+  // The toggle animates by enabling a `flex` transition (`.dock-animating`)
+  // for the duration of THIS open/close only — a permanent transition would
+  // lag splitter drags + window resizes. The size change is deferred one
+  // frame so the class is committed before flex changes (else the first
+  // frame jumps with nothing to tween).
+  const dockPanelRef = usePanelRef();
+  const [dockAnimating, setDockAnimating] = useState(false);
   useEffect(() => {
-    if (toggled) saveLayout(outerKey, outerDefaultLayout);
-    prevDockVisible.current = dockVisible;
-  }, [toggled, dockVisible, outerKey, outerDefaultLayout]);
+    const p = dockPanelRef.current;
+    if (!p) return;
+    const need = dockVisible ? p.isCollapsed() : !p.isCollapsed();
+    if (!need) return;
+    setDockAnimating(true);
+    const raf = requestAnimationFrame(() => {
+      if (dockVisible) p.expand();
+      else p.collapse();
+    });
+    const t = setTimeout(() => setDockAnimating(false), 260);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
+  }, [dockVisible, dockPanelRef]);
+
+  // The content shown in the dock slot LAGS `dock` on close: keep the last
+  // pane mounted while the slot animates shut so it slides out instead of
+  // popping, then clear it. Open/swap shows the new pane immediately.
+  const [displayDock, setDisplayDock] = useState(dock);
+  useEffect(() => {
+    if (dock !== null) {
+      setDisplayDock(dock);
+      return;
+    }
+    const t = setTimeout(() => setDisplayDock(null), 260);
+    return () => clearTimeout(t);
+  }, [dock]);
+
+  // The dock is CLOSING when the logical state says closed (dock === null)
+  // but the content is still mounted for the slide-out (displayDock !== null).
+  // During this window the panel must NOT be an interactive, openable dialog:
+  // it's sliding away and about to unmount. `inert` removes it from the
+  // focus/hit-test/a11y tree (correctness — you can't click a panel that's
+  // leaving); ToolPanel additionally stamps data-state="closing" so it no
+  // longer matches an "open ToolPanel" selector. Without this, a click that
+  // lands in the ~260ms slide-out window (Playwright's strict actionability,
+  // or a fast user) targets a shrinking-then-detaching Close button and
+  // never lands.
+  const dockClosing = dock === null && displayDock !== null;
 
   const left = usePersistedLayout("alo:layout:left", LEFT_DEFAULTS);
   const center = usePersistedLayout("alo:layout:center", CENTER_DEFAULTS);
@@ -248,8 +244,8 @@ export function PanelLayout({ bridge }: Props) {
   // canonical knob — pull it from the loaded layout.
   return (
     <Group
-      key={dockVisible ? "3col" : "2col"}
       orientation="horizontal"
+      className={dockAnimating ? "dock-animating" : undefined}
       defaultLayout={outerDefaultLayout}
       onLayoutChanged={onOuterLayoutChanged}
       resizeTargetMinimumSize={RESIZE_HIT_MIN}
@@ -354,39 +350,40 @@ export function PanelLayout({ bridge }: Props) {
         </Group>
       </Panel>
 
-      {dockVisible && (
-        <>
-          <Separator className="ce-splitter ce-splitter-v" />
-          {/* Pixel minSize for the same reason as `left`: the docked
-              panels' labels (e.g. Spawner's "Initial spawn delay:",
-              Lighting's "Intensity") truncate when dragged narrow.
-              ~260px keeps them readable. The Panel id stays "spawner"
-              regardless of content so the existing 3col persistence keys
-              (alo:layout:outer:3col → {left,center,spawner}) keep
-              working — the slot's *identity* is the right-dock, not the
-              specific tool inside it. */}
-          <Panel
-            id="spawner"
-            defaultSize={`${outerDefaultLayout.spawner}%`}
-            minSize={260}
-            maxSize="40%"
-          >
-            {/* Plain layout container — the panel chrome (bg, border)
-                lives on the `.panel` (SpawnerPanel) or the docked
-                ToolPanel (LightingPanel) rendered inside. */}
-            <aside
-              data-testid="quadrant-spawner"
-              className="h-full w-full overflow-hidden"
-            >
-              {dock === "spawner" ? (
-                <SpawnerPanel bridge={bridge} />
-              ) : (
-                <LightingPanel bridge={bridge} onClose={() => setDock(null)} />
-              )}
-            </aside>
-          </Panel>
-        </>
-      )}
+      {/* Right dock — ALWAYS mounted as a collapsible slot (collapsedSize 0),
+          so opening/closing never remounts the Group (no left-pane flicker)
+          and the slot can animate. The separator hides while collapsed so no
+          handle floats at the edge. Pixel minSize (260) keeps the docked
+          labels readable; the Panel id stays "spawner" regardless of content
+          so the persistence key (alo:layout:outer:3col) is stable — the
+          slot's identity is the right-dock, not the tool inside it. */}
+      <Separator
+        className={
+          "ce-splitter ce-splitter-v" +
+          (dockVisible ? "" : " invisible pointer-events-none")
+        }
+      />
+      <Panel
+        id="spawner"
+        panelRef={dockPanelRef}
+        collapsible
+        collapsedSize={0}
+        defaultSize={dockVisibleAtMount ? `${outerDefaultLayout.spawner ?? 20}%` : "0%"}
+        minSize={260}
+        maxSize="40%"
+      >
+        <aside
+          data-testid="quadrant-spawner"
+          className="h-full w-full overflow-hidden"
+          inert={dockClosing}
+        >
+          {displayDock === "spawner" ? (
+            <SpawnerPanel bridge={bridge} />
+          ) : displayDock === "lighting" ? (
+            <LightingPanel bridge={bridge} onClose={() => setDock(null)} closing={dockClosing} />
+          ) : null}
+        </aside>
+      </Panel>
     </Group>
   );
 }

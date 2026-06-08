@@ -1211,6 +1211,21 @@
 [data-separator].ce-splitter:active {
   background: var(--accent-soft);
 }
+/* Dock open/close slide. PanelLayout adds `.dock-animating` to the outer
+   Group only for the duration of an open/close toggle, so the three outer
+   panels' `flex` (which the library sets when the dock slot collapses/
+   expands) tweens. Scoped to direct children + toggle-only so splitter
+   DRAGS and window RESIZES stay instant (a permanent transition would lag
+   them). */
+.dock-animating [data-panel] {
+  transition: flex-grow 0.2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-animating [data-panel] {
+    transition: none;
+  }
+}
+
 [data-separator].ce-splitter-v {
   width: 8px;
   cursor: col-resize;

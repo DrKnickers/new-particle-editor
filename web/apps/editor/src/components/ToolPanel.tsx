@@ -48,6 +48,14 @@ type ToolPanelProps = {
    *  "docked" fills its parent layout column (the right-dock slot, shared
    *  with the Spawner) and skips viewport occlusion. */
   variant?: "overlay" | "docked";
+  /** True while the dock is sliding shut (logically closed but still mounted
+   *  for the exit animation). Stamps data-state="closing" on the dialog so it
+   *  no longer matches the "open ToolPanel" selector
+   *  (`[role="dialog"]:not([data-state])`) — a closing panel is not an open,
+   *  closeable dialog. The PanelLayout slot also marks itself `inert` during
+   *  this window. Together they stop a click that lands in the ~260ms
+   *  slide-out from targeting the shrinking/detaching Close button. */
+  closing?: boolean;
 };
 
 const HEADER_HEIGHT_PX = 48;
@@ -59,6 +67,7 @@ export function ToolPanel({
   bridge,
   occlusionId,
   variant = "overlay",
+  closing = false,
 }: ToolPanelProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const docked = variant === "docked";
@@ -76,6 +85,7 @@ export function ToolPanel({
       }
       role="dialog"
       aria-label={title}
+      data-state={closing ? "closing" : undefined}
     >
       {/* Header — mirrors Modal's header layout (48 px, title left, X right). */}
       <div

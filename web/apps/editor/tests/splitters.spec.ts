@@ -13,9 +13,12 @@
 //      `dblclick` document listener the library registers, since
 //      synthesising a true browser double-click via PointerEvent is
 //      finicky over CDP.
-//   4. Spawner toggle remount — flipping the toolbar's Spawner button
-//      remounts the outer Group with a different panel-id set
-//      (`:2col` / `:3col` localStorage keys are distinct).
+//   4. Spawner toggle collapse — flipping the toolbar's Spawner button
+//      COLLAPSES the always-mounted right-dock slot to width 0 (and
+//      re-toggling restores it) WITHOUT remounting the outer Group, so
+//      the left pane + viewport survive (no flicker). The old key-based
+//      design remounted the Group with a `:2col`/`:3col` swap; that was
+//      replaced by a single collapsible Panel (one `:3col` key).
 //   5. Corrupted persistence fallback — garbage in the storage key
 //      falls back to defaults without crashing.
 //
@@ -300,45 +303,60 @@ test("corrupted localStorage falls back to defaults without crashing", async () 
   expect(Math.abs(center.curve - 50)).toBeLessThan(1);
 });
 
-test("Spawner toggle remounts outer Group with the 2-col key, then restores 3-col on re-toggle", async () => {
-  // Toggle Spawner OFF via the toolbar button.
+test("Spawner toggle collapses the always-mounted dock (no remount), restores on re-toggle", async () => {
+  // Tag the LEFT-pane DOM node so we can prove the toggle does NOT remount
+  // the outer Group. The old key-based design remounted it (destroying this
+  // node = the left-pane flicker); the always-mounted collapsible dock keeps
+  // it, so a custom property set on the node survives the toggle.
   await page.evaluate(() => {
-    // The Spawner toggle is an icon button (CirclePlus); find it by its
-    // stable aria-label rather than the old "Spawner" text content.
-    const btn = document.querySelector<HTMLButtonElement>(
-      '.toolbar button[aria-label="Toggle Spawner panel"]',
-    );
-    if (!btn) throw new Error("Spawner toolbar button not found");
-    btn.click();
+    const tree = document.querySelector(
+      '[data-testid="quadrant-emitter-tree"]',
+    ) as (HTMLElement & { __aliveMarker?: string }) | null;
+    if (tree) tree.__aliveMarker = "alive";
   });
-  // The quadrant-spawner element should unmount.
-  await expect(page.locator('[data-testid="quadrant-spawner"]')).toHaveCount(0);
-  const layout2col = await readLayout();
-  const outer2 = layout2col["horizontal:left,center"];
-  expect(outer2).toBeDefined();
-  // 2-col defaults are 20/80, but `left`'s 330px floor clamps it up at the
-  // narrow test window; center takes the remainder. (±1 %.)
-  const w2 = await outerGroupWidthPx("left,center");
-  const exp2Left = flooredPct(LEFT_MIN_PX, w2, 20);
-  expect(Math.abs(outer2.left - exp2Left)).toBeLessThan(1);
-  expect(Math.abs(outer2.center - (100 - exp2Left))).toBeLessThan(1);
 
-  // Toggle back ON.
-  await page.evaluate(() => {
-    // The Spawner toggle is an icon button (CirclePlus); find it by its
-    // stable aria-label rather than the old "Spawner" text content.
-    const btn = document.querySelector<HTMLButtonElement>(
-      '.toolbar button[aria-label="Toggle Spawner panel"]',
+  const clickToggle = () =>
+    page.evaluate(() => {
+      const btn = document.querySelector<HTMLButtonElement>(
+        '.toolbar button[aria-label="Toggle Spawner panel"]',
+      );
+      if (!btn) throw new Error("Spawner toolbar button not found");
+      btn.click();
+    });
+  const spawnerWidth = () =>
+    page.evaluate(
+      () =>
+        document
+          .querySelector('[data-testid="quadrant-spawner"]')
+          ?.getBoundingClientRect().width ?? -1,
     );
-    if (!btn) throw new Error("Spawner toolbar button not found");
-    btn.click();
-  });
-  await expect(page.locator('[data-testid="quadrant-spawner"]')).toBeVisible();
-  const layout3col = await readLayout();
-  const outer3 = layout3col["horizontal:left,center,spawner"];
-  expect(outer3).toBeDefined();
-  // Floor-aware (left 330px, spawner 260px) at the narrow test window.
-  const w3b = await outerGroupWidthPx("left,center,spawner");
-  expect(Math.abs(outer3.left - flooredPct(LEFT_MIN_PX, w3b, 20))).toBeLessThan(1);
-  expect(Math.abs(outer3.spawner - flooredPct(SPAWNER_MIN_PX, w3b, 20))).toBeLessThan(1);
+
+  // Toggle OFF — the dock slot collapses to width 0 but stays MOUNTED
+  // (no remount). Wait out the ~260ms collapse animation before measuring.
+  await clickToggle();
+  await page.waitForTimeout(400);
+  await expect(page.locator('[data-testid="quadrant-spawner"]')).toHaveCount(1);
+  expect(await spawnerWidth()).toBeLessThan(5);
+
+  // The left pane was NOT remounted (no flicker) — the marker survives.
+  const markerSurvived = await page.evaluate(
+    () =>
+      (
+        document.querySelector(
+          '[data-testid="quadrant-emitter-tree"]',
+        ) as (HTMLElement & { __aliveMarker?: string }) | null
+      )?.__aliveMarker === "alive",
+  );
+  expect(markerSurvived).toBe(true);
+
+  // Single persistence key — the dual 2col/3col machinery is gone with the
+  // always-mounted dock; only `:3col` exists.
+  const layout = await readLayout();
+  expect(layout["horizontal:left,center,spawner"]).toBeDefined();
+  expect(layout["horizontal:left,center"]).toBeUndefined();
+
+  // Toggle ON — the slot expands back to a usable width (≥ the 260px minSize).
+  await clickToggle();
+  await page.waitForTimeout(400);
+  expect(await spawnerWidth()).toBeGreaterThan(200);
 });

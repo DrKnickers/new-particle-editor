@@ -63,6 +63,11 @@ import type { RgbColor } from "@/primitives/palette-store";
 type Props = {
   bridge: Bridge;
   onClose: () => void;
+  /** True while the dock is sliding shut (logically closed, still mounted
+   *  for the exit animation). Forwarded to ToolPanel so it marks itself
+   *  data-state="closing" and stops presenting as an open, closeable
+   *  dialog. See PanelLayout's `dockClosing`. */
+  closing?: boolean;
 };
 
 // (Z angle, tilt) → unit direction vector. Mirrors `DirectionFromZTilt`
@@ -147,7 +152,7 @@ function colorrefToRgb(c: Color): RgbColor {
   };
 }
 
-export function LightingPanel({ bridge, onClose }: Props) {
+export function LightingPanel({ bridge, onClose, closing }: Props) {
   const [sun, setSun] = useState<LightFormState>(SUN_DEFAULTS);
   const [fill1, setFill1] = useState<LightFormState>(FILL1_DEFAULTS);
   const [fill2, setFill2] = useState<LightFormState>(FILL2_DEFAULTS);
@@ -337,7 +342,7 @@ export function LightingPanel({ bridge, onClose }: Props) {
   };
 
   return (
-    <ToolPanel title="Lighting" onClose={onClose} variant="docked">
+    <ToolPanel title="Lighting" onClose={onClose} variant="docked" closing={closing}>
       <ToolPanel.Section title="Sun" defaultOpen>
         <ToolPanel.Row label="Intensity">
           <Spinner

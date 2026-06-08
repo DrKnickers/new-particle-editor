@@ -71,4 +71,31 @@ describe("ToolPanel", () => {
     const dialog = screen.getByRole("dialog", { name: "Background" });
     expect(dialog.className).toContain("absolute");
   });
+
+  it("closing marks data-state='closing' so a sliding-out panel is excluded from the open-dialog selector", () => {
+    // Regression guard (session 24): while the dock slides shut, the panel
+    // stays mounted for the exit animation but must NOT present as an open,
+    // closeable dialog — else a click landing in the ~260ms window (the
+    // harness's closeAnyPanel, or a fast user) targets the shrinking/
+    // detaching Close button and hangs. data-state='closing' takes it out of
+    // `[role="dialog"]:not([data-state])`. See PanelLayout's `dockClosing`.
+    const { rerender } = render(
+      <ToolPanel title="Lighting" onClose={() => {}} variant="docked">
+        body
+      </ToolPanel>,
+    );
+    // Open: no data-state → still matches the "open ToolPanel" selector.
+    expect(
+      screen.getByRole("dialog", { name: "Lighting" }).hasAttribute("data-state"),
+    ).toBe(false);
+
+    rerender(
+      <ToolPanel title="Lighting" onClose={() => {}} variant="docked" closing>
+        body
+      </ToolPanel>,
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Lighting" }).getAttribute("data-state"),
+    ).toBe("closing");
+  });
 });
