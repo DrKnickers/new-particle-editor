@@ -16,6 +16,47 @@ Conventions:
 
 ## Changelog
 
+### New WebView2/React UI is now the default; `--legacy` opts back into the classic chrome
+
+*2026-06-08 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO-PR](https://github.com/DrKnickers/new-particle-editor/pull/TODO-PR)* <!-- TODO: backfill merge hash + PR number on lt-4→master merge -->
+
+Launching the x64 editor with **no flag** now opens the new WebView2 + D3D9 UI —
+the same interface previously gated behind `--new-ui`. To run the classic Win32
+chrome, pass the net-new **`--legacy`** flag (alias **`--legacy-ui`**, mirroring
+`--new-ui`). The x86 build is unaffected: it has
+no host and always runs legacy. `--new-ui` still works but is now redundant (it
+selects the default). The new-UI **About** dialog also gains the upstream
+attribution the legacy About already showed — *"Forked from Mike.NL's GlyphX
+Particle Editor v1.5"*. This change also lands the standard public-repo
+scaffolding (`CONTRIBUTING.md`, `SECURITY.md`, the bug-report issue template, and
+`DEVELOPMENT_LOG.md`).
+
+**How we tackled it.** The flip is a localized edit to the arg block in
+[`src/main.cpp`](src/main.cpp:8058). The `newUi` initializer is **x64-gated**
+(`#ifdef _WIN64` → `true`, `#else` → `false`): a flat default-true would break x86,
+whose dispatch `#else` branch hard-`return -1`s for a host it can't provide. A
+net-new `--legacy` flag (plus the `--legacy-ui` alias — the name the codebase's
+comments already used, which only "worked" before because legacy was the default)
+is collected in the existing flag loop and applied after it as
+`if (legacy) newUi = false;` — placed *before* the `--capture` clamp so a headless
+`--capture` run (which needs the host to own the Engine) still wins. The flag logic
+is layered clamps rather than nested conditionals, so reading top-to-bottom is the
+precedence spec: capture > legacy > x64-default. The native test harness is
+unaffected — it passes `--new-ui --test-host`, and post-flip `--new-ui` is a harmless
+no-op while `--test-host` alone enters the host.
+
+**Issues encountered and resolutions.** *The x86 gate is the one real correctness
+constraint.* x86 isn't in the `.sln` (the host is x64-only), so the gate is verified
+by inspection of the two preprocessor guards — the initializer `#ifdef _WIN64` and the
+dispatch `#else return -1` — rather than an x86 run. *Scaffolding docs were ported
+byte-identical from `master`* (verified by matching blob hashes); they're add-only on
+`lt-4`, so they survive the eventual `merge -s ours` supersede. One pre-existing wrinkle
+carried over verbatim: `master`'s `CONTRIBUTING.md` references a
+`.github/PULL_REQUEST_TEMPLATE.md` that exists on neither branch — a dangling link
+inherited from upstream, left as-is to keep the port faithful.
+
+---
+
 ### Per-tick undo coalescing for curve-key spinner edits
 
 *2026-06-08 · [`dd3db53`](https://github.com/DrKnickers/new-particle-editor/commit/dd3db53) · [#NN](https://github.com/DrKnickers/new-particle-editor/pull/NN)* <!-- TODO: backfill merge hash + PR number on lt-4→master merge -->

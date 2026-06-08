@@ -40,6 +40,9 @@ export function AboutDialog({ open, onOpenChange }: Props) {
           <div className="text-xs text-text-3">
             Build date: {BUILD_DATE}
           </div>
+          <div className="text-xs text-text-3">
+            Forked from Mike.NL's GlyphX Particle Editor v1.5
+          </div>
           <p className="mt-2 text-xs leading-relaxed text-text-2">
             Particle editor for the Petroglyph Alamo engine
             (Star Wars: Empire at War / Forces of Corruption).

@@ -13,4 +13,11 @@ describe("AboutDialog", () => {
     // green when the constant bumps.
     expect(screen.getByText(/Version \d+(\.\d+)?/)).toBeInTheDocument();
   });
+
+  it("shows the upstream fork attribution", () => {
+    render(<AboutDialog open onOpenChange={() => {}} />);
+    expect(
+      screen.getByText(/Forked from Mike\.NL's GlyphX Particle Editor v1\.5/),
+    ).toBeInTheDocument();
+  });
 });

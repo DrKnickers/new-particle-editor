@@ -28,12 +28,14 @@
 #include "ModManager.h"
 #include "resource.h"
 
-// LT-4 Task 1.3: --new-ui flag dispatches to the WebView2 + D3D9 host
-// declared here. Legacy mode (no flag) ignores this include entirely.
-// The host requires Windows 10+ (DPI awareness v2, WebView2) and is
-// only built for x64 — the legacy Win32 configuration silently treats
-// --new-ui as unrecognised. The .sln only exposes x64, so this gate is
-// purely belt-and-suspenders against an out-of-tree Win32 build.
+// LT-4 Task 1.3: the WebView2 + D3D9 host declared here is the DEFAULT UI
+// on x64 — launching with no flag enters it; `--legacy` (alias `--legacy-ui`)
+// opts back into the classic Win32 chrome. (`--new-ui` is kept as a no-op so the
+// native test harness and old launch shortcuts keep working.) The host
+// requires Windows 10+ (DPI awareness v2, WebView2) and is only built for
+// x64 — the legacy Win32 configuration defaults to legacy and silently
+// treats --new-ui as unrecognised. The .sln only exposes x64, so this gate
+// is purely belt-and-suspenders against an out-of-tree Win32 build.
 #ifdef _WIN64
 #include "host/Run.h"
 #endif
@@ -8047,15 +8049,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		if (pSet) pSet(L"DrKnickers.AloParticleEditor");
 	}
 
-	// LT-4 Task 1.3 — `--new-ui` runs the WebView2 + D3D9 host instead of
-	// the legacy chrome. Detect the flag, build the same three managers
-	// legacy main() builds (so the host can construct Engine identically),
-	// then return early. No legacy WNDCLASS / windows are registered.
+	// LT-4 Task 1.3 — the WebView2 + D3D9 host is the DEFAULT UI on x64. With
+	// no flag we build the same three managers legacy main() builds (so the
+	// host can construct Engine identically), then return early — no legacy
+	// WNDCLASS / windows are registered. `--legacy` (alias `--legacy-ui`) opts
+	// back into the classic chrome; `--new-ui` is a no-op kept for the harness.
 	//
-	// Without the flag, behaviour is unchanged from before this commit.
+	// x86 has no host (the `#else` at the dispatch below hard-returns), so the
+	// default MUST stay legacy there — the `newUi` initializer is x64-gated.
 	{
 		const std::vector<std::wstring> argv = parseCommandLine();
-		bool newUi    = false;
+#ifdef _WIN64
+		bool newUi    = true;   // new UI is the default on x64
+#else
+		bool newUi    = false;  // x86: no host, legacy only (see #else at dispatch)
+#endif
+		bool legacy   = false;  // --legacy opts back into the classic chrome
 		bool devUi    = false;
 		bool testHost = false;
 		// [NT-5] --gen-nt5-fixture <path>: one-shot CLI to produce a
@@ -8083,7 +8092,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 		int          captureSkydome = 0;
 		for (size_t i = 1; i < argv.size(); ++i)
 		{
-			if (argv[i] == L"--new-ui")    newUi    = true;
+			if (argv[i] == L"--new-ui")    newUi    = true;  // no-op: now the default
+			// --legacy / --legacy-ui both opt back into the classic chrome.
+			// The `-ui` alias mirrors `--new-ui` and is the name used
+			// throughout the codebase's comments/docs; before the default
+			// flip it "worked" only because legacy was the default, so accept
+			// it explicitly now that it no longer falls through.
+			if (argv[i] == L"--legacy" ||
+			    argv[i] == L"--legacy-ui") legacy = true;
 			if (argv[i] == L"--dev-ui")    devUi    = true;
 			if (argv[i] == L"--test-host") testHost = true;
 			if (argv[i] == L"--gen-nt5-fixture" && i + 1 < argv.size())
@@ -8110,6 +8126,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 				captureSkydome = _wtoi(argv[i + 1].c_str());
 			}
 		}
+		// `--legacy` opts back into the classic chrome (clears the x64
+		// default-true). Applied before the --capture clamp so a headless
+		// --capture run — which needs the host to own the Engine — still wins.
+		if (legacy) newUi = false;
 		// --capture implies the new-UI host (it owns the Engine). Clamp a
 		// garbage/zero --frames back to the default.
 		if (!captureAlo.empty() && !capturePng.empty()) newUi = true;
