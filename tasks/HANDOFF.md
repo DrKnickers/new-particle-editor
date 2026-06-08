@@ -1,5 +1,104 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-08 (session 25) — **VPT-2 undo coalescing SHIPPED (last parity item) + stray lockfile fixed + `lt-4 → master` GREENLIT as new-UI-DEFAULT (arch-C now trusted) + audit-P2 F12–F16 ported (integration step 1/4). FF-pushed, `origin/lt-4 = f6ba926`.** NEXT: integration steps 2–4 (default-flip → scaffolding docs → `merge -s ours` + PR)
+
+**`origin/lt-4` = `f6ba926`** (HEAD == origin, 0/0, tree clean). **No `master`
+changes** (`origin/master = ab120d0`). Web vitest **510 / 0**; `tsc -b` clean; native
+harness **174 / 0**. Native lane restored in THIS worktree (`x64\Debug\ParticleEditor.exe`
++ composition `dist/` present; a FRESH worktree needs L-039 NuGet copy + L-046 MSBuild
+**VS18** Debug x64 + L-040 `pnpm build`).
+
+### What shipped this session (all FF-pushed to `lt-4`)
+- **`dd3db53` fix(host)** — **VPT-2 track-key undo coalescing** (the LAST open
+  `ui-delta-report.md` item; the open list is now **empty**). `emitters/set-track-key`
+  passes a per-track|emitter `coalesceKey` to `captureUndo` → `CapturePreCoalesced`, so a
+  wheel/hold-arrow/scrub Value/Time key spinner (and the N-call group shift) fold into one
+  undo step (1500ms window), mirroring the emitter-property coalescing. Per-track keying
+  (legacy `track<<16|emitterIdx`) is the only stable key for a Time spinner (oldTime drifts
+  per tick). 5 native CDP regressions. Spec+plan in `docs/superpowers/`. **Process note:**
+  during the merge forensics, cross-checking two verification agents caught a wrong "F4/F5
+  missing" finding (a case-sensitive grep missed lt-4's parallel impls) — verify a
+  load-bearing claim directly, don't trust a single agent.
+- **`e0b3adc` chore(web)** — deleted the stray `web/apps/editor/pnpm-lock.yaml` +
+  gitignored it. It was a non-authoritative artifact (committed by accident in `ee4df22`);
+  lt-4 CI installs from `web/` against the in-sync **workspace** lockfile `web/pnpm-lock.yaml`,
+  so CI was never at risk. Premise of the flagged task was wrong — verified before acting.
+- **`f6ba926` fix(engine)** — **audit-P2 F12/F13-F14/F15/F16** forward-ported from master
+  PR #89 (`36b8f17`) to lt-4's divergent source. F12 WM_PAINT BeginPaint/EndPaint; F13/F14
+  `ReadAndRelease(IFile*)` helper + 4 migrated sites (IFile leak + delete-on-refcounted +
+  ignored short reads); F15 Emitter copy-ctor `m_instances.clear()`; F16 blend `case 6`
+  `break;`. Clean `/WX` build, native **174/0**, approved code review. F1–F5 already on lt-4
+  (parallel) — not re-applied. **Integration step 1/4.**
+- **`48edea8` docs** — `tasks/lt-4-master-integration-proposal.md` (the integration plan).
+
+### ⚠️ The headline — `lt-4 → master` is GREENLIT as **new-UI-DEFAULT** (read before merge work)
+The user **gained confidence in arch-C** ("major issues resolved, mostly UI polish left")
+and chose to make the **new UI the DEFAULT** (legacy → opt-out `--legacy`), reversing the
+old "still daily-driving legacy, arch-C untrusted" stance (memory updated). **A 5-agent
+git-forensics pass found the scary divergence is a mirage:** a `git-filter-repo` email
+redaction was applied to `master` AFTER `lt-4` forked (2026-05-15), renumbering ~204 shared
+commits so Git's merge-base falls back to 2017. **Real delta: 35 master-only vs 517
+lt-4-only commits; `lt-4` is a content SUPERSET of master.** Strategy: do the work on
+`lt-4`, then **`git merge -s ours master`** (lt-4 content wins, master history preserved,
+ZERO conflicts) → PR into master. Full plan + evidence:
+[`tasks/lt-4-master-integration-proposal.md`](lt-4-master-integration-proposal.md).
+
+### NEXT — integration steps 2–4 (step 1 = audit-P2, done)
+2. **Default-flip** — `src/main.cpp` arg block (~8023-8077): x64-gated `bool newUi = true`
+   default (`#ifdef _WIN64`) + net-new `--legacy` opt-out (`if (legacy) newUi = false;`).
+   **The one sharp constraint: x86 MUST stay legacy** — the x86 `#else` branch (~8191)
+   hard-`return -1`s, so a flat default-true breaks x86. Keep the x64 guards verbatim.
+   Harness unaffected (`--new-ui` becomes a no-op). Update stale comments + README.
+3. **Scaffolding docs + About attribution** — add-only `CONTRIBUTING.md` / `SECURITY.md` /
+   `.github/ISSUE_TEMPLATE/bug_report.md` / `DEVELOPMENT_LOG.md` (lt-4 lacks them, no
+   conflict) + port the "Forked from Mike.NL" attribution into `web/.../AboutDialog.tsx`.
+4. **`merge -s ours` supersede + PR** into master so `build.yml` (x86+x64) runs; backfill
+   the provisional CHANGELOG/ROADMAP hashes + move lt-4-only ROADMAP §5 entries to master slots.
+
+### Pending USER verification (only they can close)
+- **`--legacy` smoke of F12/F16** — legacy-mode visual paths the new-UI harness doesn't
+  exercise (paint-storm fix + blend mode 6). Faithful ports of already-shipped master fixes,
+  but arch-A visuals are the user's lane (L-033). (The user's master-based 0.2 daily-driver
+  already runs these.)
+
+### Verified baseline (run before changing anything)
+- `git fetch origin lt-4`; confirm `origin/lt-4` = `f6ba926` or newer; lineage 0/0; tree clean.
+- web: from `web/`, `pnpm install` if `node_modules` absent (install from **`web/`** — never
+  per-app, or you recreate the stray editor lockfile); `pnpm --filter @particle-editor/editor
+  test` → **510**; **`tsc -b`** (NOT `--noEmit` — L-070) → 0.
+- native: lane restored in THIS worktree; a FRESH worktree needs L-039 + L-046 (**VS18**) +
+  L-040. **After any web change, `pnpm build` before the harness (L-068).** `pnpm test:native`
+  → **174/0** (exit 1/2 + "browser closed" can be an L-066/L-071 phantom — re-run).
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-
+> DComp particle editor for SW:EaW) on branch `lt-4`. Read `tasks/HANDOFF.md` top (session 25)
+> and `tasks/lt-4-master-integration-proposal.md` (the active project — `lt-4 → master` integration,
+> greenlit as **new-UI-DEFAULT**). Read `tasks/lessons.md` (esp. **L-070** `tsc -b` gate; **L-068**
+> `pnpm build` before native; **L-067** Playwright real input; **L-066/L-071** native phantom re-run;
+> **L-046** MSBuild **VS18**; **L-039/L-040** fresh-worktree restore; **L-033** arch-C visuals need
+> the user; **L-022** verify claims against code). **VERIFY claims against actual code.** Pre-flight:
+> `origin/lt-4` = `f6ba926` or newer, 0/0, clean; from `web/` `pnpm install` if needed (install from
+> `web/`, NOT per-app), then `pnpm --filter @particle-editor/editor test` → **510**, `tsc -b` 0; native
+> **174/0** (fresh worktree needs L-039/L-046/L-040). Session 25 shipped VPT-2 undo coalescing (last
+> parity item; open list now empty), fixed a stray lockfile, and ported audit-P2 F12–F16 (integration
+> step 1/4). The `lt-4 → master` merge is greenlit as new-UI-default; forensics proved the divergence
+> is mostly a history-rewrite mirage (lt-4 is a content superset; strategy = `merge -s ours`). NEXT:
+> integration step 2 (default-flip in `src/main.cpp` — x64-gated default + `--legacy`, x86 stays
+> legacy), then step 3 (scaffolding docs + About attribution), then step 4 (`merge -s ours` + PR).
+> Pending user smoke: `--legacy` F12/F16. Summarize understanding + confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor on `lt-4`. Read `tasks/HANDOFF.md` top (session 25) +
+> `tasks/lt-4-master-integration-proposal.md`. VERIFY against code. Pre-flight: `origin/lt-4` =
+> `f6ba926` or newer, 0/0, clean; `pnpm --filter @particle-editor/editor test` → **510**, `tsc -b` 0;
+> native **174/0** (lane restored here; fresh worktree needs L-039/L-046/L-040; install pnpm from
+> `web/`, not per-app). `lt-4 → master` is greenlit as **new-UI-default**; divergence is a history-
+> rewrite mirage (lt-4 = superset; use `merge -s ours`). Step 1/4 (audit-P2 F12–F16) done. NEXT: step 2
+> default-flip (`src/main.cpp`, x64-gated + `--legacy`, x86 stays legacy) → step 3 docs → step 4 merge+PR.
+
+---
+
 ## 2026-06-08 (session 24) — **Animated dock SHIPPED + root-caused the "native host hang" as a FALSE diagnosis (it was a test-harness actionability race). FF-pushed, `origin/lt-4 = a273d19`, user-tested in the real host.** NEXT: VPT-2 / wrap / propose `lt-4 → master`
 
 **`origin/lt-4` = `a273d19`** (HEAD == origin, 0/0, tree clean). **No `master` changes**
