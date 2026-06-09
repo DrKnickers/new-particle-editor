@@ -4271,3 +4271,65 @@ and skipped the per-stage split, NT-10 would have shipped at ~53 ms calling it
 done. The split logs caught the misdiagnosis. Cross-reference [L-022](#l-022)
 (verify claims — including a roadmap's own framing — against measured reality)
 and [L-033](#l-033) (the *feel* still needs the user's eye, the numbers don't).
+
+---
+
+## L-074 — An implementation task that changes SHARED state must run the FULL test suite, not a per-area subset — and never trust a subagent's "pre-existing failure" claim without bisecting
+
+**Rule.** When a task lifts state to a wider scope (component `useState` →
+global store), changes a shared module, or otherwise alters something many
+files consume, its verification step must run the **entire** suite, not just
+the directory it edited. And when a subagent reports a failure as "pre-existing
+/ present identically before my change," **verify it** by running the same test
+at the immediately-prior commit before accepting it — a regression introduced
+by task N looks "pre-existing" to task N+1.
+
+**Trigger.** Any task whose change is consumed outside the file(s) it edits;
+any subagent report that dismisses a red test as not-my-fault.
+
+**How to apply.**
+- In the plan, integration/wiring tasks that touch shared state get
+  `pnpm --filter @particle-editor/editor test` (full), never a scoped path.
+- On a "pre-existing failure" claim: `git checkout <prev> -- <file>`, re-run
+  the failing test, `git checkout HEAD -- <file>`. Pass-before / fail-after =
+  regression, not pre-existing.
+
+**Source incident (2026-06-09, save/delete-safety).** Task 6 lifted the emitter
+tree from `EmitterTree`'s local `useState` to a global zustand store, but its
+plan step ran only `screens/__tests__ lib/__tests__` (297/0 green) — missing
+`components/__tests__`, where `PanelLayout.test.tsx` renders `EmitterTree`. The
+global store leaked the layout stub's malformed `{}` `emitters/list` response
+across test cases, crashing the next test's synchronous render on
+`tree.root.children`. The Task-7 subagent surfaced the 3 failures but dismissed
+them as "pre-existing." Bisecting (`git checkout 86cff8f -- EmitterTree.tsx` →
+13/13 pass) proved it was the swap. Root-caused with a single store-invariant
+guard at the setter. Cross-reference [L-022](#l-022) (verify claims) and
+[L-073](#l-073) (a triage avenue is a hypothesis until measured).
+
+---
+
+## L-075 — When migrating "all call sites" of an API, grep exhaustively for the wire-kind string — a conditionally-mounted consumer is the one you'll miss
+
+**Rule.** "Route every call site of X through the new wrapper" is only complete
+when you've grepped the codebase for the **wire identifier** itself (the message
+`kind`, the function name), not just the obvious UI surfaces. A call site behind
+a rarely-open modal or a closure stored in an atom won't show up in a mental
+inventory of "the toolbar / menu / shortcuts."
+
+**Trigger.** Centralising or wrapping an existing API/message across its callers.
+
+**How to apply.** Before declaring the migration done, run a content search for
+the literal kind (e.g. `grep -rn '"file/save"' web/apps/editor/src`) and route
+**every** hit (minus the documented exclusions). Add the exhaustive list to the
+spec's call-site inventory so a reviewer can check it off.
+
+**Source incident (2026-06-09, save/delete-safety).** The spec said "surface
+failures at **all** `file/save|open|save-as` call sites," and the plan listed
+Toolbar, MenuBar, and `use-app-accelerators` — but missed
+[`SaveChangesPrompt.tsx`](../src/screens/SaveChangesPrompt.tsx:49)'s `file/save`,
+a closure-gated modal mounted unconditionally that fires on every dirty
+New/Open/Recent and conflated user-cancel with real failure (no error shown) —
+the precise silent-data-loss path the feature existed to close. The
+comprehensive review caught it; a `grep '"file/save"'` up front would have. The
+two pure-logic modules and the modals were clean — the gap was a *consumer*
+inventory, exactly the thing a content search, not intuition, finds.

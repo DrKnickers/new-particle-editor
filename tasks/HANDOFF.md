@@ -1,5 +1,45 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-09 (session 30) — **Audit-driven UI polish: save/delete safety + multi-aware delete/duplicate/move (selection-follow, preserve-order) — all BUILT, user-confirmed in the host, COMMITTED on `claude/modest-hypatia-ebdbc4`, but the 7 newest commits are NOT pushed (held per user) and PR [#104] is STALE.** NEXT: push the 7 commits + refresh PR #104, settle the merge gate + bundling, then the future **multi-select drag** item (`tasks/next-multiselect-drag.md`).
+
+**Branch state (read carefully).** Working branch **`claude/modest-hypatia-ebdbc4`**, HEAD **`cba3a9b`**. `origin/master` = **`d9767ff`** (session-29 #103 handoff doc merged). The branch is **23 ahead / 2 behind** origin/master — the 2 behind are #103's session-29 entry in `tasks/HANDOFF.md` (this file on the branch still tops out at session 28; reconcile with `git merge origin/master` before merging PR #104 — likely a clean auto-merge since both just prepend, but check). The remote branch + **PR [#104] are at `c9f1c9b`** (16 commits: audit + save/delete-safety + ROADMAP tidy). The **7 newest commits are LOCAL-ONLY** (push held at the user's request): `c05df31` right-click delete multi, `1aebdc8` trash multi, `5887ddc` multi-aware duplicate+move, `ba6c4ca` preserve-order, `d4bf691` toolbar move-enabled, `364c68d` context-menu move-enabled, `cba3a9b` drag note.
+
+**PR [#104]** (`feat(new-ui): confirm destructive deletes + surface failed Save/Open; ROADMAP §1→§5 tidy`) is **OPEN, mergeStateStatus CLEAN, but STALE** — it does NOT contain the multi-aware delete/duplicate/move work (those are the 7 unpushed commits). **PR [#103]** (session-29 handoff doc) was merged to master this session.
+
+### Verified baseline at HEAD `cba3a9b` (all green)
+- web **585 / 585** (`pnpm --filter @particle-editor/editor test`); **`tsc -b`** 0; `vite build` clean (>500 kB chunk warning is the known-benign one).
+- host **Debug x64** (MSBuild **VS18**, L-046) clean — only the benign LNK4098. Native a11y harness **174 / 0** (30 skipped). This worktree's L-039 (WebView2 1.0.3967.48 → `packages/`) + L-040 (`pnpm build`) restore is **done**.
+- Two new bridge messages added this session: **`emitters/move-many` / `emitters/duplicate-many`** (schema + host `BridgeDispatcher.cpp` + mock + React).
+
+### What shipped this session (committed on the branch, in order)
+1. **ROADMAP §1→§5 tidy** (`fdc8408`) — relocated shipped-but-stranded NT-5/NT-6 into Shipped, renumbered §5 1–29.
+2. **Multi-agent audit** of the new UI (`3d42d90`) — 7 lenses → 47 adversarially-verified findings + 12 settings proposals → [`tasks/audit-2026-06-09.md`](audit-2026-06-09.md). Drove the item choice.
+3. **Save/delete safety** (Approach B), spec+plan in `docs/superpowers/`, 10 TDD tasks via subagents (`bb999e9`…`ba42875`) + a code-review fix (`c4f6f6f`):
+   - **File-op failure feedback** — `runFileOp` ([`lib/file-op.ts`](../web/apps/editor/src/lib/file-op.ts)) surfaces non-cancel `file/save|open|save-as` failures in `<FileOpErrorModal>`; rewired Toolbar/MenuBar/use-app-accelerators **and** `SaveChangesPrompt` (the review-caught 4th site → L-075).
+   - **Proportional delete confirm** — [`lib/delete-emitters.ts`](../web/apps/editor/src/lib/delete-emitters.ts) (`computeDeleteImpact`/`requestDeleteEmitters`/`performDelete`/`useDeleteConfirmStore`) + `<DeleteConfirmModal>`; default-on **Preferences toggle**. Emitter tree lifted into [`lib/emitter-tree.ts`](../web/apps/editor/src/lib/emitter-tree.ts) store (regression fix `7c30672` → L-074).
+4. **All 4 delete affordances made multi-aware** (`c05df31` right-click, `1aebdc8` trash) — context-menu/trash now act on the whole selection.
+5. **Multi-aware duplicate + move** (`5887ddc`) — host-side batch (`emitters/move-many`/`duplicate-many` return `newIds`), [`lib/emitter-reorder.ts`](../web/apps/editor/src/lib/emitter-reorder.ts) re-selects them so the highlight follows. **Preserve-order at the edge** (`ba6c4ca`): a block moves as a unit or freezes (no compacting) — user's explicit call.
+6. **Move Up/Down enabled state made selection-aware + symmetric** (`d4bf691` toolbar, `364c68d` context menu) via shared [`lib/move-enabled.ts`](../web/apps/editor/src/lib/move-enabled.ts) `canMoveSelection` — matches `move-many`'s preserve rule.
+
+### Open decisions for the user (raised, not yet resolved)
+1. **Push + merge gate.** The 7 newest commits aren't pushed. Push them to refresh PR #104, then merge to `master` is the explicit-OK gate. (Reconcile the 2-behind first — see Branch state.)
+2. **Bundling.** PR #104 bundles the save/delete-safety feature + the ROADMAP tidy (one PR per the session-branch model). User may want the tidy split into its own PR — the tidy is the branch's first commit (`fdc8408`), cleanly separable.
+
+### NEXT — future work (not started)
+**Multi-select click-drag reordering** — see [`tasks/next-multiselect-drag.md`](next-multiselect-drag.md): drag moves the whole selection, selection stays on the originals, same preserve constraints as the arrows, + a group **drop preview**. Main new piece is an absolute-position batch host op (extend `move-many` or use `ParticleSystem::moveEmitterToRootIndex`). Drag code lives in `EmitterTree.tsx` (`startDrag`/`computeDropIntent`/`indicator`) + `lib/drop-zone.ts`/`drag-autoscroll.ts`/`marquee.ts`.
+
+### Lessons added this session
+- **L-074** — integration tasks that change SHARED state must run the FULL suite (the Task-6 tree-store lift broke `PanelLayout.test.tsx`, missed by a `screens/+lib/` scoped run; a subagent mislabeled it "pre-existing" — bisect such claims).
+- **L-075** — grep the wire-kind string to find ALL call sites of an API migration (the `SaveChangesPrompt` `file/save` site was missed by intuition, caught by review).
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-DComp particle editor for SW:EaW). **`master` is the trunk** (new-UI x64 default, `--legacy` opts out; `lt-4` retired). Working branch **`claude/modest-hypatia-ebdbc4`**, HEAD **`cba3a9b`**, **23 ahead / 2 behind** `origin/master` (`d9767ff`). **The 7 newest commits (`c05df31`…`cba3a9b`) are NOT pushed** (held per user); the remote branch + **PR [#104] are stale at `c9f1c9b`** and lack the multi-aware delete/duplicate/move work. Read `tasks/HANDOFF.md` top (session 30), the CHANGELOG top entries, `tasks/audit-2026-06-09.md`, `tasks/next-multiselect-drag.md`, and `tasks/lessons.md` (esp. **L-074** full-suite-on-shared-state + bisect "pre-existing" claims; **L-075** grep the wire-kind for all call sites; **L-072** never rewrite UTF-8 with PowerShell Set-Content; **L-033** arch-C feel needs the user's eye; **L-046** MSBuild VS18; **L-039/L-040** fresh-worktree restore; **L-068** `pnpm build` before native; **L-070** `tsc -b`). **VERIFY claims against actual code.** **Pre-flight:** `git fetch origin master`; from `web/` `pnpm --filter @particle-editor/editor test` → **585**, `tsc -b` 0; host **Debug x64** (VS18) clean; native **174/0** (fresh worktree needs L-039 NuGet copy + L-046 + L-040). **NEXT — confirm with the user:** (a) **push the 7 commits + refresh PR #104**, reconcile the 2-behind (`git merge origin/master`, likely clean), settle the **merge gate** + whether to **split the ROADMAP tidy**; OR (b) start the **multi-select drag** feature per `tasks/next-multiselect-drag.md` (plan mode — iterate the absolute-position-batch host-op design + the non-contiguous-drop semantics + the preview WITH the user before coding; tune feel in the real host per L-033). Summarize understanding + confirm scope before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor. Branch **`claude/modest-hypatia-ebdbc4`** (HEAD `cba3a9b`, 23 ahead / 2 behind `origin/master`). **7 newest commits unpushed (held); PR [#104] stale at `c9f1c9b`** (missing the multi-aware delete/duplicate/move work). Read `tasks/HANDOFF.md` top (session 30) + `tasks/next-multiselect-drag.md` + `tasks/lessons.md` (L-074, L-075, L-072, L-033). VERIFY against code. Pre-flight: `pnpm --filter @particle-editor/editor test` → **585**, `tsc -b` 0; host Debug x64 (VS18) clean; native **174/0**. NEXT: confirm with user — push 7 commits + refresh/merge PR #104 (reconcile 2-behind first), OR start **multi-select drag** (`tasks/next-multiselect-drag.md`, plan mode). Confirm scope first.
+
+---
+
 ## 2026-06-09 (session 29) — **ROADMAP [NT-10] (maximized save-modal backdrop latency) BUILT → profiled → scope-expanded with user OK (added JPEG) → user-confirmed instant in the host → SHIPPED to `master`: PR [#101] (NT-10 feat, `d431bde`) + PR [#102] (hash backfill, `05e331e`) — both merged, all CI green. No open PRs.** NEXT: **MT-13** (legacy/arch-A removal, greenlit — its own ★★★★ effort) **or** more **UI polish** (open-ended; brainstorm WITH the user)
 
 **`origin/master` = `05e331e`** (advanced this session: #101 → `d431bde`, #102 → `05e331e`).
