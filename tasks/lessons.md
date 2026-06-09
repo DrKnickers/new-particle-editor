@@ -4246,3 +4246,28 @@ churn on lines I hadn't logically changed. Fixed with `git checkout --` (net
 change was zero). Cross-reference [L-046] (drive MSBuild through PowerShell, not
 Git-Bash — the inverse: some things NEED PowerShell, file rewrites do NOT) and
 [L-022] (read the actual diff before claiming a clean change).
+
+## L-073 — A perf-triage "avenue" in the ROADMAP/handoff is a hypothesis, not a measurement — instrument every stage and profile the real bottleneck on the real target before committing to the named fix
+
+**Rule.** When a ROADMAP item or handoff prescribes a specific optimization
+("avenue (a): do X — the most direct win"), treat it as an *untested hypothesis*.
+Add per-stage `#ifndef NDEBUG` timing, measure the actual cost breakdown on the
+real worst-case target (not a convenient small case), and confirm the named
+avenue targets the dominant stage **before** declaring the item done. The
+prescribed fix may shave a real-but-minor cost while the bulk sits elsewhere —
+shipping it then would close the item having solved ~25% of the problem.
+
+**Source incident (2026-06-08, session 29, NT-10).** ROADMAP NT-10 named
+"avenue (a): `StretchRect` the offscreen RT into a small render target … (a) is
+the most direct win" for the maximized save-modal snapshot (~72 ms). Built it:
+the GPU readback collapsed ~8 ms → ~1.5 ms exactly as predicted — but the
+maximized `[INSTANT-MODAL]` total only dropped ~72 ms → ~53 ms. A `[NT10-SPLIT]
+pngSave` timer (added precisely to test the premise) showed the GDI+ **PNG
+encode** (~28 ms) plus the base64/IPC of the ~905 KB PNG was ~70 % of the cost —
+entirely untouched by avenue (a). The real lever was switching the *blurred*
+backdrop to **JPEG** (encode 28 → 1.7 ms, payload 905 KB → ~120 KB), which took
+the total to ~6 ms (~11×). Avenue (a) alone was ~27 %. Had I trusted the triage
+and skipped the per-stage split, NT-10 would have shipped at ~53 ms calling it
+done. The split logs caught the misdiagnosis. Cross-reference [L-022](#l-022)
+(verify claims — including a roadmap's own framing — against measured reality)
+and [L-033](#l-033) (the *feel* still needs the user's eye, the numbers don't).

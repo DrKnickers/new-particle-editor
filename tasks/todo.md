@@ -1,365 +1,217 @@
-# UI polish batch 2 — selected-key / popover anims / modal speed / viewport stutter
+# NT-10 — Further reduce maximized save-modal backdrop snapshot latency
 
-Session 27. Branch `claude/ui-polish-2` off `master`. New-UI (React) is the
-x64 default. User is driving the live host (PID running) for visual tuning
-(L-033 — agent-rendered native is unreliable; values get the user's eye).
+Session 29. Branch `claude/brave-bouman-f44073` off `master` (`900b317`+,
+lineage clean: `HEAD..origin/master` = 0). ROADMAP §1.3 [NT-10].
 
-## 1. Goal + scope
-
-Four independent UI-polish items from the user, tackled **quick-wins-first**:
-
-1. **Selected curve key** — replace the blue selection highlight with a *more
-   saturated* version of the key's **own** color, enlarge the selected key, and
-   strengthen its drop shadow.
-2. **Background / Ground / texture-picker popovers** — add a consistent
-   **fade + slight zoom** entrance/exit animation (match the existing modals),
-   applied once in the shared wrapper.
-3. **Save-changes modal speed** — make it near-instant **while keeping** the
-   frosted-glass backdrop, by making the viewport snapshot capture cheap
-   (downscale) instead of dropping the gate.
-4. **Viewport stutter on dock slide** — smooth the D3D9 viewport as the right
-   dock animates open/closed. (Hardest; needs host experimentation; done last.)
-
-**In:** items 1, 4(anim), 2 as a low-risk batch; then 3 on its own.
-**Out:**
-- The flaky PAL-14 test fix — already its own PR (#96), not part of this batch.
-- Any change to *which* views use the curve editor, popover *contents*, or the
-  modal's logic/flow (only its open latency). Scope is appearance + smoothness.
-- MT-13 legacy removal (greenlit but a separate effort).
-
-**Order (user-chosen):** 1 → 4 → 2 → 3. Each verified + shown in the host before
-moving on.
-
-## 2. What the codebase already gives us
-
-- **Selected key (item 1):** keys are SVG `<circle>` in
-  `web/apps/editor/src/screens/CurveEditor.tsx`. Single-track path ~`:956-1003`
-  (`r=5` selected / `4` not), multi-channel focus path ~`:1858-1934` (hit-pad +
-  visible dot, `visR=6/5`). Selected fill is a hardcoded blue
-  `SELECTED_FILL = "#0EA5E9"` (`:213`), applied in **both** paths. Multi-channel
-  keys carry their channel color (`channel.color`, e.g. `var(--x-axis)`) — that's
-  the "own color" to saturate. Every key has a `data-selected="true"` hook, and a
-  shared `.curve-key-marker { filter: drop-shadow(0 1px 1.2px rgba(0,0,0,.5)); }`
-  at `web/apps/editor/src/styles/components.css:1063`.
-- **Popovers (item 4):** all three (`BackgroundDropdown`, `GroundDropdown`,
-  `TexturePalettePopover`) are Radix `Popover` routed through ONE wrapper,
-  `web/apps/editor/src/components/OccludingPopover.tsx`, which renders
-  `Popover.Content`. The repo's golden anim pattern lives in
-  `web/apps/editor/src/components/Modal.tsx:251,253`
-  (`data-[state=open]:animate-in fade-in-0 zoom-in-95`). Tailwind v4 ships the
-  `animate-in/out`, `fade-*`, `zoom-*` utilities natively (no plugin). Radix
-  exposes `--radix-popover-content-transform-origin` for a trigger-anchored zoom.
-- **Modal speed (item 2):** `Modal.tsx:80-220` gates
-  `Dialog open={open && snapshotReady}` on a `viewport/capture-snapshot` bridge
-  call. The capture (`CaptureSnapshotPng`, dispatched at
-  `src/host/BridgeDispatcher.cpp` ~1023) does a full-res (3440×1369) GPU readback
-  + GDI+ PNG encode + IPC + decode = 50–750ms. The gate exists to avoid a
-  backdrop-filter flash — keep it; just make capture cheap.
-- **Viewport stutter (item 3):** dock tween = `transition: flex-grow 0.2s ease`
-  (`components.css:1216`), orchestrated in `PanelLayout.tsx:184-199`.
-  `ViewportSlot` fires `layout/scene-rect` on **every** ResizeObserver tick with
-  **no throttle** (`ViewportSlot.tsx:85`) → ~15 msgs/tween. Host already coalesces
-  (Compositor keeps only latest pending transform; Engine viewport-set
-  idempotent), so the stutter is the 1-frame lag between DComp clip widening and
-  the engine re-rendering the new viewport.
-
-## 3. Implementation approach
-
-**Item 1 — selected key (web only).** Stop overriding the selected fill to blue;
-keep the key's **own** color when selected, then express "more saturated +
-bigger + stronger shadow" via the existing `data-selected` CSS hook:
-- `CurveEditor.tsx`: in both render paths, when `selected`, set `fill` to the
-  key's own color (multi-channel: `channel.color`; single-track: its
-  border/interior color) instead of `SELECTED_FILL`. Bump selected radius
-  (single `5→~6-7`; multi `visR 6→~7-8`, `hitR` to match).
-- `components.css`: add `.curve-key-marker[data-selected="true"]` →
-  `filter: saturate(<X>) drop-shadow(<stronger>)`. `saturate()` intensifies the
-  channel color; single-track grey is unaffected by saturate (size+shadow carry
-  it there — confirm acceptable in host). Retire `SELECTED_FILL` if now unused.
-- Values (saturate factor, radii, shadow) are first-pass; **tuned live with the
-  user in the host**.
-
-**Item 4 — popover anim (web only).** Centralize in `OccludingPopover`: merge a
-fixed animation class string with the caller's `className` (prepend, don't let
-caller override) on `Popover.Content`:
-`data-[state=open]:animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out
-fade-out-0 zoom-out-95 origin-[--radix-popover-content-transform-origin]` plus a
-short `duration-*`. Radix delays unmount for the CSS exit animation natively (no
-`forceMount`). All three popovers inherit it; no per-caller change.
-
-**Item 2 — modal speed (host + maybe web).** Keep the snapshot-ready gate (no
-flash). Make `CaptureSnapshotPng` cheap: downscale the readback to a small max
-dimension (e.g. ≤ ~960px wide) before the GDI+ PNG encode — the backdrop is
-`backdrop-blur-sm` over `bg-black/60`, so low-res is visually identical. Target
-capture ≤ ~30ms so the gated open feels instant. Read the capture impl first to
-pick the cleanest downscale point (StretchBlt / D3DXLoadSurface / scaled RT).
-
-**Item 3 — viewport stutter (host-heavy, experimental).** Hypotheses to try in
-the host, simplest first: (a) rAF-coalesce `layout/scene-rect` sends so ≤1/frame;
-(b) ensure the engine viewport change is applied *before* the DComp clip on
-shrink (kill the 1-frame lag); (c) if needed, let DComp scale the existing visual
-during the tween and do one true resize at the end. **Iterate with the user** —
-no promised design until we see it move.
-
-## 4. Risks + mitigations
-
-1. **Single-track grey keys don't visibly "pop" under saturate-only.** Grey has
-   no saturation to boost, so item 1's color change is a no-op there. *Mitigation:*
-   the selected size bump + stronger shadow still differentiate; confirm the look
-   with the user in the host and, if too subtle, fall back to a slight brightness
-   bump for the single-track path only. Accepted as a tune-in-host detail.
-2. **Popover exit animation never plays (element unmounts instantly).** If the
-   caller's `className` overrides or Radix unmounts before `data-[state=closed]`,
-   the exit won't show. *Mitigation:* merge classes in the wrapper (don't pass raw
-   `{...rest}` className through), verify against the Modal pattern which already
-   works, and assert `data-state` transitions in a vitest spec.
-3. **Downscaled snapshot visibly degrades the backdrop.** If the downscale is too
-   aggressive or applied before the blur reads it. *Mitigation:* the backdrop is
-   already blurred to mush; pick a max-dim that's still > the blurred detail floor
-   (~720–960px). Eyeball in the host before committing the factor.
-4. **Item 3 host changes regress the existing resize-storm mitigations.** The
-   compositor's coalescing + occlusion logic is load-bearing (drag-resize). *Mit:*
-   treat item 3 as its own change/PR, re-run the native harness (174/0), and
-   stress drag-resize + dock-toggle together before declaring it fixed.
-5. **Host rebuild churn.** Items 2 & 3 need MSBuild + relaunch each iteration.
-   *Mitigation:* batch the web items (1, 4) first — they only need `pnpm build` +
-   reload — then do the host items so the user isn't waiting on C++ builds early.
-
-## 5. Testing & verification
-
-- **Build/type gates:** `pnpm --filter @particle-editor/editor test` → 514/0 (+
-  any new popover-anim spec); `tsc -b` → 0; host Debug x64 clean for items 2/3;
-  `pnpm build` before any native harness run (L-068); native harness 174/0 after
-  host changes.
-- **Item 1:** selected keys show a saturated own-color (not blue), larger, with a
-  stronger shadow; unselected unchanged; multi-channel AND single-track both sane;
-  selection/drag still works. User confirms the look in the host.
-- **Item 4:** all three popovers fade+zoom in on open and **out** on close (exit
-  actually plays); no layout shift; trigger-anchored origin; vitest asserts the
-  `data-state` open/closed classes are present.
-- **Item 2:** save-changes modal appears effectively instantly with the frosted
-  backdrop intact; no unblurred-frame flash; works at maximize (worst case). User
-  times it in the host.
-- **Item 3:** dock open/close is smooth — no viewport stutter/clear-strip; drag-
-  resize storms still clean; native harness 174/0. User confirms smoothness.
+Pre-flight baseline (this worktree, all green):
+- web **537/537**, `tsc -b` + `vite build` clean (dist produced)
+- host **Debug x64** clean (LNK4098 is the known-benign warning)
+- native harness **174 passed / 30 skipped**
+- fresh-worktree restore done: L-039 (WebView2 1.0.3967.48 → `packages/`),
+  pnpm install, L-040 (`pnpm build`).
 
 ---
 
-## Item 3 — build plan (session 28, scope CONFIRMED with user)
+## 1. Goal + scope
 
-Design = `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md` (rev 2).
-This section is the **execution checklist**; the spec holds the rationale. All
-spec claims re-verified against current code this session (L-022 pass):
-`send` is one shared closure (ViewportSlot.tsx:69-117); `dockAnimating` is local
-useState (PanelLayout.tsx:183); `[STUTTER-PROBE]` `#ifndef NDEBUG` at
-BridgeDispatcher.cpp:925-935; `SetSceneRect` drives both compositors, arch-C gate =
-`if (m_dcompCompositor)` (LayoutBroker.cpp:268); `PerfQpcNow()` at HostWindow.cpp:179;
-render loop drains-all-then-RenderD3D9-once at HostWindow.cpp:3363-3384.
+**Goal.** Cut the maximized (3440×1369) modal-backdrop snapshot latency from
+~69 ms toward the windowed ~18 ms, by moving the downscale onto the GPU
+(`StretchRect`) so the readback, the ~19 MB memcpy, and the GDI+ `DrawImage`
+all operate on the already-small (~1024×383) image instead of full RT size.
+The frosted backdrop is blurred under `backdrop-blur-sm`, so effective
+resolution (and thus visual quality) must stay **identical** to today's
+downscale output dims.
 
-**Confirmed decisions (user, session 28):**
-- **arch-C gated** — anim is a no-op under `--legacy` (host: the `m_dcompCompositor`
-  branch; **web: also gated** — see refinement below).
-- **Analytic `to`** (primary). Verified exact: `dockPanelRef.getSize().inPixels`
-  reads the open-width at toggle; `expand()` restores `expandToSize` (the pre-collapse
-  width, react-resizable-panels.js:857/862) which we shadow in `lastDockWidthRef`.
-  Close: `to.w = from.w + W_dock`; open: `to.w = from.w − W_dock` (first-ever open
-  falls back to persisted spawner% × groupWidth, else 260 min). Authoritative 260ms
-  send corrects the rare narrow-window edge (center hits its 30% min → left absorbs).
-- **No kill-switch** — contained + arch-C-gated; revert-via-PR if it regresses.
+**In:**
+- `AlphaCompositor::CaptureSnapshotPng` only (`src/host/AlphaCompositor.cpp`).
+- A GPU fast path: `StretchRect` the scene-rect crop of `offscreenRT` into a
+  small render target sized to today's `dstW×dstH`, read **that** back, encode.
+- Runtime guards (caps query + HRESULT checks) + a fallback to the existing
+  full-readback path, so there is **zero regression** on any device/driver.
+- Debug instrumentation to prove which path ran and the latency.
 
-**Refinement to the spec (named to user):** the web RO-suppression + `animate-scene-rect`
-send MUST be gated to `!isLegacyMode()`, not just the host. Otherwise under `--legacy`
-the suppression drops per-frame scene-rects while the host anim no-ops → freeze-then-snap.
-Extract `isLegacyMode()` from ViewportSlot.tsx into a shared `lib/hosting-mode.ts`
-(preserve the exact import.meta.env + process.env semantics so ViewportSlot's tests
-stay green) and import in PanelLayout.
+**Out (with reasons):**
+- `CaptureSnapshotToFile` (the `--capture` offline-diff path) — must stay
+  full-res; it's a deliberately separate method (`AlphaCompositor.cpp:791`,
+  comment at :795). Untouched.
+- Avenue (b) async/double-buffered encode and (c) warm throttled cache — the
+  ROADMAP calls (a) the most direct win; (b)/(c) stay as ROADMAP follow-ups if
+  (a) proves insufficient.
+- Changing the downscale **formula** or output dims — kept byte-identical so
+  the native dim tests and the blur "floor" are unchanged.
+- The per-frame `Composite()` / arch-C frame path — orthogonal.
 
-### Phase 1a — Web (self-verifiable) — ✅ DONE (536 tests, tsc -b 0)
-- [x] **Bridge schema:** `animate-scene-rect` request + response (index.ts) + MockBridge
-      no-op (mock.ts). `tsc -b` 0.
-- [x] **Signal store:** `lib/dock-anim.ts` (`{ animating, setAnimating }`) + unit test.
-- [x] **Shared hosting-mode:** extracted `isLegacyMode()` → `lib/hosting-mode.ts`;
-      ViewportSlot imports it; existing ViewportSlot tests still green. + unit test.
-- [x] **Shared geometry:** `lib/scene-rect.ts` — `computeSceneRect(el)` (DRY w/ ViewportSlot)
-      + pure `dockSlideTarget(from, dockWidthDev, opening)` (analytic `to`). + unit tests.
-- [x] **ViewportSlot RO-only suppression:** `animatingRef` synced via `useDockAnim.subscribe`;
-      RO callback gated; scroll/resize/DPR/mount stay raw. + 4 suppression tests.
-- [x] **PanelLayout toggle (arch-C only):** legacy → no anim/no signal (regression-safe);
-      reduced-motion → snap; analytic `to` via `getSize().inPixels` + shadowed
-      `lastDockWidthCssRef`; `animate-scene-rect` in the rAF with `msElapsedAtSend`;
-      authoritative settle at 260ms reads the REAL settled rect. + 4 dock-anim tests
-      (separate mocked file so the synchronous PanelLayout tests stay mock-free).
-- [x] Web gate: **536** tests (515 + 21), `tsc -b` 0.
-- [~] Adversarial review of the web diff (workflow in flight) → fold confirmed findings.
+---
 
-### Phase 1b — Host — ✅ WRITTEN + COMPILES (Debug x64 clean; harness running)
-- [x] **`ViewportAnim` on LayoutBroker** (`LayoutBroker.h`): float from/to + `startQpc`
-      + `durMs`; `StartSceneAnim(from,to,durMs,msElapsedAtSend)` (back-dates `startQpc`
-      via its own QPC; **no-op unless `m_dcompCompositor`**) + `AdvanceSceneAnim(qpcNow)`
-      (lerp+apply; at t≥1 apply exact `to`, clear active) + `IsSceneAnimActive()`.
-- [x] **Self-defense:** `SetSceneRect` early-outs while `active`; real work split into
-      private `ApplySceneRect` (anim advance + the guard both funnel through it).
-- [x] **Dispatcher** (`BridgeDispatcher.cpp`): `animate-scene-rect` handler →
-      `m_layout.StartSceneAnim(from,to,durationMs,msElapsedAtSend)`. `easing` read-but-
-      unbranched (host hardcodes the `ease` bezier; web only sends "ease").
-- [x] **Render-loop advance** (`HostWindow.cpp:823` area): `layout.AdvanceSceneAnim(
-      PerfQpcNow())` before `engine->Render()`, OUTSIDE the `[PERF]` region.
-- [x] **Bezier sampler:** anonymous-namespace `UnitBezier` (WebKit-style Newton+bisection)
-      for CSS `ease` = cubic-bezier(0.25,0.1,0.25,1.0) + `Lerpf` + cached `QpcPerMs()`.
-- [x] **Probe:** kept ONE-line `[STUTTER-PROBE] anim-start` (`#ifndef NDEBUG`, TEMPORARY);
-      dropped the per-frame apply log (would spam the uncapped loop + pollute `[PERF]`).
-      The arrival probe going QUIET mid-slide is the suppression evidence. **Remove BOTH
-      probes before sign-off.**
-- [x] Host gate: Debug x64 clean ✅; web `pnpm build` ✅ (L-068); native harness **174/0** ✅
-      (incl. viewport-resize.spec — the ApplySceneRect split didn't regress the static path).
-      Bezier hand-verified (CSS ease y(0.5)≈0.80 ✓).
-- [x] **Adversarial host review** (14 raised → **1 confirmed**, 13 refuted; one agent ported
-      the bezier to Python: CssEaseY(0.5)=0.8024, max err 2.3e-6, Newton always converges):
-  - **#1 (risk-#4, confirmed):** mid-anim resize/DPR wasn't cancelled → anim lerps to a stale
-    `to`. **FIXED:** `LayoutBroker::CancelSceneAnim()` called from `Apply`/`PredictAndApply` on a
-    real SIZE change only (move-only `RefreshScreenPosition` excluded — scene rect is client-rel).
-  - **#5/#8 (refuted, defensive):** StartSceneAnim degenerate fast-path now clears a prior anim.
-  - **#12 (refuted, micro):** moved the bezier solve below the t≥1 branch (no wasted final solve).
-  - **#13 (refuted, doc):** fixed the dispatcher `easing` comment.
-  - Rebuilt Debug x64 clean; native harness re-confirmed **174/0**.
+## 2. What the codebase already gives us
 
-### Phase 2 — Live-tune + sign-off (NEEDS THE USER — L-033) — ✅ DONE
-- [x] **User confirmed in the real host: "it is aligned. both directions seem good. even
-      rapid toggle seems smooth. looks great."** No tuning needed — the back-dated clock +
-      matched CSS-`ease` bezier aligned the edges on the first try (no residual jitter to
-      expose a phase mismatch). No `phaseBiasMs` knob required.
-- [x] **Removed BOTH `[STUTTER-PROBE]` blocks** (BridgeDispatcher arrival + LayoutBroker
-      anim-start); grep confirms none remain in `src/`.
-- [x] Final gate: web **537/0**, `tsc -b` 0, host Debug x64 clean; native harness **174/0**.
-- [ ] Commit Item 3; open PR (own-PR per spec; strategy + master-gate = user's call).
-      Backfill the CHANGELOG `TODO` hash/PR once merged.
+- **Device**: D3D9Ex HAL — `Direct3DCreate9Ex` + `CreateDeviceEx(...,
+  D3DDEVTYPE_HAL,...)` (`src/engine.cpp:2217,2259`). WDDM, so the relaxed
+  StretchRect rules apply.
+- **`offscreenRT`** = `sharedTex` level-0 surface, from
+  `CreateTexture(w,h,1,D3DUSAGE_RENDERTARGET,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,…)`
+  (`AlphaCompositor.cpp:149-155`). A render-target **texture** surface, ARGB,
+  POOL_DEFAULT, MULTISAMPLE_NONE.
+- **`sysMemSurface`** = `CreateOffscreenPlainSurface(w,h,ARGB,SYSTEMMEM,…)`
+  (`:159-163`) — the readback target.
+- **Existing crop + downscale** (`CaptureSnapshotPng`, `:644-730`): crop to
+  scene rect, `kSnapshotDownscale=2`, `kSnapshotMaxEdge=1024`, GDI+
+  `InterpolationModeBilinear` `DrawImage`. The crop only needs `width/height`
+  (available pre-readback), so it can move ahead of the GPU work.
+- **Encode tail** (`:732-786`): `CreateStreamOnHGlobal` → `Bitmap::Save(PNG)` →
+  `Base64Encode` → `outBase64/outW/outH` + the `[INSTANT-MODAL]` /
+  `[CACHE-DEFERRAL-PERF]` debug logs. Shared between both paths.
+- **Consumer contract**: `viewport/capture-snapshot`
+  (`BridgeDispatcher.cpp:1047`) → on `false` sends `{pngBase64:"",w:0,h:0}` and
+  React skips the `<img>` (modal opens with **no** frosted backdrop —
+  graceful, but a visible downgrade → motivates the fallback).
+- **Native dim tests** (`alpha-compositor-snapshot.spec.ts`): assert exact dims
+  1024×768→512×384, 800×600→400×300, 1600×900→800×450, plus the `iVBORw0KGgo`
+  PNG signature. Run on the **real** HAL device → end-to-end-validate the path.
+- **Engine RT binding** (`engine.cpp:674/943/984/1017`): `offscreenRT` is the
+  bound slot-0 RT at snapshot time; the engine re-binds it every frame at :674;
+  snapshot runs **outside** BeginScene/EndScene (EndScene at :984).
 
-### Phase 2 — Live-tune + sign-off (NEEDS THE USER — L-033)
-- [ ] User eyeballs **open AND close separately**: edge glides with the panel? moving
-      seam? Tune the bezier / `msElapsedAtSend` phase bias live (host render can't judge
-      animation timing — L-033).
-- [ ] **`--legacy` smoke:** dock toggle unchanged (anim no-op).
-- [ ] **Stress:** drag a splitter rapidly + rapid re-toggle mid-slide → **zero**
-      clear-strip frames; host `[PERF]` no new spikes.
-- [ ] **Remove the probe**; final gate (web 515+/0, tsc -b 0, native 174/0); land as its
-      own PR.
+---
 
-### Risks (delta from spec §4 — only the build-specific ones)
-1. **Clock phase residual.** `msElapsedAtSend` captures only the web-side delay, not
-   the IPC transit (~16-33ms). The ease is slow at t≈0 so a small start-phase lag is the
-   least visible; the authoritative 260ms send pins the rest. *Mitigation:* a tunable
-   `phaseBiasMs` knob, dialed in live (Phase 2). Don't over-model on paper — the spec
-   defers this to live tuning.
-2. **`computeSceneRect` drift.** PanelLayout's `from`/`to` must equal ViewportSlot's
-   scene-rect math byte-for-byte. *Mitigation:* one shared helper, both call it.
-3. **Self-defense vs authoritative send.** If the authoritative send raced in before
-   t≥1 it'd be dropped. *Mitigation:* 260ms cleanup > 200ms duration margin; verify.
+## 3. Architecture / implementation approach
 
-## Progress
+Refactor `CaptureSnapshotPng` into: **compute crop + dims (shared)** →
+**fast path (GPU StretchRect)** → on failure **slow path (existing full
+readback)** → **shared encode tail**.
 
-- [x] Item 1 — selected curve key (saturated + bigger + stronger shadow).
-      **Rev 2 (user feedback):** unselected keys now carry NO shadow (only
-      selected); select/deselect now ANIMATES (CSS `transition: r, filter` —
-      no library needed; Chromium transitions the SVG `r` attr + `filter`).
-      Code + tests done; live in host. **Pending user host-confirm.**
-- [x] Item 4 — popover animation (centralized in OccludingPopover via a
-      self-contained `popover-animate` CSS class — `animate-in` utilities are
-      NOT in this build, agent's claim was wrong).
-      **Rev 3 (FINAL — root cause nailed with real-input Playwright):** the
-      user's press-shift (Background only, shifts while depressed, corrects on
-      release) was **scale coupled to position**. The popover's entrance
-      `scale` + `transform-origin` at the trigger corner + `align="end"`
-      (right edge pinned) means ANY non-1 scale renders the popover offset; a
-      press re-resolves the transform → snaps to full width (measured: rest
-      stuck at `scale(0.95)`, rect 266px @ x1415; on press → 280px @ x1401,
-      −14px). Secondary contributor: `.tb-btn:active{transform:scale(.96)}`
-      scales the *trigger* (anchor), and a re-measure re-pins the menu to the
-      moved edge (measured −7px). Background > Ground because its label is
-      wider. **Fix (two parts):** (1) popover entrance+exit are now pure
-      opacity fades — NO scale anywhere, so position can't couple to animation
-      state; (2) `.tb-btn[data-state="open"]:active{transform:none}` holds the
-      trigger anchor steady on the dismiss-press. Verified with real input:
-      press → x 1401→1401, w 280→280, both transforms `none` (0px shift).
-      **Gap named to user:** they asked for fade+zoom; the zoom is what caused
-      the shift, so shipped a clean fade (offered to revisit shift-free motion).
-      Live in host. **Pending confirm.**
-- [x] Item 2 — modal instant via downscaled snapshot capture. `AlphaCompositor::
-      CaptureSnapshotPng` now downscales the cropped backdrop to a ≤1024px long
-      edge (GDI+ bilinear) before the PNG encode — the kept no-flash gate now
-      waits on ~0.4MP instead of ~4.7MP, so encode+base64+IPC+decode (the
-      dominant cost) drops ~11×. `CaptureSnapshotToFile` (--capture offline
-      diff) left full-res. Added `[INSTANT-MODAL]` debug timing. Updated the
-      the native tests that pinned snapshot dims to the source. Host Debug x64
-      clean; native harness **174/0**. Maximize confirmed instant by user.
-      **Rev 2 (user — windowed snappier too):** added a min-2× downscale
-      (`kSnapshotDownscale`) on top of the 1024 cap, so sub-cap (windowed)
-      captures also shed pixels (the cap alone left ≤1024px crops at native
-      size — the user's 918px window encoded ~50ms unchanged). Now
-      `target = min(1024, longEdge/2)`: maximize still 1024 (≈3.4× upscale,
-      approved), windowed halves (2× upscale, gentler under blur, ~¼ the
-      encode/IPC). Native tests re-baselined to the /2 dims (512×384, 400×300,
-      800×450); harness **174/0**. `[INSTANT-MODAL]` log confirms the numbers.
-      **User-confirmed** ("quite snappy"): windowed **~18 ms** (was ~50),
-      maximized **~69 ms**. Residual maximized latency deferred to ROADMAP
-      **[NT-10]** (StretchRect-before-readback the likely win) — user OK with
-      it for now, flagged to triage later.
-- [~] Item 3 — viewport stutter on dock slide (experimental, host). **Design:**
-      `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md` (host-side
-      time-interpolated viewport rect — the chosen approach over DComp-scale #4, which
-      distorts geometry). Investigation workflow `wa0o0il6r` (root cause = multi-clock
-      sampling, NOT a 1-frame clip lag — adversarial pass corrected that). Spec red-team
-      workflow `w6v635b1y` (in flight). **Phase 0 DONE (diagnosis confirmed):** probe at
-      BridgeDispatcher.cpp:919 over 17 user slides showed 16–30 distinct-integer-rect
-      `scene-rect` msgs/slide, arrival Δt mean 13ms / stdev 20ms / gaps up to 109ms, with
-      big width jumps (up to ~69px) after gaps — the irregular sampling, already CLUMPY on
-      the emit side (validates time-interp over rAF-coalesce). Width-only (h const),
-      from/to 658↔918 at the test window (grow=dock-close, shrink=dock-open). `[PERF]`
-      frame-time not capturable via stderr (goes to host.log elsewhere) but continuous msg
-      flow rules out a stall. NEXT: fold red-team verdict → Phase 1 build (web
-      animate-scene-rect + host ViewportAnim render-loop interpolation + bezier). Probe is
-      `#ifndef NDEBUG`, TEMPORARY — remove before sign-off.
+### 3.1 Caps (queried once, cached on `Impl`)
+At first snapshot (or in `Resize`), `device->GetDeviceCaps(&caps)` and record:
+- `canStretchFromTex = caps.DevCaps2 & D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES`
+  — required because `offscreenRT` is an RT **texture** surface, not a plain RT.
+- `linearFilter = (caps.StretchRectFilterCaps & D3DPTFILTERCAPS_MINFLINEAR)`
+  → choose `D3DTEXF_LINEAR` if present, else `D3DTEXF_POINT`.
 
-## Review
+### 3.2 Fast path
+```
+compute cropX/Y/W/H (from sceneRect, clamped to width/height)   // pre-readback
+compute dstW/dstH                       // EXISTING formula, reused verbatim
+if (!canStretchFromTex || dstW==cropW)  // no cap, or no downscale → slow path
+guard: save slot-0 RT; bind a neutral surface (back buffer) so offscreenRT is
+       NOT the active source during the blit; RAII-restore on every exit.
+CreateRenderTarget(dstW,dstH,ARGB,MULTISAMPLE_NONE,0,FALSE,&smallRT,nullptr)
+CreateOffscreenPlainSurface(dstW,dstH,ARGB,SYSTEMMEM,&smallSys,nullptr)
+StretchRect(offscreenRT, &srcRECT{crop}, smallRT, &dstRECT{0,0,dstW,dstH}, filter)
+GetRenderTargetData(smallRT, smallSys); LockRect → memcpy dstW*dstH*4 → Unlock
+wrap small buffer in a GDI+ Bitmap(dstW,dstH,…,ARGB) → encodeBmp
+```
+Any failure (Create*, StretchRect, GetRenderTargetData, LockRect) → return into
+the slow path. The RAII guard restores slot-0 to `offscreenRT` regardless.
 
-### Item 3 (dock-slide viewport stutter) — shipped (pending PR/merge)
-Built the host-side time-interpolated viewport rect end-to-end and signed off:
-web **537/0** (+22 tests over 515), `tsc -b` 0, host Debug x64 clean, native harness
-**174/0**, and the **user confirmed the visual in the real host** ("aligned … both
-directions … rapid toggle smooth … looks great"). The edges aligned on the first
-try — no easing/phase tuning needed.
+### 3.3 Active-RT mitigation — resolve empirically, keep the guard
+`offscreenRT` is the bound RT at snapshot time (confirmed). MS WDDM docs say the
+active-RT-source restriction is relaxed on D3D9Ex ("only remaining restriction
+is RT usage"); the red-team says retail drivers *can* still reject it. The guard
+(park slot-0 on the back buffer around the blit) is **correct on every runtime
+and cheap (~3 lines + RAII)**, so it's included unconditionally. The debug log
+will confirm whether StretchRect-from-active-RT would have worked here, but we
+don't rely on it. Back buffer is full-size (≥ smallRT) and never presented in
+arch-C, so parking the binding there is side-effect-free; depth-stencil
+(`m_pDepthStencilSurface`, full size) is left bound and is ≥ smallRT so
+`SetRenderTarget` accepts it.
 
-**Approach delivered** (as designed, scope confirmed up front): web sends ONE
-`animate-scene-rect` at the dock toggle (arch-C-gated, analytic `to`,
-reduced-motion branch, RO-only suppression via a zustand signal, authoritative
-260ms settle); the host interpolates the scene rect each render frame off a
-back-dated QPC clock through a WebKit-style `UnitBezier` matched to CSS `ease`,
-with `SetSceneRect` self-defense and a resize-cancel. Shared `lib/scene-rect.ts`
-+ `lib/hosting-mode.ts` keep web/host geometry + the legacy gate in lockstep.
+### 3.4 Slow path (fallback) + encode tail
+The existing full `GetRenderTargetData(offscreenRT→sysMemSurface)` + memcpy +
+crop-view + `DrawImage` downscale, kept verbatim as the fallback. Both paths
+converge on one encode tail (factored to a local lambda to avoid duplicating
+stream/Save/base64/log + srcBmp lifetime juggling).
 
-**What the adversarial reviews caught (and we fixed):**
-- *Web (9 confirmed of 16):* a **MAJOR** regression my own suppression signal
-  introduced — a rapid re-toggle cancelled the 260ms timer that was the signal's
-  only clear, stranding it `true` and silencing ViewportSlot's RO indefinitely.
-  Fixed by clearing the signal in the effect **teardown** (covers re-toggle +
-  unmount + a pre-existing CSS-class stick), with a regression test. Plus:
-  capture the dock width at the settle (not a mid-transition `offsetWidth`);
-  exactly-one contract assertion; documented the constraint-reclamp deferral.
-- *Host (1 confirmed of 14):* spec risk #4 (mid-anim resize) was unimplemented →
-  added `CancelSceneAnim()` on a genuine size change only. Plus three defensive
-  touches (degenerate-path clears a prior anim; no wasted final-frame bezier
-  solve; doc accuracy). One agent ported the bezier to Python and confirmed it
-  (CssEaseY(0.5)=0.8024, Newton always converges).
+### 3.5 Debug instrumentation
+- `[INSTANT-MODAL]` total (kept), plus a `path=fast|slow` + `stretchHr=0x…`
+  field so a single stderr line tells us which path ran and why.
+- `[CACHE-DEFERRAL-PERF]` readback time now reflects the small surface.
 
-**L-022 paid off repeatedly:** the scout AND both reviews each surfaced
-plausible-but-FALSE claims (a hallucinated CSS line number; "getSize() isn't
-typed" — it is, `.d.ts:222`; the "1-frame clip lag" root cause; the "synchronous
-flexGrow read"). Every one was caught by verifying against the actual code before
-acting. The two adversarial verify passes also *refuted* 20 of 30 raised findings
-with code citations — the skeptic pass isn't rubber-stamping.
+---
 
-**Deferred (documented, settle-corrected, acceptable):** the analytic `to` skips
-the library's center-min/dock-max re-clamp + the percentage-vs-pixel
-resize-while-closed divergence (a small end-of-slide snap at constraint
-boundaries, pinned by the authoritative settle); first-ever-open uses the panel
-min as the width fallback (sub-px snap, settle-corrected). Lessons: none new —
-existing L-022 / L-033 reinforced.
+## 4. Risks named up front + mitigations
+
+1. **StretchRect from the active RT may return `D3DERR_INVALIDCALL`** (the
+   make-or-break, confirmed `offscreenRT` is bound). *Mitigation:* park slot-0
+   on the back buffer around the blit (RAII restore on all exits) — makes the
+   active-source question moot on all runtimes; debug log records the truth.
+2. **Source is an RT *texture*** → needs `D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES`.
+   *Mitigation:* cap-gate; absent → slow path.
+3. **`D3DTEXF_LINEAR` needs `StretchRectFilterCaps` MINFLINEAR.** *Mitigation:*
+   cap-gate; absent → `D3DTEXF_POINT` (still fine under blur).
+4. **Any new failure mode silently dropping the backdrop** (`false`→no blur).
+   *Mitigation:* full fallback to the proven slow path on every failure ⇒ zero
+   regression; the only observable change on a "bad" device is no speed-up.
+5. **Device-state corruption from the RT swap** breaking the next engine frame.
+   *Mitigation:* touch only slot-0 (not depth); restore via RAII on every exit;
+   the engine also re-binds at `engine.cpp:674` each frame (belt-and-suspenders).
+6. **Dim drift breaking the native tests.** *Mitigation:* reuse the exact
+   `dstW/dstH` formula; the small RT and StretchRect dst RECT use those ints.
+7. **Bilinear softness vs. GDI+ bilinear.** Equivalent (both 2-tap), capped at
+   2× min downscale, and blurred. *Mitigation:* user A/B at 3440×1369 (L-033);
+   two-step GPU halving only if the single pass looks too soft (unlikely).
+
+---
+
+## 5. Testing & verification
+
+**Build**: host Debug x64 clean (VS18, L-046). `pnpm build` (L-068/L-070).
+
+**Native harness** (`test:native`): still **174/0**; the 3 snapshot-dim cases
+prove the fast path produces 512×384 / 400×300 / 800×450 valid PNGs end-to-end
+on the real HAL.
+
+**Latency (objective, mine)** — `[INSTANT-MODAL]` via `Start-Process
+-RedirectStandardError`: drive a **3440×1369** viewport-rect + scene-rect +
+`viewport/capture-snapshot` over CDP; record before/after total ms and the
+`path=` field. Target: maximized total well under the old ~69 ms.
+
+**Edge cases:** no scene rect (full-RT crop); tiny viewport (no-downscale →
+slow path); two consecutive snapshots (re-entrant, surfaces released each
+call); a resize between snapshots (dims follow). Walk each mentally + the
+harness covers the first three.
+
+**Fallback proof:** temporarily force `canStretchFromTex=false` in a debug
+build, confirm slow path still yields 174/0 and identical dims.
+
+**Feel (user, L-033):** open the save-changes modal maximized in the real host;
+confirm it appears instantly. Agent screenshots can't judge arch-C feel.
+
+**Cleanup:** remove any temporary probe instrumentation before sign-off; keep
+the `path=`/`stretchHr=` field only if it's `#ifndef NDEBUG`.
+
+---
+
+## 6. Review
+
+**Shipped: avenue (a) GPU `StretchRect` fast path + JPEG backdrop.** The plan
+assumed avenue (a) was the win; profiling proved otherwise and the scope grew
+(with user sign-off) to add JPEG. Final maximized `[INSTANT-MODAL]`:
+**~72 ms → ~6 ms (~11×)**, payload **905 KB → ~120 KB**.
+
+**What was built (all in `CaptureSnapshotPng`, the slow path kept as fallback):**
+- Shared crop + dims computation moved ahead of any readback.
+- `tryStretchPath`: caps-gated (`CAN_STRETCHRECT_FROM_TEXTURES` + `MINFLINEAR`)
+  GPU `StretchRect` of the scene-rect crop → small `CreateRenderTarget`, with
+  slot-0 parked on the back buffer around the blit (active-RT-source guard),
+  then a small `GetRenderTargetData` readback. Falls through to the slow path on
+  any miss.
+- `encodeBitmap` lambda shared by both paths; encodes **JPEG q82** (was PNG).
+- Field rename `pngBase64` → `imageBase64` (host + bridge-schema + Modal + mock +
+  test); `CaptureSnapshotToFile` left full-res PNG.
+
+**Verification (all green):** host Debug x64 clean; web vitest **537/537**;
+`tsc -b` + `vite build` clean; native harness **174/0** (fast path) AND **174/0**
+with `NT10_FORCE_SLOW=1` (fallback proof); same-machine `[INSTANT-MODAL]` A/B
+captured (slow ~72 ms / (a)-only ~53 ms / JPEG-slow ~30 ms / (a)+JPEG ~6 ms);
+`path=fast stretchHr=0x0` confirmed on the real D3D9Ex HAL. Temp instrumentation
+(`NT10_FORCE_SLOW`, `[NT10-SPLIT]`) + the throwaway probe removed before handoff.
+
+**Risks that bit / didn't:** Risk #1 (active-RT `StretchRect`) was real in
+principle — verified `offscreenRT` is the bound RT (`engine.cpp:674/943`) and
+parked slot 0; on this HAL the blit returned `S_OK` regardless, but the guard is
+correct on all runtimes. The unplanned find: the **encode**, not the readback,
+dominated — captured as **L-073** (profile before trusting a triage avenue).
+
+**Left for the user:** the maximized modal *feel* in the real host (L-033 — agent
+runs can't judge arch-C timing), and backfilling the CHANGELOG/ROADMAP `#TODO`
+merge hash + PR number after merge.
