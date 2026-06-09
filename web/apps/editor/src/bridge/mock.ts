@@ -1021,24 +1021,25 @@ export class MockBridge implements Bridge {
       }
 
       case "emitters/move-many": {
-        // Move the selected ROOTS as a block, anchored at the edge: skip the
-        // edge-most contiguous run of selected roots, move the rest by one
-        // (ascending for up / descending for down). The mock keeps node ids
-        // stable through a move, so newIds are the selected ids still at root
-        // level. (The real host reindexes; both honour {newIds}.)
+        // Move the selected ROOTS as a UNIT, preserving order: if the edge-most
+        // root in the move direction is selected, the block is pinned → nothing
+        // moves (no compacting past non-selected roots). Otherwise shift every
+        // selected root by one (ascending for up / descending for down). The
+        // mock keeps node ids stable through a move, so newIds are the selected
+        // ids still at root level. (The real host reindexes; both honour {newIds}.)
         let tree = useMockEmitterTree.getState().tree;
         const dir = req.params.direction;
         const sel = new Set(req.params.ids);
         const order = tree.root.children.map((c) => c.id);
         const movable: number[] = [];
-        if (dir === "up") {
-          let p = 0;
-          while (p < order.length && sel.has(order[p]!)) p++;
-          for (let i = p; i < order.length; i++) if (sel.has(order[i]!)) movable.push(order[i]!);
-        } else {
-          let p = order.length;
-          while (p > 0 && sel.has(order[p - 1]!)) p--;
-          for (let i = p - 1; i >= 0; i--) if (sel.has(order[i]!)) movable.push(order[i]!);
+        const edgePinned =
+          order.length > 0 && sel.has(dir === "up" ? order[0]! : order[order.length - 1]!);
+        if (!edgePinned) {
+          if (dir === "up") {
+            for (let i = 0; i < order.length; i++) if (sel.has(order[i]!)) movable.push(order[i]!);
+          } else {
+            for (let i = order.length - 1; i >= 0; i--) if (sel.has(order[i]!)) movable.push(order[i]!);
+          }
         }
         let moved = false;
         for (const id of movable) {

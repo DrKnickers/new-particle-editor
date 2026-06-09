@@ -4308,15 +4308,13 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
 
     // -------- emitters/move-many -------------------------------------
     //
-    // Batch reorder: move the selected ROOT emitters up/down by one as a
-    // block (non-root selections are no-ops — moveEmitter is root-only).
-    // The block is anchored at the edge: the edge-most contiguous run of
-    // selected roots can't move, and the rest stop behind it. Returns
-    // `newIds` (targets' final indices, input-order-aligned) so the React
-    // selection follows the reorder. See the dual-direction algorithm note:
-    // process the non-anchored selected roots ascending (up) / descending
-    // (down) so each one's neighbour is already an unselected root when it
-    // swaps, and read ->index from the (stable) pointers afterwards.
+    // Batch reorder: move the selected ROOT emitters up/down by one as a UNIT
+    // (non-root selections are no-ops — moveEmitter is root-only). Order is
+    // preserved: if the edge-most selected root is pinned at the edge, NOTHING
+    // moves (the block doesn't deform by compacting trailing members past the
+    // non-selected roots). Returns `newIds` (targets' final indices,
+    // input-order-aligned) read from the stable pointers afterwards, so the
+    // React selection follows the reorder.
     if (kind == "emitters/move-many")
     {
         if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
@@ -4353,21 +4351,28 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         for (ParticleSystem::Emitter* e : sys->getEmitters())
             if (e != nullptr && e->parent == nullptr) roots.push_back(e);
 
-        // Movable selected roots = selected roots NOT in the edge-anchored run.
+        // Preserve order: the selection moves as a UNIT, or not at all. If the
+        // edge-most root in the move direction is selected, the block is pinned
+        // against the edge and NOTHING moves — rather than letting the trailing
+        // members compact past the non-selected roots (order matters in a
+        // particle system). Otherwise every selected root shifts by one,
+        // processed ascending (up) / descending (down) so each one's neighbour
+        // is already an unselected root when it swaps.
         std::vector<ParticleSystem::Emitter*> movable;
-        if (dir == -1)
+        const bool edgePinned =
+            !roots.empty() && isSel(dir == -1 ? roots.front() : roots.back());
+        if (!edgePinned)
         {
-            size_t p = 0;
-            while (p < roots.size() && isSel(roots[p])) ++p;       // skip anchored prefix
-            for (size_t i = p; i < roots.size(); ++i)
-                if (isSel(roots[i])) movable.push_back(roots[i]);  // ascending
-        }
-        else
-        {
-            size_t p = roots.size();
-            while (p > 0 && isSel(roots[p - 1])) --p;              // skip anchored suffix
-            for (size_t i = p; i-- > 0; )
-                if (isSel(roots[i])) movable.push_back(roots[i]);  // descending
+            if (dir == -1)
+            {
+                for (size_t i = 0; i < roots.size(); ++i)
+                    if (isSel(roots[i])) movable.push_back(roots[i]);   // ascending
+            }
+            else
+            {
+                for (size_t i = roots.size(); i-- > 0; )
+                    if (isSel(roots[i])) movable.push_back(roots[i]);   // descending
+            }
         }
 
         if (!movable.empty()) captureUndo();
