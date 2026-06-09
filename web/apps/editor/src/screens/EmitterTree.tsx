@@ -95,7 +95,8 @@ import {
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { requestDeleteEmitters } from "@/lib/delete-emitters";
-import { moveEmitters, duplicateEmitters } from "@/lib/emitter-reorder";
+import { moveEmitters, duplicateEmitters, reorderManyEmitters } from "@/lib/emitter-reorder";
+import { isMultiDrag, selectedRootIdsInOrder, resolveMultiDropIntent } from "@/lib/multi-drag";
 import { canMoveSelection } from "@/lib/move-enabled";
 
 type Props = {
@@ -151,7 +152,7 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
 // at a time displays a visual indicator. `targetId` is the row currently
 // being hovered; `zone` is which third of the row's rect the cursor is
 // in. `null` means no active drag-over.
-type DropIndicator = { targetId: number; zone: DropZone } | null;
+type DropIndicator = { targetId: number; zone: DropZone; multi?: boolean; blockSize?: number } | null;
 
 // Validated parameters for the `emitters/drop` bridge call — the output
 // of resolveDropIntent. `null` means the drop is refused.
@@ -1312,6 +1313,17 @@ export function EmitterTree({ bridge }: Props) {
     const curTree = tree;
     const curRoots = rootChildren;
     const curRows = flatRows;
+    // [multi-drag] When the grabbed row is part of a multi-root selection, the
+    // gesture moves the WHOLE block of selected roots (reorder-only) instead of
+    // the single source emitter. `blockIds` are the selected roots in tree
+    // order; `blockRootIdxs` their current ascending root indices; the resolved
+    // destination gap is stashed in `lastReorderGap` (mirrors `lastParams` for
+    // the single-drag path). A non-multi drag leaves all of this inert.
+    const selIds = useEmitterSelectionStore.getState().ids;
+    const multi = isMultiDrag(source.id, selIds, curRoots);
+    const blockIds = multi ? selectedRootIdsInOrder(selIds, curRoots) : [];
+    const blockRootIdxs = blockIds.map((id) => curRoots.findIndex((c) => c.id === id)); // ascending
+    let lastReorderGap: number | null = null;
     let active = false;
     let lastParams: DropParams | null = null;
     let rafId: number | null = null;
@@ -1332,12 +1344,19 @@ export function EmitterTree({ bridge }: Props) {
       const target = curRows.find((r) => r.node.id === targetId)?.node ?? null;
       if (target === null) {
         lastParams = null;
+        lastReorderGap = null;
         setIndicator(null);
         return;
       }
       const rect = rowEl.getBoundingClientRect();
       const zone = computeDropZone(clientY - rect.top, rect.height);
       const targetRootIdx = curRoots.findIndex((c) => c.id === targetId);
+      if (multi) {
+        const intent = resolveMultiDropIntent(blockRootIdxs, target, targetRootIdx, zone, curRoots.length);
+        lastReorderGap = intent ? intent.rootIndex : null;
+        setIndicator(intent ? { targetId, zone, multi: true, blockSize: blockIds.length } : null);
+        return;
+      }
       const params = resolveDropIntent(source, target, targetRootIdx, zone, curTree, curRoots);
       lastParams = params;
       setIndicator(params !== null ? { targetId, zone } : null);
@@ -1398,8 +1417,12 @@ export function EmitterTree({ bridge }: Props) {
       setDraggingId(null);
       setIndicator(null);
       draggedRef.current = true; // swallow the trailing click
-      if (commit && lastParams !== null) {
-        void bridge.request({ kind: "emitters/drop", params: lastParams });
+      if (commit) {
+        if (multi) {
+          if (lastReorderGap !== null) void reorderManyEmitters(bridge, blockIds, lastReorderGap);
+        } else if (lastParams !== null) {
+          void bridge.request({ kind: "emitters/drop", params: lastParams });
+        }
       }
     };
     const onUp = () => finish(true);
