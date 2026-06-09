@@ -16,6 +16,7 @@ import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
 import { AutosaveRecoveryDialog, AutosaveRecoveryView } from "@/screens/AutosaveRecoveryDialog";
 import { FileOpErrorModal } from "@/components/FileOpErrorModal";
+import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
@@ -202,6 +203,7 @@ function AppShell() {
           a no-op when the host reports none (always so under the mock). */}
       <AutosaveRecoveryDialog bridge={bridge} />
       <FileOpErrorModal />
+      <DeleteConfirmModal bridge={bridge} />
     </div>
     </BridgeContext.Provider>
   );
