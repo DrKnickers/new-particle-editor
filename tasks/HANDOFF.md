@@ -40,6 +40,126 @@
 
 ---
 
+## 2026-06-09 (session 29) — **ROADMAP [NT-10] (maximized save-modal backdrop latency) BUILT → profiled → scope-expanded with user OK (added JPEG) → user-confirmed instant in the host → SHIPPED to `master`: PR [#101] (NT-10 feat, `d431bde`) + PR [#102] (hash backfill, `05e331e`) — both merged, all CI green. No open PRs.** NEXT: **MT-13** (legacy/arch-A removal, greenlit — its own ★★★★ effort) **or** more **UI polish** (open-ended; brainstorm WITH the user)
+
+**`origin/master` = `05e331e`** (advanced this session: #101 → `d431bde`, #102 → `05e331e`).
+**No open PRs** — the stale handoff PR [#100] ("retarget NEXT to NT-10", branch
+`claude/handoff-nt10`) was **closed**, not merged: it pointed NEXT at NT-10, which is now done.
+`master` is the trunk; branch fresh work off it. Baseline on `master`: web **537/0**, `tsc -b` 0,
+native harness **174/0**, host Debug **and** Release x64 clean (CI built both legs on #101/#102).
+Fresh worktree needs L-039 (NuGet copy) + L-046 (MSBuild **VS18**) + L-040 (`pnpm build`).
+
+### What shipped — NT-10: GPU `StretchRect` fast path + JPEG backdrop (PR [#101], `d431bde`)
+**Maximized save-modal frosted-glass backdrop: ~72 ms → ~6 ms (~11×)**, payload 905 KB → ~120 KB.
+**User-confirmed instant** in the real maximized host (`path=fast`, 5.5–10 ms on actual hardware).
+All changes in [`AlphaCompositor::CaptureSnapshotPng`](../src/host/AlphaCompositor.cpp:572) — the
+slow path is kept intact as a fallback:
+- **GPU `StretchRect` fast path** — crop+downscale `offscreenRT` on the GPU into a small
+  `CreateRenderTarget` surface, then `GetRenderTargetData` from THAT. Readback ~8 ms → ~1.5 ms
+  (decoupled from window size); the ~19 MB memcpy + GDI+ `DrawImage` are gone. The downscale dims
+  formula is reused **verbatim**, so output dims (and the native dim tests) are unchanged.
+- **Three D3D9 guards** (caught by a first-party-docs verification + 3-agent adversarial red-team
+  BEFORE coding): (1) `offscreenRT` is the engine's *currently-bound* slot-0 RT
+  ([`engine.cpp:674`](../src/engine.cpp:674)/[`:943`](../src/engine.cpp:943), left bound at `:1017`);
+  `StretchRect` from the active RT can return `D3DERR_INVALIDCALL`, so slot 0 is parked on the
+  swap-chain back buffer for the blit then restored. (2) source is an RT *texture* → needs
+  `DevCaps2 & D3DDEVCAPS2_CAN_STRETCHRECT_FROM_TEXTURES`. (3) `D3DTEXF_LINEAR` needs
+  `StretchRectFilterCaps & D3DPTFILTERCAPS_MINFLINEAR`. **Any cap miss or runtime failure falls
+  back to the original full-readback + GDI+ path** — zero regression, verified by forcing the slow
+  path through the full 174-test native harness (still 174/0).
+- **JPEG backdrop (q82)** instead of PNG (`kBackdropJpegQuality`,
+  [`AlphaCompositor.cpp:584`](../src/host/AlphaCompositor.cpp:584)) — shown blurred under
+  `backdrop-blur-sm` so lossy is invisible; encode ~28 ms → ~1.7 ms, payload ~7× smaller (also cuts
+  base64/IPC/browser-decode). Response field renamed `pngBase64` → `imageBase64` across host
+  ([`BridgeDispatcher.cpp:1047`](../src/host/BridgeDispatcher.cpp:1047)), the bridge schema's
+  `ResponseFor<R>` conditional ([`bridge-schema/src/index.ts:1064`](../web/packages/bridge-schema/src/index.ts:1064)
+  — NOT a grep-obvious spot; `tsc -b` caught the missed rename), the consumer
+  ([`Modal.tsx:233`](../web/apps/editor/src/components/Modal.tsx:233), now `data:image/jpeg`),
+  `mock.ts`, and the native dim test (JPEG `/9j/` signature).
+  [`CaptureSnapshotToFile`](../src/host/AlphaCompositor.cpp:791) (the `--capture` offline-diff path)
+  deliberately stays full-res PNG.
+- **The pivot (why scope grew):** the ROADMAP premise was wrong. Avenue (a) alone was only ~27%
+  (72→53 ms); a `[NT10-SPLIT]` per-stage timer showed the **PNG encode + base64/IPC of a ~905 KB
+  image**, not the readback, was ~70% of the cost. JPEG was the real lever (user OK'd the +JPEG
+  scope mid-task). Captured as **L-073**.
+
+### Also this session
+- PR [#102] (`05e331e`) — backfilled the CHANGELOG date-line + ROADMAP §5.1 `TODO` placeholders
+  with `d431bde` / #101 (same pattern as #95/#98).
+- **ROADMAP:** NT-10 struck through and moved to **Shipped §5.1**; the 26 existing Shipped entries
+  renumbered 5.1→5.27 (done via `[System.IO.File]::WriteAllText` with `UTF8Encoding($false)` then
+  verified UTF-8-clean with `git diff` — see L-072 nuance); a stale `§5.1` cross-ref in §2 was
+  de-referenced to the `[MT-11]` tag. **NT-5/NT-6 remain stranded in §1** (a pre-existing session-28
+  oversight — shipped items left in-tier; the user chose NOT to fix this now → tiny future cleanup:
+  move them to Shipped §5 per the convention).
+- CHANGELOG entry added (top); [`tasks/todo.md`](todo.md) holds the full NT-10 plan + a Review.
+
+### Verified baseline (run before changing anything)
+- `git fetch origin master`; `origin/master` = `05e331e` or newer. No open PRs. Fresh worktree off
+  master: `HEAD..origin/master` = 0.
+- web: from `web/`, `pnpm install` if `node_modules` absent (from **`web/`**); `pnpm --filter
+  @particle-editor/editor test` → **537**; **`tsc -b`** (NOT `--noEmit`, L-070) → 0.
+- native: fresh worktree needs L-039 + L-046 (**VS18**) + L-040. After any web change `pnpm build`
+  before the harness (L-068). `pnpm --filter @particle-editor/editor test:native` → **174/0**.
+- Re-measure modal latency: build Debug x64, launch `x64\Debug\ParticleEditor.exe --new-ui` with
+  `Start-Process -RedirectStandardError <log>`, open a modal **maximized**, grep `[INSTANT-MODAL]`
+  in the log (Debug-only `#ifndef NDEBUG`; `path=fast`/`slow` shows which path ran).
+
+### Lessons / gotchas this session
+- **L-073 (new):** a perf-triage "avenue" in the ROADMAP/handoff is a *hypothesis*, not a
+  measurement — instrument every stage and profile the real worst-case target before committing.
+  NT-10's avenue (a) fixed the readback (~25%) while the encode (~70%) was the real bottleneck.
+- **L-072 nuance (reinforced):** the ROADMAP renumber rewrote the file via the .NET
+  `WriteAllText(...,UTF8Encoding($false))` API that L-072 itself sanctions — UTF-8-safe, unlike
+  `Set-Content`/`Out-File`. Always `git diff`-verify after a scripted rewrite (em-dashes/✅/~~ stayed intact).
+- **L-022 held:** the red-team's "offscreenRT is the bound RT" claim was verified against
+  `engine.cpp` before trusting it (true); the ROADMAP's own "readback is the bottleneck" framing
+  was NOT — disproved by measurement. Verify claims AND framings, including a roadmap's own.
+- **L-033 held:** the maximized *feel* was judged by the user in the real host; I measured the
+  number, the user confirmed the feel.
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React +
+> D3D9Ex-via-DComp particle editor for SW:EaW). **`master` is the trunk** (new-UI is the x64
+> DEFAULT, `--legacy` opts out; `lt-4` retired). **`origin/master` = `05e331e`**, **no open PRs**.
+> Session 29 shipped **ROADMAP [NT-10]** — the maximized save-modal frosted-glass backdrop now
+> captures in ~6 ms (was ~72 ms), via a GPU `StretchRect` crop+downscale fast path + a JPEG
+> backdrop, in [`AlphaCompositor::CaptureSnapshotPng`](../src/host/AlphaCompositor.cpp:572)
+> (PR #101 `d431bde` + backfill #102 `05e331e`). Read `tasks/HANDOFF.md` top (session 29) and, for
+> the just-shipped work, the CHANGELOG top entry + `tasks/todo.md`. Read `tasks/lessons.md` (esp.
+> **L-073** a perf-triage avenue is a hypothesis — profile before committing; **L-072** never
+> rewrite UTF-8 source with PowerShell `Set-Content`/`Out-File` — use `[IO.File]::WriteAllText`
+> no-BOM + `git diff`-verify; **L-022** verify code AND measurements over handoff/agent claims;
+> **L-033** arch-C visuals + latency *feel* need the user's eye, not agent screenshots; **L-046**
+> MSBuild **VS18**; **L-039/L-040** fresh-worktree restore; **L-068** `pnpm build` before native;
+> **L-070** `tsc -b` not `--noEmit`; **L-066/L-071** native phantom re-run). **VERIFY against actual
+> code.** **Pre-flight:** `git fetch origin master`; from `web/` `pnpm install` if needed, then
+> `pnpm --filter @particle-editor/editor test` → **537**, `tsc -b` 0; host Debug x64 (VS18) clean;
+> native harness **174/0** (fresh worktree needs L-039 NuGet copy + L-046 VS18 + L-040 `pnpm
+> build`); a fresh worktree off master `HEAD..origin/master` should be 0. **NEXT — confirm with the
+> user which:** (1) **MT-13** — legacy/arch-A removal, **greenlit** (the user daily-drives arch-C
+> now); its OWN **★★★★** effort (legacy WNDCLASS, `RenderWindowProc`, `.rc` resources, the
+> `--legacy` flag + dual-mode test-harness `--legacy` paths, the x86 leg) — **use plan mode**: write
+> `tasks/todo.md` and iterate the risks WITH the user before any code; OR (2) **more UI polish** —
+> open-ended, the user's standing direction (brainstorm the next item WITH the user; tune values in
+> the real host per L-033). Tiny optional cleanup: NT-5/NT-6 are shipped but stranded in ROADMAP §1
+> (move to Shipped §5 per the convention). Summarize understanding + confirm scope before changing
+> anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor. **`master` is the trunk** (`05e331e`, no open PRs; new-UI x64 default,
+> `lt-4` retired). Session 29 shipped ROADMAP [NT-10] (maximized save-modal backdrop ~72→~6 ms: GPU
+> `StretchRect` fast path + JPEG) via #101/#102. Read `tasks/HANDOFF.md` top (session 29) +
+> `tasks/lessons.md` (esp. **L-073** profile before trusting a triage avenue, **L-072** no
+> PowerShell `Set-Content` on UTF-8 source, **L-022** verify over claims, **L-033** arch-C/feel
+> needs the user's eye). VERIFY against code. Pre-flight: `git fetch origin master`; `pnpm --filter
+> @particle-editor/editor test` → **537**, `tsc -b` 0; native **174/0** (fresh worktree needs
+> L-039/L-046/L-040; install pnpm from `web/`). **NEXT (confirm with user):** **MT-13** (legacy
+> removal, greenlit — ★★★★, plan-mode it) or **more UI polish** (open-ended). Confirm scope before
+> changing anything.
+
+---
+
 ## 2026-06-08 (session 28) — **Item 3 (dock-slide viewport stutter) BUILT → reviewed (2 adversarial passes) → user-confirmed in the host → SHIPPED to `master` via PR [#94-style flow]: PR [#97] (Item 3 + UI-polish items 1/2/4), PR [#96] (PAL-14 flake fix), PR [#98] (CHANGELOG backfill) — all merged. No open PRs.** NEXT: **continue UI polish** (open-ended, the user's standing direction) or start **MT-13** (legacy/arch-A removal, greenlit, its own ★★★★ effort)
 
 **`origin/master` = `2c7bc31`** (advanced this session: #97 → `3eb6e28`, #96 → `311661d`,
