@@ -15,6 +15,7 @@ import { RescaleEmitterDialog } from "@/screens/RescaleEmitterDialog";
 import { LinkGroupSettingsDialog } from "@/screens/LinkGroupSettingsDialog";
 import { SetLinkGroupDialog } from "@/screens/SetLinkGroupDialog";
 import { AutosaveRecoveryDialog, AutosaveRecoveryView } from "@/screens/AutosaveRecoveryDialog";
+import { FileOpErrorModal } from "@/components/FileOpErrorModal";
 import { SaveChangesPrompt } from "@/screens/SaveChangesPrompt";
 import { useFileState, useSeedFileState } from "@/lib/file-state";
 import { promptModNickname } from "@/lib/mod-nickname";
@@ -200,6 +201,7 @@ function AppShell() {
       {/* VPT-3 — crash-recovery. Checks for an orphaned autosave on mount;
           a no-op when the host reports none (always so under the mock). */}
       <AutosaveRecoveryDialog bridge={bridge} />
+      <FileOpErrorModal />
     </div>
     </BridgeContext.Provider>
   );
