@@ -145,6 +145,116 @@ no promised design until we see it move.
 
 ---
 
+## Item 3 — build plan (session 28, scope CONFIRMED with user)
+
+Design = `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md` (rev 2).
+This section is the **execution checklist**; the spec holds the rationale. All
+spec claims re-verified against current code this session (L-022 pass):
+`send` is one shared closure (ViewportSlot.tsx:69-117); `dockAnimating` is local
+useState (PanelLayout.tsx:183); `[STUTTER-PROBE]` `#ifndef NDEBUG` at
+BridgeDispatcher.cpp:925-935; `SetSceneRect` drives both compositors, arch-C gate =
+`if (m_dcompCompositor)` (LayoutBroker.cpp:268); `PerfQpcNow()` at HostWindow.cpp:179;
+render loop drains-all-then-RenderD3D9-once at HostWindow.cpp:3363-3384.
+
+**Confirmed decisions (user, session 28):**
+- **arch-C gated** — anim is a no-op under `--legacy` (host: the `m_dcompCompositor`
+  branch; **web: also gated** — see refinement below).
+- **Analytic `to`** (primary). Verified exact: `dockPanelRef.getSize().inPixels`
+  reads the open-width at toggle; `expand()` restores `expandToSize` (the pre-collapse
+  width, react-resizable-panels.js:857/862) which we shadow in `lastDockWidthRef`.
+  Close: `to.w = from.w + W_dock`; open: `to.w = from.w − W_dock` (first-ever open
+  falls back to persisted spawner% × groupWidth, else 260 min). Authoritative 260ms
+  send corrects the rare narrow-window edge (center hits its 30% min → left absorbs).
+- **No kill-switch** — contained + arch-C-gated; revert-via-PR if it regresses.
+
+**Refinement to the spec (named to user):** the web RO-suppression + `animate-scene-rect`
+send MUST be gated to `!isLegacyMode()`, not just the host. Otherwise under `--legacy`
+the suppression drops per-frame scene-rects while the host anim no-ops → freeze-then-snap.
+Extract `isLegacyMode()` from ViewportSlot.tsx into a shared `lib/hosting-mode.ts`
+(preserve the exact import.meta.env + process.env semantics so ViewportSlot's tests
+stay green) and import in PanelLayout.
+
+### Phase 1a — Web (self-verifiable) — ✅ DONE (536 tests, tsc -b 0)
+- [x] **Bridge schema:** `animate-scene-rect` request + response (index.ts) + MockBridge
+      no-op (mock.ts). `tsc -b` 0.
+- [x] **Signal store:** `lib/dock-anim.ts` (`{ animating, setAnimating }`) + unit test.
+- [x] **Shared hosting-mode:** extracted `isLegacyMode()` → `lib/hosting-mode.ts`;
+      ViewportSlot imports it; existing ViewportSlot tests still green. + unit test.
+- [x] **Shared geometry:** `lib/scene-rect.ts` — `computeSceneRect(el)` (DRY w/ ViewportSlot)
+      + pure `dockSlideTarget(from, dockWidthDev, opening)` (analytic `to`). + unit tests.
+- [x] **ViewportSlot RO-only suppression:** `animatingRef` synced via `useDockAnim.subscribe`;
+      RO callback gated; scroll/resize/DPR/mount stay raw. + 4 suppression tests.
+- [x] **PanelLayout toggle (arch-C only):** legacy → no anim/no signal (regression-safe);
+      reduced-motion → snap; analytic `to` via `getSize().inPixels` + shadowed
+      `lastDockWidthCssRef`; `animate-scene-rect` in the rAF with `msElapsedAtSend`;
+      authoritative settle at 260ms reads the REAL settled rect. + 4 dock-anim tests
+      (separate mocked file so the synchronous PanelLayout tests stay mock-free).
+- [x] Web gate: **536** tests (515 + 21), `tsc -b` 0.
+- [~] Adversarial review of the web diff (workflow in flight) → fold confirmed findings.
+
+### Phase 1b — Host — ✅ WRITTEN + COMPILES (Debug x64 clean; harness running)
+- [x] **`ViewportAnim` on LayoutBroker** (`LayoutBroker.h`): float from/to + `startQpc`
+      + `durMs`; `StartSceneAnim(from,to,durMs,msElapsedAtSend)` (back-dates `startQpc`
+      via its own QPC; **no-op unless `m_dcompCompositor`**) + `AdvanceSceneAnim(qpcNow)`
+      (lerp+apply; at t≥1 apply exact `to`, clear active) + `IsSceneAnimActive()`.
+- [x] **Self-defense:** `SetSceneRect` early-outs while `active`; real work split into
+      private `ApplySceneRect` (anim advance + the guard both funnel through it).
+- [x] **Dispatcher** (`BridgeDispatcher.cpp`): `animate-scene-rect` handler →
+      `m_layout.StartSceneAnim(from,to,durationMs,msElapsedAtSend)`. `easing` read-but-
+      unbranched (host hardcodes the `ease` bezier; web only sends "ease").
+- [x] **Render-loop advance** (`HostWindow.cpp:823` area): `layout.AdvanceSceneAnim(
+      PerfQpcNow())` before `engine->Render()`, OUTSIDE the `[PERF]` region.
+- [x] **Bezier sampler:** anonymous-namespace `UnitBezier` (WebKit-style Newton+bisection)
+      for CSS `ease` = cubic-bezier(0.25,0.1,0.25,1.0) + `Lerpf` + cached `QpcPerMs()`.
+- [x] **Probe:** kept ONE-line `[STUTTER-PROBE] anim-start` (`#ifndef NDEBUG`, TEMPORARY);
+      dropped the per-frame apply log (would spam the uncapped loop + pollute `[PERF]`).
+      The arrival probe going QUIET mid-slide is the suppression evidence. **Remove BOTH
+      probes before sign-off.**
+- [x] Host gate: Debug x64 clean ✅; web `pnpm build` ✅ (L-068); native harness **174/0** ✅
+      (incl. viewport-resize.spec — the ApplySceneRect split didn't regress the static path).
+      Bezier hand-verified (CSS ease y(0.5)≈0.80 ✓).
+- [x] **Adversarial host review** (14 raised → **1 confirmed**, 13 refuted; one agent ported
+      the bezier to Python: CssEaseY(0.5)=0.8024, max err 2.3e-6, Newton always converges):
+  - **#1 (risk-#4, confirmed):** mid-anim resize/DPR wasn't cancelled → anim lerps to a stale
+    `to`. **FIXED:** `LayoutBroker::CancelSceneAnim()` called from `Apply`/`PredictAndApply` on a
+    real SIZE change only (move-only `RefreshScreenPosition` excluded — scene rect is client-rel).
+  - **#5/#8 (refuted, defensive):** StartSceneAnim degenerate fast-path now clears a prior anim.
+  - **#12 (refuted, micro):** moved the bezier solve below the t≥1 branch (no wasted final solve).
+  - **#13 (refuted, doc):** fixed the dispatcher `easing` comment.
+  - Rebuilt Debug x64 clean; native harness re-confirmed **174/0**.
+
+### Phase 2 — Live-tune + sign-off (NEEDS THE USER — L-033) — ✅ DONE
+- [x] **User confirmed in the real host: "it is aligned. both directions seem good. even
+      rapid toggle seems smooth. looks great."** No tuning needed — the back-dated clock +
+      matched CSS-`ease` bezier aligned the edges on the first try (no residual jitter to
+      expose a phase mismatch). No `phaseBiasMs` knob required.
+- [x] **Removed BOTH `[STUTTER-PROBE]` blocks** (BridgeDispatcher arrival + LayoutBroker
+      anim-start); grep confirms none remain in `src/`.
+- [x] Final gate: web **537/0**, `tsc -b` 0, host Debug x64 clean; native harness **174/0**.
+- [ ] Commit Item 3; open PR (own-PR per spec; strategy + master-gate = user's call).
+      Backfill the CHANGELOG `TODO` hash/PR once merged.
+
+### Phase 2 — Live-tune + sign-off (NEEDS THE USER — L-033)
+- [ ] User eyeballs **open AND close separately**: edge glides with the panel? moving
+      seam? Tune the bezier / `msElapsedAtSend` phase bias live (host render can't judge
+      animation timing — L-033).
+- [ ] **`--legacy` smoke:** dock toggle unchanged (anim no-op).
+- [ ] **Stress:** drag a splitter rapidly + rapid re-toggle mid-slide → **zero**
+      clear-strip frames; host `[PERF]` no new spikes.
+- [ ] **Remove the probe**; final gate (web 515+/0, tsc -b 0, native 174/0); land as its
+      own PR.
+
+### Risks (delta from spec §4 — only the build-specific ones)
+1. **Clock phase residual.** `msElapsedAtSend` captures only the web-side delay, not
+   the IPC transit (~16-33ms). The ease is slow at t≈0 so a small start-phase lag is the
+   least visible; the authoritative 260ms send pins the rest. *Mitigation:* a tunable
+   `phaseBiasMs` knob, dialed in live (Phase 2). Don't over-model on paper — the spec
+   defers this to live tuning.
+2. **`computeSceneRect` drift.** PanelLayout's `from`/`to` must equal ViewportSlot's
+   scene-rect math byte-for-byte. *Mitigation:* one shared helper, both call it.
+3. **Self-defense vs authoritative send.** If the authoritative send raced in before
+   t≥1 it'd be dropped. *Mitigation:* 260ms cleanup > 200ms duration margin; verify.
+
 ## Progress
 
 - [x] Item 1 — selected curve key (saturated + bigger + stronger shadow).
@@ -211,4 +321,45 @@ no promised design until we see it move.
 
 ## Review
 
-_(appended after the work)_
+### Item 3 (dock-slide viewport stutter) — shipped (pending PR/merge)
+Built the host-side time-interpolated viewport rect end-to-end and signed off:
+web **537/0** (+22 tests over 515), `tsc -b` 0, host Debug x64 clean, native harness
+**174/0**, and the **user confirmed the visual in the real host** ("aligned … both
+directions … rapid toggle smooth … looks great"). The edges aligned on the first
+try — no easing/phase tuning needed.
+
+**Approach delivered** (as designed, scope confirmed up front): web sends ONE
+`animate-scene-rect` at the dock toggle (arch-C-gated, analytic `to`,
+reduced-motion branch, RO-only suppression via a zustand signal, authoritative
+260ms settle); the host interpolates the scene rect each render frame off a
+back-dated QPC clock through a WebKit-style `UnitBezier` matched to CSS `ease`,
+with `SetSceneRect` self-defense and a resize-cancel. Shared `lib/scene-rect.ts`
++ `lib/hosting-mode.ts` keep web/host geometry + the legacy gate in lockstep.
+
+**What the adversarial reviews caught (and we fixed):**
+- *Web (9 confirmed of 16):* a **MAJOR** regression my own suppression signal
+  introduced — a rapid re-toggle cancelled the 260ms timer that was the signal's
+  only clear, stranding it `true` and silencing ViewportSlot's RO indefinitely.
+  Fixed by clearing the signal in the effect **teardown** (covers re-toggle +
+  unmount + a pre-existing CSS-class stick), with a regression test. Plus:
+  capture the dock width at the settle (not a mid-transition `offsetWidth`);
+  exactly-one contract assertion; documented the constraint-reclamp deferral.
+- *Host (1 confirmed of 14):* spec risk #4 (mid-anim resize) was unimplemented →
+  added `CancelSceneAnim()` on a genuine size change only. Plus three defensive
+  touches (degenerate-path clears a prior anim; no wasted final-frame bezier
+  solve; doc accuracy). One agent ported the bezier to Python and confirmed it
+  (CssEaseY(0.5)=0.8024, Newton always converges).
+
+**L-022 paid off repeatedly:** the scout AND both reviews each surfaced
+plausible-but-FALSE claims (a hallucinated CSS line number; "getSize() isn't
+typed" — it is, `.d.ts:222`; the "1-frame clip lag" root cause; the "synchronous
+flexGrow read"). Every one was caught by verifying against the actual code before
+acting. The two adversarial verify passes also *refuted* 20 of 30 raised findings
+with code citations — the skeptic pass isn't rubber-stamping.
+
+**Deferred (documented, settle-corrected, acceptable):** the analytic `to` skips
+the library's center-min/dock-max re-clamp + the percentage-vs-pixel
+resize-while-closed divergence (a small end-of-slide snap at constraint
+boundaries, pinned by the authoritative settle); first-ever-open uses the panel
+min as the width fallback (sub-px snap, settle-corrected). Lessons: none new —
+existing L-022 / L-033 reinforced.

@@ -922,18 +922,31 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         int y = params.value("y", 0);
         int w = params.value("w", 0);
         int h = params.value("h", 0);
-#ifndef NDEBUG
-        // [STUTTER-PROBE] Phase-0 diagnostic for Item 3 (dock-slide viewport
-        // stutter). Unthrottled per-message log of arrival time + rect, so we
-        // can count messages-per-tween and inspect the integer rect sequence
-        // during a dock toggle. TEMPORARY — remove once the diagnosis is
-        // confirmed and the time-interpolation fix lands.
-        fprintf(stderr,
-                "[STUTTER-PROBE] t=%lu scene-rect x=%d y=%d w=%d h=%d\n",
-                GetTickCount(), x, y, w, h);
-        fflush(stderr);
-#endif
         m_layout.SetSceneRect(x, y, w, h);
+        sendOk(json::object());
+        return res;
+    }
+
+    // -------- animate-scene-rect --------
+    // [Item 3] One-shot dock-slide animation. Instead of the per-frame
+    // layout/scene-rect stream (which the uncapped render loop samples at
+    // irregular Δt → a juddering viewport edge), the web sends ONE of these at
+    // the dock toggle; LayoutBroker then re-renders the engine at a wall-clock-
+    // lerped rect every frame, synced to the CSS flex-grow tween. Arch-C only
+    // (StartSceneAnim is a no-op when no DComp compositor is attached). `from`/
+    // `to` are scene rects in main-client device px; `msElapsedAtSend` back-dates
+    // the host clock to the CSS origin across this IPC hop. `easing` is ignored
+    // here — the host hardcodes the matching CSS `ease` cubic-bezier and the web
+    // only ever sends "ease"; the field stays in the schema for forward-compat.
+    if (kind == "animate-scene-rect")
+    {
+        const json from = params.value("from", json::object());
+        const json to   = params.value("to",   json::object());
+        m_layout.StartSceneAnim(
+            from.value("x", 0), from.value("y", 0), from.value("w", 0), from.value("h", 0),
+            to.value("x", 0),   to.value("y", 0),   to.value("w", 0),   to.value("h", 0),
+            params.value("durationMs", 0.0),
+            params.value("msElapsedAtSend", 0.0));
         sendOk(json::object());
         return res;
     }
