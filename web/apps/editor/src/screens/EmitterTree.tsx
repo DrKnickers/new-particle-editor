@@ -1170,7 +1170,10 @@ export function EmitterTree({ bridge }: Props) {
     bridge
       .request({ kind: "emitters/list", params: {} })
       .then((t) => {
-        if (!cancelled) setTree(t);
+        // Store invariant: null or a well-formed tree (every consumer here
+        // assumes a truthy tree has a `root`). Ignore a malformed/partial
+        // response — e.g. a stubbed `{}` — so it can't reach the renderers.
+        if (!cancelled && (t as EmitterTreeDto | null)?.root) setTree(t);
       })
       .catch((err) => console.warn("[EmitterTree] emitters/list failed:", err));
     return () => { cancelled = true; };
