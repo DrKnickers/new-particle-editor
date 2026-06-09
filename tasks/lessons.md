@@ -4218,3 +4218,31 @@ its Close button collapsing-then-detaching. Fix = `closing` prop →
 The animated dock then shipped green. Cross-reference [L-022] (handoff claims are
 not facts — verify against code), [L-066] (native phantom re-run), [L-067] (real
 input for drag/click features), [L-033] (arch-C visuals need the user's eye).
+
+---
+
+## L-072 — Never rewrite a UTF-8 source file with PowerShell 5.1 `Set-Content`/`Out-File` — it adds a BOM and mangles every non-ASCII byte; use `git checkout` or the Edit tool
+
+**Rule.** To truncate / rewrite an existing source file that may contain
+non-ASCII characters (em-dashes `—`, arrows, accented names — common in this
+repo's comments), do NOT pipe `Get-Content` → `Set-Content -Encoding utf8` (or
+`Out-File`) in PowerShell **5.1**. Two corruptions stack: (1) `Get-Content`
+without `-Encoding utf8` reads the file with the ANSI codepage, so each UTF-8
+multi-byte char (`—` = `E2 80 94`) becomes 3 garbage chars (`â€"`); (2)
+`Set-Content -Encoding utf8` writes UTF-8 **with a BOM**, which shows up as a
+stray `﻿` at line 1 and a spurious first-line diff. The file may still pass tests
+(the damage is in comments / test names) but the git diff is dirty and the BOM
+can break tooling. Prefer: `git checkout -- <file>` if the net change is zero;
+the **Edit** tool for surgical changes; or `git apply` a patch. If you truly must
+script it, use `[IO.File]::WriteAllText($p,$s,(New-Object Text.UTF8Encoding $false))`
+(no-BOM) and read with `Get-Content -Raw -Encoding utf8`.
+
+**Source incident (2026-06-08, session 28, Item 3).** Truncating
+`PanelLayout.test.tsx` back to 203 lines via
+`Get-Content -TotalCount 203 | Set-Content -Encoding utf8` added a BOM and turned
+every `—` in the file into `â€"`. Tests stayed green (537/0) so it nearly shipped;
+caught only by reading the pre-commit `git diff`, which showed the encoding
+churn on lines I hadn't logically changed. Fixed with `git checkout --` (net
+change was zero). Cross-reference [L-046] (drive MSBuild through PowerShell, not
+Git-Bash — the inverse: some things NEED PowerShell, file rewrites do NOT) and
+[L-022] (read the actual diff before claiming a clean change).
