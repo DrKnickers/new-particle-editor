@@ -123,6 +123,29 @@ describe("EmitterTree", () => {
     expect(tree.getAttribute("data-primary-id")).toBe("3");
   });
 
+  it("right-click → Delete on a multi-selection deletes the WHOLE selection (regression)", async () => {
+    localStorage.removeItem("alo:confirm-delete"); // confirm-before-delete on (default)
+    useDeleteConfirmStore.setState({ pending: null });
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+
+    // Multi-select Smoke(0) + the childless leaf Flash(5).
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Flash"), { ctrlKey: true });
+    expect(useEmitterSelectionStore.getState().ids).toEqual([0, 5]);
+
+    // Right-click the SELECTED leaf and choose Delete. Pre-fix this deleted
+    // only Flash (a leaf → immediate, no confirm); post-fix it confirms the
+    // whole selection because handleDelete uses resolveTargetIds().
+    fireEvent.contextMenu(screen.getByText("Flash"));
+    fireEvent.click(await screen.findByText("Delete"));
+
+    const pending = useDeleteConfirmStore.getState().pending;
+    expect(pending).not.toBeNull();
+    expect([...(pending?.ids ?? [])].sort((a, b) => a - b)).toEqual([0, 5]);
+  });
+
   // ─── Batch B3 — drag/drop reorder + reparent ─────────────────────
 
   /** Stub the row's getBoundingClientRect so the drop-zone math has a

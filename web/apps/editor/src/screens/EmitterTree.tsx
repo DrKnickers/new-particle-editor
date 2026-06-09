@@ -411,8 +411,13 @@ function EmitterRow({
     void bridge.request({ kind: "emitters/duplicate", params: { id: node.id } });
   };
   const handleDelete = () => {
-    resolveTargetIds();
-    requestDeleteEmitters(bridge, [node.id]);
+    // Delete the resolved target set — the whole selection when the
+    // right-clicked row is part of it, else just the clicked row
+    // (resolveTargetIds promotes a non-selected row to a single select).
+    // Previously this discarded the return and hardcoded [node.id], so
+    // right-click → Delete on a multi-selection deleted only one row and
+    // skipped the destructive-confirm.
+    requestDeleteEmitters(bridge, resolveTargetIds());
   };
   const handleIncrement = () => {
     resolveTargetIds();
