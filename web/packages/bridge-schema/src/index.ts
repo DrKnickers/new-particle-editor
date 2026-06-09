@@ -1026,9 +1026,6 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/duplicate-many" } ?
     | { ok: true; newIds: number[] }
     | { ok: false; error: string } :
-  R extends { kind: "emitters/reorder-many" } ?
-    | { ok: true; newIds: number[] }
-    | { ok: false; error: string } :
   R extends { kind: "emitters/delete" }                         ? Record<string, never> :
   R extends { kind: "emitters/rename" }                         ? Record<string, never> :
   R extends { kind: "emitters/duplicate-with-index-increment" } ? { newId: number } :
@@ -1039,6 +1036,9 @@ export type ResponseFor<R extends Request> =
   R extends { kind: "emitters/add-root" }           ? { newId: number } :
   R extends { kind: "emitters/move" }               ? Record<string, never> :
   R extends { kind: "emitters/move-many" }          ? { newIds: number[] } :
+  R extends { kind: "emitters/reorder-many" } ?
+    | { ok: true; newIds: number[] }
+    | { ok: false; error: string } :
   R extends { kind: "emitters/set-visible" }        ? Record<string, never> :
   R extends { kind: "emitters/set-all-visible" }    ? Record<string, never> :
   R extends { kind: "linkGroups/set-membership" }   ? Record<string, never> :

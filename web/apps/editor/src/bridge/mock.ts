@@ -107,6 +107,8 @@ function isMutating(kind: Request["kind"]): boolean {
   // Screen 4 Batch B3 — drag/drop reorder + reparent. Both modes
   // mutate persisted tree state.
   if (kind === "emitters/drop") return true;
+  // Multi-select drag-reorder — same structural-mutation tier as emitters/drop.
+  if (kind === "emitters/reorder-many") return true;
   // Screen 4 Batch C — clipboard. `copy` doesn't mutate the tree;
   // `cut` (delete) + `paste` (insert) both do. Matches the native
   // host's per-handler `SetDirty` rule.

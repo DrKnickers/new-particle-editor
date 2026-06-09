@@ -26,6 +26,9 @@ describe("reorderManyRoots", () => {
     for (const gap of [1, 2, 3, 4]) {
       expect(reorderManyRoots(tree(), [1, 2, 3], gap)).toBeNull();
     }
+    // ...and DOES move for gaps outside its own footprint:
+    expect(order(reorderManyRoots(tree(), [1, 2, 3], 0))).toBe("BCDAEF"); // to top
+    expect(order(reorderManyRoots(tree(), [1, 2, 3], 6))).toBe("AEFBCD"); // to bottom
   });
   it("treats a single-id selection like a single reorder", () => {
     expect(order(reorderManyRoots(tree(), [0], 3))).toBe("BCADEF");
