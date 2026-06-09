@@ -148,7 +148,10 @@ export const useFileOpErrorStore = create<{
 
 // Await a file request and surface non-cancel failures. Returns the result
 // so callers that care (e.g. promptSaveChanges chains) can still branch.
+// `bridge` is passed in — it is NOT a module singleton (App.tsx:35 creates
+// the one instance via useMemo(makeBridge) and threads it as a prop).
 export async function runFileOp<R extends FileOpReq>(
+  bridge: Bridge,
   req: R,
 ): Promise<ResultFor<R>> {
   const r = await bridge.request(req);
@@ -159,8 +162,9 @@ export async function runFileOp<R extends FileOpReq>(
 }
 ```
 `messageFor` maps kind → friendly prefix ("Couldn't save the file", "Couldn't
-open the file", …) + `: ${error}`. Callable from non-component code
-(`use-app-accelerators.ts`) because it touches only the store, not React.
+open the file", …) + `: ${error}`. Touches only the store (not React), so it
+is callable from non-component code (`use-app-accelerators.ts`) — the caller
+already holds `bridge`.
 
 ### 3.2 `lib/emitter-tree.ts` — shared tree (structural)
 ```ts
@@ -191,23 +195,26 @@ export function computeDeleteImpact(
 ): DeleteImpact;           // pure; unit-tested
 
 // The single descending-order delete loop (collapses the two copies).
-export function performDelete(ids: number[]): void;
+// `bridge` threaded in (not a singleton — see runFileOp note).
+export function performDelete(bridge: Bridge, ids: number[]): void;
 
 // Confirm-or-immediate entry point used by ALL four call sites.
-export function requestDeleteEmitters(ids: number[]): void;
+export function requestDeleteEmitters(bridge: Bridge, ids: number[]): void;
 
-// Pending-confirm store consumed by <DeleteConfirmModal>.
+// Pending-confirm store consumed by <DeleteConfirmModal>. The store holds
+// ONLY data — it never calls bridge. <DeleteConfirmModal> (mounted in App,
+// where bridge lives) does performDelete(bridge, pending.ids) on confirm,
+// then clear(). This keeps bridge out of the store.
 export const useDeleteConfirmStore = create<{
   pending: { ids: number[]; impact: DeleteImpact } | null;
   open: (ids: number[], impact: DeleteImpact) => void;
-  confirm: () => void;   // performDelete(pending.ids); pending = null
-  cancel: () => void;    // pending = null
+  clear: () => void;     // pending = null (used by confirm-after-delete AND cancel)
 }>(...)
 ```
-`requestDeleteEmitters(ids)`:
+`requestDeleteEmitters(bridge, ids)`:
 1. `if (ids.length === 0) return;`
-2. `impact = computeDeleteImpact(ids, getTree())`
-3. `if (!readConfirmDelete() || !impact.isDestructive) { performDelete(ids); return; }`
+2. `impact = computeDeleteImpact(ids, useEmitterTreeStore.getState().tree)`
+3. `if (!readConfirmDelete() || !impact.isDestructive) { performDelete(bridge, ids); return; }`
 4. else `useDeleteConfirmStore.getState().open(ids, impact)`.
 
 `computeDeleteImpact` walks the tree once, indexing nodes by id, then unions
@@ -232,8 +239,11 @@ each selected id's subtree into a `Set` (dedup) → `affectedCount = set.size`;
     ({total} total)?"
 
   Footer: `Modal.CancelButton` (**receives initial focus** — Enter must not
-  delete) + `Modal.OkButton onClick={confirm}` labelled **Delete**, styled
-  with the existing `--danger` token. Cancel/Esc/overlay → `cancel`.
+  delete) + `Modal.OkButton` labelled **Delete**, styled with the existing
+  `--danger` token, whose `onClick` does
+  `performDelete(bridge, pending.ids); clear()`. Cancel/Esc/overlay → `clear`.
+  `<DeleteConfirmModal>` takes a `bridge: Bridge` prop (it is mounted in
+  `App.tsx`, where the instance lives). `<FileOpErrorModal>` needs no bridge.
 
 ### 3.5 Call-site rewiring
 - **File** (save / open / save-as sites): `void bridge.request({kind:"file/…"})`
