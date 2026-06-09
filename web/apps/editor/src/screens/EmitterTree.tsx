@@ -96,6 +96,7 @@ import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { requestDeleteEmitters } from "@/lib/delete-emitters";
 import { moveEmitters, duplicateEmitters } from "@/lib/emitter-reorder";
+import { canMoveSelection } from "@/lib/move-enabled";
 
 type Props = {
   bridge: Bridge;
@@ -315,7 +316,7 @@ function EmitterRow({
   editing, beginEdit, setEditValue, commitEdit, cancelEdit,
   linkHover, onHoverLinkGroup, onDissolveLinkGroup,
 }: RowProps) {
-  const { node, depth, siblings, indexInSiblings } = row;
+  const { node, depth, siblings } = row;
   const isPrimary = primaryId === node.id;
   const isSelected = selectedIds.includes(node.id);
   const isLinked = node.linkGroup !== 0;
@@ -343,8 +344,13 @@ function EmitterRow({
   // Move is a root-only operation. The engine refuses non-root moves
   // (children of the same role can't be swapped — at most one of each).
   const isRoot = node.role === "root";
-  const canMoveUp   = isRoot && indexInSiblings > 0;
-  const canMoveDown = isRoot && indexInSiblings < siblings.length - 1;
+  // The context-menu Move targets the whole selection when this row is part of
+  // it (else just this row — mirrors resolveTargetIds), so its enabled state
+  // uses the same preserve rule as move-many over that target set.
+  const moveTargetIds = isRoot && selectedIds.includes(node.id) ? selectedIds : [node.id];
+  const rootIdsInOrder = siblings.map((s) => s.id);
+  const canMoveUp   = isRoot && canMoveSelection(moveTargetIds, rootIdsInOrder, "up");
+  const canMoveDown = isRoot && canMoveSelection(moveTargetIds, rootIdsInOrder, "down");
 
   // Leave Link Group: enabled when at least one of the currently
   // selected emitters has `linkGroup !== 0`. If the right-clicked row
@@ -944,19 +950,11 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
   // Move is a root-only operation — same gate as the per-row context
   // menu. Sibling reordering at lifetime/death depth is a separate
   // capability not exposed by the legacy panel toolbar either.
-  // Move is a selection-wide, root-only op (matches emitter-reorder /
-  // move-many's preserve rule): the buttons enable iff the move would
-  // actually do something — at least one root is selected AND the edge-most
-  // root in that direction is NOT selected (else the block is pinned against
-  // the edge and the move freezes). Primary-position logic was single-select
-  // and made the enabled state depend on WHICH member was primary.
-  const rootChildren = tree?.root.children ?? [];
-  const anyRootSelected = rootChildren.some((r) => selIds.includes(r.id));
-  const canMoveUp =
-    anyRootSelected && !selIds.includes(rootChildren[0]!.id);
-  const canMoveDown =
-    anyRootSelected &&
-    !selIds.includes(rootChildren[rootChildren.length - 1]!.id);
+  // Move enabled state mirrors move-many's preserve rule, via the shared
+  // helper (same predicate the row context-menu Move items use).
+  const rootIds = (tree?.root.children ?? []).map((c) => c.id);
+  const canMoveUp = canMoveSelection(selIds, rootIds, "up");
+  const canMoveDown = canMoveSelection(selIds, rootIds, "down");
 
   const addRoot = () =>
     void bridge.request({ kind: "emitters/add-root", params: {} });
