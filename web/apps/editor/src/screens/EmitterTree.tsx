@@ -980,8 +980,13 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
     });
   };
   const del = () => {
-    if (primaryId === null) return;
-    requestDeleteEmitters(bridge, [primaryId]);
+    // Selection-aware: the trash button deletes the WHOLE multi-selection
+    // (matching right-click → Delete and the Delete key), not just the
+    // primary row. ids and primary stay in sync, so an empty selection ==
+    // no primary == nothing to delete.
+    const ids = useEmitterSelectionStore.getState().ids;
+    if (ids.length === 0) return;
+    requestDeleteEmitters(bridge, ids);
   };
   const moveUp = () => {
     if (primaryId === null) return;

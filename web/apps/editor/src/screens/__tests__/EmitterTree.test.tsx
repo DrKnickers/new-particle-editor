@@ -146,6 +146,27 @@ describe("EmitterTree", () => {
     expect([...(pending?.ids ?? [])].sort((a, b) => a - b)).toEqual([0, 5]);
   });
 
+  it("the trash button deletes the WHOLE multi-selection (confirms)", async () => {
+    localStorage.removeItem("alo:confirm-delete"); // confirm-before-delete on (default)
+    useDeleteConfirmStore.setState({ pending: null });
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+
+    // Multi-select Smoke(0) + the childless leaf Flash(5).
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Flash"), { ctrlKey: true });
+    expect(useEmitterSelectionStore.getState().ids).toEqual([0, 5]);
+
+    // Toolbar trash deletes the whole selection (pre-fix: only the primary
+    // Flash, a leaf → immediate, no confirm).
+    fireEvent.click(screen.getByLabelText("Delete emitter"));
+
+    const pending = useDeleteConfirmStore.getState().pending;
+    expect(pending).not.toBeNull();
+    expect([...(pending?.ids ?? [])].sort((a, b) => a - b)).toEqual([0, 5]);
+  });
+
   // ─── Batch B3 — drag/drop reorder + reparent ─────────────────────
 
   /** Stub the row's getBoundingClientRect so the drop-zone math has a
