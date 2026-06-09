@@ -57,7 +57,9 @@ describe("duplicateEmitters", () => {
 });
 
 // ── reorderManyEmitters ──────────────────────────────────────────────────────
-function fakeVibridge(response: unknown) {
+// Returns the same `response` for every request kind (use when only one
+// dispatch is exercised, or when asserting via vi.fn toHaveBeenCalledWith).
+function fakeUniformBridge(response: unknown) {
   return { request: vi.fn().mockResolvedValue(response) } as any;
 }
 
@@ -66,7 +68,7 @@ describe("reorderManyEmitters", () => {
     useEmitterSelectionStore.getState().setIds([1, 3], 3); // primary = 3
   });
   it("dispatches reorder-many then re-selects newIds, preserving primary by position", async () => {
-    const bridge = fakeVibridge({ ok: true, newIds: [4, 5] });
+    const bridge = fakeUniformBridge({ ok: true, newIds: [4, 5] });
     await reorderManyEmitters(bridge, [1, 3], 6);
     expect(bridge.request).toHaveBeenCalledWith({
       kind: "emitters/reorder-many",
@@ -78,12 +80,12 @@ describe("reorderManyEmitters", () => {
     expect(bridge.request).toHaveBeenCalledWith({ kind: "emitters/select", params: { id: 5 } });
   });
   it("leaves the selection untouched when the host refuses", async () => {
-    const bridge = fakeVibridge({ ok: false, error: "reorder refused" });
+    const bridge = fakeUniformBridge({ ok: false, error: "reorder refused" });
     await reorderManyEmitters(bridge, [1, 3], 2);
     expect(useEmitterSelectionStore.getState().ids).toEqual([1, 3]);
   });
   it("no-ops on an empty id list", async () => {
-    const bridge = fakeVibridge({ ok: true, newIds: [] });
+    const bridge = fakeUniformBridge({ ok: true, newIds: [] });
     await reorderManyEmitters(bridge, [], 2);
     expect(bridge.request).not.toHaveBeenCalled();
   });

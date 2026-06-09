@@ -44,6 +44,7 @@ export function resolveMultiDropIntent(
   const first = blockRootIdxs[0]!;
   const last = blockRootIdxs[blockRootIdxs.length - 1]!;
   const M = blockRootIdxs.length;
+  // Mirrors the no-op guard in mock-state.ts::reorderManyRoots — keep in sync.
   if (last - first + 1 === M && gap >= first && gap <= last + 1) return null;
   return { rootIndex: gap };
 }
