@@ -4680,7 +4680,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         {
             for (const auto& j : params["ids"])
             {
-                ParticleSystem::Emitter* e = getEmitterById(j.get<int>());
+                ParticleSystem::Emitter* e =
+                    getEmitterById(j.is_number_integer() ? j.get<int>() : -1);
                 if (e == nullptr)
                 {
                     sendOk(json{{"ok", false}, {"error", "emitter not found"}});
