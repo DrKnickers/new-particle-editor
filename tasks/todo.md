@@ -193,7 +193,21 @@ no promised design until we see it move.
       maximized **~69 ms**. Residual maximized latency deferred to ROADMAP
       **[NT-10]** (StretchRect-before-readback the likely win) — user OK with
       it for now, flagged to triage later.
-- [ ] Item 3 — viewport stutter on dock slide (experimental, host)
+- [~] Item 3 — viewport stutter on dock slide (experimental, host). **Design:**
+      `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md` (host-side
+      time-interpolated viewport rect — the chosen approach over DComp-scale #4, which
+      distorts geometry). Investigation workflow `wa0o0il6r` (root cause = multi-clock
+      sampling, NOT a 1-frame clip lag — adversarial pass corrected that). Spec red-team
+      workflow `w6v635b1y` (in flight). **Phase 0 DONE (diagnosis confirmed):** probe at
+      BridgeDispatcher.cpp:919 over 17 user slides showed 16–30 distinct-integer-rect
+      `scene-rect` msgs/slide, arrival Δt mean 13ms / stdev 20ms / gaps up to 109ms, with
+      big width jumps (up to ~69px) after gaps — the irregular sampling, already CLUMPY on
+      the emit side (validates time-interp over rAF-coalesce). Width-only (h const),
+      from/to 658↔918 at the test window (grow=dock-close, shrink=dock-open). `[PERF]`
+      frame-time not capturable via stderr (goes to host.log elsewhere) but continuous msg
+      flow rules out a stall. NEXT: fold red-team verdict → Phase 1 build (web
+      animate-scene-rect + host ViewportAnim render-loop interpolation + bezier). Probe is
+      `#ifndef NDEBUG`, TEMPORARY — remove before sign-off.
 
 ## Review
 

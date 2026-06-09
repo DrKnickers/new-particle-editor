@@ -922,6 +922,17 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         int y = params.value("y", 0);
         int w = params.value("w", 0);
         int h = params.value("h", 0);
+#ifndef NDEBUG
+        // [STUTTER-PROBE] Phase-0 diagnostic for Item 3 (dock-slide viewport
+        // stutter). Unthrottled per-message log of arrival time + rect, so we
+        // can count messages-per-tween and inspect the integer rect sequence
+        // during a dock toggle. TEMPORARY — remove once the diagnosis is
+        // confirmed and the time-interpolation fix lands.
+        fprintf(stderr,
+                "[STUTTER-PROBE] t=%lu scene-rect x=%d y=%d w=%d h=%d\n",
+                GetTickCount(), x, y, w, h);
+        fflush(stderr);
+#endif
         m_layout.SetSceneRect(x, y, w, h);
         sendOk(json::object());
         return res;
