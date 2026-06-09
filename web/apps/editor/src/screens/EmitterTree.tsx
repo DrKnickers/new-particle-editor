@@ -524,9 +524,14 @@ function EmitterRow({
 
   const isThisRowIndicator = indicator?.targetId === node.id;
   const indicatorZone = isThisRowIndicator ? indicator!.zone : null;
+  // The 2px insertion line + onto-ring are the SINGLE-drag affordance only;
+  // a multi-drag renders the destination band instead (below), so suppress
+  // the line/ring when the active indicator is multi. (`indicator.multi` is
+  // undefined for single-drag → singleZone === indicatorZone, unchanged.)
+  const singleZone = indicator?.multi ? null : indicatorZone;
 
   // Reparent target visual: tint the row + ring.
-  const reparentTintClass = indicatorZone === "onto"
+  const reparentTintClass = singleZone === "onto"
     ? "bg-accent-soft ring-1 ring-sky-400"
     : "";
 
@@ -554,16 +559,33 @@ function EmitterRow({
       {/* Insertion line: 2px sky-400 bar at the top or bottom of the row
           during dragover for the reorder zones. Absolute-positioned so
           it doesn't perturb the row's layout. */}
-      {indicatorZone === "above" && (
+      {singleZone === "above" && (
         <div
           data-testid={`drop-indicator-above-${node.id}`}
           className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-0.5 bg-accent"
         />
       )}
-      {indicatorZone === "below" && (
+      {singleZone === "below" && (
         <div
           data-testid={`drop-indicator-below-${node.id}`}
           className="pointer-events-none absolute left-0 right-0 bottom-0 z-10 h-0.5 bg-accent"
+        />
+      )}
+      {/* [multi-drag] Destination band: a tinted block spanning `blockSize`
+          row-heights, anchored at this row's top (above) or bottom (below).
+          The <li> is position-relative and exactly one row tall, so 100% ==
+          one row height — no hardcoded pixel height. Reuses the reparent
+          tint tokens (bg-accent-soft + ring-sky-400) so it reads as the same
+          drop affordance family as the single-drag onto-ring. */}
+      {isThisRowIndicator && indicator?.multi && (
+        <div
+          data-testid={`drop-band-${node.id}`}
+          aria-hidden
+          className="pointer-events-none absolute left-0 right-0 z-10 rounded bg-accent-soft ring-1 ring-sky-400"
+          style={{
+            top: indicator.zone === "above" ? 0 : "100%",
+            height: `calc(${indicator.blockSize ?? 1} * 100%)`,
+          }}
         />
       )}
       <ContextMenu.Root>
@@ -1128,6 +1150,12 @@ export function EmitterTree({ bridge }: Props) {
   // and so rows can read the dragged node's subtree for cycle checks.
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [indicator, setIndicator] = useState<DropIndicator>(null);
+  // [multi-drag] Cursor chip following the pointer during a multi-root drag —
+  // shows up to 3 dragged emitter names + a total count. `null` outside a
+  // multi-drag (single-drag uses the per-row insertion line only).
+  const [dragChip, setDragChip] = useState<
+    { x: number; y: number; names: string[]; total: number } | null
+  >(null);
   // [pointer-drag] Set true when a real drag completes so the synthetic
   // click that follows pointerup (when down+up land on the same row) does
   // NOT also fire row selection. Reset on the next pointerdown and in
@@ -1401,6 +1429,12 @@ export function EmitterTree({ bridge }: Props) {
         ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
         null;
       updateDropTarget(rowEl, ev.clientY);
+      if (multi && active) {
+        const names = blockIds
+          .map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "")
+          .filter(Boolean);
+        setDragChip({ x: ev.clientX, y: ev.clientY, names: names.slice(0, 3), total: blockIds.length });
+      }
     };
 
     const finish = (commit: boolean) => {
@@ -1416,6 +1450,7 @@ export function EmitterTree({ bridge }: Props) {
       if (!active) return;
       setDraggingId(null);
       setIndicator(null);
+      setDragChip(null);
       draggedRef.current = true; // swallow the trailing click
       if (commit) {
         if (multi) {
@@ -1914,6 +1949,25 @@ export function EmitterTree({ bridge }: Props) {
         </div>
       )}
       <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
+      {/* [multi-drag] Cursor chip — a small fixed-position card following the
+          pointer during a multi-root drag. Lists up to 3 dragged names + a
+          total count. Uses this file's floating-surface vocabulary (bg-bg-2 +
+          shadow-xl) with the sky-400 drag accent on the border to read as part
+          of the same drop affordance family as the destination band. */}
+      {dragChip && (
+        <div
+          data-testid="drag-chip"
+          aria-hidden
+          className="pointer-events-none fixed z-50 rounded-md border border-sky-400 bg-bg-2/95 px-2 py-1 text-xs text-accent shadow-xl"
+          style={{ left: dragChip.x + 12, top: dragChip.y + 12 }}
+        >
+          {dragChip.names.join(", ")}
+          {dragChip.total > dragChip.names.length
+            ? ` +${dragChip.total - dragChip.names.length} more`
+            : ""}
+          <span className="ml-1 opacity-70">({dragChip.total})</span>
+        </div>
+      )}
     </div>
   );
 }
