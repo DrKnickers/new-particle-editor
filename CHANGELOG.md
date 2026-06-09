@@ -16,6 +16,48 @@ Conventions:
 
 ## Changelog
 
+### Multi-select drag-reorder: drag a whole selection as one block
+
+*2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Dragging a root emitter that is part of a multi-selection now reorders the
+**entire selection as one contiguous block** instead of just the grabbed row —
+consistent with the selection-aware Move Up/Down arrows. A non-contiguous
+selection collapses together at the drop point in its current top-to-bottom
+order; the highlight follows the moved emitters to their new positions. While
+dragging, a destination **band** shows where the block will land and a cursor
+**chip** lists the rows being carried (with a count). Dropping a block onto its
+own current footprint does nothing. Drag-reorder stays **root-only** and
+**reorder-only**: dropping *onto* a row to reparent remains a single-emitter-drag
+affordance, and dragging an unselected row behaves exactly as before.
+
+**How we tackled it.** A new atomic host op `emitters/reorder-many { ids,
+rootIndex } -> { newIds }` ([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp)
++ [`ParticleSystem::reorderManyRootsToIndex`](src/ParticleSystem.cpp)) computes
+the final root order in a single pass — remove the selected block, reinsert it
+contiguously at the gap shifted by the count of selected roots ahead of it — then
+reuses `moveEmitterToRootIndex`'s subtree-reassembly to relayout and return the
+moved roots' new indices. The React pointer-drag controller
+([`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx)) gained a
+multi-drag branch (pure intent resolution in
+[`lib/multi-drag.ts`](web/apps/editor/src/lib/multi-drag.ts)) that dispatches the
+op and re-selects the returned `newIds` through the existing `applyNewSelection`
+path; the dev mock mirrors the host algorithm exactly, so the Vitest suite is the
+behavioural contract for both.
+
+**Issues encountered and resolutions.** A pre-coding adversarial design pass
+caught that the no-op rule must refuse **every** gap on an already-contiguous
+block's own footprint `[first, last+1]` (both edges *and* the interior gaps), not
+just the two edges — reinserting a block into its own vacated span is the
+identity layout. The smooth glide animation of rows sliding to their new
+positions was **deferred**: the data model has no stable emitter identity (ids
+are positional and reshuffle on every reorder), so a robust glide needs an
+imperative FLIP controller rather than a React-keyed transition — captured as a
+follow-up ([`tasks/next-reorder-glide-animation.md`](tasks/next-reorder-glide-animation.md))
+to take on after a stable id is added.
+
+---
+
 ### Multi-aware emitter operations: delete / duplicate / move act on the whole selection, order preserved
 
 *2026-06-09 · [`6f462e0`](https://github.com/DrKnickers/new-particle-editor/commit/6f462e0) · [#104](https://github.com/DrKnickers/new-particle-editor/pull/104)*
