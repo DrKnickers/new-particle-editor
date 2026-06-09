@@ -25,18 +25,25 @@ export function isMultiDrag(
   return roots.length > 1 && roots.includes(grabbedId);
 }
 
-/** Resolve a multi-drag drop to a target gap, or null when refused:
- *    - "onto" (middle third) → refused (reparent is single-only),
- *    - non-root target → refused,
- *    - own-footprint no-op (an already-contiguous block in [first, last+1]).
- *  `blockRootIdxs` = the dragged block's current root indices, ascending. */
+/** Resolve a multi-drag drop over a hovered row to one of three outcomes:
+ *    - `{ rootIndex }` — a valid drop gap (move the block there);
+ *    - `"noop"`        — the block's OWN footprint (an already-contiguous block
+ *                        in [first, last+1]); a deliberate "leave it where it
+ *                        is", distinct from a dead zone;
+ *    - `null`          — a dead zone: the "onto" middle third (reparent is
+ *                        single-only), a non-root target, or an out-of-range gap.
+ *  The caller CLEARS the gap on `"noop"` (so a release leaves the order
+ *  unchanged — you're not forced to move the block once you grab it) but HOLDS
+ *  the last gap on `null` (so the preview doesn't flicker as the shifted rows /
+ *  the gap pass under the pointer). `blockRootIdxs` = the dragged block's current
+ *  root indices, ascending. */
 export function resolveMultiDropIntent(
   blockRootIdxs: number[],
   target: EmitterTreeNode,
   targetRootIdx: number,
   zone: DropZone,
   rootCount: number,
-): { rootIndex: number } | null {
+): { rootIndex: number } | "noop" | null {
   if (zone === "onto") return null;
   if (target.role !== "root" || targetRootIdx === -1) return null;
   const gap = computeRootGapIndex(targetRootIdx, zone);
@@ -44,7 +51,9 @@ export function resolveMultiDropIntent(
   const first = blockRootIdxs[0]!;
   const last = blockRootIdxs[blockRootIdxs.length - 1]!;
   const M = blockRootIdxs.length;
-  // Mirrors the no-op guard in mock-state.ts::reorderManyRoots — keep in sync.
-  if (last - first + 1 === M && gap >= first && gap <= last + 1) return null;
+  // Own-footprint no-op. Mirrors the guard in mock-state.ts::reorderManyRoots —
+  // keep in sync. Returned as "noop" (not null) so the caller distinguishes a
+  // deliberate leave-it-here from a dead zone.
+  if (last - first + 1 === M && gap >= first && gap <= last + 1) return "noop";
   return { rootIndex: gap };
 }

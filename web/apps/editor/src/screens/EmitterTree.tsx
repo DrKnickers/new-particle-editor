@@ -63,6 +63,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  Fragment,
   useState,
   type ComponentProps,
 } from "react";
@@ -152,7 +153,7 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
 // at a time displays a visual indicator. `targetId` is the row currently
 // being hovered; `zone` is which third of the row's rect the cursor is
 // in. `null` means no active drag-over.
-type DropIndicator = { targetId: number; zone: DropZone; multi?: boolean; blockSize?: number } | null;
+type DropIndicator = { targetId: number; zone: DropZone; multi?: boolean; blockSize?: number; rowHeight?: number } | null;
 
 // Validated parameters for the `emitters/drop` bridge call — the output
 // of resolveDropIntent. `null` means the drop is refused.
@@ -234,6 +235,8 @@ type RowProps = {
   // controller (startDrag); the row just initiates on pointerdown and
   // reads draggingId / indicator for its visual state.
   draggingId: number | null;
+  // Ids of every row in the lifted multi-drag block (all dim while dragging).
+  draggingIds: number[];
   indicator: DropIndicator;
   startDrag: (node: EmitterTreeNode, e: React.PointerEvent) => void;
   // Batch C — inline rename. `editing.id === node.id` means this row
@@ -313,7 +316,7 @@ function OccludingContextSubContent({
 
 function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
-  draggingId, indicator, startDrag,
+  draggingId, draggingIds, indicator, startDrag,
   editing, beginEdit, setEditValue, commitEdit, cancelEdit,
   linkHover, onHoverLinkGroup, onDissolveLinkGroup,
 }: RowProps) {
@@ -524,6 +527,8 @@ function EmitterRow({
 
   const isThisRowIndicator = indicator?.targetId === node.id;
   const indicatorZone = isThisRowIndicator ? indicator!.zone : null;
+  // Dimmed while lifted: the grabbed row OR any row in the multi-drag block.
+  const isDragging = draggingId === node.id || draggingIds.includes(node.id);
   // The 2px insertion line + onto-ring are the SINGLE-drag affordance only;
   // a multi-drag renders the destination band instead (below), so suppress
   // the line/ring when the active indicator is multi. (`indicator.multi` is
@@ -571,23 +576,9 @@ function EmitterRow({
           className="pointer-events-none absolute left-0 right-0 bottom-0 z-10 h-0.5 bg-accent"
         />
       )}
-      {/* [multi-drag] Destination band: a tinted block spanning `blockSize`
-          row-heights, anchored at this row's top (above) or bottom (below).
-          The <li> is position-relative and exactly one row tall, so 100% ==
-          one row height — no hardcoded pixel height. Reuses the reparent
-          tint tokens (bg-accent-soft + ring-sky-400) so it reads as the same
-          drop affordance family as the single-drag onto-ring. */}
-      {isThisRowIndicator && indicator?.multi && (
-        <div
-          data-testid={`drop-band-${node.id}`}
-          aria-hidden
-          className="pointer-events-none absolute left-0 right-0 z-10 rounded bg-accent-soft ring-1 ring-sky-400"
-          style={{
-            top: indicator.zone === "above" ? 0 : "100%",
-            height: `calc(${indicator.blockSize ?? 1} * 100%)`,
-          }}
-        />
-      )}
+      {/* [multi-drag] The destination "make room" gap is a flow spacer in the
+          EmitterTree list (see the flatRows map), not an absolute overlay here,
+          so the rows below it shift down to reveal where the block will land. */}
       <ContextMenu.Root>
         <ContextMenu.Trigger asChild>
           <button
@@ -622,7 +613,7 @@ function EmitterRow({
             data-selected={isSelected ? "true" : "false"}
             data-primary={isPrimary ? "true" : "false"}
             data-drop-zone={singleZone ?? ""}
-            data-dragging={draggingId === node.id ? "true" : "false"}
+            data-dragging={isDragging ? "true" : "false"}
             className={[
               "grid w-full items-center gap-1.5 py-0.5 pr-2 text-left text-sm transition-colors",
               "border-l-2",
@@ -633,7 +624,7 @@ function EmitterRow({
               // LNK-6: hovering a group's bracket tints its member rows.
               linkHover ? "bg-accent/10" : "",
               node.visible ? "" : "opacity-50",
-              draggingId === node.id ? "opacity-50" : "",
+              isDragging ? "opacity-50" : "",
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
@@ -1149,12 +1140,14 @@ export function EmitterTree({ bridge }: Props) {
   // Both lifted to the tree level so only one indicator can be active
   // and so rows can read the dragged node's subtree for cycle checks.
   const [draggingId, setDraggingId] = useState<number | null>(null);
+  // [multi-drag] ids of every lifted row in the block (all dim while dragging).
+  const [draggingIds, setDraggingIds] = useState<number[]>([]);
   const [indicator, setIndicator] = useState<DropIndicator>(null);
   // [multi-drag] Cursor chip following the pointer during a multi-root drag —
-  // shows up to 3 dragged emitter names + a total count. `null` outside a
-  // multi-drag (single-drag uses the per-row insertion line only).
+  // lists the dragged emitter names vertically, in their emitter-list order.
+  // `null` outside a multi-drag (single-drag uses the per-row insertion line).
   const [dragChip, setDragChip] = useState<
-    { x: number; y: number; names: string[]; total: number } | null
+    { x: number; y: number; names: string[] } | null
   >(null);
   // [pointer-drag] Set true when a real drag completes so the synthetic
   // click that follows pointerup (when down+up land on the same row) does
@@ -1352,9 +1345,8 @@ export function EmitterTree({ bridge }: Props) {
     const blockIds = multi ? selectedRootIdsInOrder(selIds, curRoots) : [];
     const blockRootIdxs = blockIds.map((id) => curRoots.findIndex((c) => c.id === id)); // ascending
     const chipNames = multi
-      ? blockIds.map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "").filter(Boolean).slice(0, 3)
+      ? blockIds.map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "").filter(Boolean)
       : [];
-    const chipTotal = blockIds.length;
     let lastReorderGap: number | null = null;
     let active = false;
     let lastParams: DropParams | null = null;
@@ -1368,6 +1360,11 @@ export function EmitterTree({ bridge }: Props) {
     // content scrolls under it).
     const updateDropTarget = (rowEl: HTMLElement | null, clientY: number) => {
       if (rowEl === null) {
+        // [multi-drag] HOLD: the pointer is over the make-room gap (which is
+        // pointer-events-none) or empty space. Keep the current gap instead of
+        // clearing it — clearing here is what makes the gap flicker as the
+        // shifted rows / the gap itself pass under the pointer.
+        if (multi) return;
         lastParams = null;
         setIndicator(null);
         return;
@@ -1375,6 +1372,7 @@ export function EmitterTree({ bridge }: Props) {
       const targetId = Number(rowEl.getAttribute("data-emitter-id"));
       const target = curRows.find((r) => r.node.id === targetId)?.node ?? null;
       if (target === null) {
+        if (multi) return; // HOLD (see above)
         lastParams = null;
         lastReorderGap = null;
         setIndicator(null);
@@ -1385,8 +1383,21 @@ export function EmitterTree({ bridge }: Props) {
       const targetRootIdx = curRoots.findIndex((c) => c.id === targetId);
       if (multi) {
         const intent = resolveMultiDropIntent(blockRootIdxs, target, targetRootIdx, zone, curRoots.length);
-        lastReorderGap = intent ? intent.rootIndex : null;
-        setIndicator(intent ? { targetId, zone, multi: true, blockSize: blockIds.length } : null);
+        if (intent === "noop") {
+          // Hovering the block's OWN spot — a deliberate no-op. CLEAR the gap so
+          // a release here leaves the order unchanged (you're not forced to move
+          // the block once you've picked it up).
+          lastReorderGap = null;
+          setIndicator(null);
+          return;
+        }
+        // HOLD on a dead zone (null: the "onto" middle third, a child row, or
+        // the pointer sitting over the gap) so the gap doesn't blink off; only
+        // move it when a NEW valid root gap is hovered.
+        if (intent !== null) {
+          lastReorderGap = intent.rootIndex;
+          setIndicator({ targetId, zone, multi: true, blockSize: blockIds.length, rowHeight: rect.height });
+        }
         return;
       }
       const params = resolveDropIntent(source, target, targetRootIdx, zone, curTree, curRoots);
@@ -1422,6 +1433,7 @@ export function EmitterTree({ bridge }: Props) {
         }
         active = true;
         setDraggingId(source.id);
+        setDraggingIds(multi ? blockIds : []);
         // [SEL-13] Esc / right-click cancel only an ACTIVE drag — attach the
         // listeners on activation so a pre-threshold right-click still opens
         // the row context menu. [SEL-12] start the autoscroll loop.
@@ -1434,7 +1446,7 @@ export function EmitterTree({ bridge }: Props) {
         null;
       updateDropTarget(rowEl, ev.clientY);
       if (multi && active) {
-        setDragChip({ x: ev.clientX, y: ev.clientY, names: chipNames, total: chipTotal });
+        setDragChip({ x: ev.clientX, y: ev.clientY, names: chipNames });
       }
     };
 
@@ -1450,6 +1462,7 @@ export function EmitterTree({ bridge }: Props) {
       }
       if (!active) return;
       setDraggingId(null);
+      setDraggingIds([]);
       setIndicator(null);
       setDragChip(null);
       draggedRef.current = true; // swallow the trailing click
@@ -1811,31 +1824,56 @@ export function EmitterTree({ bridge }: Props) {
             aria-label="Emitters"
             className="m-0 flex-1 list-none p-0"
           >
-          {flatRows.map((row) => (
-            <EmitterRow
-              key={row.node.id}
-              row={row}
-              primaryId={primaryId}
-              selectedIds={selectedIds}
-              orderedIds={orderedIds}
-              onRowClick={handleRowClick}
-              bridge={bridge}
-              draggingId={draggingId}
-              indicator={indicator}
-              startDrag={startDrag}
-              editing={editing}
-              beginEdit={beginEdit}
-              setEditValue={setEditValue}
-              commitEdit={commitEdit}
-              cancelEdit={cancelEdit}
-              linkHover={
-                hoveredLinkGroup !== null &&
-                row.node.linkGroup === hoveredLinkGroup
-              }
-              onHoverLinkGroup={setHoveredLinkGroup}
-              onDissolveLinkGroup={handleDissolveLinkGroup}
-            />
-          ))}
+          {flatRows.map((row) => {
+            // [multi-drag] "make room" gap: a flow spacer (block-height) at the
+            // drop point so the rows below actually shift down to reveal where
+            // the dragged block will land. Replaces the old absolute overlay.
+            const showGap =
+              indicator?.multi === true && indicator.targetId === row.node.id;
+            const gap = showGap ? (
+              <li
+                aria-hidden
+                role="presentation"
+                data-testid={`drop-gap-${row.node.id}`}
+                // ring-inset: render the ring INSIDE the element so it isn't
+                // clipped by the scroll container's overflow at the very top /
+                // bottom edge of the list.
+                className="pointer-events-none mx-0.5 rounded bg-accent-soft ring-1 ring-inset ring-sky-400"
+                style={{
+                  height: `${(indicator!.rowHeight ?? 24) * (indicator!.blockSize ?? 1)}px`,
+                }}
+              />
+            ) : null;
+            return (
+              <Fragment key={row.node.id}>
+                {showGap && indicator!.zone === "above" && gap}
+                <EmitterRow
+                  row={row}
+                  primaryId={primaryId}
+                  selectedIds={selectedIds}
+                  orderedIds={orderedIds}
+                  onRowClick={handleRowClick}
+                  bridge={bridge}
+                  draggingId={draggingId}
+                  draggingIds={draggingIds}
+                  indicator={indicator}
+                  startDrag={startDrag}
+                  editing={editing}
+                  beginEdit={beginEdit}
+                  setEditValue={setEditValue}
+                  commitEdit={commitEdit}
+                  cancelEdit={cancelEdit}
+                  linkHover={
+                    hoveredLinkGroup !== null &&
+                    row.node.linkGroup === hoveredLinkGroup
+                  }
+                  onHoverLinkGroup={setHoveredLinkGroup}
+                  onDissolveLinkGroup={handleDissolveLinkGroup}
+                />
+                {showGap && indicator!.zone === "below" && gap}
+              </Fragment>
+            );
+          })}
           </ul>
           {/* Link-group bracket layer. Absolutely positioned at the
               measured longest-name right edge (bracketLeft) so the
@@ -1962,11 +2000,11 @@ export function EmitterTree({ bridge }: Props) {
           className="pointer-events-none fixed z-50 rounded-md border border-sky-400 bg-bg-2/95 px-2 py-1 text-xs text-accent shadow-xl"
           style={{ left: dragChip.x + 12, top: dragChip.y + 12 }}
         >
-          {dragChip.names.join(", ")}
-          {dragChip.total > dragChip.names.length
-            ? ` +${dragChip.total - dragChip.names.length} more`
-            : ""}
-          <span className="ml-1 opacity-70">({dragChip.total})</span>
+          {dragChip.names.map((name, i) => (
+            <div key={i} className="truncate px-2 leading-5">
+              {name}
+            </div>
+          ))}
         </div>
       )}
     </div>

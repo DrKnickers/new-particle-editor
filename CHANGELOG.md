@@ -25,9 +25,10 @@ Dragging a root emitter that is part of a multi-selection now reorders the
 consistent with the selection-aware Move Up/Down arrows. A non-contiguous
 selection collapses together at the drop point in its current top-to-bottom
 order; the highlight follows the moved emitters to their new positions. While
-dragging, a destination **band** shows where the block will land and a cursor
-**chip** lists the rows being carried (with a count). Dropping a block onto its
-own current footprint does nothing. Drag-reorder stays **root-only** and
+dragging, the other emitters slide aside to open a **make-room gap** at the drop
+point and the lifted rows **dim**, so you see exactly where the block will land;
+a **vertical chip** by the cursor lists the rows being carried, in order.
+Dropping a block onto its own footprint does nothing. Drag-reorder stays **root-only** and
 **reorder-only**: dropping *onto* a row to reparent remains a single-emitter-drag
 affordance, and dragging an unselected row behaves exactly as before.
 

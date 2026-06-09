@@ -25,9 +25,9 @@ describe("resolveMultiDropIntent", () => {
   it("refuses an onto (reparent) zone", () => {
     expect(resolveMultiDropIntent([1, 2], roots[3]!, 3, "onto", 4)).toBeNull();
   });
-  it("refuses a no-op on the block's own footprint", () => {
-    expect(resolveMultiDropIntent([1, 2], roots[1]!, 1, "above", 4)).toBeNull();
-    expect(resolveMultiDropIntent([1, 2], roots[2]!, 2, "below", 4)).toBeNull();
+  it("returns 'noop' for the block's own footprint (leave it where it is)", () => {
+    expect(resolveMultiDropIntent([1, 2], roots[1]!, 1, "above", 4)).toBe("noop");
+    expect(resolveMultiDropIntent([1, 2], roots[2]!, 2, "below", 4)).toBe("noop");
   });
   it("refuses a non-root target (e.g. hovering a child row)", () => {
     const child: EmitterTreeNode = {

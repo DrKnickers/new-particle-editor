@@ -2,8 +2,8 @@
 // (Tasks 6 + 7). With a multi-root selection, a pointer drag past the
 // activation threshold over another root must:
 //   - dispatch emitters/reorder-many on release (Task 6),
-//   - render a destination band on the hovered target row + a cursor chip
-//     following the pointer (Task 7 — preview D).
+//   - render a make-room gap at the drop point + a cursor chip following the
+//     pointer (Task 7 — preview D).
 //
 // The single-drag path (emitters/drop) is covered by EmitterTree.test.tsx;
 // here we only exercise the additive multi-drag branch.
@@ -93,14 +93,13 @@ describe("EmitterTree multi-drag preview", () => {
     fireEvent.pointerDown(flashBtn, { button: 0, clientX: 0, clientY: 0 });
     fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 40, clientY: 103 });
 
-    // Preview D: cursor chip following the pointer + destination band on the
-    // hovered target row (Sparks, id=3). The band carries multi info.
+    // Preview D: cursor chip (vertical name list) following the pointer + a
+    // make-room gap at the drop point (above Sparks, id=3).
     const chip = screen.getByTestId("drag-chip");
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain("Smoke");
     expect(chip.textContent).toContain("Flash");
-    expect(chip.textContent).toContain("(2)");
-    expect(screen.getByTestId("drop-band-3")).toBeInTheDocument();
+    expect(screen.getByTestId("drop-gap-3")).toBeInTheDocument();
     // The single-drag insertion line must NOT render for a multi-drag.
     expect(screen.queryByTestId("drop-indicator-above-3")).toBeNull();
 
@@ -115,7 +114,7 @@ describe("EmitterTree multi-drag preview", () => {
 
     // Chip + band clear once the drag finishes.
     expect(screen.queryByTestId("drag-chip")).toBeNull();
-    expect(screen.queryByTestId("drop-band-3")).toBeNull();
+    expect(screen.queryByTestId("drop-gap-3")).toBeNull();
   });
 
   it("a single-root drag still uses the insertion line + emitters/drop (no band/chip)", async () => {
@@ -135,7 +134,7 @@ describe("EmitterTree multi-drag preview", () => {
 
     // No multi preview; the single-drag insertion line shows instead.
     expect(screen.queryByTestId("drag-chip")).toBeNull();
-    expect(screen.queryByTestId("drop-band-3")).toBeNull();
+    expect(screen.queryByTestId("drop-gap-3")).toBeNull();
     expect(screen.getByTestId("drop-indicator-above-3")).toBeInTheDocument();
 
     fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
