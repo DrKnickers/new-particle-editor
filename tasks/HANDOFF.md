@@ -1,6 +1,6 @@
 # Session Handoff — AloParticleEditor / LT-4
 
-## 2026-06-08 (session 28) — **Item 3 (dock-slide viewport stutter) BUILT → reviewed (2 adversarial passes) → user-confirmed in the host → SHIPPED to `master` via PR [#94-style flow]: PR [#97] (Item 3 + UI-polish items 1/2/4), PR [#96] (PAL-14 flake fix), PR [#98] (CHANGELOG backfill) — all merged. No open PRs.** NEXT: **continue UI polish** (open-ended, the user's standing direction) or start **MT-13** (legacy/arch-A removal, greenlit, its own ★★★★ effort)
+## 2026-06-08 (session 28) — **Item 3 (dock-slide viewport stutter) BUILT → reviewed (2 adversarial passes) → user-confirmed in the host → SHIPPED to `master` via PR [#94-style flow]: PR [#97] (Item 3 + UI-polish items 1/2/4), PR [#96] (PAL-14 flake fix), PR [#98] (CHANGELOG backfill) — all merged. No open PRs.** NEXT (user chose, 2026-06-08): **ROADMAP [NT-10]** — reduce the maximized save-modal backdrop snapshot latency (~69ms), via StretchRect-before-readback in `AlphaCompositor::CaptureSnapshotPng`; see the Kickoff below
 
 **`origin/master` = `2c7bc31`** (advanced this session: #97 → `3eb6e28`, #96 → `311661d`,
 #98 → `2c7bc31`). **No open PRs.** `master` is the trunk; branch fresh work off it. The
@@ -68,39 +68,52 @@ adversarial pass corrected). Fix = the host **generates** the rect itself each f
 - **CI flake = the documented caveat:** #97's web leg flaked on PAL-14 (branch predated #96);
   a single re-run cleared it. Merging #96 first then rebasing #98 gave deterministic CI.
 
-### Kickoff (full) — paste into a fresh session
+### Kickoff (full) — paste into a fresh session [TASK: ROADMAP NT-10]
 > Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React +
 > D3D9Ex-via-DComp particle editor for SW:EaW). **`master` is the trunk** (new-UI is the x64
-> DEFAULT, `--legacy` opts out; `lt-4` retired). **`origin/master` = `2c7bc31`** and there are
-> **no open PRs** — last session (28) shipped Item 3 (the dock-slide viewport stutter, a
-> host-side time-interpolated viewport rect) via PR #97, plus the PAL-14 flake fix (#96) and a
-> CHANGELOG backfill (#98). Read `tasks/HANDOFF.md` top (session 28) and, for the just-shipped
-> work, the CHANGELOG top entry + `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md`.
-> Read `tasks/lessons.md` (esp. **L-072** never rewrite UTF-8 files with PowerShell
-> `Set-Content`; **L-022** verify code over handoff/agent claims — four false premises died to
-> this last session; **L-033** arch-C visuals + animation timing need the user's eye, not agent
-> screenshots; **L-070** `tsc -b`; **L-068** `pnpm build` before native; **L-066/L-071** native
-> phantom re-run; **L-046** MSBuild **VS18**; **L-039/L-040** fresh-worktree restore). **VERIFY
-> claims against actual code.** **Pre-flight:** `git fetch origin master`; from `web/` `pnpm
-> install` if needed, then `pnpm --filter @particle-editor/editor test` → **537**, `tsc -b` 0;
-> native **174/0** (fresh worktree needs L-039 NuGet copy + L-046 MSBuild VS18 + L-040 `pnpm
-> build`); a fresh worktree off master `HEAD..origin/master` should be 0. **NEXT:** the user is
-> doing an open-ended UI-polish pass on the now-default new UI — **brainstorm the next item(s)
-> WITH the user** (Item 3 was the last big one; tune values in the real host per L-033). MT-13
-> (legacy/arch-A removal) is **greenlit** but is its OWN ★★★★+ effort (legacy WNDCLASS,
-> `RenderWindowProc`, `.rc` resources, the `--legacy` flag, x86) — plan it separately if the
-> user picks it up. Summarize your understanding + confirm scope before changing anything.
+> DEFAULT, `--legacy` opts out; `lt-4` retired). **`origin/master` = `900b317`+**, **no open
+> PRs**. Session 28 shipped Item 3 (the dock-slide viewport stutter).
+> **TASK: ROADMAP [NT-10] — further reduce the maximized save-modal backdrop snapshot latency**
+> (`ROADMAP.md` §1.3). The frosted-glass modal snapshots the engine viewport on every open via
+> `AlphaCompositor::CaptureSnapshotPng` ([`src/host/AlphaCompositor.cpp:572`](../src/host/AlphaCompositor.cpp:572)).
+> Session-28's Item-2 work added a downscale-before-encode (`kSnapshotDownscale=2`, capped 1024px
+> long edge, ~line 699) → windowed **~18 ms**, but **maximized (3440×1369) still ~69 ms**: the
+> `GetRenderTargetData` readback (:605) + the ~19 MB SYSTEMMEM→RAM memcpy run at FULL RT size,
+> then GDI+ `DrawImage` downscales the full ~2519×942 crop. **Recommended (ROADMAP avenue a):**
+> `StretchRect` the full offscreen RT into a SMALL render target (at today's target dims — keep
+> the same effective resolution so the dialog's `backdrop-blur-sm` floor isn't broken), then
+> `GetRenderTargetData` from THAT — cutting the full-size readback, the memcpy, AND the
+> DrawImage-source read in one move. **Verify before building:** StretchRect format/pool/filter
+> (`D3DTEXF_LINEAR`) compat on this D3D9Ex device; preserve the scene-rect crop; leave
+> `CaptureSnapshotToFile` (the `--capture` offline-diff path, :791) full-res. **Measure** with the
+> `[INSTANT-MODAL]` stderr log (:781; `Start-Process -RedirectStandardError`). Read
+> `tasks/HANDOFF.md` top (session 28), the NT-10 ROADMAP entry, and the current
+> `CaptureSnapshotPng` impl. Read `tasks/lessons.md` (esp. **L-072** never rewrite UTF-8 source
+> with PowerShell `Set-Content`; **L-022** verify code over handoff/agent claims; **L-033** the
+> modal-latency *feel* (esp. maximized) needs the user's eye, not just `[INSTANT-MODAL]` numbers;
+> **L-046** MSBuild **VS18**; **L-039/L-040** fresh-worktree restore; **L-068** `pnpm build`
+> before native; **L-070** `tsc -b`; **L-066/L-071** native phantom re-run). **VERIFY against
+> actual code.** **Pre-flight:** `git fetch origin master`; from `web/` `pnpm install` if needed,
+> `pnpm --filter @particle-editor/editor test` → **537**, `tsc -b` 0; host Debug x64 (VS18) clean;
+> native harness **174/0** (fresh worktree needs L-039 NuGet copy + L-040 `pnpm build`);
+> `HEAD..origin/master` should be 0. **On ship:** update `ROADMAP.md` (strikethrough §1.3, move to
+> Shipped §5 with an *Actual:* line, vacate the tag) + add a `CHANGELOG.md` entry. Summarize
+> understanding + confirm scope (esp. the StretchRect feasibility on the D3D9Ex device) before
+> changing anything.
 
-### Kickoff (short)
-> Pick up AloParticleEditor. **`master` is the trunk** (`2c7bc31`, no open PRs; new-UI x64
-> default, `lt-4` retired). Session 28 shipped Item 3 (dock-slide viewport stutter) + #96/#98.
-> Read `tasks/HANDOFF.md` top (session 28) + `tasks/lessons.md` (esp. **L-072** no PowerShell
-> `Set-Content` on source files, **L-022** verify code over claims, **L-033** arch-C/animation
-> needs the user's eye). VERIFY against code. Pre-flight: `git fetch origin master`;
-> `pnpm --filter @particle-editor/editor test` → **537**, `tsc -b` 0; native **174/0** (fresh
-> worktree needs L-039/L-046/L-040; install pnpm from `web/`). NEXT: **continue UI polish**
-> (open-ended — brainstorm the next item WITH the user) or start **MT-13** (legacy removal,
-> greenlit, separate effort). Confirm scope before changing anything.
+### Kickoff (short) [TASK: ROADMAP NT-10]
+> Pick up AloParticleEditor. **`master` trunk** (`900b317`+, no open PRs; new-UI x64 default,
+> `lt-4` retired). **TASK: ROADMAP [NT-10]** — cut the maximized save-modal snapshot latency
+> (~69 ms). It's `AlphaCompositor::CaptureSnapshotPng` ([`src/host/AlphaCompositor.cpp:572`](../src/host/AlphaCompositor.cpp:572));
+> session-28 added a downscale-before-encode (windowed ~18 ms) but maximized still does a full-RT
+> `GetRenderTargetData` + ~19 MB memcpy + full-crop GDI+ `DrawImage`. **Recommended:** StretchRect
+> the RT into a SMALL render target and read THAT back (ROADMAP §1.3 avenue a). Keep the scene-rect
+> crop + the blur-floor target dims; leave `CaptureSnapshotToFile` full-res; measure via
+> `[INSTANT-MODAL]` (:781). Read `tasks/HANDOFF.md` top (s28) + ROADMAP §1.3 + `tasks/lessons.md`
+> (**L-072/L-022/L-033/L-046/L-039/L-040/L-068**). VERIFY against code. Pre-flight: `git fetch
+> origin master`; `pnpm --filter @particle-editor/editor test` → **537**, `tsc -b` 0; native
+> **174/0** (fresh worktree L-039/L-040; pnpm from `web/`). On ship → update ROADMAP §1.3 +
+> CHANGELOG. Confirm scope first.
 
 ---
 
