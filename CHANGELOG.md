@@ -16,6 +16,44 @@ Conventions:
 
 ## Changelog
 
+### Multi-aware emitter operations: delete / duplicate / move act on the whole selection, order preserved
+
+*2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Selecting several emitters and then deleting, duplicating, or reordering now
+acts on the **whole selection** from every entry point — the panel toolbar, the
+row right-click menu, the `Delete` key, and `Alt+↑/↓` — instead of just one
+emitter. After a **duplicate** the selection jumps to the new copies; after a
+**move** the highlight **follows** the moved emitters to their new positions.
+Moving a multi-selection up/down behaves as a **rigid block**: it translates by
+one or, if the edge-most member is pinned at the top/bottom, **freezes** — it
+never deforms by compacting trailing members past non-selected emitters (order
+is load-bearing in a particle system). The Move Up/Down buttons (and
+context-menu items) now grey out exactly when the move would do nothing,
+symmetrically at both edges.
+
+**How we tackled it.** Because an emitter "id" is a host-side position index
+that reshuffles on every structural change, the batch ops are done host-side:
+two new bridge messages `emitters/move-many` and `emitters/duplicate-many`
+([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp)) perform the op
+atomically and return `newIds` — the affected emitters' final indices — which
+the React side re-selects ([`emitter-reorder.ts`](web/apps/editor/src/lib/emitter-reorder.ts)).
+The block-move preserve rule (skip the edge-anchored run; move the rest as a
+unit) lives in the host **and** the mock, plus a shared `canMoveSelection`
+predicate ([`move-enabled.ts`](web/apps/editor/src/lib/move-enabled.ts)) that the
+toolbar and context-menu Move items share so their enabled state can't drift.
+
+**Issues encountered and resolutions.** *The disabled-state asymmetry* (up
+greyed at the top, down didn't at the bottom) traced to the buttons reading the
+*primary* emitter's row position — single-select logic — so the result depended
+on which member was primary; fixed by computing from the selection. *The
+context-menu / trash / right-click delete originally ignored the multi-selection*
+(acted on the clicked or primary row); routed through the selection like the
+`Delete` key. *Compact-vs-preserve at the edge* was a real design fork settled
+with the user in favour of preserve.
+
+---
+
 ### Confirm destructive emitter deletes + surface failed Save / Open
 
 *2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
