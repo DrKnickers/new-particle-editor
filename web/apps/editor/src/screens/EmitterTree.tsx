@@ -97,7 +97,16 @@ import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { requestDeleteEmitters } from "@/lib/delete-emitters";
 import { moveEmitters, duplicateEmitters, reorderManyEmitters } from "@/lib/emitter-reorder";
-import { isMultiDrag, selectedRootIdsInOrder, resolveMultiDropIntent } from "@/lib/multi-drag";
+import {
+  isMultiDrag,
+  selectedRootIdsInOrder,
+  collectSubtreeIds,
+  resolveGapFromGeometry,
+  gapContentY,
+  liftedBlockHeight,
+  computeChipTarget,
+  type RootBlockGeometry,
+} from "@/lib/multi-drag";
 import { canMoveSelection } from "@/lib/move-enabled";
 
 type Props = {
@@ -152,14 +161,50 @@ function flattenTree(tree: EmitterTreeDto | null): FlatRow[] {
 // Drop indicator state. Owned at the EmitterTree level so only one row
 // at a time displays a visual indicator. `targetId` is the row currently
 // being hovered; `zone` is which third of the row's rect the cursor is
-// in. `null` means no active drag-over.
-type DropIndicator = { targetId: number; zone: DropZone; multi?: boolean; blockSize?: number; rowHeight?: number } | null;
+// in. `null` means no active drag-over. A multi-drag carries a resolved gap
+// index (+ the lifted block's measured height for the spacer) instead — it
+// has no hovered-row semantics, the gap is geometric.
+type DropIndicator =
+  | { multi?: false; targetId: number; zone: DropZone }
+  | { multi: true; gapIndex: number; gapHeight: number }
+  | null;
+
+// [multi-drag] Chip-magnetize tuning: how far the chip's Y leans toward the
+// active gap's center (0 = stays at the pointer, 1 = docks onto the gap), and
+// the per-frame spring factor for the glide between targets.
+const CHIP_PULL = 0.6;
+const CHIP_SPRING = 0.25;
 
 // Validated parameters for the `emitters/drop` bridge call — the output
 // of resolveDropIntent. `null` means the drop is refused.
 type DropParams =
   | { mode: "reparent"; id: number; targetId: number; slot: "lifetime" | "death" }
   | { mode: "reorder"; id: number; rootIndex: number };
+
+/** [multi-drag] Measure every root block's extent (root row + whole subtree)
+ *  in scroll-CONTENT space at drag activation. Measured, never assumed — row
+ *  height varies with density and a block's height with its subtree. Returns
+ *  null if any row element is missing (defensive: the drag then shows no gap
+ *  and a release is a no-op). */
+function captureRootBlockGeometry(
+  sc: HTMLElement | null,
+  roots: EmitterTreeNode[],
+): RootBlockGeometry | null {
+  if (sc === null) return null;
+  // content Y of a rect = rect.top - scroll viewport top + scrollTop
+  const scTop = sc.getBoundingClientRect().top - sc.scrollTop;
+  const tops: number[] = [];
+  const bottoms: number[] = [];
+  for (const r of roots) {
+    const ids = collectSubtreeIds(r);
+    const firstEl = sc.querySelector(`button[data-emitter-id="${ids[0]}"]`);
+    const lastEl = sc.querySelector(`button[data-emitter-id="${ids[ids.length - 1]}"]`);
+    if (firstEl === null || lastEl === null) return null;
+    tops.push(firstEl.getBoundingClientRect().top - scTop);
+    bottoms.push(lastEl.getBoundingClientRect().bottom - scTop);
+  }
+  return { tops, bottoms };
+}
 
 /** Find the parent node of `id` in the tree (null for a root / not found). */
 function findParentNode(
@@ -525,15 +570,15 @@ function EmitterRow({
   // (startDrag, wired to this row's button below); the row only renders
   // the drop indicator from `indicator` and initiates on pointerdown.
 
-  const isThisRowIndicator = indicator?.targetId === node.id;
-  const indicatorZone = isThisRowIndicator ? indicator!.zone : null;
-  // Dimmed while lifted: the grabbed row OR any row in the multi-drag block.
+  // Dimmed while lifted: the grabbed row OR any row in the lifted block
+  // (selected roots + all their descendants).
   const isDragging = draggingId === node.id || draggingIds.includes(node.id);
   // The 2px insertion line + onto-ring are the SINGLE-drag affordance only;
-  // a multi-drag renders the destination band instead (below), so suppress
-  // the line/ring when the active indicator is multi. (`indicator.multi` is
-  // undefined for single-drag → singleZone === indicatorZone, unchanged.)
-  const singleZone = indicator?.multi ? null : indicatorZone;
+  // a multi-drag renders the make-room gap instead (parent render).
+  const singleZone =
+    indicator !== null && indicator.multi !== true && indicator.targetId === node.id
+      ? indicator.zone
+      : null;
 
   // Reparent target visual: tint the row + ring.
   const reparentTintClass = singleZone === "onto"
@@ -623,8 +668,10 @@ function EmitterRow({
               fontClass,
               // LNK-6: hovering a group's bracket tints its member rows.
               linkHover ? "bg-accent/10" : "",
-              node.visible ? "" : "opacity-50",
-              isDragging ? "opacity-50" : "",
+              // Lifted rows read distinctly from hidden ones (plain
+              // opacity-50): dragging also desaturates. Dragging wins when
+              // both apply.
+              isDragging ? "opacity-40 saturate-50" : node.visible ? "" : "opacity-50",
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
@@ -1347,24 +1394,85 @@ export function EmitterTree({ bridge }: Props) {
     const chipNames = multi
       ? blockIds.map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "").filter(Boolean)
       : [];
+    // The dim set: every dragged root's WHOLE subtree (children ride along on
+    // a reorder, so they lift visually too). Single-drag dims its subtree for
+    // the same reason — whatever you pick up, all of it reads as "in hand".
+    const dimIds = multi
+      ? blockIds.flatMap((id) => {
+          const n = curRoots.find((c) => c.id === id);
+          return n ? collectSubtreeIds(n) : [id];
+        })
+      : collectSubtreeIds(source);
     let lastReorderGap: number | null = null;
     let active = false;
     let lastParams: DropParams | null = null;
     let rafId: number | null = null;
     const THRESHOLD = 4;
+    // [multi-drag] Geometry snapshot (captured at activation) + the lifted
+    // block's total measured height — the resolver and the gap spacer both
+    // work off these, never off live (gap-shifted) DOM hit-testing.
+    let geom: RootBlockGeometry | null = null;
+    let liftedH = 0;
+    // [multi-drag] Chip spring state: the chip glides toward its target (the
+    // pointer, pulled toward the active gap) instead of teleporting.
+    const chipPos = { x: startX + 12, y: startY + 12 };
+    const reduceMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // Resolve the drop intent for the given row at vertical position `clientY`
-    // and reflect it in the indicator. Shared by the pointermove path (row
-    // from the event target) and the autoscroll loop (row from
-    // elementFromPoint — a held, stationary pointer fires no move while the
-    // content scrolls under it).
+    // [multi-drag] Resolve the drop gap geometrically from the pointer's
+    // content-space Y. Continuous — every position maps to a gap or the
+    // footprint no-op, so there is nothing to "hold" and nothing to flicker.
+    const updateMultiTarget = (clientY: number) => {
+      const sc = treeScrollRef.current;
+      if (sc === null || geom === null) return;
+      const p = clientY - sc.getBoundingClientRect().top + sc.scrollTop;
+      const res = resolveGapFromGeometry(geom, blockRootIdxs, p, lastReorderGap, liftedH);
+      if (res === "noop") {
+        // The block's own spot — clear the gap so a release leaves the order
+        // unchanged (you're not forced to move the block once you grab it).
+        if (lastReorderGap !== null) {
+          lastReorderGap = null;
+          setIndicator(null);
+        }
+      } else if (res.rootIndex !== lastReorderGap) {
+        lastReorderGap = res.rootIndex;
+        setIndicator({ multi: true, gapIndex: res.rootIndex, gapHeight: liftedH });
+      }
+    };
+
+    // [multi-drag] Advance the chip one spring step toward its target and
+    // render it. Called per pointermove AND per rAF tick (so it keeps gliding
+    // between moves); under prefers-reduced-motion it jumps straight to the
+    // target — the pull is information, the glide is decoration.
+    const stepChip = () => {
+      if (!multi || !active) return;
+      const sc = treeScrollRef.current;
+      let gapCenter: number | null = null;
+      if (sc !== null && geom !== null && lastReorderGap !== null) {
+        gapCenter =
+          gapContentY(geom, lastReorderGap) - sc.scrollTop +
+          sc.getBoundingClientRect().top + liftedH / 2;
+      }
+      const target = computeChipTarget(lastX, lastY, gapCenter, CHIP_PULL);
+      if (reduceMotion) {
+        chipPos.x = target.x;
+        chipPos.y = target.y;
+      } else {
+        chipPos.x += (target.x - chipPos.x) * CHIP_SPRING;
+        chipPos.y += (target.y - chipPos.y) * CHIP_SPRING;
+      }
+      setDragChip({ x: chipPos.x, y: chipPos.y, names: chipNames });
+    };
+
+    // Resolve the SINGLE-drag drop intent for the given row at vertical
+    // position `clientY` and reflect it in the indicator. Shared by the
+    // pointermove path (row from the event target) and the autoscroll loop
+    // (row from elementFromPoint — a held, stationary pointer fires no move
+    // while the content scrolls under it). The multi path never hit-tests
+    // rows — see updateMultiTarget.
     const updateDropTarget = (rowEl: HTMLElement | null, clientY: number) => {
       if (rowEl === null) {
-        // [multi-drag] HOLD: the pointer is over the make-room gap (which is
-        // pointer-events-none) or empty space. Keep the current gap instead of
-        // clearing it — clearing here is what makes the gap flicker as the
-        // shifted rows / the gap itself pass under the pointer.
-        if (multi) return;
         lastParams = null;
         setIndicator(null);
         return;
@@ -1372,34 +1480,13 @@ export function EmitterTree({ bridge }: Props) {
       const targetId = Number(rowEl.getAttribute("data-emitter-id"));
       const target = curRows.find((r) => r.node.id === targetId)?.node ?? null;
       if (target === null) {
-        if (multi) return; // HOLD (see above)
         lastParams = null;
-        lastReorderGap = null;
         setIndicator(null);
         return;
       }
       const rect = rowEl.getBoundingClientRect();
       const zone = computeDropZone(clientY - rect.top, rect.height);
       const targetRootIdx = curRoots.findIndex((c) => c.id === targetId);
-      if (multi) {
-        const intent = resolveMultiDropIntent(blockRootIdxs, target, targetRootIdx, zone, curRoots.length);
-        if (intent === "noop") {
-          // Hovering the block's OWN spot — a deliberate no-op. CLEAR the gap so
-          // a release here leaves the order unchanged (you're not forced to move
-          // the block once you've picked it up).
-          lastReorderGap = null;
-          setIndicator(null);
-          return;
-        }
-        // HOLD on a dead zone (null: the "onto" middle third, a child row, or
-        // the pointer sitting over the gap) so the gap doesn't blink off; only
-        // move it when a NEW valid root gap is hovered.
-        if (intent !== null) {
-          lastReorderGap = intent.rootIndex;
-          setIndicator({ targetId, zone, multi: true, blockSize: blockIds.length, rowHeight: rect.height });
-        }
-        return;
-      }
       const params = resolveDropIntent(source, target, targetRootIdx, zone, curTree, curRoots);
       lastParams = params;
       setIndicator(params !== null ? { targetId, zone } : null);
@@ -1414,13 +1501,18 @@ export function EmitterTree({ bridge }: Props) {
         const delta = computeAutoscrollDelta(lastY, sc.getBoundingClientRect());
         if (delta !== 0) {
           sc.scrollTop += delta;
-          const rowEl =
-            (document.elementFromPoint(lastX, lastY)?.closest?.("[data-emitter-id]") as
-              | HTMLElement
-              | null) ?? null;
-          updateDropTarget(rowEl, lastY);
+          if (multi) {
+            updateMultiTarget(lastY);
+          } else {
+            const rowEl =
+              (document.elementFromPoint(lastX, lastY)?.closest?.("[data-emitter-id]") as
+                | HTMLElement
+                | null) ?? null;
+            updateDropTarget(rowEl, lastY);
+          }
         }
       }
+      stepChip();
       rafId = requestAnimationFrame(tick);
     };
 
@@ -1433,7 +1525,14 @@ export function EmitterTree({ bridge }: Props) {
         }
         active = true;
         setDraggingId(source.id);
-        setDraggingIds(multi ? blockIds : []);
+        setDraggingIds(dimIds);
+        // [multi-drag] Snapshot the root-block geometry NOW — the DOM is
+        // still in its resting layout (no gap rendered, no dimming applied);
+        // every later resolve is pure math against this.
+        if (multi) {
+          geom = captureRootBlockGeometry(treeScrollRef.current, curRoots);
+          liftedH = geom !== null ? liftedBlockHeight(geom, blockRootIdxs) : 0;
+        }
         // [SEL-13] Esc / right-click cancel only an ACTIVE drag — attach the
         // listeners on activation so a pre-threshold right-click still opens
         // the row context menu. [SEL-12] start the autoscroll loop.
@@ -1441,12 +1540,14 @@ export function EmitterTree({ bridge }: Props) {
         document.addEventListener("contextmenu", onCtx, true);
         rafId = requestAnimationFrame(tick);
       }
-      const rowEl =
-        ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
-        null;
-      updateDropTarget(rowEl, ev.clientY);
-      if (multi && active) {
-        setDragChip({ x: ev.clientX, y: ev.clientY, names: chipNames });
+      if (multi) {
+        updateMultiTarget(ev.clientY);
+        stepChip(); // also per-move, so the chip exists without waiting on rAF
+      } else {
+        const rowEl =
+          ((ev.target as Element | null)?.closest?.("[data-emitter-id]") as HTMLElement | null) ??
+          null;
+        updateDropTarget(rowEl, ev.clientY);
       }
     };
 
@@ -1825,28 +1926,30 @@ export function EmitterTree({ bridge }: Props) {
             className="m-0 flex-1 list-none p-0"
           >
           {flatRows.map((row) => {
-            // [multi-drag] "make room" gap: a flow spacer (block-height) at the
-            // drop point so the rows below actually shift down to reveal where
-            // the dragged block will land. Replaces the old absolute overlay.
+            // [multi-drag] "make room" gap: a flow spacer (the lifted block's
+            // measured height) at the resolved gap index, so the rows below
+            // shift down to reveal where the block will land. Gap g renders
+            // before root g's row; the end gap (g = N) renders after the
+            // whole list (below this map).
             const showGap =
-              indicator?.multi === true && indicator.targetId === row.node.id;
+              indicator?.multi === true &&
+              indicator.gapIndex < rootChildren.length &&
+              rootChildren[indicator.gapIndex]!.id === row.node.id;
             const gap = showGap ? (
               <li
                 aria-hidden
                 role="presentation"
-                data-testid={`drop-gap-${row.node.id}`}
+                data-testid={`drop-gap-at-${indicator.gapIndex}`}
                 // ring-inset: render the ring INSIDE the element so it isn't
                 // clipped by the scroll container's overflow at the very top /
                 // bottom edge of the list.
                 className="pointer-events-none mx-0.5 rounded bg-accent-soft ring-1 ring-inset ring-sky-400"
-                style={{
-                  height: `${(indicator!.rowHeight ?? 24) * (indicator!.blockSize ?? 1)}px`,
-                }}
+                style={{ height: `${indicator.gapHeight}px` }}
               />
             ) : null;
             return (
               <Fragment key={row.node.id}>
-                {showGap && indicator!.zone === "above" && gap}
+                {gap}
                 <EmitterRow
                   row={row}
                   primaryId={primaryId}
@@ -1870,10 +1973,20 @@ export function EmitterTree({ bridge }: Props) {
                   onHoverLinkGroup={setHoveredLinkGroup}
                   onDissolveLinkGroup={handleDissolveLinkGroup}
                 />
-                {showGap && indicator!.zone === "below" && gap}
               </Fragment>
             );
           })}
+          {/* [multi-drag] end gap (g = N): after the LAST root's whole
+              subtree — the very bottom of the list. */}
+          {indicator?.multi === true && indicator.gapIndex === rootChildren.length && (
+            <li
+              aria-hidden
+              role="presentation"
+              data-testid={`drop-gap-at-${indicator.gapIndex}`}
+              className="pointer-events-none mx-0.5 rounded bg-accent-soft ring-1 ring-inset ring-sky-400"
+              style={{ height: `${indicator.gapHeight}px` }}
+            />
+          )}
           </ul>
           {/* Link-group bracket layer. Absolutely positioned at the
               measured longest-name right edge (bracketLeft) so the
@@ -1988,23 +2101,30 @@ export function EmitterTree({ bridge }: Props) {
         </div>
       )}
       <EmitterTreeToolbar bridge={bridge} tree={tree} primaryId={primaryId} />
-      {/* [multi-drag] Cursor chip — a small fixed-position card following the
-          pointer during a multi-root drag. Lists up to 3 dragged names + a
-          total count. Uses this file's floating-surface vocabulary (bg-bg-2 +
-          shadow-xl) with the sky-400 drag accent on the border to read as part
-          of the same drop affordance family as the destination band. */}
+      {/* [multi-drag] Cursor chip — a small fixed-position card during a
+          multi-root drag: up to 4 dragged names (tree order) + a "+k more"
+          line. Its position is the magnetized spring state (computeChipTarget
+          + per-frame easing): anchored at the pointer, pulled toward the
+          active gap so the emitters read as flowing into it. Uses this file's
+          floating-surface vocabulary (bg-bg-2 + shadow-xl) with the sky-400
+          drag accent to match the gap affordance. */}
       {dragChip && (
         <div
           data-testid="drag-chip"
           aria-hidden
           className="pointer-events-none fixed z-50 rounded-md border border-sky-400 bg-bg-2/95 px-2 py-1 text-xs text-accent shadow-xl"
-          style={{ left: dragChip.x + 12, top: dragChip.y + 12 }}
+          style={{ left: dragChip.x, top: dragChip.y }}
         >
-          {dragChip.names.map((name, i) => (
+          {dragChip.names.slice(0, 4).map((name, i) => (
             <div key={i} className="truncate px-2 leading-5">
               {name}
             </div>
           ))}
+          {dragChip.names.length > 4 && (
+            <div className="px-2 leading-5 text-text-3">
+              +{dragChip.names.length - 4} more
+            </div>
+          )}
         </div>
       )}
     </div>

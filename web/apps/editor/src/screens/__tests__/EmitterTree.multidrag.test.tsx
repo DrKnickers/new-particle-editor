@@ -36,8 +36,7 @@ function fixtureTree(): EmitterTreeDto {
   };
 }
 
-function makeStubBridge() {
-  const tree = fixtureTree();
+function makeStubBridge(tree: EmitterTreeDto = fixtureTree()) {
   const snapshot = { selectedEmitterId: null };
   return {
     request: vi.fn().mockImplementation((req: { kind: string; params?: unknown }) => {
@@ -83,38 +82,44 @@ describe("EmitterTree multi-drag preview", () => {
     fireEvent.click(screen.getByText("Flash"), { ctrlKey: true });
     expect(useEmitterSelectionStore.getState().ids).toEqual([0, 5]);
 
+    // Stub the full row geometry — the multi-drag resolver snapshots every
+    // root block's rect at activation and works in content space (the jsdom
+    // scroll container's rect is all-zero, so content Y == stubbed rect Y).
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
     const flashBtn  = screen.getByText("Flash").closest("button")!;
     const sparksBtn = screen.getByText("Sparks").closest("button")!;
-    stubRect(sparksBtn, 100, 30); // thirds at 10px; y=3 → "above"
+    stubRect(smokeBtn, 0, 24);
+    stubRect(sparksBtn, 24, 24);
+    stubRect(flashBtn, 48, 24);
 
-    // pointerdown at y=0, then a move (y=103, past the 4px threshold) over
-    // Sparks' upper third — multi branch resolves a destination gap (gap=1,
-    // above Sparks) and shows the preview while the drag is still live.
+    // pointerdown at y=0, then a move to y=20 (past the 4px threshold):
+    // block midpoints are 12/36/60, so y=20 is past Smoke's midpoint only →
+    // gap index 1 (between Smoke and Sparks).
     fireEvent.pointerDown(flashBtn, { button: 0, clientX: 0, clientY: 0 });
-    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 40, clientY: 103 });
+    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 40, clientY: 20 });
 
-    // Preview D: cursor chip (vertical name list) following the pointer + a
-    // make-room gap at the drop point (above Sparks, id=3).
+    // Preview: cursor chip (vertical name list) + a make-room gap at the
+    // resolved gap index.
     const chip = screen.getByTestId("drag-chip");
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain("Smoke");
     expect(chip.textContent).toContain("Flash");
-    expect(screen.getByTestId("drop-gap-3")).toBeInTheDocument();
+    expect(screen.getByTestId("drop-gap-at-1")).toBeInTheDocument();
     // The single-drag insertion line must NOT render for a multi-drag.
     expect(screen.queryByTestId("drop-indicator-above-3")).toBeNull();
 
     // Release commits the block reorder via the reorder-many bridge message
     // (NOT emitters/drop, which is the single-drag path).
-    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 40, clientY: 103 });
+    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 40, clientY: 20 });
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     const reorder = calls.find((c) => c.kind === "emitters/reorder-many");
     expect(reorder).toBeDefined();
     expect(reorder.params).toEqual({ ids: [0, 5], rootIndex: 1 });
     expect(calls.find((c) => c.kind === "emitters/drop")).toBeUndefined();
 
-    // Chip + band clear once the drag finishes.
+    // Chip + gap clear once the drag finishes.
     expect(screen.queryByTestId("drag-chip")).toBeNull();
-    expect(screen.queryByTestId("drop-gap-3")).toBeNull();
+    expect(screen.queryByTestId("drop-gap-at-1")).toBeNull();
   });
 
   it("a single-root drag still uses the insertion line + emitters/drop (no band/chip)", async () => {
@@ -141,5 +146,162 @@ describe("EmitterTree multi-drag preview", () => {
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
     expect(calls.find((c) => c.kind === "emitters/drop")).toBeDefined();
     expect(calls.find((c) => c.kind === "emitters/reorder-many")).toBeUndefined();
+  });
+
+  it("hovering the block's own footprint clears the gap and a release there is a no-op (no wire call)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+
+    // Contiguous block: Smoke(0) + Sparks(3) at root indices 0,1 → noop gaps 0..2.
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Sparks"), { ctrlKey: true });
+
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    stubRect(smokeBtn, 0, 24);
+    stubRect(sparksBtn, 24, 24);
+    stubRect(flashBtn, 48, 24);
+
+    // y=30 → past mid 12 only → gap 1 → inside the footprint → no gap shown.
+    fireEvent.pointerDown(smokeBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(smokeBtn, { button: 0, clientX: 40, clientY: 30 });
+
+    expect(screen.getByTestId("drag-chip")).toBeInTheDocument();
+    expect(document.querySelector('[data-testid^="drop-gap-at-"]')).toBeNull();
+
+    fireEvent.pointerUp(smokeBtn, { button: 0, clientX: 40, clientY: 30 });
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "emitters/reorder-many")).toBeUndefined();
+    expect(calls.find((c) => c.kind === "emitters/drop")).toBeUndefined();
+  });
+
+  it("dragging below every block resolves the END gap (after the whole list)", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Sparks"), { ctrlKey: true });
+
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    stubRect(smokeBtn, 0, 24);
+    stubRect(sparksBtn, 24, 24);
+    stubRect(flashBtn, 48, 24);
+
+    // y=70 → past all midpoints (12/36/60) → gap 3 = N (end of list).
+    fireEvent.pointerDown(smokeBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(flashBtn, { button: 0, clientX: 40, clientY: 70 });
+
+    expect(screen.getByTestId("drop-gap-at-3")).toBeInTheDocument();
+
+    fireEvent.pointerUp(flashBtn, { button: 0, clientX: 40, clientY: 70 });
+    const reorder = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[0]).find((c) => c.kind === "emitters/reorder-many");
+    expect(reorder.params).toEqual({ ids: [0, 3], rootIndex: 3 });
+  });
+
+  // --- Preview polish (session 32) ---
+
+  /** Roots A(0, child A1=1), B(3), C(5) — for subtree-dim assertions. */
+  function fixtureWithChildren(): EmitterTreeDto {
+    return {
+      root: {
+        id: -1, name: "", role: "root", linkGroup: 0, visible: true,
+        children: [
+          {
+            id: 0, name: "Smoke", role: "root", linkGroup: 0, visible: true,
+            children: [
+              { id: 1, name: "SmokeLife", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+            ],
+          },
+          { id: 3, name: "Sparks", role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 5, name: "Flash", role: "root", linkGroup: 0, visible: true, children: [] },
+        ],
+      },
+    };
+  }
+
+  it("a multi-drag dims the dragged roots' children too (whole subtree lifts)", async () => {
+    const bridge = makeStubBridge(fixtureWithChildren());
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("SmokeLife")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Flash"), { ctrlKey: true });
+
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);
+
+    fireEvent.pointerDown(smokeBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 40, clientY: 103 });
+
+    // Both selected roots AND Smoke's child row dim; the non-dragged root
+    // doesn't. (Query rows by data-emitter-id — the chip duplicates names.)
+    const row = (id: number) => document.querySelector(`button[data-emitter-id="${id}"]`)!;
+    expect(row(0)).toHaveAttribute("data-dragging", "true");
+    expect(row(1)).toHaveAttribute("data-dragging", "true");
+    expect(row(5)).toHaveAttribute("data-dragging", "true");
+    expect(row(3)).toHaveAttribute("data-dragging", "false");
+
+    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 40, clientY: 103 });
+  });
+
+  it("a single drag dims the grabbed root's subtree too", async () => {
+    const bridge = makeStubBridge(fixtureWithChildren());
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("SmokeLife")).toBeInTheDocument());
+
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+    stubRect(sparksBtn, 100, 30);
+
+    fireEvent.pointerDown(smokeBtn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+
+    expect(screen.getByText("Smoke").closest("button")!).toHaveAttribute("data-dragging", "true");
+    expect(screen.getByText("SmokeLife").closest("button")!).toHaveAttribute("data-dragging", "true");
+    expect(screen.getByText("Sparks").closest("button")!).toHaveAttribute("data-dragging", "false");
+
+    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+  });
+
+  it("the cursor chip caps at 4 names + a '+k more' line for big selections", async () => {
+    const manyRoots: EmitterTreeDto = {
+      root: {
+        id: -1, name: "", role: "root", linkGroup: 0, visible: true,
+        children: [0, 1, 2, 3, 4, 5].map((i) => ({
+          id: i, name: `R${i}`, role: "root" as const, linkGroup: 0, visible: true, children: [],
+        })),
+      },
+    };
+    const bridge = makeStubBridge(manyRoots);
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("R0")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("R0"));
+    for (const n of ["R1", "R2", "R3", "R4", "R5"]) {
+      fireEvent.click(screen.getByText(n), { ctrlKey: true });
+    }
+
+    const r0Btn = screen.getByText("R0").closest("button")!;
+    const r5Btn = screen.getByText("R5").closest("button")!;
+    stubRect(r5Btn, 100, 30);
+
+    fireEvent.pointerDown(r0Btn, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(r5Btn, { button: 0, clientX: 40, clientY: 103 });
+
+    const chip = screen.getByTestId("drag-chip");
+    expect(chip.textContent).toContain("R0");
+    expect(chip.textContent).toContain("R3");
+    expect(chip.textContent).not.toContain("R4");
+    expect(chip.textContent).not.toContain("R5");
+    expect(chip.textContent).toContain("+2 more");
+
+    fireEvent.pointerUp(r5Btn, { button: 0, clientX: 40, clientY: 103 });
   });
 });

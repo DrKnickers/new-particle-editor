@@ -26,9 +26,14 @@ consistent with the selection-aware Move Up/Down arrows. A non-contiguous
 selection collapses together at the drop point in its current top-to-bottom
 order; the highlight follows the moved emitters to their new positions. While
 dragging, the other emitters slide aside to open a **make-room gap** at the drop
-point and the lifted rows **dim**, so you see exactly where the block will land;
-a **vertical chip** by the cursor lists the rows being carried, in order.
-Dropping a block onto its own footprint does nothing. Drag-reorder stays **root-only** and
+point — sized to the lifted block's true height — and the **whole lifted
+subtree dims** (children ride along with their roots; a single-row drag dims its
+subtree too), so you see exactly where the block will land and exactly what is
+moving. A **vertical chip** by the cursor lists up to four of the rows being
+carried (+ a "+k more" line) and is **magnetized toward the active gap** — it
+glides partway into the gap so the emitters visibly "flow in", and returns to
+the pointer when a release would do nothing. Dropping a block onto its own
+footprint does nothing. Drag-reorder stays **root-only** and
 **reorder-only**: dropping *onto* a row to reparent remains a single-emitter-drag
 affordance, and dragging an unselected row behaves exactly as before.
 
@@ -44,7 +49,18 @@ multi-drag branch (pure intent resolution in
 [`lib/multi-drag.ts`](web/apps/editor/src/lib/multi-drag.ts)) that dispatches the
 op and re-selects the returned `newIds` through the existing `applyNewSelection`
 path; the dev mock mirrors the host algorithm exactly, so the Vitest suite is the
-behavioural contract for both.
+behavioural contract for both. The drop target is resolved **geometrically**, not
+by DOM hit-testing: at drag activation the controller snapshots every root
+block's measured extent in scroll-content space
+(`captureRootBlockGeometry`), and each pointer move maps to a gap index with
+pure math ([`resolveGapFromGeometry`](web/apps/editor/src/lib/multi-drag.ts) —
+un-shift the pointer past the rendered gap, then the classic
+midpoint-crossing rule). Every pointer position resolves to a gap or the
+footprint no-op — there are no dead zones, so the preview tracks the pointer
+continuously. The chip's magnet is a small rAF spring toward a blend of the
+pointer and the gap's center (`computeChipTarget`, pull/spring constants
+`CHIP_PULL`/`CHIP_SPRING` in `EmitterTree.tsx`); `prefers-reduced-motion`
+skips the glide but keeps the position.
 
 **Issues encountered and resolutions.** A pre-coding adversarial design pass
 caught that the no-op rule must refuse **every** gap on an already-contiguous
@@ -55,7 +71,19 @@ positions was **deferred**: the data model has no stable emitter identity (ids
 are positional and reshuffle on every reorder), so a robust glide needs an
 imperative FLIP controller rather than a React-keyed transition — captured as a
 follow-up ([`tasks/next-reorder-glide-animation.md`](tasks/next-reorder-glide-animation.md))
-to take on after a stable id is added.
+to take on after a stable id is added. The first preview iteration resolved the
+drop target from the **live** DOM, which a make-room gap inherently fights: the
+gap reflows the list, the pointer lands on the (pointer-events-none) gap, the
+target resolves null, the gap clears, the rows snap back — flicker. A
+hold-on-dead-zone workaround stopped the flicker but made the gap "stick" for
+~a block height of travel on tall blocks. The geometric snapshot resolver
+replaced both; its stability is pinned by a vitest **fixed-point property**
+(re-resolving a stationary pointer against the gap it produced never moves the
+gap; iteration from any reachable state converges without cycles — the property
+test caught a genuine transient on its first run). Synthetic-pointer testing
+gotcha: a dispatched `pointerdown` with the default `pointerType: ""` held over
+a Radix `ContextMenu.Trigger` opens the menu via the touch long-press path —
+drive synthetic drags with `pointerType: "mouse"`.
 
 ---
 
