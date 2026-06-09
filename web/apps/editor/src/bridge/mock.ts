@@ -44,6 +44,7 @@ import {
   pasteEmittersFromClipboard,
   pasteAsChildFromClipboard,
   renameEmitter,
+  reorderManyRoots,
   reorderRootEmitter,
   reparentEmitterInTree,
   setAllEmittersVisibleMock,
@@ -1054,6 +1055,19 @@ export class MockBridge implements Bridge {
         if (moved) this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         const finalRootIds = new Set(tree.root.children.map((c) => c.id));
         return { newIds: req.params.ids.filter((id) => finalRootIds.has(id)) };
+      }
+
+      case "emitters/reorder-many": {
+        const cur = useMockEmitterTree.getState().tree;
+        const next = reorderManyRoots(cur, req.params.ids, req.params.rootIndex);
+        if (next === null) return { ok: false, error: "reorder refused" };
+        useMockEmitterTree.getState().setTree(next);
+        this.emit({ kind: "emitters/tree/changed", payload: next });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        // Mock ids are stable across a reorder; newIds = the selected ids still
+        // at root level, in input order (aligned for applyNewSelection).
+        const rootIds = new Set(next.root.children.map((c) => c.id));
+        return { ok: true, newIds: req.params.ids.filter((id) => rootIds.has(id)) };
       }
 
       case "emitters/set-visible": {
