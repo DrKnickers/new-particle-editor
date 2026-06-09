@@ -1,5 +1,159 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-08 (session 27) — **Session-26 batch LANDED (PR #94 merged) + flaky PAL-14 fix (PR #96 OPEN) + UI-polish round 2 items 1/2/4 SHIPPED (committed `6307ba5` on `claude/ui-polish-2`, user-verified, NOT merged) + Item 3 (dock-slide viewport stutter) fully investigated → designed → red-teamed → Phase-0-confirmed (`92682e1`).** NEXT: **BUILD Item 3** per the spec (host-side time-interpolated viewport rect)
+
+**`origin/master` = `f729e6c`** (advanced this session by merging #94 → `1239ff9`, backfill
+#95 → `f729e6c`). **Working branch `claude/ui-polish-2` = `92682e1`** (2 ahead of master,
+**pushed** — branch from it). **PR #96** (`claude/fix-pal14-flake`) is **OPEN into master** —
+the flaky-test fix, awaiting the user's merge. Items 1/2/4 are **committed + verified but NOT
+PR'd/merged** (ready to PR, master-gate OK pending). Baseline on `claude/ui-polish-2`: web
+**515/0**, `tsc -b` 0, native harness **174/0**, host Debug x64 clean. Fresh worktree needs
+L-039 (NuGet copy) + L-046 (MSBuild **VS18** Debug x64) + L-040 (`pnpm build`).
+
+### Part A — session-26 carryover landed
+- **Merged PR #94** (session-26 UI-polish batch + the `xtree:181` link-group crash fix) →
+  `master` `1239ff9`, after waiting for all 3 CI legs green.
+- **Backfilled** the two CHANGELOG `TODO` merge-hashes → PR #95 (`f729e6c`).
+- **Fixed a flaky test** → **PR #96 (OPEN)**: `TexturePalettePopover.test.tsx` PAL-14 cases
+  read `data-thumb-status` synchronously after `findByTestId`, racing the async
+  `textures/palette/thumbnail` bridge resolve (`useEffect`→`setThumb`). Caught it failing a
+  CHANGELOG-only PR; wrapped both assertions in `waitFor`. 514→514, re-ran 3×.
+  **NOTE: this fix is on `claude/fix-pal14-flake` (#96), NOT on `claude/ui-polish-2`** — so
+  that branch still carries the master (unfixed) test; rare flake possible until #96 merges
+  and propagates.
+
+### Part B — UI-polish round 2 (items 1/2/4) — committed `6307ba5`, user-confirmed in host
+4 user requests; **#3 became Item 3** (its own effort, Part C). Items 1/2/4:
+- **Item 1 — selected curve key** (`CurveEditor.tsx`, `components.css`, `CurveEditor.test.tsx`).
+  Dropped the flat-blue selection override → selected keys keep their OWN colour intensified
+  via `filter: saturate(1.8)`, enlarged (`r` 4→6 single / `visR` 5→8 multi), stronger shadow;
+  **unselected keys now have NO shadow**; select/deselect **ANIMATES** (`transition: r 150ms,
+  filter 150ms` — Chromium transitions the SVG `r` attribute, no JS lib).
+- **Item 4 — popover anims** (`OccludingPopover.tsx`, `components.css`). Background/Ground/
+  texture-picker popovers fade in/out, centralised in the shared wrapper. **Hand-written
+  `@keyframes`** keyed off Radix `data-state` (the `animate-in` Tailwind utilities are NOT in
+  this build — no `tailwindcss-animate`). **Opacity-only, deliberately**: a corner-anchored
+  scale coupled the popover's position to its animation state (the "shift on press" the user
+  reported — *measured* via real-input Playwright: rest stuck at `scale(0.95)`, press snapped
+  to full width). Also `.tb-btn[data-state="open"]:active { transform: none }` so the trigger
+  doesn't scale (move the anchor) on the dismiss-press.
+- **Item 2 — instant modals** (`AlphaCompositor::CaptureSnapshotPng`). The frosted-glass
+  backdrop snapshot is **downscaled before PNG-encode** (`min 2×, cap 1024px long edge`) — it's
+  blurred behind the dialog, so full-res was pure latency. **Windowed ~18ms (was ~50),
+  maximized ~69ms** (measured via the `[INSTANT-MODAL]` debug log). Covers EVERY modal (all use
+  the shared `Modal`). Native snapshot-dim tests re-baselined to the 2× dims. `CaptureSnapshotToFile`
+  (`--capture`) left full-res. **ROADMAP [NT-10]** tracks the residual maximized latency
+  (StretchRect-before-readback the likely win).
+
+### Part C — Item 3 (dock-slide viewport stutter) — READY TO BUILD (`92682e1`)
+**Spec:** [`docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md`](../docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md) (rev 2, red-team folded in).
+**Two workflow outputs (rich detail):** `tasks/wa0o0il6r.output` (9-agent root-cause
+investigation), `tasks/w6v635b1y.output` (6-agent spec red-team).
+- **Root cause (verified):** *multi-clock sampling.* The uncapped, vsync-less host render loop
+  samples a **clumpy, gap-ridden** `scene-rect` message stream at irregular Δt → the viewport's
+  cropped edge advances in irregular integer steps against the browser-smooth panel. **NOT** a
+  1-frame clip lag (the investigation's adversarial pass proved engine render + DComp clip are
+  *co-applied* per host iteration — corrected the initial synthesis).
+- **Phase 0 DONE (diagnosis confirmed):** `[STUTTER-PROBE]` at `BridgeDispatcher.cpp:919-938`
+  (`#ifndef NDEBUG`, **TEMPORARY — remove before the fix lands**). 17 user slides → **16–30
+  distinct-integer rects/slide**, Δt **mean 13ms / stdev 20ms / gaps to 109ms**, width jumps up
+  to **~69px** after gaps. Width-only (h const), `from/to 658↔918` at the test window
+  (grow=dock-close, shrink=dock-open). The stream is irregular *already on the emit side* →
+  validates time-interpolation over the rejected rAF-coalesce.
+- **Design = host-side time-interpolated viewport rect.** Web sends ONE
+  `animate-scene-rect {from,to,durationMs,easing,msElapsedAtSend}`; host re-renders the engine
+  at a wall-clock-lerped rect every frame (matched cubic-bezier, back-dated QPC clock). Chosen
+  over DComp-scale (#4 — distorts geometry: per-pixel FoV ⇒ squished slice + end-snap).
+- **Red-team corrections folded into the spec (do NOT skip):** the "synchronous flexGrow read"
+  for `to` is **impossible** (react-resizable-panels emits on the next React commit) → compute
+  `to` **analytically**; add a **`prefers-reduced-motion`** branch (else a 200ms seam every
+  toggle); add the **`dockAnimating` zustand signal channel** + **RO-only** send suppression
+  (the single shared `send` closure also serves scroll/resize/DPR — don't gate all of them);
+  **host self-defense** (ignore stray `scene-rect`s while animating); **web-stamped start phase**
+  (the IPC hop is ~16–33ms, not "sub-ms"); **gate the anim to arch-C** (no-op under `--legacy`).
+- **NEXT (the build), per spec §3/§5:** Phase 1 = web first (the store + RO-only suppression +
+  analytic `to` + reduced-motion + the new message), then host (`ViewportAnim` + back-dated
+  `PerfQpcNow()` clock + render-loop advance + bezier + self-defense, arch-C-gated), then **live-
+  tune with the user** (L-033), then the regression gate (web 515/0, native 174/0, drag-resize +
+  rapid re-toggle = zero clear-strip frames, `--legacy` smoke, **remove the probe**). Spec
+  Open-questions: confirm arch-C gating (recommended) + analytic-`to` (recommended).
+
+### Verified baseline (run before changing anything)
+- Work is on **`claude/ui-polish-2`** (pushed, `92682e1`); `git fetch origin claude/ui-polish-2`
+  and **branch from it** (it has items 1/2/4 + the Item-3 spec/probe).
+- web: from `web/`, `pnpm install` if `node_modules` absent (install from **`web/`**, never
+  per-app); `pnpm --filter @particle-editor/editor test` → **515**; **`tsc -b`** (NOT `--noEmit`
+  — L-070) → 0.
+- native: fresh worktree needs L-039 + L-046 (**VS18**) + L-040. After any web change `pnpm
+  build` before the harness (L-068). `pnpm --filter @particle-editor/editor test:native` →
+  **174/0** (exit 1/2 + "browser closed" can be an L-066/L-071 phantom — re-run).
+- host: MSBuild **VS18** Debug x64 (`C:\Program Files\Microsoft Visual Studio\18\Community\…`);
+  **kill any running `ParticleEditor.exe` before the link** (it locks the exe). Launch
+  `x64\Debug\ParticleEditor.exe` (new-UI default; `ComputeEditorDistPath` is **exe-relative**
+  — `HostWindow.cpp:265-271` — so cwd doesn't matter, but launch from the worktree root anyway).
+
+### Lessons / gotchas this session
+- **L-022 reinforced twice:** the investigation's "1-frame clip lag" AND the spec's "synchronous
+  flexGrow read" were both plausible-but-FALSE; the adversarial workflow passes caught both
+  before any wasted code. Trust *verified* code, not the first synthesis.
+- **L-033 extends to timing:** the Claude **preview tab backgrounds → throttles CSS animations/
+  rAF** (it froze the popover entrance at `scale(0.95)`, which by accident *revealed* the
+  coupling bug). Real-input **Playwright (foreground)** measures genuine `:active` + animation
+  timing; use measured **geometry / CSSOM**, not screenshots, in both harnesses.
+- PowerShell 5.1 has **no ternary `? :`** (parser error — use `if/else`). `Start-Process
+  -RedirectStandardError <file>` captures the GUI host's `fprintf(stderr,...)` perf logs.
+
+### Kickoff (full) — paste into a fresh session
+> Pick up `new-particle-editor` (AloParticleEditor — Win32 host + WebView2/React + D3D9Ex-via-
+> DComp particle editor for SW:EaW). **`master` is the trunk** (new-UI is the x64 DEFAULT,
+> `--legacy` opts out; `lt-4` retired). The active task is **building Item 3 — the dock-slide
+> viewport stutter** — which is fully investigated, designed, adversarially reviewed, and
+> Phase-0-confirmed; only the implementation remains. **Pre-flight:** `git fetch origin
+> claude/ui-polish-2` and branch from it (`92682e1` — it has UI-polish items 1/2/4 + the Item-3
+> spec/probe, 2 ahead of master, pushed). From `web/` `pnpm install` if needed (from `web/`, not
+> per-app), then `pnpm --filter @particle-editor/editor test` → **515**, `tsc -b` 0; native
+> **174/0** (fresh worktree needs L-039 NuGet copy + L-046 MSBuild **VS18** + L-040 `pnpm build`).
+> **Read first:** `tasks/HANDOFF.md` top (session 27) and the design spec
+> `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md` (rev 2). The rich
+> investigation + red-team detail is in `tasks/wa0o0il6r.output` + `tasks/w6v635b1y.output`. Read
+> `tasks/lessons.md` (esp. **L-022** verify code over claims — TWO load-bearing premises were
+> proven false this session; **L-033** arch-C visuals + animation TIMING need the user's eye /
+> real-input Playwright, not agent screenshots or the throttled preview tab; **L-070** `tsc -b`
+> gate; **L-068** `pnpm build` before native; **L-066/L-071** native phantom re-run; **L-046**
+> MSBuild VS18; **L-039/L-040** fresh-worktree restore). **VERIFY claims against actual code.**
+> Item 3 = a host-side **time-interpolated viewport rect** (host re-renders at a wall-clock-lerped
+> rect each frame, synced to the CSS curve) — chosen over DComp-scale (#4, distorts geometry).
+> Root cause = multi-clock sampling of a clumpy `scene-rect` stream (NOT a 1-frame clip lag — the
+> spec explains). Build per spec §3: **web side first** (a `dockAnimating` zustand signal channel
+> + **RO-only** send suppression + **analytic** `to`-width + a **`prefers-reduced-motion`** branch
+> + the new `animate-scene-rect` message), then **host side** (`ViewportAnim` + back-dated
+> `PerfQpcNow()` clock + render-loop advance + a matched cubic-bezier + stray-`scene-rect`
+> self-defense, **gated to arch-C**), then **live-tune the easing/phase with the user** (the
+> viewport edge must glide with the panel — your render can't judge it). The `[STUTTER-PROBE]` at
+> `BridgeDispatcher.cpp:919-938` is `#ifndef NDEBUG` and **TEMPORARY — remove before sign-off**.
+> Also OPEN: **PR #96** (flaky PAL-14 fix) awaits the user's merge; items **1/2/4** are committed
+> on `claude/ui-polish-2` but NOT yet PR'd (master-gate OK pending). MT-13 (legacy removal) is
+> greenlit but separate. Summarize your understanding + confirm scope (esp. the spec's two
+> open-questions: arch-C gating + analytic-`to`) before changing anything.
+
+### Kickoff (short)
+> Pick up AloParticleEditor. **`master` = trunk; new-UI x64 default.** Task: **build Item 3
+> (dock-slide viewport stutter)** — investigated/designed/red-teamed/Phase-0-done, only the build
+> remains. Pre-flight: `git fetch origin claude/ui-polish-2` + branch from it (`92682e1`, has
+> items 1/2/4 + the spec); `pnpm --filter @particle-editor/editor test` → **515**, `tsc -b` 0;
+> native **174/0** (fresh worktree: L-039/L-046 **VS18**/L-040; install pnpm from `web/`). Read
+> `tasks/HANDOFF.md` top (session 27) + `docs/superpowers/specs/2026-06-08-item3-viewport-stutter-design.md`
+> (rev 2) + lessons **L-022/L-033/L-070/L-068/L-046**. VERIFY against code. Item 3 = host-side
+> **time-interpolated viewport rect** (web `animate-scene-rect` → host re-renders at a wall-clock
+> bezier-lerped rect each frame, arch-C-gated); root cause = multi-clock sampling of a clumpy
+> `scene-rect` stream. Build web-side first (zustand `dockAnimating` + RO-only suppression +
+> analytic `to` + reduced-motion), then host (`ViewportAnim` + back-dated `PerfQpcNow()` +
+> render-loop advance + matched bezier + self-defense), then **live-tune with the user** (L-033).
+> Remove the `#ifndef NDEBUG` `[STUTTER-PROBE]` before sign-off. PR #96 + items 1/2/4 await
+> user merge-OK. Confirm scope before changing anything.
+
+---
+
 ## 2026-06-08 (session 26) — **`lt-4 → master` integration COMPLETE (new-UI-default LIVE on `master`) + UI-polish batch (7 items) + recovery-modal fix + a pre-existing `xtree:181` link-group crash root-caused & fixed. Polish/crash work is PR [#94](https://github.com/DrKnickers/new-particle-editor/pull/94) (OPEN into `master`, MERGEABLE, CI running — NOT merged).** NEXT: continue UI polish
 
 **`origin/master` = `e902344`** (the integration end-state). Working branch
