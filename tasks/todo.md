@@ -1,3 +1,83 @@
+# Session 32 — Part 3: reorder glide animation (stable id + FLIP)
+
+_User-directed start while they work elsewhere; design pre-agreed in
+[next-reorder-glide-animation.md](next-reorder-glide-animation.md) (fix the
+root cause — stable id — then a standard React FLIP, all reorder paths).
+Branch: `claude/reorder-glide` stacked on `claude/multiselect-drag` (#106)._
+
+## 1. Goal + scope
+
+When the emitter list reorders (single drag, multi drag, Move Up/Down), rows
+**glide** to their new positions (~200ms ease) instead of snapping.
+
+**In:** host-side stable per-emitter id surfaced on the DTO; React rows keyed
+by it; a FLIP pass on flat-list order changes; `prefers-reduced-motion` skips
+the glide. **Out:** persisting stable ids into `.alo` (runtime-only — undo
+restore rebuilds emitters, so a glide doesn't play across undo/redo: rows
+remount, acceptable); animating expand/collapse or add/delete (only moves);
+the chain investigation (deferred, see next-emitter-chain-investigation.md).
+
+## 2. What the codebase already gives us
+
+- `ParticleSystem::Emitter` has exactly 3 constructors
+  ([ParticleSystem.cpp:478](../src/ParticleSystem.cpp:478) reader, :529
+  default, :534 copy) — a static counter assignment in each covers every
+  creation path (load, add-root, add-child, duplicate, paste, import, undo).
+- DTO built in BridgeDispatcher (`BuildEmitterTree`-style walker for
+  `emitters/list`); schema `EmitterTreeNode` in
+  `web/packages/bridge-schema/src/index.ts`; mock tree in `mock-state.ts`
+  (mock node ids are ALREADY stable — mirror `stableId = id`).
+- Rows render in `EmitterTree.tsx` flatRows map, currently keyed by
+  `row.node.id` (positional — the thing to replace).
+- Animation prior art: hand-rolled rAF (PanelLayout dock-slide; this
+  session's chip spring); `prefers-reduced-motion` pattern established.
+- Native tests assert tree *structure* from `emitters/list`, not strict DTO
+  goldens → adding a field is additive.
+
+## 3. Architecture
+
+- **Host:** `unsigned int stableId` on `Emitter`, assigned in all 3 ctors
+  from a process-monotonic counter. Surfaced as `stableId` in the
+  `emitters/list` JSON.
+- **Schema:** `EmitterTreeNode.stableId: number` (required).
+- **Mock:** `stableId: id` at fixture-build + wherever new nodes are created
+  (duplicate/paste assign fresh ids already → fresh stableIds).
+- **Web:** rows keyed `key={row.node.stableId}`; new `useFlipReorder` hook in
+  EmitterTree: `useLayoutEffect` per flatRows change — read each row's
+  `offsetTop` (layout position, transform-immune), diff vs a ref-map keyed by
+  stableId, apply inverted `translateY`, force reflow, transition to 0 over
+  ~200ms ease; update the map every pass. Reduced-motion: update map only.
+  Pure delta math in `lib/flip.ts`, unit-tested.
+
+## 4. Risks + mitigations
+
+1. **FLIP fights the drag preview** (gap spacer insertion also reflows rows
+   mid-drag): gate the glide to fire only when NOT dragging (`draggingId ===
+   null`) — the make-room shift stays instant, the post-drop settle glides.
+2. **Transform-polluted measurements:** read `offsetTop`, never
+   `getBoundingClientRect`, and cancel in-flight transitions before
+   re-measuring.
+3. **Undo/redo rebuilds emitters → new stableIds → remount, no glide:**
+   accepted (out of scope); keyed remount is correct, just unanimated.
+4. **DTO field fan-out:** additive; bridge contract tests updated; native
+   harness re-run to prove 174/0.
+
+## 5. Testing & verification
+
+- vitest: `lib/flip.ts` delta math; schema/mock contract (stableId present,
+  stable across reorder, fresh on duplicate); EmitterTree render keyed by
+  stableId (reorder does NOT remount rows — spy via element identity).
+- `tsc -b` 0; full suite; native 174/0; host Debug x64 clean.
+- User smoke (L-033): glide feel on all three paths; reduced-motion off
+  switch; no glide mid-drag.
+
+## Part 3 progress
+- [ ] Host stableId + DTO + schema + mock (+ contract tests)
+- [ ] Web: key by stableId + lib/flip.ts + useFlipReorder (gated off-drag)
+- [ ] Full verify + user smoke
+
+---
+
 # Multi-drag preview polish (session 32) — PR #106 branch
 
 ## 1. Goal + scope
