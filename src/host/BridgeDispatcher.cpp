@@ -4654,6 +4654,69 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         return res;
     }
 
+    // -------- emitters/reorder-many (multi-select drag-reorder) ------
+    //
+    // Batch absolute-position root reorder. Moves the selected ROOT
+    // emitters (params.ids, positional) to land contiguous at gap
+    // params.rootIndex, preserving tree order; non-contiguous selections
+    // collapse. Wraps ParticleSystem::reorderManyRootsToIndex, which refuses
+    // out-of-range / non-root / empty / own-footprint no-op. Returns the
+    // moved roots' final indices as newIds (a contiguous run).
+    if (kind == "emitters/reorder-many")
+    {
+        if (m_pParticleSystem == nullptr || !*m_pParticleSystem)
+        {
+            sendOk(json{{"ok", false}, {"error", "particle system not bound"}});
+            return res;
+        }
+        int rootIndex = params.value("rootIndex", -1);
+        if (rootIndex < 0)
+        {
+            sendOk(json{{"ok", false}, {"error", "invalid rootIndex"}});
+            return res;
+        }
+        std::vector<ParticleSystem::Emitter*> selection;
+        if (params.contains("ids") && params["ids"].is_array())
+        {
+            for (const auto& j : params["ids"])
+            {
+                ParticleSystem::Emitter* e = getEmitterById(j.get<int>());
+                if (e == nullptr)
+                {
+                    sendOk(json{{"ok", false}, {"error", "emitter not found"}});
+                    return res;
+                }
+                if (e->parent != nullptr)
+                {
+                    sendOk(json{{"ok", false}, {"error", "non-root in selection"}});
+                    return res;
+                }
+                selection.push_back(e);
+            }
+        }
+        if (selection.empty())
+        {
+            sendOk(json{{"ok", false}, {"error", "empty selection"}});
+            return res;
+        }
+        captureUndo();
+        std::vector<size_t> outNewIds;
+        const bool ok = (*m_pParticleSystem)->reorderManyRootsToIndex(
+            selection, static_cast<size_t>(rootIndex), outNewIds);
+        if (!ok)
+        {
+            sendOk(json{{"ok", false}, {"error", "reorder refused"}});
+            return res;
+        }
+        json newIds = json::array();
+        for (size_t v : outNewIds) newIds.push_back(static_cast<int>(v));
+        sendOk(json{{"ok", true}, {"newIds", newIds}});
+        markDirty();
+        EmitEngineStateChanged();
+        EmitEmittersTreeChanged();
+        return res;
+    }
+
     // -------- emitters/copy / cut / paste (Screen 4 Batch C) --------
     //
     // Process-local clipboard. We reuse the existing LT-3 import-from-

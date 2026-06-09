@@ -337,6 +337,16 @@ public:
     // would be a no-op (target position equals current position).
     bool           moveEmitterToRootIndex(Emitter* emitter, size_t targetRootIndex);
 
+    // Move a SET of root emitters so they become contiguous, landing at `gap`
+    // (gap K = "before root K"; gap == rootCount = "after last root"),
+    // preserving the selected roots' current top-to-bottom order. Non-
+    // contiguous selections collapse together. `outNewIds` receives the moved
+    // roots' final positional indices (a contiguous run, tree order). Returns
+    // false on no-op / out-of-range / empty / non-root selection.
+    bool           reorderManyRootsToIndex(const std::vector<Emitter*>& selection,
+                                           size_t gap,
+                                           std::vector<size_t>& outNewIds);
+
     // Reparent `source` so it becomes a child of `target` via target's
     // spawnDuringLife (when useSpawnDuringLife is true) or spawnOnDeath
     // (when false). The full subtree under source is preserved — its
