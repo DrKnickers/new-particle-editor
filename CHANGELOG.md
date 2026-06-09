@@ -16,6 +16,61 @@ Conventions:
 
 ## Changelog
 
+### Confirm destructive emitter deletes + surface failed Save / Open
+
+*2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Two safety gaps in the now-default new UI are closed. **(1)** A failed Save,
+Open, or Save As no longer fails silently: `file/save` · `file/open` ·
+`file/save-as` all return `{ok:false, error}`, but every call site previously
+discarded it — a save that failed (disk full, read-only target, locked file)
+left the document dirty while the user believed it saved. Now a non-cancel
+failure pops an error modal naming the problem; a user-cancelled native picker
+stays silent. **(2)** Deleting an emitter that has children (the host deletes
+the whole subtree) or deleting a multi-selection now asks first — *"Delete X
+and its N child emitters?"* / *"Delete N emitters?"* — while a single childless
+leaf still deletes immediately (it is undoable). A new **Preferences → Confirm
+before deleting emitters** toggle (default on) governs the confirm. Behaviour
+under `--legacy` is unchanged.
+
+**How we tackled it.** Three small additive `lib/` modules + two App-mounted
+modals. [`file-op.ts`](src/lib/file-op.ts:1)'s `runFileOp(bridge, req)` wraps a
+file request and, on `error !== "user-cancelled"`, sets a zustand error store
+that [`FileOpErrorModal`](src/components/FileOpErrorModal.tsx:1) renders.
+[`delete-emitters.ts`](src/lib/delete-emitters.ts:1) owns `computeDeleteImpact`
+(deduped subtree union → `isDestructive` + affected-count), `performDelete`
+(the descending-order loop, centralised from its two former inline copies), and
+`requestDeleteEmitters` — the single entry point all four delete sites call,
+which either deletes immediately or opens a confirm store that
+[`DeleteConfirmModal`](src/components/DeleteConfirmModal.tsx:1) consumes. The
+constraint that shaped the API: `bridge` is created once in
+[`App.tsx`](src/App.tsx:35) and passed as a prop (no module singleton), so every
+helper takes it as a parameter and the confirm store never touches it (the
+modal, which holds the prop, runs the delete on confirm). To let `MenuBar` and
+the delete helper compute subtree impact, the emitter tree was lifted from
+`EmitterTree`'s local `useState` into a shared
+[`emitter-tree.ts`](src/lib/emitter-tree.ts:1) store.
+
+**Issues encountered and resolutions.** *The tree-store lift exposed a latent
+crash.* `EmitterTree` derefs `tree.root` assuming a truthy tree has a root —
+true in production, but the layout tests' stub bridge resolves `emitters/list`
+to `{}`. With per-component `useState` that malformed value reached a render only
+asynchronously (after assertions); through the global store it leaks across test
+cases and is present at the next test's *synchronous* initial render →
+`PanelLayout.test.tsx` crashed. Fixed by enforcing the store invariant
+"null-or-well-formed" at the single setter
+([`EmitterTree.tsx`](src/screens/EmitterTree.tsx:1174): ignore a response with no
+`root`). *A fourth Save call site was missed and caught in review.*
+[`SaveChangesPrompt`](src/screens/SaveChangesPrompt.tsx:49)'s "Save" — fired on
+every dirty New/Open/Recent — conflated user-cancel with real failure and showed
+no error: the exact silent-data-loss path the feature targets. Routed through
+`runFileOp` so a real failure surfaces while the pending op still aborts (unsaved
+work survives). *`emitters/delete` is already undoable* (it `captureUndo()`s
+pre-mutation host-side), which is why the confirm is proportional — gating only
+the non-obvious destructive cases rather than every delete.
+
+---
+
 ### Make the maximized save-modal backdrop snapshot near-instant
 
 *2026-06-09 · [`d431bde`](https://github.com/DrKnickers/new-particle-editor/commit/d431bde) · [#101](https://github.com/DrKnickers/new-particle-editor/pull/101)*

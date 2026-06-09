@@ -991,3 +991,33 @@ git commit -m "docs: changelog + review for save/delete safety"
 - **Names are consistent across tasks:** `useFileOpErrorStore`/`runFileOp`/`FileOpReq`/`messageFor`; `useEmitterTreeStore`; `computeDeleteImpact`/`DeleteImpact`/`performDelete`/`requestDeleteEmitters`/`useDeleteConfirmStore`/`read|writeConfirmDelete`; `<FileOpErrorModal>`; `<DeleteConfirmModal bridge>`.
 - **`bridge` is threaded everywhere** (no singleton); the confirm store never touches bridge.
 - **Open risk to watch during execution (Task 6):** if an existing EmitterTree/MenuBar test asserts a raw `emitters/delete` on what is now a destructive (confirm-gated) delete, update that test to the new confirm-store contract — that is an intended behaviour change, not a regression.
+
+---
+
+## Review (2026-06-09 — executed)
+
+**Status: complete.** All 10 tasks landed via subagent-driven execution (fresh
+implementer per task), plus a comprehensive independent code review and a
+verification fix. Commits `bb999e9 … c4f6f6f` on `claude/modest-hypatia-ebdbc4`.
+
+**Verification (all green):**
+- Web suite **565/565** (537 baseline + 28 new); `tsc -b` clean; `vite build` clean.
+- Host **Debug x64** (VS18) clean (LNK4098 benign); native a11y harness **174/0**
+  (30 skipped) — no golden shift, so the Preferences-row golden churn (Risk 7)
+  did not materialise.
+
+**Deviations from the plan, and why:**
+1. **Regression found + fixed (not in the plan).** The tree-store lift (Task 6)
+   exposed a latent `tree.root` deref via the layout tests' `{}` stub response,
+   which the global store surfaces synchronously. Fixed at the single setter
+   (store invariant: null-or-well-formed). The plan's Task-6 test scope
+   (`screens/`+`lib/` only) let it slip past to Task 7 → **L-074**.
+2. **Fourth Save call site (review-caught).** `SaveChangesPrompt`'s `file/save`
+   was missed by the plan's call-site inventory; it conflated cancel with
+   failure and showed no error — the headline data-loss path. Routed through
+   `runFileOp`, with failure + cancel-stays-silent tests → **L-075**.
+3. **Review polish:** added the multi-select-with-children copy test; gave the
+   danger Delete button real hover feedback (`hover:bg-danger/90`).
+
+**Out of scope (as designed, unchanged):** autosave-recover failure feedback,
+a toast system, the multi-select stale-index footgun.
