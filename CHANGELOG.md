@@ -33,9 +33,15 @@ moving. A **vertical chip** by the cursor lists up to four of the rows being
 carried (+ a "+k more" line) and is **magnetized toward the active gap** — it
 glides partway into the gap so the emitters visibly "flow in", and returns to
 the pointer when a release would do nothing. Dropping a block onto its own
-footprint does nothing. Drag-reorder stays **root-only** and
-**reorder-only**: dropping *onto* a row to reparent remains a single-emitter-drag
-affordance, and dragging an unselected row behaves exactly as before.
+footprint does nothing.
+
+**Single drag gets the same treatment.** Dragging one unselected root now shows
+the identical make-room gap + cursor chip (one name) and lifts its whole subtree,
+instead of a thin insertion line — and the highlight **follows** the emitter to
+its new spot after the drop (previously it stayed on the slot the emitter left,
+which then held a different emitter). Reparenting is unchanged: drop a root onto
+the **middle third** of any row to nest it under that row (its sky onto-ring,
+never a gap), and the highlight follows there too.
 
 **How we tackled it.** A new atomic host op `emitters/reorder-many { ids,
 rootIndex } -> { newIds }` ([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp)
@@ -60,7 +66,18 @@ footprint no-op — there are no dead zones, so the preview tracks the pointer
 continuously. The chip's magnet is a small rAF spring toward a blend of the
 pointer and the gap's center (`computeChipTarget`, pull/spring constants
 `CHIP_PULL`/`CHIP_SPRING` in `EmitterTree.tsx`); `prefers-reduced-motion`
-skips the glide but keeps the position.
+skips the glide but keeps the position. Single drag unifies onto the same
+controller: a single root is a size-1 block, so its reorder reuses
+`resolveGapFromGeometry` and commits through `reorder-many` (which is why the
+highlight follows — the `newIds` re-select). The one thing single drag adds is
+**reparent**, which needs per-row hit-testing; to stay flicker-free the
+controller also snapshots every row's extent (`captureRowGeometry`) and
+`resolveSingleRootDrop` resolves both outcomes in one geometric pass — middle
+third → onto (reusing the tested `resolveDropIntent` for reparent validity),
+else the reorder gap. The host re-selects the moved emitter after an
+`emitters/drop` (by scanning for the dragged `Emitter*`'s new index in the
+re-laid-out vector) and emits `emitters/selected`, so reparent's highlight
+follows even though ids are positional and reshuffle.
 
 **Issues encountered and resolutions.** A pre-coding adversarial design pass
 caught that the no-op rule must refuse **every** gap on an already-contiguous
@@ -83,7 +100,17 @@ gap; iteration from any reachable state converges without cycles — the propert
 test caught a genuine transient on its first run). Synthetic-pointer testing
 gotcha: a dispatched `pointerdown` with the default `pointerType: ""` held over
 a Radix `ContextMenu.Trigger` opens the menu via the touch long-press path —
-drive synthetic drags with `pointerType: "mouse"`.
+drive synthetic drags with `pointerType: "mouse"`. Extending the gap to single
+drag risked the same flicker plus a new one: single drag toggles between a gap
+(reorder) and no gap (reparent onto), and clearing a flow gap reflows the list by
+the gap height under a stationary pointer, which can oscillate at the
+onto/reorder boundary. Rather than add speculative hysteresis, the no-cycle
+property test was extended to the single-root resolver and the **simplest**
+un-shift-only resolver was tried first — it converged for every reachable state
+and pointer (including a childless root where the gap height equals one row), so
+no hysteresis was needed. The highlight-not-following bug was a missing
+host/mock re-select: `emitters/drop` returned only `{ ok }`, so the stale
+positional id kept highlighting the slot the emitter vacated.
 
 ---
 

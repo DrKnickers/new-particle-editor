@@ -4,10 +4,12 @@ import {
   isMultiDrag,
   collectSubtreeIds,
   resolveGapFromGeometry,
+  resolveSingleRootDrop,
   gapContentY,
   liftedBlockHeight,
   computeChipTarget,
   type RootBlockGeometry,
+  type RowGeometry,
 } from "@/lib/multi-drag";
 import type { EmitterTreeNode } from "@particle-editor/bridge-schema";
 
@@ -130,6 +132,81 @@ describe("geometry helpers", () => {
   it("liftedBlockHeight sums the dragged blocks' measured extents", () => {
     expect(liftedBlockHeight(geom, [1, 2])).toBe(96);  // 72 + 24
     expect(liftedBlockHeight(geom, [0, 3])).toBe(48);  // 24 + 24
+  });
+});
+
+// --- Single-root drag resolver (gap+chip+onto for single drag) ---
+// Layout: roots a=0, b=1 (child c=2), d=3. Root blocks group the subtree.
+const sRows: RowGeometry = {
+  ids:     [0, 1, 2, 3],
+  tops:    [0, 24, 48, 72],
+  bottoms: [24, 48, 72, 96],
+};
+// root blocks: a=[0,24], b=[24,72] (root+child), d=[72,96]. mids 12,48,84.
+const sBlock: RootBlockGeometry = { tops: [0, 24, 72], bottoms: [24, 72, 96] };
+const allReparentOk = () => true;
+
+describe("resolveSingleRootDrop", () => {
+  it("upper/lower third of a root → reorder gap (size-1 block, midpoint rule)", () => {
+    // drag d (rootIdx 2); pointer in a's upper area → gap 0
+    expect(resolveSingleRootDrop(sBlock, sRows, 2, 3, allReparentOk, 5, null, 24))
+      .toEqual({ kind: "reorder", rootIndex: 0 });
+    // pointer past a's mid (12), before b's mid (48) → gap 1
+    expect(resolveSingleRootDrop(sBlock, sRows, 2, 3, allReparentOk, 30, null, 24))
+      .toEqual({ kind: "reorder", rootIndex: 1 });
+  });
+  it("middle third of a row → reparent onto that row", () => {
+    // y=36 is in root b's row [24,48], middle third [32,40) → onto b
+    expect(resolveSingleRootDrop(sBlock, sRows, 2, 3, allReparentOk, 36, null, 24))
+      .toEqual({ kind: "onto", targetId: 1 });
+    // onto a child row too (y=60 in child c [48,72], middle [56,64))
+    expect(resolveSingleRootDrop(sBlock, sRows, 2, 3, allReparentOk, 60, null, 24))
+      .toEqual({ kind: "onto", targetId: 2 });
+  });
+  it("never reparents onto itself, and falls back to reorder when reparent is refused", () => {
+    // drag a (rootIdx 0, id 0); hovering a's own middle → not onto self → reorder
+    const r = resolveSingleRootDrop(sBlock, sRows, 0, 0, allReparentOk, 12, null, 24);
+    expect(r).not.toEqual(expect.objectContaining({ kind: "onto" }));
+    // reparent refused everywhere → middle third resolves to a reorder gap
+    const noReparent = resolveSingleRootDrop(sBlock, sRows, 2, 3, () => false, 36, null, 24);
+    expect(noReparent).toEqual({ kind: "reorder", rootIndex: 1 });
+  });
+  it("the root's own footprint gap is a no-op", () => {
+    // drag d (rootIdx 2): gaps 2 and 3 are its footprint. Lower third of d
+    // (y=90 → past d's mid 84) → gap 3 → noop.
+    expect(resolveSingleRootDrop(sBlock, sRows, 2, 3, () => false, 90, null, 24)).toBe("noop");
+  });
+  it("no-cycle stability: from any reachable state, iteration converges without cycles", () => {
+    // Reachable currentGap: null (no-drag / onto) or a returned reorder gap.
+    const sources = [
+      { srcRootIdx: 0, sourceId: 0 },
+      { srcRootIdx: 1, sourceId: 1 },
+      { srcRootIdx: 2, sourceId: 3 },
+    ];
+    for (const { srcRootIdx, sourceId } of sources) {
+      const H = liftedBlockHeight(sBlock, [srcRootIdx]);
+      const first = srcRootIdx, last = srcRootIdx;
+      const inFootprint = (g: number) => g >= first && g <= last + 1;
+      const reachable: Array<number | null> =
+        [null, ...[0, 1, 2, 3].filter((g) => !inFootprint(g))];
+      for (let p = -10; p <= 130; p += 1) {
+        for (const g0 of reachable) {
+          let state: number | null = g0;
+          const seen = new Set<string>([String(g0)]);
+          for (let i = 0; i < 8; i++) {
+            const r = resolveSingleRootDrop(sBlock, sRows, srcRootIdx, sourceId, allReparentOk, p, state, H);
+            const next = r === "noop" || r.kind === "onto" ? null : r.rootIndex;
+            if (next === state) break;
+            expect(seen.has(String(next)), `cycle src=${sourceId} p=${p} g0=${g0} revisits ${next}`).toBe(false);
+            seen.add(String(next));
+            state = next;
+          }
+          const settled = resolveSingleRootDrop(sBlock, sRows, srcRootIdx, sourceId, allReparentOk, p, state, H);
+          const settledNext = settled === "noop" || settled.kind === "onto" ? null : settled.rootIndex;
+          expect(settledNext, `did not converge src=${sourceId} p=${p} g0=${g0}`).toBe(state);
+        }
+      }
+    }
   });
 });
 

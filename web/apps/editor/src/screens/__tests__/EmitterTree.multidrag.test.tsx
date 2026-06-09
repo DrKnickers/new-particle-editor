@@ -122,30 +122,36 @@ describe("EmitterTree multi-drag preview", () => {
     expect(screen.queryByTestId("drop-gap-at-1")).toBeNull();
   });
 
-  it("a single-root drag still uses the insertion line + emitters/drop (no band/chip)", async () => {
+  it("a single-root drag also shows the make-room gap + chip and reorders via reorder-many", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
 
-    // Single selection of the dragged root — NOT a multi-drag.
+    // Single selection of the dragged root — NOT a multi-drag, but now the
+    // same gap+chip affordance and the selection-following reorder-many path.
     fireEvent.click(screen.getByText("Flash"));
 
-    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    const smokeBtn  = screen.getByText("Smoke").closest("button")!;
     const sparksBtn = screen.getByText("Sparks").closest("button")!;
-    stubRect(sparksBtn, 100, 30);
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    stubRect(smokeBtn, 0, 24);
+    stubRect(sparksBtn, 24, 24);
+    stubRect(flashBtn, 48, 24);
 
-    fireEvent.pointerDown(flashBtn, { button: 0, clientX: 0, clientY: 0 });
-    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+    // y=26 is Sparks' upper third [24,32) → reorder gap 1 (before Sparks).
+    fireEvent.pointerDown(flashBtn, { button: 0, pointerType: "mouse", clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(flashBtn, { pointerType: "mouse", clientX: 40, clientY: 26 });
 
-    // No multi preview; the single-drag insertion line shows instead.
-    expect(screen.queryByTestId("drag-chip")).toBeNull();
-    expect(screen.queryByTestId("drop-gap-3")).toBeNull();
-    expect(screen.getByTestId("drop-indicator-above-3")).toBeInTheDocument();
+    // Single drag now gets the gap + a 1-name chip — no 2px insertion line.
+    expect(screen.getByTestId("drop-gap-at-1")).toBeInTheDocument();
+    expect(screen.getByTestId("drag-chip").textContent).toContain("Flash");
+    expect(screen.queryByTestId("drop-indicator-above-3")).toBeNull();
 
-    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+    fireEvent.pointerUp(flashBtn, { button: 0, pointerType: "mouse", clientX: 40, clientY: 26 });
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
-    expect(calls.find((c) => c.kind === "emitters/drop")).toBeDefined();
-    expect(calls.find((c) => c.kind === "emitters/reorder-many")).toBeUndefined();
+    const reorder = calls.find((c) => c.kind === "emitters/reorder-many");
+    expect(reorder?.params).toEqual({ ids: [5], rootIndex: 1 });
+    expect(calls.find((c) => c.kind === "emitters/drop")).toBeUndefined();
   });
 
   it("hovering the block's own footprint clears the gap and a release there is a no-op (no wire call)", async () => {
@@ -260,14 +266,16 @@ describe("EmitterTree multi-drag preview", () => {
     const sparksBtn = screen.getByText("Sparks").closest("button")!;
     stubRect(sparksBtn, 100, 30);
 
-    fireEvent.pointerDown(smokeBtn, { button: 0, clientX: 0, clientY: 0 });
-    fireEvent.pointerMove(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+    fireEvent.pointerDown(smokeBtn, { button: 0, pointerType: "mouse", clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(smokeBtn, { pointerType: "mouse", clientX: 0, clientY: 103 });
 
-    expect(screen.getByText("Smoke").closest("button")!).toHaveAttribute("data-dragging", "true");
-    expect(screen.getByText("SmokeLife").closest("button")!).toHaveAttribute("data-dragging", "true");
-    expect(screen.getByText("Sparks").closest("button")!).toHaveAttribute("data-dragging", "false");
+    // Query rows by id — the chip duplicates names, so getByText is ambiguous.
+    const row = (id: number) => document.querySelector(`button[data-emitter-id="${id}"]`)!;
+    expect(row(0)).toHaveAttribute("data-dragging", "true");   // Smoke (root)
+    expect(row(1)).toHaveAttribute("data-dragging", "true");   // SmokeLife (child)
+    expect(row(3)).toHaveAttribute("data-dragging", "false");  // Sparks (not dragged)
 
-    fireEvent.pointerUp(sparksBtn, { button: 0, clientX: 0, clientY: 103 });
+    fireEvent.pointerUp(smokeBtn, { button: 0, pointerType: "mouse", clientX: 0, clientY: 103 });
   });
 
   it("the cursor chip caps at 4 names + a '+k more' line for big selections", async () => {

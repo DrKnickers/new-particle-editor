@@ -1102,6 +1102,14 @@ export class MockBridge implements Bridge {
       // match the native dispatcher's contract.
       case "emitters/drop": {
         const cur = useMockEmitterTree.getState().tree;
+        // After a successful drop the highlight FOLLOWS the moved emitter
+        // (re-select it + emit emitters/selected), mirroring the native host.
+        // Mock ids are stable across a drop, so the moved id is req.params.id.
+        const followSelection = () => {
+          const id = req.params.id;
+          useMockEngineState.getState().applyPatch({ selectedEmitterId: id });
+          this.emit({ kind: "emitters/selected", payload: { id } });
+        };
         if (req.params.mode === "reorder") {
           const next = reorderRootEmitter(cur, req.params.id, req.params.rootIndex);
           if (next === null) {
@@ -1109,6 +1117,7 @@ export class MockBridge implements Bridge {
           }
           useMockEmitterTree.getState().setTree(next);
           this.emit({ kind: "emitters/tree/changed", payload: next });
+          followSelection();
           this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
           return { ok: true };
         }
@@ -1124,6 +1133,7 @@ export class MockBridge implements Bridge {
         }
         useMockEmitterTree.getState().setTree(next);
         this.emit({ kind: "emitters/tree/changed", payload: next });
+        followSelection();
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         return { ok: true };
       }

@@ -4333,3 +4333,40 @@ the precise silent-data-loss path the feature existed to close. The
 comprehensive review caught it; a `grep '"file/save"'` up front would have. The
 two pure-logic modules and the modals were clean — the gap was a *consumer*
 inventory, exactly the thing a content search, not intuition, finds.
+
+## L-076 — A mutation that REINDEXES positional ids must re-select the moved entity (return newIds, or emit a selected event); otherwise the highlight sticks on the slot, now holding a DIFFERENT entity
+
+**Rule.** When an "id" is a position index (not a stable handle) and an op moves
+or reparents an entity, the old id now points at a *different* entity. Any op
+that reshuffles those indices must tell the client where the moved entity went —
+return `newIds` (so the caller re-selects) **or** have the host re-select it and
+emit a `selected` event. If it returns only `{ ok }`, the selection scalar is
+left pointing at the vacated slot and the highlight "stays put" on whatever
+emitter now occupies it. The bug is invisible in a mock whose ids happen to be
+stable — it only manifests on the real host where indices reshuffle.
+
+**Trigger.** Adding/reviewing any structural op (move, reorder, reparent,
+delete, duplicate) whose entity ids are positional. Ask: *after this op, does the
+selection still identify the same entity?*
+
+**How to apply.** Either return the moved entity's new index(es) and re-select on
+the client (the `reorder-many` / `move-many` / `duplicate-many` pattern —
+`applyNewSelection` over `newIds`), or, for ops that don't (like
+`emitters/drop`), have the host find the moved object's new index after the
+mutation (scan for the same `Emitter*` pointer in the re-laid-out vector) and
+emit `emitters/selected`. Verify highlight-follow on the **real host**, not just
+the mock — and add a browser/host smoke that checks the selection lands on the
+moved entity, since a stable-id mock will pass regardless.
+
+**Source incident (2026-06-09, single-drag highlight-follow).** `emitters/drop`
+(reorder *and* reparent) returned only `{ ok: true }` and never re-selected; the
+multi-drag path looked fine only because `reorder-many` returns `newIds`. After
+a single-drag reorder/reparent the highlight stayed on the old positional slot
+(a different emitter). Fix: route single-root reorder through `reorder-many`
+(free follow via `newIds`) and add a host re-select to `emitters/drop` for
+reparent (scan `getEmitters()` for the dragged `Emitter*`, set
+`m_selectedEmitterId`, emit `emitters/selected`); mock mirrors it. The bug was
+masked in mock mode because mock-state keeps node ids stable across a drop —
+exactly the "stable-id mock hides it" trap. Cross-reference
+[L-033](#l-033) (host-only behaviour needs the real host, not the agent's
+mock-mode view).

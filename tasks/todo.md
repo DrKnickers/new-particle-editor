@@ -238,3 +238,85 @@ items built TDD-style and verified:
 **Remaining (user's eye, L-033):** feel verdict in the real host — gap
 tracking on tall blocks, magnet strength (CHIP_PULL), spring speed
 (CHIP_SPRING), dim opacity. All single-constant tweaks + `pnpm build`.
+
+---
+
+## Part 2 (session 32 cont.) — single drag gets gap+chip + highlight-follow
+
+User feedback after the host smoke: (a) the make-room gap + chip should also
+apply to **single** drag, not just multi; (b) after a single drop the
+highlight does **not** follow the dropped emitter.
+
+**Root cause of (b) (verified, host + mock):** `emitters/drop` returns only
+`{ ok }` and never re-selects — `m_selectedEmitterId` is untouched, no
+`emitters/selected` emitted. The stale positional id then highlights the old
+slot (now a different emitter). The multi path follows only because
+`reorder-many` returns `newIds` and `reorderManyEmitters` re-selects.
+
+**Scope (user-confirmed):**
+- Reorder zones (drop a root above/below another root) → **gap + chip**, same
+  geometric machinery as multi (a single root = a size-1 block). Commit via
+  `reorderManyEmitters([id], gap)` → highlight follows (newIds, host+mock), no
+  host change.
+- Reparent (drop a root **onto** a row to nest it) → **keep the onto-ring**;
+  highlight follows via a small **host change** (`emitters/drop` re-selects the
+  moved emitter + emits `emitters/selected`; mock parity). Covers both
+  reorder and reparent follow.
+
+**Design — unify single+multi on the geometric controller.**
+- A single-root drag becomes `blockIds = [source.id]`, reusing
+  `captureRootBlockGeometry` + `resolveGapFromGeometry` for the reorder gap
+  and the chip (`chipNames = [source.name]`).
+- Single drag additionally supports **onto** (reparent), which multi doesn't.
+  Onto needs per-row hit-testing; to stay flicker-free I snapshot **per-row**
+  geometry at activation (`RowGeometry`) and resolve onto from it (un-shift +
+  middle-third), never live DOM. The onto branch reuses the existing,
+  tested `resolveDropIntent` for reparent validation (slot / cycle /
+  same-parent); only the hit-test moves to geometry.
+- The single-drag **2px insertion line is replaced by the make-room gap**; the
+  DropIndicator becomes a clean union `{kind:"gap"|"onto"}`.
+- **Oscillation risk** (onto has no gap, reorder has a gap → toggling reflows
+  the list by the gap height under a stationary pointer): pinned by extending
+  the **no-cycle property test** to the single-root resolver. Implement the
+  simple version first; only add transition-confirmation/hysteresis if the
+  property test finds a cycle (test-driven, no speculative complexity).
+
+**Files:** `lib/multi-drag.ts` (RowGeometry + `resolveSingleRootDrop`),
+`screens/EmitterTree.tsx` (rowGeom capture, single-drag geometric resolution,
+unify reorder commit, chip for single, indicator union, drop the line),
+`src/host/BridgeDispatcher.cpp` (drop re-selects), `bridge/mock.ts` (parity),
++ vitest. Verify: full suite, tsc, browser smoke at the onto/reorder
+boundary, native 174/0, host Debug build, then user host smoke.
+
+### Part 2 progress
+- [x] lib resolver + no-cycle property (test-first; simple resolver converged,
+      no hysteresis needed)
+- [x] EmitterTree wiring (gap+chip+onto, unify commit via reorder-many, drop
+      the 2px line, indicator union {gap|onto})
+- [x] host + mock drop re-select (BridgeDispatcher scans for the moved
+      `Emitter*`'s new index + emits `emitters/selected`; mock parity)
+- [x] full verify: web 620/620, tsc 0, build clean, native 174/0 (both
+      emitter-drag bridge tests pass), host Debug x64 clean
+- [x] browser smoke: single reorder gap+chip+subtree-dim+follow; reparent
+      onto-ring (no gap) + nest + follow; no console errors
+- [ ] user host smoke (feel verdict)
+
+### Part 2 review
+
+Shipped single-drag parity + the highlight-follow fix on `claude/multiselect-drag`:
+- **Unified controller** — a single root is a size-1 block; reorder reuses
+  `resolveGapFromGeometry` + `reorderManyEmitters` (so the highlight follows via
+  `newIds`). Single drag adds `resolveSingleRootDrop` (geometric, one pass →
+  reorder gap OR reparent onto) backed by a per-row `captureRowGeometry`
+  snapshot, reusing the tested `resolveDropIntent` for reparent validity. The
+  2px insertion line is gone; the indicator is now `{kind:"gap"|"onto"}`.
+- **Highlight-follow** — host `emitters/drop` now re-selects the moved emitter
+  (scan for the dragged `Emitter*`'s new index) + emits `emitters/selected`;
+  mock mirrors it. Reorder already followed via reorder-many.
+- **No-cycle gate** — the onto↔gap toggle reflows the list; the property test
+  was extended to the single resolver and the simplest un-shift resolver passed
+  with no hysteresis (test-driven, no speculative complexity).
+- **Verification:** web 620/620 (incl. the extended no-cycle property + updated
+  single-drag component tests), tsc 0, vite build clean, native 174/0, host
+  Debug x64 clean; browser-preview drove both paths (reorder + reparent) with
+  the highlight following and zero console errors.

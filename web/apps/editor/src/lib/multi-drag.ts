@@ -3,6 +3,7 @@
 // EmitterTree.tsx calls them. Reorder-only, root-only — reparent stays a
 // single-emitter-drag affordance.
 import type { EmitterTreeNode } from "@particle-editor/bridge-schema";
+import { computeDropZone } from "@/lib/drop-zone";
 
 /** The selected ids that are CURRENTLY roots, in tree (top-to-bottom) order. */
 export function selectedRootIdsInOrder(
@@ -94,17 +95,90 @@ export function resolveGapFromGeometry(
   currentGap: number | null,
   gapHeight: number,
 ): { rootIndex: number } | "noop" {
-  let y = pointerY;
-  if (currentGap !== null) {
-    const boundary = gapContentY(geom, currentGap);
-    if (y > boundary) y = Math.max(boundary, y - gapHeight);
-  }
+  const y = unshiftPointer(geom, pointerY, currentGap, gapHeight);
+  const g = midpointGap(geom, y);
+  if (isOwnFootprint(blockRootIdxs, g)) return "noop";
+  return { rootIndex: g };
+}
+
+/** Map a pointer back into the snapshot's original space: content at/below the
+ *  rendered gap is shifted down by `gapHeight`; a pointer inside the gap clamps
+ *  to the gap boundary (the stability fixed point). No gap → identity. */
+function unshiftPointer(
+  geom: RootBlockGeometry,
+  pointerY: number,
+  currentGap: number | null,
+  gapHeight: number,
+): number {
+  if (currentGap === null) return pointerY;
+  const boundary = gapContentY(geom, currentGap);
+  return pointerY > boundary ? Math.max(boundary, pointerY - gapHeight) : pointerY;
+}
+
+/** The midpoint rule: gap index = the number of root blocks whose midpoint
+ *  lies above `y`. Continuous in `y`, no dead zones. */
+function midpointGap(geom: RootBlockGeometry, y: number): number {
   let g = 0;
   for (let k = 0; k < geom.tops.length; k++) {
     if ((geom.tops[k]! + geom.bottoms[k]!) / 2 < y) g++;
   }
-  if (isOwnFootprint(blockRootIdxs, g)) return "noop";
-  return { rootIndex: g };
+  return g;
+}
+
+/** Per-row extents at drag activation, in scroll-CONTENT space, flat (rendered)
+ *  order — parallel arrays keyed by `ids[i]`. Used by the single-drag resolver
+ *  to hit-test the hovered row (reparent onto detection) geometrically, so a
+ *  reflowing make-room gap never corrupts the live DOM hit-test. */
+export type RowGeometry = { ids: number[]; tops: number[]; bottoms: number[] };
+
+/** Single-root drag resolution — one geometric pass that yields BOTH the
+ *  multi-style reorder gap (drop above/below a root) AND a reparent target
+ *  (drop onto the middle of a row). A single root is treated as a size-1 block,
+ *  so the reorder gap reuses the same midpoint machinery as multi-drag.
+ *
+ *    - `{ kind: "reorder", rootIndex }` — make-room gap at that root gap;
+ *    - `{ kind: "onto", targetId }`     — reparent under that row (its middle
+ *                                         third, when `reparentOk(targetId)`);
+ *    - `"noop"`                         — the root's own footprint gap.
+ *
+ *  `reparentOk` injects the tree-aware reparent validity (slot / cycle /
+ *  same-parent) so this stays pure. Like the multi resolver it never returns a
+ *  dead zone: every pointer maps to onto, a gap, or the footprint no-op. */
+export function resolveSingleRootDrop(
+  block: RootBlockGeometry,
+  rows: RowGeometry,
+  srcRootIdx: number,
+  sourceId: number,
+  reparentOk: (targetId: number) => boolean,
+  pointerY: number,
+  currentGap: number | null,
+  gapHeight: number,
+): { kind: "reorder"; rootIndex: number } | { kind: "onto"; targetId: number } | "noop" {
+  const y = unshiftPointer(block, pointerY, currentGap, gapHeight);
+  const k = rowIndexAt(rows, y);
+  if (k >= 0) {
+    const top = rows.tops[k]!;
+    const zone = computeDropZone(y - top, rows.bottoms[k]! - top);
+    const id = rows.ids[k]!;
+    if (zone === "onto" && id !== sourceId && reparentOk(id)) {
+      return { kind: "onto", targetId: id };
+    }
+  }
+  const g = midpointGap(block, y);
+  if (isOwnFootprint([srcRootIdx], g)) return "noop";
+  return { kind: "reorder", rootIndex: g };
+}
+
+/** Index of the row whose [top, bottom) contains `y`; clamped to the first row
+ *  above the list and the last row below it. -1 only for an empty list. */
+function rowIndexAt(rows: RowGeometry, y: number): number {
+  const n = rows.ids.length;
+  if (n === 0) return -1;
+  if (y < rows.tops[0]!) return 0;
+  for (let i = 0; i < n; i++) {
+    if (y < rows.bottoms[i]!) return i;
+  }
+  return n - 1;
 }
 
 /** Where the cursor chip wants to be: anchored at the pointer (+12px offset,

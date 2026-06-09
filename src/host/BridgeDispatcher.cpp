@@ -4604,6 +4604,35 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             sendOk(json{{"ok", false}, {"error", "source emitter not found"}});
             return res;
         }
+        // After a successful drop the dragged emitter's positional index has
+        // changed; re-select it (by its post-op index) so the highlight FOLLOWS
+        // the moved emitter rather than sticking on the slot it left behind
+        // (which now holds a different emitter). The web side leans on the
+        // emitters/selected event this emits. `source` is the same Emitter
+        // object across the move, so its new index is its position in the
+        // (now-reordered) flat emitter vector.
+        auto reselectMovedEmitter = [&]() {
+            const auto& es = (*m_pParticleSystem)->getEmitters();
+            for (size_t i = 0; i < es.size(); ++i)
+            {
+                if (es[i] == source)
+                {
+                    m_selectedEmitterId = static_cast<int>(i);
+                    // emitters/selected event — same narrow payload the
+                    // emitters/select handler emits; EmitterTree syncs primary.
+                    if (m_emit)
+                    {
+                        json env = {
+                            {"type",    "evt"},
+                            {"kind",    "emitters/selected"},
+                            {"payload", json{{"id", json(m_selectedEmitterId)}}},
+                        };
+                        m_emit(env.dump());
+                    }
+                    break;
+                }
+            }
+        };
         captureUndo();
         if (mode == "reorder")
         {
@@ -4622,6 +4651,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             }
             sendOk(json{{"ok", true}});
             markDirty();
+            reselectMovedEmitter();
             EmitEngineStateChanged();
             EmitEmittersTreeChanged();
             return res;
@@ -4646,6 +4676,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             }
             sendOk(json{{"ok", true}});
             markDirty();
+            reselectMovedEmitter();
             EmitEngineStateChanged();
             EmitEmittersTreeChanged();
             return res;
