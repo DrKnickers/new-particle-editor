@@ -5,9 +5,11 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { Bridge, EmitterTreeDto } from "@particle-editor/bridge-schema";
+import type { Bridge, EmitterTreeDto, EmitterTreeNode } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
+import { useEmitterTreeStore } from "@/lib/emitter-tree";
+import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitters";
 
 function fixtureTree(): EmitterTreeDto {
   return {
@@ -821,5 +823,23 @@ describe("EmitterTree", () => {
 
     const dissolve = await screen.findByText("Dissolve Link Group");
     expect(dissolve.closest("[role='menuitem']")?.getAttribute("data-disabled")).not.toBeNull();
+  });
+});
+
+const node = (id: number, name: string, children: EmitterTreeNode[] = []) =>
+  ({ id, name, role: "root", visible: true, children } as unknown as EmitterTreeNode);
+
+describe("EmitterTree delete gating (helper-level)", () => {
+  beforeEach(() => {
+    useEmitterTreeStore.setState({ tree: { root: node(-1, "root", [node(0, "a", [node(1, "a1")])]) } as unknown as EmitterTreeDto });
+    useDeleteConfirmStore.setState({ pending: null });
+    localStorage.clear();
+  });
+  it("deleting a parent opens the confirm", () => {
+    const calls: number[] = [];
+    const bridge = { request: (r: { kind: string; params: { id?: number } }) => { if (r.kind === "emitters/delete") calls.push(r.params.id!); return Promise.resolve({}); }, on: () => () => {} } as unknown as Bridge;
+    requestDeleteEmitters(bridge, [0]);
+    expect(calls).toEqual([]);
+    expect(useDeleteConfirmStore.getState().pending?.ids).toEqual([0]);
   });
 });

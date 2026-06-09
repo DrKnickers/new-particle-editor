@@ -93,6 +93,8 @@ import {
   type DropZone,
 } from "@/lib/drop-zone";
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
+import { useEmitterTreeStore } from "@/lib/emitter-tree";
+import { requestDeleteEmitters } from "@/lib/delete-emitters";
 
 type Props = {
   bridge: Bridge;
@@ -410,7 +412,7 @@ function EmitterRow({
   };
   const handleDelete = () => {
     resolveTargetIds();
-    void bridge.request({ kind: "emitters/delete", params: { id: node.id } });
+    requestDeleteEmitters(bridge, [node.id]);
   };
   const handleIncrement = () => {
     resolveTargetIds();
@@ -974,7 +976,7 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
   };
   const del = () => {
     if (primaryId === null) return;
-    void bridge.request({ kind: "emitters/delete", params: { id: primaryId } });
+    requestDeleteEmitters(bridge, [primaryId]);
   };
   const moveUp = () => {
     if (primaryId === null) return;
@@ -1108,7 +1110,8 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
 }
 
 export function EmitterTree({ bridge }: Props) {
-  const [tree, setTree] = useState<EmitterTreeDto | null>(null);
+  const tree = useEmitterTreeStore((s) => s.tree);
+  const setTree = useEmitterTreeStore((s) => s.setTree);
   const selectedIds = useEmitterSelectionIds();
   const primaryId = useEmitterSelectionPrimary();
 
@@ -1674,14 +1677,9 @@ export function EmitterTree({ bridge }: Props) {
         const cur = useEmitterSelectionStore.getState().ids;
         if (cur.length === 0) return;
         e.preventDefault();
-        // Descending id order — deleting in ascending order would
-        // invalidate higher indices mid-loop on the C++ side (the
-        // mock's id-based delete is robust, but the contract has to
-        // match the host).
-        const sorted = [...cur].sort((a, b) => b - a);
-        for (const id of sorted) {
-          void bridge.request({ kind: "emitters/delete", params: { id } });
-        }
+        // Descending-order delete + the destructive-confirm gate both live in
+        // requestDeleteEmitters → performDelete now.
+        requestDeleteEmitters(bridge, [...cur]);
         return;
       }
       // Ctrl+C / Ctrl+X / Ctrl+V on the focused tree. Cmd+* on macOS
