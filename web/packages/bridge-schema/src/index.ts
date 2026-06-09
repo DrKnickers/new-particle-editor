@@ -701,6 +701,7 @@ export type Request =
   | { kind: "emitters/add-root";            params: Record<string, never> }
   | { kind: "emitters/move";                params: { id: number; direction: "up" | "down" } }
   | { kind: "emitters/move-many";           params: { ids: number[]; direction: "up" | "down" } }   // batch: move the selected roots as a block; response.newIds follow them
+  | { kind: "emitters/reorder-many";        params: { ids: number[]; rootIndex: number } }   // batch drag-reorder: move selected roots to land contiguous at gap rootIndex; response.newIds follow them (input order)
   // FD10 (Group A polish): visibility ops for the EmitterTree panel
   // toolbar. `set-visible` flips a single emitter's `visible` flag
   // without touching its children (matches legacy
@@ -1023,6 +1024,9 @@ export type ResponseFor<R extends Request> =
     | { ok: true; newId: number }
     | { ok: false; error: string } :
   R extends { kind: "emitters/duplicate-many" } ?
+    | { ok: true; newIds: number[] }
+    | { ok: false; error: string } :
+  R extends { kind: "emitters/reorder-many" } ?
     | { ok: true; newIds: number[] }
     | { ok: false; error: string } :
   R extends { kind: "emitters/delete" }                         ? Record<string, never> :
