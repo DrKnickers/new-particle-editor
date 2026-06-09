@@ -25,6 +25,7 @@ import { promptSaveChanges } from "@/lib/file-state";
 import { runFileOp } from "@/lib/file-op";
 import { toggleDock } from "@/lib/right-dock";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
+import { moveEmitters } from "@/lib/emitter-reorder";
 import { RESET_CAMERA } from "@/lib/reset-camera";
 
 const ACCEL_COMBOS = [
@@ -107,13 +108,12 @@ export function useAppAccelerators(bridge: Bridge): void {
         // ── Emitters ──
         case "Alt+Up":
         case "Alt+Down": {
-          const primary = useEmitterSelectionStore.getState().primary;
-          if (primary !== null) {
-            void bridge.request({
-              kind: "emitters/move",
-              params: { id: primary, direction: combo === "Alt+Up" ? "up" : "down" },
-            });
-          }
+          // Move the whole selection as a block; the highlight follows.
+          void moveEmitters(
+            bridge,
+            useEmitterSelectionStore.getState().ids,
+            combo === "Alt+Up" ? "up" : "down",
+          );
           break;
         }
         case "Ctrl+Space":

@@ -673,7 +673,7 @@ describe("EmitterTree", () => {
     expect(dupBtn.compareDocumentPosition(delBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("clicking Duplicate dispatches emitters/duplicate with the primary's id", async () => {
+  it("clicking Duplicate dispatches emitters/duplicate-many with the selection", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
@@ -689,9 +689,9 @@ describe("EmitterTree", () => {
     fireEvent.click(screen.getByLabelText("Duplicate emitter"));
 
     const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
-    const dup = calls.find((c) => c.kind === "emitters/duplicate");
+    const dup = calls.find((c) => c.kind === "emitters/duplicate-many");
     expect(dup).toBeDefined();
-    expect(dup!.params).toEqual({ id: 0 });
+    expect(dup!.params).toEqual({ ids: [0] });
   });
 
   it("Duplicate button is disabled when no emitter is selected", async () => {

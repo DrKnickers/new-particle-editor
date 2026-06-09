@@ -889,6 +889,29 @@ export class MockBridge implements Bridge {
         return { ok: true, newId: result.newId };
       }
 
+      case "emitters/duplicate-many": {
+        // Loop the single duplicate. The mock appends each copy with a fresh
+        // high id and does NOT reindex existing emitters, so the collected
+        // newIds stay valid across the loop. (The real host inserts after the
+        // source + reindexes; both honour the {newIds} contract.)
+        let tree = useMockEmitterTree.getState().tree;
+        const newIds: number[] = [];
+        for (const id of req.params.ids) {
+          const r = duplicateEmitter(tree, id);
+          if (r !== null) {
+            tree = r.tree;
+            newIds.push(r.newId);
+          }
+        }
+        if (newIds.length === 0) {
+          return { ok: false, error: "no emitters to duplicate" };
+        }
+        useMockEmitterTree.getState().setTree(tree);
+        this.emit({ kind: "emitters/tree/changed", payload: tree });
+        this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        return { ok: true, newIds };
+      }
+
       case "emitters/delete": {
         const cur = useMockEmitterTree.getState().tree;
         const next = deleteEmitter(cur, req.params.id);
@@ -995,6 +1018,41 @@ export class MockBridge implements Bridge {
         this.emit({ kind: "emitters/tree/changed", payload: next });
         this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
         return {};
+      }
+
+      case "emitters/move-many": {
+        // Move the selected ROOTS as a block, anchored at the edge: skip the
+        // edge-most contiguous run of selected roots, move the rest by one
+        // (ascending for up / descending for down). The mock keeps node ids
+        // stable through a move, so newIds are the selected ids still at root
+        // level. (The real host reindexes; both honour {newIds}.)
+        let tree = useMockEmitterTree.getState().tree;
+        const dir = req.params.direction;
+        const sel = new Set(req.params.ids);
+        const order = tree.root.children.map((c) => c.id);
+        const movable: number[] = [];
+        if (dir === "up") {
+          let p = 0;
+          while (p < order.length && sel.has(order[p]!)) p++;
+          for (let i = p; i < order.length; i++) if (sel.has(order[i]!)) movable.push(order[i]!);
+        } else {
+          let p = order.length;
+          while (p > 0 && sel.has(order[p - 1]!)) p--;
+          for (let i = p - 1; i >= 0; i--) if (sel.has(order[i]!)) movable.push(order[i]!);
+        }
+        let moved = false;
+        for (const id of movable) {
+          const next = moveEmitterInTree(tree, id, dir);
+          if (next !== null) {
+            tree = next;
+            moved = true;
+          }
+        }
+        useMockEmitterTree.getState().setTree(tree);
+        this.emit({ kind: "emitters/tree/changed", payload: tree });
+        if (moved) this.emit({ kind: "engine/state/changed", payload: snapshotEngineState() });
+        const finalRootIds = new Set(tree.root.children.map((c) => c.id));
+        return { newIds: req.params.ids.filter((id) => finalRootIds.has(id)) };
       }
 
       case "emitters/set-visible": {

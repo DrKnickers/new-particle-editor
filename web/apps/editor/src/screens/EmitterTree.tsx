@@ -95,6 +95,7 @@ import {
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { requestDeleteEmitters } from "@/lib/delete-emitters";
+import { moveEmitters, duplicateEmitters } from "@/lib/emitter-reorder";
 
 type Props = {
   bridge: Bridge;
@@ -407,8 +408,9 @@ function EmitterRow({
     beginEdit(node.id, node.name);
   };
   const handleDuplicate = () => {
-    resolveTargetIds();
-    void bridge.request({ kind: "emitters/duplicate", params: { id: node.id } });
+    // Duplicate the resolved target set (whole selection if the clicked row
+    // is in it, else just that row); the selection moves to the new copies.
+    void duplicateEmitters(bridge, resolveTargetIds());
   };
   const handleDelete = () => {
     // Delete the resolved target set — the whole selection when the
@@ -480,18 +482,10 @@ function EmitterRow({
     });
   };
   const handleMoveUp = () => {
-    resolveTargetIds();
-    void bridge.request({
-      kind: "emitters/move",
-      params: { id: node.id, direction: "up" },
-    });
+    void moveEmitters(bridge, resolveTargetIds(), "up");
   };
   const handleMoveDown = () => {
-    resolveTargetIds();
-    void bridge.request({
-      kind: "emitters/move",
-      params: { id: node.id, direction: "down" },
-    });
+    void moveEmitters(bridge, resolveTargetIds(), "down");
   };
   const handleSetLinkGroup = () => {
     resolveTargetIds();
@@ -973,11 +967,11 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
     });
   };
   const duplicatePrimary = () => {
-    if (primaryId === null) return;
-    void bridge.request({
-      kind: "emitters/duplicate",
-      params: { id: primaryId },
-    });
+    // Toolbar Duplicate is selection-aware (like the trash button); the new
+    // copies become the selection.
+    const ids = useEmitterSelectionStore.getState().ids;
+    if (ids.length === 0) return;
+    void duplicateEmitters(bridge, ids);
   };
   const del = () => {
     // Selection-aware: the trash button deletes the WHOLE multi-selection
@@ -989,18 +983,14 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
     requestDeleteEmitters(bridge, ids);
   };
   const moveUp = () => {
-    if (primaryId === null) return;
-    void bridge.request({
-      kind: "emitters/move",
-      params: { id: primaryId, direction: "up" },
-    });
+    const ids = useEmitterSelectionStore.getState().ids;
+    if (ids.length === 0) return;
+    void moveEmitters(bridge, ids, "up");
   };
   const moveDown = () => {
-    if (primaryId === null) return;
-    void bridge.request({
-      kind: "emitters/move",
-      params: { id: primaryId, direction: "down" },
-    });
+    const ids = useEmitterSelectionStore.getState().ids;
+    if (ids.length === 0) return;
+    void moveEmitters(bridge, ids, "down");
   };
   const showAll = () =>
     void bridge.request({
