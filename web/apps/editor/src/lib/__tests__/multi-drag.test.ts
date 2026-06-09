@@ -29,4 +29,14 @@ describe("resolveMultiDropIntent", () => {
     expect(resolveMultiDropIntent([1, 2], roots[1]!, 1, "above", 4)).toBeNull();
     expect(resolveMultiDropIntent([1, 2], roots[2]!, 2, "below", 4)).toBeNull();
   });
+  it("refuses a non-root target (e.g. hovering a child row)", () => {
+    const child: EmitterTreeNode = {
+      id: 7, name: "c", role: "lifetime", linkGroup: 0, visible: true, children: [],
+    };
+    expect(resolveMultiDropIntent([1, 2], child, -1, "above", 4)).toBeNull();
+  });
+  it("refuses an out-of-range gap (defensive guard)", () => {
+    // artificial targetRootIdx past the root list -> computeRootGapIndex > rootCount
+    expect(resolveMultiDropIntent([1, 2], roots[3]!, 4, "below", 4)).toBeNull();
+  });
 });
