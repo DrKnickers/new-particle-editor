@@ -45,4 +45,12 @@ describe("DeleteConfirmModal", () => {
     expect(calls).toEqual([]);
     expect(useDeleteConfirmStore.getState().pending).toBeNull();
   });
+
+  it("shows multi-select-with-children copy", () => {
+    const { bridge } = recordingBridge();
+    // 2 selected (ids 0 + 3), 4 total once children are counted.
+    useDeleteConfirmStore.setState({ pending: { ids: [0, 3], impact: { affectedCount: 4, primaryName: "a", isDestructive: true } } });
+    render(<DeleteConfirmModal bridge={bridge} />);
+    expect(screen.getByText("Delete 2 selected emitters and their children (4 total)?")).toBeTruthy();
+  });
 });

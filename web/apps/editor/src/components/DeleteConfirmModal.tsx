@@ -48,7 +48,7 @@ export function DeleteConfirmModal({ bridge }: { bridge: Bridge }) {
         <button
           type="button"
           onClick={onDelete}
-          className="rounded bg-danger px-3 py-1 text-xs font-medium text-white hover:bg-danger outline-none focus:ring-2 focus:ring-danger"
+          className="rounded bg-danger px-3 py-1 text-xs font-medium text-white hover:bg-danger/90 outline-none focus:ring-2 focus:ring-danger"
         >
           Delete
         </button>
