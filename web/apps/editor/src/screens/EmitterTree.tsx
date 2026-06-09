@@ -934,6 +934,7 @@ type ToolbarProps = {
 function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
   const primary = findNodeInTree(tree, primaryId);
   const hasPrimary = primary !== null;
+  const selIds = useEmitterSelectionStore((s) => s.ids);
   // Lifetime/Death child adds require both a primary AND a free slot
   // (parents can hold at most one of each role).
   const canAddLifetime =
@@ -943,12 +944,19 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
   // Move is a root-only operation — same gate as the per-row context
   // menu. Sibling reordering at lifetime/death depth is a separate
   // capability not exposed by the legacy panel toolbar either.
-  const isRootPrimary = hasPrimary && primary!.node.role === "root";
+  // Move is a selection-wide, root-only op (matches emitter-reorder /
+  // move-many's preserve rule): the buttons enable iff the move would
+  // actually do something — at least one root is selected AND the edge-most
+  // root in that direction is NOT selected (else the block is pinned against
+  // the edge and the move freezes). Primary-position logic was single-select
+  // and made the enabled state depend on WHICH member was primary.
+  const rootChildren = tree?.root.children ?? [];
+  const anyRootSelected = rootChildren.some((r) => selIds.includes(r.id));
   const canMoveUp =
-    isRootPrimary && primary!.indexInSiblings > 0;
+    anyRootSelected && !selIds.includes(rootChildren[0]!.id);
   const canMoveDown =
-    isRootPrimary &&
-    primary!.indexInSiblings < primary!.siblings.length - 1;
+    anyRootSelected &&
+    !selIds.includes(rootChildren[rootChildren.length - 1]!.id);
 
   const addRoot = () =>
     void bridge.request({ kind: "emitters/add-root", params: {} });

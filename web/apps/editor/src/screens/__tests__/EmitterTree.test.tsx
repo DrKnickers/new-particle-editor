@@ -694,6 +694,32 @@ describe("EmitterTree", () => {
     expect(dup!.params).toEqual({ ids: [0] });
   });
 
+  it("Move Up/Down disabled state is selection-aware and symmetric at both edges", async () => {
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+    const up = () => screen.getByLabelText("Move emitter up") as HTMLButtonElement;
+    const down = () => screen.getByLabelText("Move emitter down") as HTMLButtonElement;
+
+    // Top root (Smoke) selected → can't move up, can move down.
+    fireEvent.click(screen.getByText("Smoke"));
+    expect(up().disabled).toBe(true);
+    expect(down().disabled).toBe(false);
+
+    // Bottom root (Flash) selected → can't move down, can move up.
+    fireEvent.click(screen.getByText("Flash"));
+    expect(down().disabled).toBe(true);
+    expect(up().disabled).toBe(false);
+
+    // Non-contiguous selection pinned at BOTH edges (Smoke + Flash) → both
+    // disabled. Under the old primary-position logic this leaked the primary's
+    // position and could leave one button wrongly enabled.
+    fireEvent.click(screen.getByText("Smoke"));
+    fireEvent.click(screen.getByText("Flash"), { ctrlKey: true });
+    expect(up().disabled).toBe(true);
+    expect(down().disabled).toBe(true);
+  });
+
   it("Duplicate button is disabled when no emitter is selected", async () => {
     const bridge = makeStubBridge();
     render(<EmitterTree bridge={bridge} />);
