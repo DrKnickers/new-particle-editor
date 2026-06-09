@@ -621,7 +621,7 @@ function EmitterRow({
             data-link-hover={linkHover ? "true" : "false"}
             data-selected={isSelected ? "true" : "false"}
             data-primary={isPrimary ? "true" : "false"}
-            data-drop-zone={indicatorZone ?? ""}
+            data-drop-zone={singleZone ?? ""}
             data-dragging={draggingId === node.id ? "true" : "false"}
             className={[
               "grid w-full items-center gap-1.5 py-0.5 pr-2 text-left text-sm transition-colors",
@@ -1351,6 +1351,10 @@ export function EmitterTree({ bridge }: Props) {
     const multi = isMultiDrag(source.id, selIds, curRoots);
     const blockIds = multi ? selectedRootIdsInOrder(selIds, curRoots) : [];
     const blockRootIdxs = blockIds.map((id) => curRoots.findIndex((c) => c.id === id)); // ascending
+    const chipNames = multi
+      ? blockIds.map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "").filter(Boolean).slice(0, 3)
+      : [];
+    const chipTotal = blockIds.length;
     let lastReorderGap: number | null = null;
     let active = false;
     let lastParams: DropParams | null = null;
@@ -1430,10 +1434,7 @@ export function EmitterTree({ bridge }: Props) {
         null;
       updateDropTarget(rowEl, ev.clientY);
       if (multi && active) {
-        const names = blockIds
-          .map((id) => curRows.find((r) => r.node.id === id)?.node.name ?? "")
-          .filter(Boolean);
-        setDragChip({ x: ev.clientX, y: ev.clientY, names: names.slice(0, 3), total: blockIds.length });
+        setDragChip({ x: ev.clientX, y: ev.clientY, names: chipNames, total: chipTotal });
       }
     };
 
