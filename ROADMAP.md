@@ -96,6 +96,31 @@ share a modulus — rare in practice.
 Only worth doing if real use reveals the bouncing as a real
 ergonomic issue.
 
+### 1.3 [NT-10] Further reduce maximized save-modal backdrop snapshot latency
+
+*Estimate: small.*
+
+The frosted-glass modal backdrop snapshots the engine viewport on every
+modal open (`AlphaCompositor::CaptureSnapshotPng`,
+[src/host/AlphaCompositor.cpp](src/host/AlphaCompositor.cpp)). The UI-polish
+batch added a downscale-before-encode (min 2× reduction, capped at a 1024px
+long edge) that made windowed modals effectively instant (**~18 ms** total
+capture, measured) and cut the maximized case sharply. But maximized still
+measures **~69 ms**: at 3440×1369 the GPU readback + the ~19 MB
+SYSTEMMEM→RAM memcpy run at full RT size, the GDI+ `DrawImage` downscale
+reads the full ~2519×942 crop, and the 1024-capped encode still emits a
+~790 KB PNG. The long-edge cap can't simply drop further without the
+backdrop going blocky under the dialog's `backdrop-blur-sm` — the cap is
+matched to the ~3.4× upscale the small blur can hide.
+
+Avenues to triage: (a) `StretchRect` the offscreen RT into a small render
+target and read **that** back — cuts the full-size readback, memcpy, and
+DrawImage-source read in one move; (b) double-buffer / async-encode so the
+capture is off the modal-open critical path; (c) a warm, throttled
+downscaled-snapshot cache refreshed off the render loop. (a) is the most
+direct win. Flagged by the user 2026-06-08 after the windowed path landed —
+"more delay when maximized but not so bad, triage later."
+
 ---
 
 ## 2. Medium term

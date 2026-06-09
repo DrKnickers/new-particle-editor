@@ -1,163 +1,200 @@
-# Plan: lt-4 → master integration, steps 2 + 3 (session 26)
+# UI polish batch 2 — selected-key / popover anims / modal speed / viewport stutter
 
-*Scope confirmed by user 2026-06-08: do steps 2 (default-flip) and 3
-(scaffolding docs + About attribution) on the session branch, FF-push to
-`lt-4`, then **STOP before step 4** (`merge -s ours` + PR — needs explicit
-OK). Full integration plan: `tasks/lt-4-master-integration-proposal.md`.*
+Session 27. Branch `claude/ui-polish-2` off `master`. New-UI (React) is the
+x64 default. User is driving the live host (PID running) for visual tuning
+(L-033 — agent-rendered native is unreliable; values get the user's eye).
 
 ## 1. Goal + scope
 
-**Goal.** After this session, launching the x64 editor with **no flag** runs
-the new WebView2/React UI; legacy chrome becomes opt-out via a net-new
-`--legacy` flag. The public repo also gains standard scaffolding docs, and the
-new-UI About dialog carries the same upstream attribution master's legacy About
-already shows.
+Four independent UI-polish items from the user, tackled **quick-wins-first**:
 
-**In:**
-- Step 2 — `src/main.cpp` default-flip: x64-gated `newUi` default-true, net-new
-  `--legacy` opt-out, stale-comment + README updates.
-- Step 3 — add-only `CONTRIBUTING.md`, `SECURITY.md`,
-  `.github/ISSUE_TEMPLATE/bug_report.md`, `DEVELOPMENT_LOG.md`; port
-  "Forked from Mike.NL's GlyphX Particle Editor v1.5" into `AboutDialog.tsx`
-  (+ its test).
-- CHANGELOG entry for the default-flip.
+1. **Selected curve key** — replace the blue selection highlight with a *more
+   saturated* version of the key's **own** color, enlarge the selected key, and
+   strengthen its drop shadow.
+2. **Background / Ground / texture-picker popovers** — add a consistent
+   **fade + slight zoom** entrance/exit animation (match the existing modals),
+   applied once in the shared wrapper.
+3. **Save-changes modal speed** — make it near-instant **while keeping** the
+   frosted-glass backdrop, by making the viewport snapshot capture cheap
+   (downscale) instead of dropping the gate.
+4. **Viewport stutter on dock slide** — smooth the D3D9 viewport as the right
+   dock animates open/closed. (Hardest; needs host experimentation; done last.)
 
-**Out (deferred, with reason):**
-- Step 4 `merge -s ours` + PR into master — **separate gate, needs explicit
-  user OK** (CLAUDE.md: never to master without it).
-- `--legacy` smoke of F12/F16 — the user's lane (L-033, arch-A visuals the
-  new-UI harness can't exercise); pending-user item, not blocking.
-- Re-applying master's F1–F5 — already on lt-4 in parallel form; the supersede
-  handles the rest. Do NOT double-apply.
+**In:** items 1, 4(anim), 2 as a low-risk batch; then 3 on its own.
+**Out:**
+- The flaky PAL-14 test fix — already its own PR (#96), not part of this batch.
+- Any change to *which* views use the curve editor, popover *contents*, or the
+  modal's logic/flow (only its open latency). Scope is appearance + smoothness.
+- MT-13 legacy removal (greenlit but a separate effort).
+
+**Order (user-chosen):** 1 → 4 → 2 → 3. Each verified + shown in the host before
+moving on.
 
 ## 2. What the codebase already gives us
 
-- Arg-parse block at `src/main.cpp:8056-8116`: `bool newUi = false;` (8058),
-  flag loop (8084-8112), `--new-ui → newUi = true` (8086). Adding `--legacy`
-  is one line in the loop + one `if (legacy) newUi = false;` after it.
-- Dispatch at `src/main.cpp:8197-8230`: `if (newUi) { #ifdef _WIN64 …host… #else
-  return -1 #endif }`. The `#else` -1 is the x86 safety net — leave verbatim.
-- Stale comments to fix: header `src/main.cpp:31-37` ("--new-ui flag
-  dispatches…"), block comment `src/main.cpp:8050-8055` ("Without the flag,
-  behaviour is unchanged").
-- `AboutDialog.tsx` (`web/apps/editor/src/screens/`) — credits block at lines
-  43-48; add the fork-attribution line. Test: `AboutDialog.test.tsx`.
-- README.md is minimal (no flags section) and already credits Mike.NL; add a
-  short Usage note documenting `--legacy`.
-- Master's attribution literal (verified via `git show origin/master`):
-  "Forked from Mike.NL's GlyphX Particle Editor v1.5"; fork version 0.2.0.
+- **Selected key (item 1):** keys are SVG `<circle>` in
+  `web/apps/editor/src/screens/CurveEditor.tsx`. Single-track path ~`:956-1003`
+  (`r=5` selected / `4` not), multi-channel focus path ~`:1858-1934` (hit-pad +
+  visible dot, `visR=6/5`). Selected fill is a hardcoded blue
+  `SELECTED_FILL = "#0EA5E9"` (`:213`), applied in **both** paths. Multi-channel
+  keys carry their channel color (`channel.color`, e.g. `var(--x-axis)`) — that's
+  the "own color" to saturate. Every key has a `data-selected="true"` hook, and a
+  shared `.curve-key-marker { filter: drop-shadow(0 1px 1.2px rgba(0,0,0,.5)); }`
+  at `web/apps/editor/src/styles/components.css:1063`.
+- **Popovers (item 4):** all three (`BackgroundDropdown`, `GroundDropdown`,
+  `TexturePalettePopover`) are Radix `Popover` routed through ONE wrapper,
+  `web/apps/editor/src/components/OccludingPopover.tsx`, which renders
+  `Popover.Content`. The repo's golden anim pattern lives in
+  `web/apps/editor/src/components/Modal.tsx:251,253`
+  (`data-[state=open]:animate-in fade-in-0 zoom-in-95`). Tailwind v4 ships the
+  `animate-in/out`, `fade-*`, `zoom-*` utilities natively (no plugin). Radix
+  exposes `--radix-popover-content-transform-origin` for a trigger-anchored zoom.
+- **Modal speed (item 2):** `Modal.tsx:80-220` gates
+  `Dialog open={open && snapshotReady}` on a `viewport/capture-snapshot` bridge
+  call. The capture (`CaptureSnapshotPng`, dispatched at
+  `src/host/BridgeDispatcher.cpp` ~1023) does a full-res (3440×1369) GPU readback
+  + GDI+ PNG encode + IPC + decode = 50–750ms. The gate exists to avoid a
+  backdrop-filter flash — keep it; just make capture cheap.
+- **Viewport stutter (item 3):** dock tween = `transition: flex-grow 0.2s ease`
+  (`components.css:1216`), orchestrated in `PanelLayout.tsx:184-199`.
+  `ViewportSlot` fires `layout/scene-rect` on **every** ResizeObserver tick with
+  **no throttle** (`ViewportSlot.tsx:85`) → ~15 msgs/tween. Host already coalesces
+  (Compositor keeps only latest pending transform; Engine viewport-set
+  idempotent), so the stutter is the 1-frame lag between DComp clip widening and
+  the engine re-rendering the new viewport.
 
 ## 3. Implementation approach
 
-**Step 2 — the x64 gate is at the declaration, not the dispatch.**
-```cpp
-#ifdef _WIN64
-        bool newUi = true;   // new UI is the default on x64
-#else
-        bool newUi = false;  // x86 has no host; legacy only (see #else at dispatch)
-#endif
-        bool legacy = false;
-```
-In the flag loop add `if (argv[i] == L"--legacy") legacy = true;`. After the
-loop (near the existing `--capture implies newUi` clamp at 8115) add
-`if (legacy) newUi = false;`. `--new-ui` stays as a now-redundant no-op
-(harness passes it; keep it harmless). Dispatch block unchanged.
+**Item 1 — selected key (web only).** Stop overriding the selected fill to blue;
+keep the key's **own** color when selected, then express "more saturated +
+bigger + stronger shadow" via the existing `data-selected` CSS hook:
+- `CurveEditor.tsx`: in both render paths, when `selected`, set `fill` to the
+  key's own color (multi-channel: `channel.color`; single-track: its
+  border/interior color) instead of `SELECTED_FILL`. Bump selected radius
+  (single `5→~6-7`; multi `visR 6→~7-8`, `hitR` to match).
+- `components.css`: add `.curve-key-marker[data-selected="true"]` →
+  `filter: saturate(<X>) drop-shadow(<stronger>)`. `saturate()` intensifies the
+  channel color; single-track grey is unaffected by saturate (size+shadow carry
+  it there — confirm acceptable in host). Retire `SELECTED_FILL` if now unused.
+- Values (saturate factor, radii, shadow) are first-pass; **tuned live with the
+  user in the host**.
 
-**Step 3 — add-only docs + one TSX edit + test.** Docs are net-new files (lt-4
-lacks them; zero conflict with the eventual supersede). AboutDialog gains a
-`text-text-3` line under the credits paragraph; the test asserts the new text
-renders.
+**Item 4 — popover anim (web only).** Centralize in `OccludingPopover`: merge a
+fixed animation class string with the caller's `className` (prepend, don't let
+caller override) on `Popover.Content`:
+`data-[state=open]:animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out
+fade-out-0 zoom-out-95 origin-[--radix-popover-content-transform-origin]` plus a
+short `duration-*`. Radix delays unmount for the CSS exit animation natively (no
+`forceMount`). All three popovers inherit it; no per-caller change.
+
+**Item 2 — modal speed (host + maybe web).** Keep the snapshot-ready gate (no
+flash). Make `CaptureSnapshotPng` cheap: downscale the readback to a small max
+dimension (e.g. ≤ ~960px wide) before the GDI+ PNG encode — the backdrop is
+`backdrop-blur-sm` over `bg-black/60`, so low-res is visually identical. Target
+capture ≤ ~30ms so the gated open feels instant. Read the capture impl first to
+pick the cleanest downscale point (StretchBlt / D3DXLoadSurface / scaled RT).
+
+**Item 3 — viewport stutter (host-heavy, experimental).** Hypotheses to try in
+the host, simplest first: (a) rAF-coalesce `layout/scene-rect` sends so ≤1/frame;
+(b) ensure the engine viewport change is applied *before* the DComp clip on
+shrink (kill the 1-frame lag); (c) if needed, let DComp scale the existing visual
+during the tween and do one true resize at the end. **Iterate with the user** —
+no promised design until we see it move.
 
 ## 4. Risks + mitigations
 
-1. **x86 default regression (the sharp one).** A flat `newUi = true` makes every
-   no-flag x86 launch hit the dispatch `#else` and `return -1`. *Mitigation:*
-   gate the initializer with `#ifdef _WIN64`; verify the guards by inspection
-   (the `.sln` is x64-only, so x86 is a preprocessor/compile reasoning check,
-   not a full run).
-2. **Harness regression from the no-op `--new-ui`.** The native harness passes
-   `--new-ui --test-host`; post-flip `--new-ui` is a no-op and `--test-host`
-   alone still enters the host on x64. *Mitigation:* re-run `test:native` →
-   174/0 after the edit.
-3. **AboutDialog test drift.** Adding text without updating the test fails
-   `tsc`/vitest. *Mitigation:* update `AboutDialog.test.tsx` in the same edit;
-   run vitest + `tsc -b`.
-4. **Double-applying F1–F5 / F12–F16.** Already on lt-4. *Mitigation:* not in
-   scope this session; the supersede (step 4) handles history.
+1. **Single-track grey keys don't visibly "pop" under saturate-only.** Grey has
+   no saturation to boost, so item 1's color change is a no-op there. *Mitigation:*
+   the selected size bump + stronger shadow still differentiate; confirm the look
+   with the user in the host and, if too subtle, fall back to a slight brightness
+   bump for the single-track path only. Accepted as a tune-in-host detail.
+2. **Popover exit animation never plays (element unmounts instantly).** If the
+   caller's `className` overrides or Radix unmounts before `data-[state=closed]`,
+   the exit won't show. *Mitigation:* merge classes in the wrapper (don't pass raw
+   `{...rest}` className through), verify against the Modal pattern which already
+   works, and assert `data-state` transitions in a vitest spec.
+3. **Downscaled snapshot visibly degrades the backdrop.** If the downscale is too
+   aggressive or applied before the blur reads it. *Mitigation:* the backdrop is
+   already blurred to mush; pick a max-dim that's still > the blurred detail floor
+   (~720–960px). Eyeball in the host before committing the factor.
+4. **Item 3 host changes regress the existing resize-storm mitigations.** The
+   compositor's coalescing + occlusion logic is load-bearing (drag-resize). *Mit:*
+   treat item 3 as its own change/PR, re-run the native harness (174/0), and
+   stress drag-resize + dock-toggle together before declaring it fixed.
+5. **Host rebuild churn.** Items 2 & 3 need MSBuild + relaunch each iteration.
+   *Mitigation:* batch the web items (1, 4) first — they only need `pnpm build` +
+   reload — then do the host items so the user isn't waiting on C++ builds early.
 
 ## 5. Testing & verification
 
-- [ ] **Build:** MSBuild Debug x64 clean.
-- [ ] **x86 reasoning check:** confirm the `#else` legacy default + the dispatch
-      `#else` guards are correct (x86 not in `.sln`).
-- [ ] **Web:** vitest still green; `tsc -b` → 0.
-- [ ] **Native harness:** `pnpm --filter @particle-editor/editor test:native`
-      → 174/0 (re-run once on an L-066/L-071 phantom).
-- [ ] **Arg-logic walk:** no flag → newUi (x64); `--legacy` → newUi false;
-      `--new-ui --legacy` → legacy wins (order-independent, post-loop clamp);
-      `--new-ui` alone → newUi (no-op).
-- [ ] **Docs present:** the four scaffolding files exist; About renders the
-      fork-attribution line.
-- [ ] **CHANGELOG** entry added (default-flip), reverse-chron, date-line format.
+- **Build/type gates:** `pnpm --filter @particle-editor/editor test` → 514/0 (+
+  any new popover-anim spec); `tsc -b` → 0; host Debug x64 clean for items 2/3;
+  `pnpm build` before any native harness run (L-068); native harness 174/0 after
+  host changes.
+- **Item 1:** selected keys show a saturated own-color (not blue), larger, with a
+  stronger shadow; unselected unchanged; multi-channel AND single-track both sane;
+  selection/drag still works. User confirms the look in the host.
+- **Item 4:** all three popovers fade+zoom in on open and **out** on close (exit
+  actually plays); no layout shift; trigger-anchored origin; vitest asserts the
+  `data-state` open/closed classes are present.
+- **Item 2:** save-changes modal appears effectively instantly with the frosted
+  backdrop intact; no unblurred-frame flash; works at maximize (worst case). User
+  times it in the host.
+- **Item 3:** dock open/close is smooth — no viewport stutter/clear-strip; drag-
+  resize storms still clean; native harness 174/0. User confirms smoothness.
+
+---
 
 ## Progress
 
-- ✅ Green pre-flight baseline confirmed before edits: git 0/0 clean, vitest
-  510, `tsc -b` 0, native build clean, native harness **174/0**.
-- ✅ Step 2 default-flip in `src/main.cpp`: x64-gated `newUi` default-true,
-  `--legacy` + `--legacy-ui` alias opt-out, `if (legacy) newUi = false;` before
-  the `--capture` clamp, stale comments + README updated.
-- ✅ Step 3 scaffolding: `CONTRIBUTING.md` / `SECURITY.md` /
-  `.github/ISSUE_TEMPLATE/bug_report.md` / `DEVELOPMENT_LOG.md` ported
-  byte-identical from master (matching blob hashes); About attribution
-  "Forked from Mike.NL's GlyphX Particle Editor v1.5" added to `AboutDialog.tsx`
-  + test + regenerated a11y golden.
-- ✅ CHANGELOG entry added (default-flip, provisional TODO hash/PR).
+- [x] Item 1 — selected curve key (saturated + bigger + stronger shadow).
+      **Rev 2 (user feedback):** unselected keys now carry NO shadow (only
+      selected); select/deselect now ANIMATES (CSS `transition: r, filter` —
+      no library needed; Chromium transitions the SVG `r` attr + `filter`).
+      Code + tests done; live in host. **Pending user host-confirm.**
+- [x] Item 4 — popover animation (centralized in OccludingPopover via a
+      self-contained `popover-animate` CSS class — `animate-in` utilities are
+      NOT in this build, agent's claim was wrong).
+      **Rev 3 (FINAL — root cause nailed with real-input Playwright):** the
+      user's press-shift (Background only, shifts while depressed, corrects on
+      release) was **scale coupled to position**. The popover's entrance
+      `scale` + `transform-origin` at the trigger corner + `align="end"`
+      (right edge pinned) means ANY non-1 scale renders the popover offset; a
+      press re-resolves the transform → snaps to full width (measured: rest
+      stuck at `scale(0.95)`, rect 266px @ x1415; on press → 280px @ x1401,
+      −14px). Secondary contributor: `.tb-btn:active{transform:scale(.96)}`
+      scales the *trigger* (anchor), and a re-measure re-pins the menu to the
+      moved edge (measured −7px). Background > Ground because its label is
+      wider. **Fix (two parts):** (1) popover entrance+exit are now pure
+      opacity fades — NO scale anywhere, so position can't couple to animation
+      state; (2) `.tb-btn[data-state="open"]:active{transform:none}` holds the
+      trigger anchor steady on the dismiss-press. Verified with real input:
+      press → x 1401→1401, w 280→280, both transforms `none` (0px shift).
+      **Gap named to user:** they asked for fade+zoom; the zoom is what caused
+      the shift, so shipped a clean fade (offered to revisit shift-free motion).
+      Live in host. **Pending confirm.**
+- [x] Item 2 — modal instant via downscaled snapshot capture. `AlphaCompositor::
+      CaptureSnapshotPng` now downscales the cropped backdrop to a ≤1024px long
+      edge (GDI+ bilinear) before the PNG encode — the kept no-flash gate now
+      waits on ~0.4MP instead of ~4.7MP, so encode+base64+IPC+decode (the
+      dominant cost) drops ~11×. `CaptureSnapshotToFile` (--capture offline
+      diff) left full-res. Added `[INSTANT-MODAL]` debug timing. Updated the
+      the native tests that pinned snapshot dims to the source. Host Debug x64
+      clean; native harness **174/0**. Maximize confirmed instant by user.
+      **Rev 2 (user — windowed snappier too):** added a min-2× downscale
+      (`kSnapshotDownscale`) on top of the 1024 cap, so sub-cap (windowed)
+      captures also shed pixels (the cap alone left ≤1024px crops at native
+      size — the user's 918px window encoded ~50ms unchanged). Now
+      `target = min(1024, longEdge/2)`: maximize still 1024 (≈3.4× upscale,
+      approved), windowed halves (2× upscale, gentler under blur, ~¼ the
+      encode/IPC). Native tests re-baselined to the /2 dims (512×384, 400×300,
+      800×450); harness **174/0**. `[INSTANT-MODAL]` log confirms the numbers.
+      **User-confirmed** ("quite snappy"): windowed **~18 ms** (was ~50),
+      maximized **~69 ms**. Residual maximized latency deferred to ROADMAP
+      **[NT-10]** (StretchRect-before-readback the likely win) — user OK with
+      it for now, flagged to triage later.
+- [ ] Item 3 — viewport stutter on dock slide (experimental, host)
 
 ## Review
 
-**Landed:** commit `cf59ce7`, FF-pushed `lt-4` (`5c5c76c..cf59ce7`); local +
-`origin/lt-4` synced, 0/0, tree clean.
-
-**Scope delivered (steps 2 + 3; stopped before step 4 merge as agreed).**
-
-What changed: `src/main.cpp` (default-flip + dual legacy flag), `README.md`
-(usage), `CHANGELOG.md` (entry), `AboutDialog.tsx` + test + golden (attribution),
-4 add-only scaffolding docs.
-
-**Two findings surfaced during the work (both real, both handled):**
-1. *Native a11y golden drift.* Adding the About attribution line broke
-   `dialog-about.composition.golden.yaml` — the native harness caught it (the
-   vitest assertion alone wasn't enough; the visible-text change also moves the
-   a11y tree). Regenerated surgically via `a11y:update --grep "dialog-about"`;
-   `git diff` confirmed the only change is the added text node.
-2. *`--legacy-ui` was never a parsed flag.* The codebase's comments/docs use
-   `--legacy-ui` (mirror of `--new-ui`), but it only ever "worked" because
-   legacy was the default — post-flip it would silently give the new UI. Per
-   user decision, accepted **both** `--legacy` and `--legacy-ui` as aliases.
-
-**Verification:** clean Debug x64 build (×2, incl. after the alias edit); vitest
-**511/511** (+1 About test); `tsc -b` 0; native harness **174/0** (after golden
-regen). Arg-logic walk: no-flag→newUi (x64) · `--legacy`/`--legacy-ui`→legacy ·
-`--new-ui --legacy`→legacy (post-loop clamp) · `--capture --legacy`→host
-(capture clamp wins) · x86→legacy by gate · fixture-gen paths return before
-dispatch (unaffected).
-
-**Step 4 — DONE (user OK'd, then merged).** `git merge -s ours master`
-(`b5915a8`) → PR [#92](https://github.com/DrKnickers/new-particle-editor/pull/92)
-→ merged to `master` (`f05fa36`, 2026-06-08). New-UI-default is **live on
-master**. Post-merge: CHANGELOG/ROADMAP provisional placeholders backfilled
-uniformly to `f05fa36`/`#92` (supersede landed everything in one merge);
-`lt-4` + two stale `claude/*` remote branches retired; CLAUDE.md branch-workflow
-rewritten for master-as-trunk. The `--legacy` F12/F16 smoke was **dropped** —
-legacy is being removed (MT-13 greenlit), so F12 (legacy-only) is moot and F16
-(shared engine) gets a new-UI eyeball instead.
-
-**Next (separate efforts):** MT-13 legacy removal (now greenlit; its own
-★★★★+ plan); optional `.github/PULL_REQUEST_TEMPLATE.md` to fix CONTRIBUTING's
-dangling link.
-
-**Open question for step 4 / user:** master's ported `CONTRIBUTING.md` links to
-`.github/PULL_REQUEST_TEMPLATE.md`, which exists on neither branch (a dangling
-link inherited from upstream). Left verbatim for a faithful port; worth creating
-the PR template (or fixing the link) before/at the public-facing merge.
+_(appended after the work)_
