@@ -1,10 +1,222 @@
-# NT-11 soft chain warning — plan (session 35)
+# Preview overload guard — plan (session 35, part 2)
+
+_2026-06-10. Triggered by the NT-11 feel test: a Shift-×10 spinner step
+committed a huge Particles/sec, the preview simulated the bomb, and the
+editor died (OOM, host.log stops mid-stream, no exception). Root cause
+traced (no global budget on live particles/instances; chains multiply
+child EmitterInstances per particle; FP-precision burst-doubling trap at
+[`EmitterInstance.cpp:919-924`](../src/EmitterInstance.cpp)). User-approved
+behavior: suppress spawning over budget + auto-clearing banner; separate
+PR (branch `claude/preview-overload-guard` off `e67e5e5`). Status:
+**EXECUTING.**_
+
+---
+
+## 1. Goal + scope
+
+When the live preview's particle population would exceed a hard budget,
+the engine **stops spawning** (existing particles live out their lives)
+and the UI shows a **non-modal, auto-clearing banner**. When the
+population decays under budget (user lowers the rate), spawning resumes
+and the banner clears itself. The editor survives ANY spawn parameters —
+typed, Shift-×10'd, or chain-multiplied.
+
+**In:** engine-wide live-particle + instance budgets, spawn suppression
+at both allocation choke points, overload latch → `stats/tick` payload →
+React banner, native regression spec (rate=huge → plateau ≤ budget +
+flag), null-safety on refused child spawns.
+**Out (deliberate):**
+- No clamping of authored values — the `.alo` data model is never
+  touched (the engine guard makes any value survivable).
+- No fix for the FP burst-doubling trap itself — its blast radius is
+  contained by the budget; noted for a future pass.
+- No modal dialog (user chose banner).
+- Spinner Shift-step behavior unchanged (it's a feature; the guard makes
+  it safe).
+
+## 2. What the codebase already gives us
+
+- `EmitterInstance::m_engine` is an `Engine&` ([`EmitterInstance.h:38`](../src/EmitterInstance.h))
+  — both spawn paths can reach a budget API without plumbing.
+- Engine already does live accounting: `m_numParticles` (delta-updated in
+  `Engine::Update`, [`engine.cpp:561`](../src/engine.cpp)), `m_numEmitters`
+  via `OnEmitterCreated` ([`engine.h:348`](../src/engine.h)).
+- The 4 Hz stats timer already ships `GetNumParticles()` to the UI
+  ([`HostWindow.cpp:2241-2248`](../src/host/HostWindow.cpp), `EmitStatsTick`).
+- Per-instance uint16 index cap (16,383) exists
+  ([`EmitterInstance.cpp:273`](../src/EmitterInstance.cpp)) — necessary but
+  insufficient (instances multiply).
+- `useViewportOcclusion` (EmitterTree.tsx's OccludingContextMenuContent
+  pattern) lets a DOM banner render over the D3D viewport without being
+  overpainted.
+- Browser mock emits NO `stats/tick` (mock.ts:405 comment) — banner is
+  host-only; component tests drive it with a stub bridge.
+
+## 3. Architecture
+
+**Engine (`engine.h`/`engine.cpp`):** constants `kMaxLivePreviewParticles
+= 100'000`, `kMaxLiveEmitterInstances = 5'000` (tunable). A per-frame
+spawn budget: `Engine::Update()` start computes
+`m_spawnBudget = max(0, kMaxLivePreviewParticles - m_numParticles)`.
+New API: `bool TryConsumeSpawnBudget()` (decrement, false at 0 → latch
+overload) and `bool TryConsumeInstanceBudget()` (checks
+`m_numEmitters < kMaxLiveEmitterInstances`). Overload flag recomputed per
+frame (any refusal this frame ⇒ active), exposed as
+`bool IsSpawnOverloadActive() const`. Resume hysteresis: budget refills
+only below 90% of cap so the boundary doesn't flicker.
+
+**Suppression points:**
+- `EmitterInstance::SpawnParticles` burst loop: per particle,
+  `if (!m_engine.TryConsumeSpawnBudget()) break;` and on refusal advance
+  `m_nextSpawnTime` to currentTime (drop missed spawns — NO catch-up
+  burst on resume).
+- `ParticleSystemInstance::SpawnEmitter`: refuse (return nullptr) when
+  instance budget exhausted. Callers made null-safe: `SpawnParticle`
+  (assigns to `m_childEmitter` — already null-tolerant downstream at
+  KillParticle:638; audit other `m_childEmitter->` derefs) and
+  `KillParticle:650-652` (currently derefs unconditionally — add guard).
+
+**Wire:** `stats/tick` payload gains `overload: boolean` (schema +
+`EmitStatsTick` signature + HostWindow call site reads
+`engine->IsSpawnOverloadActive()`).
+
+**Web:** small `OverloadBanner` component (new file), subscribes to
+`stats/tick`, renders a fixed banner over the viewport top (with
+`useViewportOcclusion` so the D3D popup doesn't overpaint it); text:
+"Preview spawning paused — live particle budget exceeded. Lower spawn
+rates (⚠ marks the offending chain)." Auto-hides when `overload` is
+false. StatusBar particle counter turns amber while overloaded.
+
+## 4. Risks
+
+1. **Hot-path overhead** — a per-spawn budget check is an int decrement;
+   negligible vs the allocation it guards. Accepted.
+2. **Refused child spawns break pointer assumptions** — `KillParticle`
+   derefs `SpawnEmitter`'s return unconditionally. Mitigation: nullptr
+   guard there + audit every `m_childEmitter->` use; native spec
+   exercises death-children under overload.
+3. **Catch-up burst on resume** — if `m_nextSpawnTime` lags while
+   suppressed, resume spawns the backlog at once. Mitigation: advance
+   `m_nextSpawnTime` on refusal (drop, don't defer).
+4. **Banner over the composited viewport gets overpainted** — mitigated
+   by `useViewportOcclusion` (the context-menu precedent).
+5. **Stats payload widening breaks consumers** — StatusBar + schema +
+   ViewportSlot read stats/tick; sweep with tsc; mock emits none.
+6. **Budget too low annoys legitimate heavy effects** — 100k is ~6× the
+   per-instance render cap and far beyond vanilla (tens-to-hundreds);
+   constant is one line to tune.
+
+## 5. Testing & verification
+
+- **Native spec (the crash regression, replaces "editor dies"):** via
+  test-host bridge — set a chained emitter's rate to 1e9 → poll
+  `stats/tick`/snapshot → particles plateau ≤ 100k AND `overload: true`
+  AND the process stays alive; set rate back to 10 → overload clears
+  (poll with timeout). Death-child variant included.
+- **Host build** Debug + Release x64 clean; harness 175→176+/0.
+- **Web:** banner component tests (stub bridge emits stats/tick
+  overload true → banner visible; false → gone); tsc 0; full vitest.
+- **Manual (user):** repeat the Shift-×10 accident — editor survives,
+  banner appears, lowering the rate clears it; FPS stays interactive
+  during overload.
+
+---
+
+## Progress (part 2)
+
+- [x] Task A: engine budget + suppression + host wire + native spec
+      — Implementation notes vs plan (Task A review):
+      - `m_numEmitters` accounting verified live: `OnEmitterDestroyed()`
+        already existed and is called on both instance-death erase paths
+        (`ParticleSystemInstance::Update` + `RemoveEmitter`) — no mirror
+        needed; `TryConsumeInstanceBudget` checks without decrementing.
+      - Catch-up loop: chose the in-loop guard (`SpawnBudgetExhausted()`
+        → snap `m_nextSpawnTime` + break) PLUS a refused-round snap
+        (`spawned == 0 && m_nParticlesPerBurst > 0`): the per-instance
+        uint16 index cap (16,383) bites BEFORE the global budget for a
+        single emitter, and without the snap the loop churned ~80k
+        refused alloc/free rounds per frame (FPS 3, stats timer starved
+        — observed live). Both bail paths call `NoteSpawnSuppressed()`
+        so the latch holds while bailing skips the TryConsume refusal.
+      - `SpawnParticle` now returns bool: index-cap-refused spawns were
+        being counted (+1, never decremented) → permanent phantom
+        inflation of `m_numParticles` that would eat budget headroom.
+      - Added `kOverloadClearDelaySec = 0.5` debounce on the latch:
+        refusals only fire on spawn-round frames, so the raw per-frame
+        flag flickers at moderate rates while pinned at a cap (plan
+        risk 4-adjacent; observed live: latch cleared 0.5 s after
+        restore with 16k particles still alive).
+      - Index-cap suppression now also latches overload (judgment call:
+        "spawning suppressed" is true and user-actionable; pre-existing
+        cap dropped spawns silently).
+      - Verified live: bomb → overload=true on every 4 Hz tick, plateau
+        16,384, FPS ~28 interactive; restore → clears at 4.7 s with
+        population decayed (particles=6).
+- [x] Task B: web banner + StatusBar tint + component tests (`5851c83`)
+      — Implementation notes vs plan (Task B review):
+      - Copy changed from the plan's "live particle budget exceeded" to
+        "Preview spawn limit reached — spawning paused…" (review nuance:
+        the latch also fires on the per-instance render cap, not only
+        the global budget, so "budget exceeded" would mislead).
+      - Mount point: sibling of `ViewportSlot` inside PanelLayout's
+        `relative` quadrant-viewport div (absolute top-center needs no
+        extra geometry; bridge already in scope there).
+      - Occlusion: `useViewportOcclusion(bridge, "banner:preview-overload",
+        ref, 12, 12)` on a child component that mounts only while
+        overloaded (the hook needs the element present when its effect
+        runs — the OccludingContextMenuContent precedent). Tests pin
+        register-on-show + rect:null release-on-clear.
+      - Banner is `pointer-events-none` so viewport camera input passes
+        through; `role="status"` + `aria-live="polite"`.
+      - Verified: vitest 670/670 (664 baseline + 5 banner + 1 StatusBar
+        tint), `tsc -b` 0.
+- [x] Task C: verification + docs + PR (+ CHANGELOG #120 merge-hash
+      backfill `e67e5e5` rider)
+
+## Review (part 2)
+
+**Executed subagent-driven (A: engine+host+spec, B: banner+tint), each
+spec- and quality-reviewed; review fixes folded in:** RemoveEmitter
+live-particle accounting leak (same actual-vs-intended counter class as
+the SpawnParticle-bool fix), overload-flag reset moved after latch
+evaluation (inter-frame refusals now count), death-child refusal spec
+phase (the plan promised it; the riskiest pointer path), best-effort
+spec cleanup, burst-burn + weather-zombie comments, and the
+`observeParent` occlusion fix (splitter drag moved the content-sized
+banner without resizing it → stale alpha cut-out).
+
+**Plan-vs-reality:** the per-instance uint16 index cap (16,383) bites
+BEFORE the global budget for a single emitter — the plan's "1e9/s alone
+exceeds the budget" was wrong; the refused-churn FPS collapse forced the
+refused-round snap, and index-cap refusals latching the banner forced
+the "spawn limit reached" wording. The a11y pause leak (user chip) was
+fixed across all 8 a11y specs in the same branch.
+
+**Verification:** web vitest **670/670** (73 files; 6 banner/tint tests
+new), `tsc -b` 0, vite build clean, host Debug + Release x64 clean,
+native harness **177/0** (30 skipped; the 2 overload specs run LAST by
+design). Final clean-tree harness rerun green after the a11y unpause
+sweep.
+
+**User feel pass (pending — user launches):**
+- [ ] Repeat the Shift-×10 accident → editor SURVIVES, banner appears.
+- [ ] FPS stays interactive while overloaded.
+- [ ] Lower the rate → banner clears on its own (~1-6 s as population
+      decays), spawning resumes.
+- [ ] StatusBar particle count tints amber during overload.
+- [ ] Banner doesn't get overpainted by the viewport, including after a
+      splitter drag while it's up.
+
+---
+
+# NT-11 soft chain warning — plan (session 35, part 1) — ✅ SHIPPED #120 (`e67e5e5`)
 
 _2026-06-10. Spec (user-approved section-by-section):
 [`docs/superpowers/specs/2026-06-10-chain-warning-design.md`](../docs/superpowers/specs/2026-06-10-chain-warning-design.md).
 Executable task plan:
 [`docs/superpowers/plans/2026-06-10-chain-warning.md`](../docs/superpowers/plans/2026-06-10-chain-warning.md).
-Status: **PLAN — awaiting user execution-mode choice.**_
+Status: **MERGED — feel-approved by the user; the feel test exposed the
+pre-existing preview-crash handled in part 2 above.**_
 
 ---
 
