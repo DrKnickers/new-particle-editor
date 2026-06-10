@@ -226,6 +226,7 @@ void Engine::Clear()
     m_spawnBudget       = kMaxLivePreviewParticles;
     m_overloadActive    = false;
     m_overloadThisFrame = false;
+    m_lastOverloadTime  = -1.0f;
 }
 
 int Engine::ActiveSpawnerInstanceCount() const
@@ -587,17 +588,25 @@ void Engine::Update()
 		}
     }
 
+	// Latch with a clear-delay debounce: refusals only occur on frames
+	// where a spawn round fires, so the raw per-frame flag flickers at
+	// moderate rates; hold the latch until kOverloadClearDelaySec passes
+	// with no refusal (see engine.h).
+	if (m_overloadThisFrame) m_lastOverloadTime = currentTime;
+	const bool overloadNow = m_overloadThisFrame
+		|| (m_overloadActive
+		    && (currentTime - m_lastOverloadTime) < kOverloadClearDelaySec);
 #ifndef NDEBUG
 	// Overload guard: log only the latch TRANSITIONS — never per refusal
 	// (refusals happen per-particle on a hot path).
-	if (m_overloadThisFrame != m_overloadActive)
+	if (overloadNow != m_overloadActive)
 	{
 		printf("[overload] spawn suppression %s (particles=%d instances=%d)\n",
-		       m_overloadThisFrame ? "ON" : "OFF", m_numParticles, m_numEmitters);
+		       overloadNow ? "ON" : "OFF", m_numParticles, m_numEmitters);
 		fflush(stdout);
 	}
 #endif
-	m_overloadActive = m_overloadThisFrame;
+	m_overloadActive = overloadNow;
 }
 
 bool Engine::RecoverDeviceIfNeeded()

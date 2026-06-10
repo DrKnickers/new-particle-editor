@@ -95,6 +95,12 @@ public:
 	// values are never clamped or modified.
 	static constexpr int kMaxLivePreviewParticles  = 100'000;
 	static constexpr int kMaxLiveEmitterInstances  = 5'000;
+	// Debounce on the latched overload flag: refusals only happen on
+	// frames where a spawn round actually fires (e.g. every 0.1 s at
+	// rate 10 while pinned at a cap), so the raw per-frame flag would
+	// flicker ON/OFF between rounds. The latch clears only after this
+	// long with no refusal at all.
+	static constexpr float kOverloadClearDelaySec  = 0.5f;
 
 	// Describes a camera
 	struct Camera
@@ -528,6 +534,9 @@ private:
     int  m_spawnBudget       = kMaxLivePreviewParticles;
     bool m_overloadActive    = false;
     bool m_overloadThisFrame = false;
+    // Time of the most recent refused spawn — drives the
+    // kOverloadClearDelaySec debounce on m_overloadActive.
+    TimeF m_lastOverloadTime = -1.0f;
 
 	// Viewing
 	Camera		m_eye;

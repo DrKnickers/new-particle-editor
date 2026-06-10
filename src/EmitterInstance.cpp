@@ -820,7 +820,25 @@ int EmitterInstance::Update(TimeF currentTime)
                 m_nextSpawnTime = currentTime + GetSpawnDelay();
                 break;
             }
-            numParticles += SpawnParticles(m_nextSpawnTime);
+            int spawned = SpawnParticles(m_nextSpawnTime);
+            numParticles += spawned;
+            // A round that spawned NOTHING (while asked to spawn
+            // something) was refused — by the engine budget mid-round or
+            // by the per-instance uint16 index cap. Same treatment as
+            // the budget bail above: drop the remaining catch-up rounds
+            // (don't churn thousands of refused alloc/free rounds per
+            // frame — that starves the render loop and the 4 Hz stats
+            // timer) and hold the overload latch: spawning IS being
+            // suppressed relative to the authored rate. The
+            // m_nParticlesPerBurst > 0 guard keeps authored zero-burst
+            // emitters on their legacy timing (a 0-particle round is
+            // not a refusal for them).
+            if (spawned == 0 && m_nParticlesPerBurst > 0)
+            {
+                m_engine.NoteSpawnSuppressed();
+                m_nextSpawnTime = currentTime + GetSpawnDelay();
+                break;
+            }
         }
     }
 
