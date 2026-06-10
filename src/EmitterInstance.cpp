@@ -255,8 +255,12 @@ void EmitterInstance::ResetParticle(Particle& particle, TimeF currentTime)
 	}
 }
 
-// Spawn a single particle
-void EmitterInstance::SpawnParticle(TimeF currentTime)
+// Spawn a single particle. Returns false when the per-instance uint16
+// index cap refused the spawn — callers must NOT count a refused spawn
+// (a phantom +1 would permanently inflate Engine::m_numParticles, since
+// only REAL particles ever decrement it on death, which would in turn
+// eat the overload guard's budget headroom forever).
+bool EmitterInstance::SpawnParticle(TimeF currentTime)
 {
 	Particle& particle = AllocateParticle();
 
@@ -278,7 +282,7 @@ void EmitterInstance::SpawnParticle(TimeF currentTime)
 		       particle.m_index); fflush(stdout);
 #endif
 		FreeParticle(particle);
-		return;
+		return false;
 	}
 
 	particle.m_verticesIndex = particle.m_index * NUM_VERTICES_PER_PARTICLE;
@@ -369,6 +373,7 @@ void EmitterInstance::SpawnParticle(TimeF currentTime)
 	particle.m_indicesIndex = m_primitives.size();
 	m_primitives.push_back(prim);
 	m_particleIndex.push_back(&particle);
+	return true;
 }
 
 void EmitterInstance::UpdateTrackCursors(Particle& particle, float relTime) const
@@ -932,7 +937,11 @@ int EmitterInstance::SpawnParticles(TimeF spawnTime)
         // it runs out, drop the REST of this burst — never deferred.
         if (!m_engine.TryConsumeSpawnBudget())
             break;
-        SpawnParticle(spawnTime);
+        // Per-instance uint16 index cap refusal: the rest of the burst
+        // would refuse too (same live-count pressure), so stop counting
+        // AND stop iterating.
+        if (!SpawnParticle(spawnTime))
+            break;
         numParticles++;
 	}
 
@@ -1000,7 +1009,8 @@ EmitterInstance::EmitterInstance(TimeF currentTime, ParticleSystemInstance& syst
 	    {
             if (!m_engine.TryConsumeSpawnBudget())
                 break;
-		    SpawnParticle(currentTime);
+		    if (!SpawnParticle(currentTime))
+                break;  // uint16 index cap — don't count refused spawns
             (*numParticles)++;
         }
     }
