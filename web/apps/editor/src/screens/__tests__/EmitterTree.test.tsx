@@ -1061,5 +1061,23 @@ describe("chain-load warning glyph (NT-11)", () => {
     const glyph = await screen.findByTestId("emitter-chain-warning-0");
     expect(glyph.getAttribute("title")).toContain("20,000");
     expect(glyph.getAttribute("title")).toContain("Soft warning");
+    // Only the offending chain glyphs: Smoke + its two children (the
+    // cumulative product carries down), NOT the sane siblings Sparks (3)
+    // and Flash (5). Pins the per-row prop wiring, not just presence.
+    expect(screen.queryAllByTestId(/^emitter-chain-warning-/)).toHaveLength(3);
+    expect(screen.queryByTestId("emitter-chain-warning-3")).toBeNull();
+    expect(screen.queryByTestId("emitter-chain-warning-5")).toBeNull();
+  });
+
+  it("marks ancestors when a CHILD's edit makes the chain offend (multi-line tooltip)", async () => {
+    // Root Smoke stays at fixture defaults (10/s × 1 s → E = 10); child
+    // "Smoke embers" (id 1) patched to 2,000/s × 1 s → cumulative
+    // 10 × 2,000 = 20,000 > 10,000. The root glyphs as an ancestor and
+    // the child's tooltip carries the per-generation breakdown.
+    useMockEmitterProperties.getState().patch(1, { nParticlesPerSecond: 2_000, lifetime: 1 });
+    render(<EmitterTree bridge={new MockBridge()} />);
+    const childGlyph = await screen.findByTestId("emitter-chain-warning-1");
+    expect(childGlyph.getAttribute("title")).toContain("→ Smoke embers");
+    expect(screen.getByTestId("emitter-chain-warning-0")).toBeInTheDocument();
   });
 });
