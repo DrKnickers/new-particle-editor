@@ -7,7 +7,7 @@ generations (sparkles → highlight flecks → smoke puffs). Decision-matrix row
 bomb, **no editor depth-guard needed**. The mod file is RESTORED to vanilla —
 nothing is planted anymore. Verdict + corollaries recorded in
 [`multi_child_emitter_investigation.md`](multi_child_emitter_investigation.md)
-(addendum). One open design question, unscheduled: a soft warning when a
+(addendum). Follow-up scheduled as ROADMAP **[NT-11]**: a soft warning when a
 chain's per-particle multiplication explodes. Historical notes below._
 
 ## The question

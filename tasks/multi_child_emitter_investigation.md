@@ -599,7 +599,7 @@ Corollaries:
 - The editor needs **no depth guard** on reparent / add-child /
   paste-as-child. Authoring chains is legitimate; Petroglyph just never
   shipped one.
-- Open design question (not scheduled): a *soft* editor warning when a
+- Scheduled as ROADMAP **[NT-11]**: a *soft* editor warning when a
   chain's per-particle multiplication explodes (each generation spawns one
   child emitter instance per parent PARTICLE — rates multiply through the
   chain). See `tasks/next-emitter-chain-investigation.md` for the math.
