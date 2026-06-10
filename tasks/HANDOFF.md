@@ -1,5 +1,33 @@
 # Session Handoff — AloParticleEditor / LT-4
 
+## 2026-06-09 (session 33) — **RESUMED the deferred drag audit as a hardened multi-agent workflow → all 10 confirmed findings FIXED + SHIPPED to `master` via PR [#110] (`e4ef42b`), CHANGELOG backfill [#111] (`5550cb4`). Host-smoke confirmed by the user. No open PRs.** The headline fix: a routine root reorder silently **swapped a parent's life/death child slots** (RMW index-aliasing across 3 hand-copied KEEP-IN-SYNC fns) → corrupted the `.alo` on save. Both deferred drag investigations from session 32 are now CLOSED; the **emitter-chain** test is the only thing still open (planted/unfired in the user's mod).
+
+**`origin/master` = `5550cb4`** (advanced this session: #110 → `e4ef42b`, #111 → `5550cb4`). **No open PRs.**
+
+### What shipped this session — all on `master`
+The prior session's drag audit (run `wf_702b08d9-c73`) had been rate-limited mid-run and reported a **false** `confirmed: []` (its workflow scored a dead verifier's missing verdict as "refuted"). Re-ran it as a **hardened** workflow (run `wf_eab3d07f-f8e`): verdict accounting now splits **confirmed / refuted / unverified** with an `isCleanRun` flag, so an incomplete run can't masquerade as clean. Result: `isCleanRun: true`, **10 confirmed / 10 refuted / 0 unverified**. All 10 fixed (PR [#110]):
+- **C (🔴 critical, C++):** the slot-swap data corruption. Consolidated the 3 KEEP-IN-SYNC reorder loops (`moveEmitter` / `moveEmitterToRootIndex` / `reorderManyRootsToIndex`) into one **two-pass** helper [`rewriteParentSpawnIndices`](../src/ParticleSystem.cpp) (snapshot-then-write) + new standalone unit test [`tests/test_emitter_reorder.cpp`](test_emitter_reorder.cpp) (15/15, red→green through both bridge-reachable entry points). → **L-077**.
+- **A1/A2/A3 (🔴+🟠, React):** a mid-drag `tree/changed` (Ctrl+Z/Y/V via accelerators, or another pane) committed stale positional ids / painted a stale gap+dim. One `activeDragCancelRef` in [`EmitterTree.tsx`](../web/apps/editor/src/screens/EmitterTree.tsx) **aborts the gesture before the refetch** (user chose "cancel the drag" over "block the accelerator").
+- **B1/B2 (🟠):** `pointerId` re-entrancy guard + `setPointerCapture` + `blur`/`visibilitychange` teardown.
+- **D (🟠):** mock dirtied the doc on **refused** drag-commits → gated `markDirty` on a `didMutate` result check mirroring the host ([`mock.ts`](../web/apps/editor/src/bridge/mock.ts)).
+- **E (🟠):** dragging a root dropped a separately-selected child → capture untouched members' `stableId`s, re-resolve across the host reindex ([`emitter-reorder.ts`](../web/apps/editor/src/lib/emitter-reorder.ts)).
+- **F1/F2 (🟡):** autoscroll nearer-edge tie-break (end gap reachable in a <56px panel); scoped click-suppression reset.
+
+### Verified
+web **636/636** (630 + 6 new), `tsc -b` 0, vite clean; host **Debug x64** clean (benign LNK4098); native a11y **174/0** (zero golden diff); native reorder unit test **15/15**; CI green on both PRs. **Host smoke (user-confirmed in the running editor):** normal drag/reparent regression, A1 mid-drag Ctrl+Z cancels, B2 Alt+Tab tears down, F2 post-cross-row-drag click selects. **Only B1 (second *physical* pointer) not host-smoked** — needs two pointers; guard is unit-reasoned + low-reachability. Accepted.
+
+### Lessons
+- **L-077 (new):** rewriting index references in place while comparing the live field aliases when a new index equals another entry's old index → snapshot-then-write; and DON'T hand-copy the remap across functions (a duplicated loop = a duplicated bug). Test the aliasing case through EVERY reachable entry point.
+- **Workflow accounting (reinforced):** a verdict tally that treats a missing verdict as "refuted" turns a rate-limited dead run into a false clean pass — split confirmed/refuted/**unverified** and surface an `isCleanRun` flag.
+
+### Still open (only one)
+**Emitter chains in-game** — `tasks/next-emitter-chain-investigation.md`. `P_S_ASSAULTCONC.ALO` is still planted (depth-3 chain, **unfired**) in the user's EmpireAtWarExpanded mod; restore via `git checkout` in the mod repo. Decision matrix in the note → editor depth-guard or not. (`tasks/next-drag-audit.md` is now **RESOLVED** — all 10 findings fixed in #110.)
+
+### Kickoff (short)
+> Pick up AloParticleEditor. `origin/master` = **`5550cb4`**. The drag-reorder/reparent **audit is DONE** — all 10 findings fixed + host-smoked, shipped via PR [#110] (`e4ef42b`) + backfill [#111]. **No open PRs.** Only remaining thread: the **emitter-chain** in-game test (`tasks/next-emitter-chain-investigation.md` — `.alo` planted/unfired in the user's mod; decision matrix → depth-guard or not). Read `tasks/HANDOFF.md` top (session 33) + `tasks/lessons.md` (**L-077** RMW index-aliasing / don't hand-copy KEEP-IN-SYNC loops; L-076; L-039/L-040/L-046 fresh-worktree build). VERIFY against code. Pre-flight: `git fetch origin master`; fresh worktree needs L-039 (NuGet copy) + L-040 (`pnpm build`); from `web/` `pnpm install`, `pnpm --filter @particle-editor/editor test` → **636**, `tsc -b` 0; host Debug x64 (VS18); native **174/0**. The C++ reorder unit test builds via `tests/build_test_emitter_reorder.bat` (cl.exe + DXSDK, links the data-model TUs only). NEXT (confirm with user): fire the chain test, or new work.
+
+---
+
 ## 2026-06-09 (session 32) — **SHIPPED the whole emitter-tree drag feature to `master` via PR [#108] (`71b5c41`): multi-drag preview polish + single-drag parity + highlight-follow + reorder GLIDE animation + chip spawn/despawn. PR [#106] superseded (GitHub auto-marked it MERGED — #108 is a superset). Two adversarial review passes hardened it; the user smoked the whole thing — single/multi reorder, reparent, the on-release AND mid-drag glide, the chip spawn/despawn-into-the-gap — and approved it ("looks great"), which is why it merged. Two investigations DEFERRED (emitter-chain in-game test still planted in the user's mod; drag audit rate-limited mid-run).** NEXT: merge the `post-108-backfill` housekeeping PR (awaits OK); resume the chain test + drag audit. No feature smoke outstanding.
 
 **Branch state.** `origin/master` = **`71b5c41`** (#108 merge). **PR [#108]** (`claude/reorder-glide` → master) **MERGED** — the entire feature. **PR [#106]** (`claude/multiselect-drag`) shows **MERGED** (auto-detected: #108 contained all its commits). **PR [#107]** mock-dirty fix is in master (`3479fe6`), reconciled into #108. Open: **`claude/post-108-backfill`** (CHANGELOG `TODO`→`71b5c41`/#108 + handoff close-out) — a housekeeping PR left for explicit OK.
