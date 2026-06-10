@@ -184,6 +184,10 @@ const CHIP_SPRING = 0.25;
 const FLIP_DRAG_MS = 120;
 const FLIP_SETTLE_MS = 200;
 
+// [glide] Chip despawn: on release the chip flies into the landing gap (or
+// the reparent target row) while fading; cancels/no-ops fade in place.
+const CHIP_EXIT_MS = 160;
+
 // Validated parameters for the `emitters/drop` bridge call — the output
 // of resolveDropIntent. `null` means the drop is refused.
 type DropParams =
@@ -1216,7 +1220,10 @@ export function EmitterTree({ bridge }: Props) {
   // lists the dragged emitter names vertically, in their emitter-list order.
   // `null` outside a multi-drag (single-drag uses the per-row insertion line).
   const [dragChip, setDragChip] = useState<
-    { x: number; y: number; names: string[] } | null
+    // `exit` set = despawn in flight: the chip transitions to that point
+    // (the landing gap / reparent row, or its own spot for a cancel) while
+    // fading, then a timeout clears the state.
+    { x: number; y: number; names: string[]; exit?: { x: number; y: number } } | null
   >(null);
   // [pointer-drag] Set true when a real drag completes so the synthetic
   // click that follows pointerup (when down+up land on the same row) does
@@ -1682,10 +1689,37 @@ export function EmitterTree({ bridge }: Props) {
         rafId = null;
       }
       if (!active) return;
+      active = false; // no straggler tick/move may touch the chip again
       setDraggingId(null);
       setDraggingIds([]);
       setIndicator(null);
-      setDragChip(null);
+      // Chip despawn: on a COMMIT, fly into the landing spot — the reorder
+      // gap's center, or the reparent target row — selling "the emitters went
+      // in there"; on cancel/no-op, fade where it stands. Reduced motion (or
+      // no chip) clears immediately.
+      const sc = treeScrollRef.current;
+      if (!hasChip || reduceMotion || sc === null || geom === null) {
+        setDragChip(null);
+      } else {
+        const scRect = sc.getBoundingClientRect();
+        let exit = { x: chipPos.x, y: chipPos.y }; // default: fade in place
+        if (commit && lastParams !== null && lastParams.mode === "reparent" && rowGeom !== null) {
+          const i = rowGeom.ids.indexOf(lastParams.targetId);
+          if (i >= 0) {
+            exit = {
+              x: scRect.left + 24,
+              y: (rowGeom.tops[i]! + rowGeom.bottoms[i]!) / 2 - sc.scrollTop + scRect.top - 10,
+            };
+          }
+        } else if (commit && lastReorderGap !== null) {
+          exit = {
+            x: scRect.left + 24,
+            y: gapContentY(geom, lastReorderGap) - sc.scrollTop + scRect.top + liftedH / 2 - 10,
+          };
+        }
+        setDragChip((c) => (c === null ? null : { ...c, exit }));
+        window.setTimeout(() => setDragChip(null), CHIP_EXIT_MS + 40);
+      }
       draggedRef.current = true; // swallow the trailing click
       if (commit) {
         // A single-drag reparent goes through emitters/drop (the host
@@ -2246,9 +2280,25 @@ export function EmitterTree({ bridge }: Props) {
       {dragChip && (
         <div
           data-testid="drag-chip"
+          data-exiting={dragChip.exit ? "true" : "false"}
           aria-hidden
-          className="pointer-events-none fixed z-50 rounded-md border border-sky-400 bg-bg-2/95 px-2 py-1 text-xs text-accent shadow-xl"
-          style={{ left: dragChip.x, top: dragChip.y }}
+          // drag-chip-enter: pop-in on spawn (components.css; reduced-motion
+          // disables it). Exit mode overrides position with the landing spot
+          // + fades/shrinks via an inline transition — see finish().
+          className="drag-chip-enter pointer-events-none fixed z-50 rounded-md border border-sky-400 bg-bg-2/95 px-2 py-1 text-xs text-accent shadow-xl"
+          style={
+            dragChip.exit
+              ? {
+                  left: dragChip.exit.x,
+                  top: dragChip.exit.y,
+                  opacity: 0,
+                  transform: "scale(0.85)",
+                  transition:
+                    `left ${CHIP_EXIT_MS}ms ease-in, top ${CHIP_EXIT_MS}ms ease-in, ` +
+                    `opacity ${CHIP_EXIT_MS}ms ease-in, transform ${CHIP_EXIT_MS}ms ease-in`,
+                }
+              : { left: dragChip.x, top: dragChip.y }
+          }
         >
           {dragChip.names.slice(0, 4).map((name, i) => (
             <div key={i} className="truncate px-2 leading-5">

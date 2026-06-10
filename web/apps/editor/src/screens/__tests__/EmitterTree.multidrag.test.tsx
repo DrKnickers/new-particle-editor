@@ -117,9 +117,11 @@ describe("EmitterTree multi-drag preview", () => {
     expect(reorder.params).toEqual({ ids: [0, 5], rootIndex: 1 });
     expect(calls.find((c) => c.kind === "emitters/drop")).toBeUndefined();
 
-    // Chip + gap clear once the drag finishes.
-    expect(screen.queryByTestId("drag-chip")).toBeNull();
+    // The gap clears immediately; the chip enters its despawn flight (flying
+    // toward the landing gap, data-exiting) and unmounts when it lands.
     expect(screen.queryByTestId("drop-gap-at-1")).toBeNull();
+    expect(screen.getByTestId("drag-chip").getAttribute("data-exiting")).toBe("true");
+    await waitFor(() => expect(screen.queryByTestId("drag-chip")).toBeNull());
   });
 
   it("a single-root drag also shows the make-room gap + chip and reorders via reorder-many", async () => {

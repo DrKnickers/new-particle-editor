@@ -130,7 +130,11 @@ footprint no-op — there are no dead zones, so the preview tracks the pointer
 continuously. The chip's magnet is a small rAF spring toward a blend of the
 pointer and the gap's center (`computeChipTarget`, pull/spring constants
 `CHIP_PULL`/`CHIP_SPRING` in `EmitterTree.tsx`); `prefers-reduced-motion`
-skips the glide but keeps the position. Single drag unifies onto the same
+skips the glide but keeps the position. The chip also **pops in on spawn**
+(`drag-chip-in`, components.css) and **flies into the landing spot on
+release** — the reorder gap's center, or the reparent target row — while
+fading (`CHIP_EXIT_MS`); cancels and no-ops fade in place. The flight target
+is computed in `finish()` from the same geometry snapshot the resolvers use. Single drag unifies onto the same
 controller: a single root is a size-1 block, so its reorder reuses
 `resolveGapFromGeometry` and commits through `reorder-many` (which is why the
 highlight follows — the `newIds` re-select). The one thing single drag adds is
