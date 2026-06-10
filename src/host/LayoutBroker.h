@@ -194,6 +194,24 @@ public:
     // is client-relative, so a move leaves from/to valid.
     void CancelSceneAnim() { m_sceneAnim.active = false; }
 
+    // [resize-perf Fix A] Defer per-tick Engine::Reset during the modal
+    // sizemove loop. While set (and a DComp compositor is attached —
+    // legacy arch-A keeps its per-tick behaviour), Apply/PredictAndApply
+    // still SetWindowPos the popup and cache the new rect, but skip the
+    // expensive device reset; the engine keeps rendering into its
+    // OLD-size RT each tick (the scene viewport clamps), so the scene
+    // stays live mid-gesture. HostWindow sets this on WM_ENTERSIZEMOVE
+    // and clears it on WM_EXITSIZEMOVE. See
+    // tasks/resize-perf-investigation.md (fix A).
+    void SetDeferEngineReset(bool defer) { m_deferEngineReset = defer; }
+
+    // [resize-perf Fix A] The one settle reset: if the popup size moved
+    // away from the size at the last Engine::Reset (i.e. resets were
+    // skipped while deferred), do a single Reset now. Idempotent and
+    // cheap when nothing was deferred. Called from WM_EXITSIZEMOVE and
+    // from the quiescence-timer fallback (lost-EXITSIZEMOVE safety net).
+    void SettleDeferredReset();
+
 private:
     // FD9b: forward all currently-registered occlusions to the
     // compositor, translated to popup-client coords using the current
@@ -239,6 +257,15 @@ private:
     // FD8 polish: main's client size at the last Apply.
     int     m_lastClientW = 0;
     int     m_lastClientH = 0;
+
+    // [resize-perf Fix A] Reset deferral state. m_resetW/H track the
+    // popup size at the last completed Engine::Reset so
+    // SettleDeferredReset can tell whether any reset was skipped
+    // (m_lastW/H ≠ m_resetW/H) without poking at the engine's
+    // presentation parameters.
+    bool    m_deferEngineReset = false;
+    int     m_resetW = 0;
+    int     m_resetH = 0;
 
     // [Item 3] In-flight dock-slide interpolation. `active` is false when idle.
     // Rects are MAIN-HWND-CLIENT device px (held as float so the per-frame lerp

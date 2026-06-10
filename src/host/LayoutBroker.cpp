@@ -151,8 +151,11 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
     if (w != m_lastW || h != m_lastH) CancelSceneAnim();
 
     // Reset the D3D9 swap chain so its backbuffer matches the new HWND
-    // client size.
-    if (m_engine && (w != m_lastW || h != m_lastH))
+    // client size. [resize-perf Fix A] Deferred during the modal
+    // sizemove loop (composition mode only) — SettleDeferredReset does
+    // the one settle reset on WM_EXITSIZEMOVE / quiescence.
+    if (m_engine && (w != m_lastW || h != m_lastH)
+        && !(m_deferEngineReset && m_dcompCompositor))
     {
         m_lastW = w;
         m_lastH = h;
@@ -178,6 +181,8 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
         {
             m_engine->RecoverDeviceIfNeeded();
         }
+        m_resetW = w;
+        m_resetH = h;
     }
 
     m_lastX = x;
@@ -248,12 +253,47 @@ void LayoutBroker::PredictAndApply()
     m_lastClientW = curW;
     m_lastClientH = curH;
 
-    if (m_engine && sizeChanged)
+    // [resize-perf Fix A] Skip the per-tick device reset during the
+    // modal sizemove loop (composition mode only). The engine keeps
+    // rendering into its old-size RT each tick — SetSceneViewport
+    // clamps to the RT, so the scene stays live; newly-grown area
+    // shows the theme backing until the settle reset. This collapses
+    // the 30-60 resets/sec storm (the dominant window-resize root
+    // cause) into ONE reset per gesture.
+    if (m_engine && sizeChanged && !(m_deferEngineReset && m_dcompCompositor))
     {
         try { m_engine->Reset(); } catch (...) {}
+        m_resetW = newW;
+        m_resetH = newH;
     }
 
     ReemitOcclusions();
+}
+
+void LayoutBroker::SettleDeferredReset()
+{
+    if (!m_engine || !m_viewport) return;
+    if (m_lastW <= 0 || m_lastH <= 0) return;          // collapsed popup
+    if (m_lastW == m_resetW && m_lastH == m_resetH) return;  // nothing deferred
+
+    bool resetOk = false;
+    try
+    {
+        m_engine->Reset();
+        resetOk = true;
+    }
+    catch (...)
+    {
+        resetOk = false;
+    }
+    if (!resetOk)
+    {
+        // Same rationale as Apply's recovery: don't leave the device in
+        // DEVICENOTRESET if the settle reset failed mid-gesture-end.
+        m_engine->RecoverDeviceIfNeeded();
+    }
+    m_resetW = m_lastW;
+    m_resetH = m_lastH;
 }
 
 void LayoutBroker::ApplyFullClient()
