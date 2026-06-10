@@ -29,6 +29,7 @@ import {
   loadLayout,
   saveLayout,
   resetPanelLayoutStorage,
+  collapseDockShare,
   PANEL_LAYOUT_KEYS,
   type Layout,
 } from "../PanelLayout";
@@ -80,6 +81,64 @@ describe("PanelLayout — persistence helpers", () => {
     expect(localStorage.getItem("alo:layout:test")).toBe(
       JSON.stringify({ a: 33, b: 67 }),
     );
+  });
+});
+
+describe("PanelLayout — collapseDockShare (dock-mount fix)", () => {
+  // Regression (2026-06-10): a CLOSED dock at mount + a persisted
+  // alo:layout:outer:3col with a nonzero spawner share rendered the dock
+  // slot open-and-empty (~its old share) and it never collapsed. The
+  // Group's defaultLayout (stored blob, spawner 20) disagreed with the
+  // dock Panel's "0%" defaultSize, and the mount effect's isCollapsed()
+  // check raced the library's deferred initial-layout apply. The fix
+  // makes both seeds agree by folding the dock share into centre.
+
+  it("folds the spawner share into center and zeroes spawner", () => {
+    expect(collapseDockShare({ left: 20, center: 60, spawner: 20 })).toEqual({
+      left: 20,
+      center: 80,
+      spawner: 0,
+    });
+  });
+
+  it("preserves the ~100 sum loadLayout validates", () => {
+    const out = collapseDockShare({ left: 33, center: 33, spawner: 34 });
+    const sum = Object.values(out).reduce((a, v) => a + v, 0);
+    expect(Math.abs(sum - 100)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("is a no-op when spawner is already 0 or absent", () => {
+    const zero = { left: 30, center: 70, spawner: 0 };
+    expect(collapseDockShare(zero)).toEqual(zero);
+    const absent = { left: 30, center: 70 };
+    expect(collapseDockShare(absent)).toEqual(absent);
+  });
+
+  it("seeds the dock slot at zero share when closed at mount with a stale stored layout", () => {
+    // The full repro: dock closed + persisted open-width blob.
+    localStorage.setItem("alo:right-dock", "none");
+    localStorage.setItem(
+      "alo:layout:outer:3col",
+      JSON.stringify({ left: 20, center: 60, spawner: 20 }),
+    );
+    __resetRightDockForTests();
+
+    const bridge = makeStubBridge();
+    render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+
+    const slotPanel = screen
+      .getByTestId("quadrant-spawner")
+      .closest("[data-panel]") as HTMLElement;
+    expect(slotPanel).not.toBeNull();
+    // The library maps each panel's layout share onto flex-grow. With the
+    // fix, the Group's defaultLayout carries spawner=0 (the stale 20 is
+    // folded into center), so the slot renders with zero share instead of
+    // its remembered open width.
+    expect(slotPanel.style.flexGrow).toBe("0");
   });
 });
 
