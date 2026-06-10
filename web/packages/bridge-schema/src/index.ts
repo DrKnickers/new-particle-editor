@@ -153,14 +153,14 @@ export type SpawnParamsDto = Pick<
 
 // All-zero spawn for synthetic roots and test fixtures that don't care
 // about chain-load (estimate = 0 → never warns).
-export const ZERO_SPAWN: SpawnParamsDto = {
+export const ZERO_SPAWN: Readonly<SpawnParamsDto> = Object.freeze({
   lifetime: 0,
   useBursts: false,
   nBursts: 0,
   burstDelay: 0,
   nParticlesPerSecond: 0,
   nParticlesPerBurst: 0,
-};
+});
 
 export type EmitterTreeNode = {
   id: number;
