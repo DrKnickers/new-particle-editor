@@ -1,8 +1,14 @@
-# Deferred: do emitter chains (children of children) work in the real game?
+# RESOLVED: emitter chains (children of children) WORK in the real game
 
-_Deferred 2026-06-09 (session 32) at the user's request, mid-experiment. The
-**v2 test file is still planted in the user's mod** — see "Live state" below
-before doing anything else._
+_**RESOLVED 2026-06-10 (session 33): depth-3 chains spawn correctly in
+`StarWarsG.exe`.** The v3 test fired in-game; the user observed all three
+generations (sparkles → highlight flecks → smoke puffs). Decision-matrix row
+"Smoke anywhere": chains work, the v1 crash was the combinatorial particle
+bomb, **no editor depth-guard needed**. The mod file is RESTORED to vanilla —
+nothing is planted anymore. Verdict + corollaries recorded in
+[`multi_child_emitter_investigation.md`](multi_child_emitter_investigation.md)
+(addendum). One open design question, unscheduled: a soft warning when a
+chain's per-particle multiplication explodes. Historical notes below._
 
 ## The question
 
@@ -12,11 +18,11 @@ the game even supports that. If the game crashes or silently ignores depth ≥ 3
 the editor must guard against authoring chains (reparent-onto, Add
 Lifetime/Death Child, paste-as-child onto child targets).
 
-## Live state (handle FIRST on resume)
+## Live state (CLEAN as of 2026-06-10)
 
-- **`P_S_ASSAULTCONC.ALO` in the user's mod is now the v3 test file**
-  (planted 2026-06-10, session 33; supersedes v2 — see "v2 result" + "The v3
-  test" below), awaiting in-game fire.
+- **`P_S_ASSAULTCONC.ALO` is RESTORED to vanilla** — the v3 test was fired
+  (smoke confirmed) and the planted file removed. Nothing in the user's mod
+  is ours anymore.
   - Mod repo: `D:\SteamLibrary\steamapps\common\Star Wars Empire at War\corruption\Mods\EmpireAtWarExpanded`
   - Restore: `git -C <mod> checkout -- Data/Art/Models/P_S_ASSAULTCONC.ALO`
   - Re-plant: rebuild with `tests/build_make_chain_test_alo.bat`, then
@@ -36,7 +42,7 @@ parent particle*, so the chain was starved at gen-1. (The sparkles seen were
 the untouched `default` controls + flash's own particle.) v2 restored;
 superseded by v3.
 
-## The v3 test (PLANTED, unfired)
+## The v3 test (FIRED 2026-06-10 — smoke confirmed, chains work)
 
 Authored with the **editor's own data model** instead of byte patches —
 [`tests/make_chain_test_alo.cpp`](../tests/make_chain_test_alo.cpp) (build:

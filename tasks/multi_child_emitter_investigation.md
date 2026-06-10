@@ -573,3 +573,35 @@ artefacts).**
 **Manual test items.** None outstanding. The conclusion is a
 binary-level invariant of the engine; no in-game test could
 contradict it short of patching the engine.
+
+---
+
+## Addendum (2026-06-10): chains CONFIRMED working in-game, depth 3
+
+This investigation recorded chains (a child emitter with its own child) as
+the structural workaround for the one-child-per-slot limit, proved from the
+binary that the runtime struct is recursive (per-emitter `deathChild`
++0x1108 / `lifeChild` +0x1110, no depth field) — but Petroglyph's shipped
+assets contain zero chains (409 particle files scanned, 21 link users, all
+exactly depth 2), so whether the engine *executes* depth ≥ 3 remained open.
+
+**Empirically confirmed 2026-06-10**: a depth-3 chain
+(`default sparkle → detail highlight → Smoke`, authored into
+`P_S_ASSAULTCONC.ALO` by `tests/make_chain_test_alo.cpp` with bounded spawn
+rates) fired in the live game (EmpireAtWarExpanded mod, x64 binary): the
+user observed all three generations — sparkles, highlight flecks, AND smoke
+puffs trailing the projectiles. **Depth-3 chains spawn correctly in
+`StarWarsG.exe`.**
+
+Corollaries:
+- The v1 chain test's crash (depth-6, full-rate, every emitter chained) was
+  the **combinatorial particle bomb**, not a depth limit.
+- The editor needs **no depth guard** on reparent / add-child /
+  paste-as-child. Authoring chains is legitimate; Petroglyph just never
+  shipped one.
+- Open design question (not scheduled): a *soft* editor warning when a
+  chain's per-particle multiplication explodes (each generation spawns one
+  child emitter instance per parent PARTICLE — rates multiply through the
+  chain). See `tasks/next-emitter-chain-investigation.md` for the math.
+
+Full experiment log: [`next-emitter-chain-investigation.md`](next-emitter-chain-investigation.md).
