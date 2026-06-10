@@ -38,12 +38,15 @@ keyed by `stableId`, the glide is a standard **FLIP** pass
 ([`lib/flip.ts`](web/apps/editor/src/lib/flip.ts) pure deltas + a layout
 effect in [`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx)):
 measure `offsetTop` per row before paint, apply the inverted `translateY`,
-transition to zero. The pass is **frozen during an active drag** — no glide
-(the make-room gap reflow stays instant under the pointer) and no position-map
-update either: the drag-activation render batches the first gap in, so
-measuring there would bake gap-shifted offsets into the map and the drop
-would play a spurious gap-collapse glide. The map keeps the pre-drag resting
-layout; the post-drop diff is resting-order → new-order, one clean glide.
+transition to zero. The pass also runs **during a drag** (user call after the
+first smoke): the effect keys on the gap indicator too, so the make-room
+reflow glides as the gap inserts/moves/clears — snappier mid-drag
+(`FLIP_DRAG_MS` 120 ms) than the post-drop settle (`FLIP_SETTLE_MS` 200 ms).
+Interrupted glides (rapid gap hops) restart from the row's current *visual*
+position by folding the in-flight computed-transform residual into the next
+inversion — without that, re-inverting from layout positions teleports rows
+mid-flight. Resolution stays correct while rows animate because gap/onto
+targets come from the drag-activation geometry snapshot, never the live DOM.
 stableIds are runtime-only — never persisted to `.alo`; undo/redo
 rebuilds emitters and issues fresh ids, so a reorder undo remounts (snaps)
 rather than glides: accepted.

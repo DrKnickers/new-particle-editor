@@ -179,6 +179,11 @@ type DropIndicator =
 const CHIP_PULL = 0.6;
 const CHIP_SPRING = 0.25;
 
+// [glide] FLIP durations: mid-drag reflows track the pointer, so they run
+// snappier than the post-drop settle.
+const FLIP_DRAG_MS = 120;
+const FLIP_SETTLE_MS = 200;
+
 // Validated parameters for the `emitters/drop` bridge call — the output
 // of resolveDropIntent. `null` means the drop is refused.
 type DropParams =
@@ -1331,17 +1336,19 @@ export function EmitterTree({ bridge }: Props) {
   const flatRows  = useMemo(() => flattenTree(tree), [tree]);
   const orderedIds = useMemo(() => flatRows.map((r) => r.node.id), [flatRows]);
 
-  // [glide] FLIP pass: when the rendered row order changes (drag drop,
-  // Move Up/Down, delete, paste — anything that re-lays-out the list), rows
-  // that moved glide to their new positions instead of snapping. Measure
-  // offsetTop per stableId BEFORE paint, diff against the previous layout,
-  // apply the inverted translateY, then transition to zero. FROZEN while a
-  // drag is live — no glide (the make-room gap reflow stays instant under
-  // the pointer) and no map update either: the drag-activation render
-  // batches the first gap in, so measuring here would bake gap-shifted
-  // offsets into the map and the drop would play a spurious gap-collapse
-  // glide. The map keeps the pre-drag resting layout; the post-drop diff is
-  // resting-order → new-order, one clean glide.
+  // [glide] FLIP pass: whenever the rendered layout changes — a reorder
+  // commit (drag drop, Move Up/Down, delete, paste) OR the make-room gap
+  // inserting/moving/clearing DURING a drag — rows that moved glide to their
+  // new positions instead of snapping (user call: the glide plays while
+  // dragging too, not just on release). Measure offsetTop per stableId
+  // BEFORE paint, diff against the previous layout, add any in-flight
+  // transform residual (an interrupted glide restarts from the row's current
+  // VISUAL position, so rapid gap hops stay continuous), apply the inverted
+  // translateY, then transition to zero — snappier mid-drag (FLIP_DRAG_MS)
+  // than on settle (FLIP_SETTLE_MS). The dragged block's own rows glide the
+  // same way when the gap crosses their footprint. Resolution math is
+  // unaffected: gap/onto targets come from the drag-activation geometry
+  // snapshot, never from the animated DOM.
   // prefers-reduced-motion: bookkeeping only, no glide.
   // [glide] A row remount (undo/redo rebuilds emitters with FRESH stableIds,
   // so every keyed row remounts) destroys the focused row button and drops
@@ -1365,7 +1372,6 @@ export function EmitterTree({ bridge }: Props) {
 
   const flipPositionsRef = useRef<FlipPositions>(new Map());
   useLayoutEffect(() => {
-    if (draggingId !== null) return;
     const sc = treeScrollRef.current;
     const prev = flipPositionsRef.current;
     const next: FlipPositions = new Map();
@@ -1384,16 +1390,24 @@ export function EmitterTree({ bridge }: Props) {
     ) {
       return;
     }
+    const durationMs = draggingId !== null ? FLIP_DRAG_MS : FLIP_SETTLE_MS;
     for (const [stableId, dy] of computeFlipDeltas(prev, next)) {
       const el = els.get(stableId);
       if (el === undefined) continue;
+      // In-flight residual: if a previous glide is still running, its
+      // computed transform holds the row's current visual offset — start the
+      // new glide from there so interruptions don't teleport.
+      const m = /matrix\([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,\s*(-?[\d.]+)\)/
+        .exec(getComputedStyle(el).transform);
+      const total = dy + (m !== null ? parseFloat(m[1]!) : 0);
+      if (total === 0) continue;
       el.style.transition = "none";
-      el.style.transform = `translateY(${dy}px)`;
+      el.style.transform = `translateY(${total}px)`;
       void el.offsetHeight; // commit the inverted transform before transitioning
-      el.style.transition = "transform 200ms ease";
+      el.style.transition = `transform ${durationMs}ms ease`;
       el.style.transform = "";
     }
-  }, [flatRows, draggingId]);
+  }, [flatRows, draggingId, indicator]);
 
   // Phase 4.1 Fix dispatch 5 — subscribe to menu-driven rename
   // requests. The MenuBar's "Rename Emitter" item writes the target
