@@ -646,10 +646,14 @@ int EmitterInstance::KillParticle(TimeF currentTime, Particle& particle)
     int numParticles = 0;
     if (m_emitter.spawnOnDeath != -1)
     {
-        // Spawn child emitter
+        // Spawn child emitter. NULL when the instance budget refused it
+        // (overload guard) — the death child is simply dropped.
         EmitterInstance* emitter = m_system.SpawnEmitter(currentTime, m_emitter.spawnOnDeath, &particle);
-        emitter->Detach();
-        emitter->StopSpawning();
+        if (emitter != NULL)
+        {
+            emitter->Detach();
+            emitter->StopSpawning();
+        }
     }
 
 	FreeParticle(particle);
@@ -796,6 +800,21 @@ int EmitterInstance::Update(TimeF currentTime)
         // Spawn new particles
         while (!DoneSpawning() && currentTime > m_nextSpawnTime)
         {
+            // Overload guard: once the engine-wide spawn budget is gone,
+            // snap m_nextSpawnTime PAST currentTime and bail. Two reasons:
+            // (a) missed spawns must be DROPPED, not deferred — otherwise
+            // resume would fire the whole backlog as one burst; (b) at
+            // pathological rates (delay ~1e-9 s) this catch-up loop would
+            // otherwise iterate millions of times per frame doing zero-work
+            // SpawnParticles calls — a CPU spin even though memory is safe.
+            // NoteSpawnSuppressed keeps the overload latch held: bailing
+            // here skips the TryConsume refusal that normally flags it.
+            if (m_engine.SpawnBudgetExhausted())
+            {
+                m_engine.NoteSpawnSuppressed();
+                m_nextSpawnTime = currentTime + GetSpawnDelay();
+                break;
+            }
             numParticles += SpawnParticles(m_nextSpawnTime);
         }
     }
@@ -908,6 +927,11 @@ int EmitterInstance::SpawnParticles(TimeF spawnTime)
     int numParticles = 0;
 	for (unsigned long i = 0; i < m_nParticlesPerBurst; i++)
 	{
+        // Overload guard: every spawn spends one unit of the engine-wide
+        // per-frame budget (see Engine::kMaxLivePreviewParticles). When
+        // it runs out, drop the REST of this burst — never deferred.
+        if (!m_engine.TryConsumeSpawnBudget())
+            break;
         SpawnParticle(spawnTime);
         numParticles++;
 	}
@@ -967,14 +991,20 @@ EmitterInstance::EmitterInstance(TimeF currentTime, ParticleSystemInstance& syst
 	// Spawn initial particles
     if (m_emitter.isWeatherParticle)
     {
-        // Spawn all particles immediately for weather particles
+        // Spawn all particles immediately for weather particles.
+        // Overload guard: budget-gated like every other spawn path, and
+        // *numParticles must report what was ACTUALLY spawned (it feeds
+        // Engine::OnEmitterCreated's live particle accounting).
+        *numParticles = 0;
         for (unsigned long i = 0; i < m_emitter.nParticlesPerSecond; i++)
 	    {
+            if (!m_engine.TryConsumeSpawnBudget())
+                break;
 		    SpawnParticle(currentTime);
+            (*numParticles)++;
         }
-        *numParticles = m_emitter.nParticlesPerSecond;
     }
-    else 
+    else
     {
     	TimeF skipped = m_emitter.initialDelay;
 	    currentTime  -= m_emitter.skipTime;
@@ -982,6 +1012,15 @@ EmitterInstance::EmitterInstance(TimeF currentTime, ParticleSystemInstance& syst
         *numParticles = 0;
 	    while (skipped <= m_emitter.skipTime && !DoneSpawning())
 	    {
+            // Overload guard: stop replaying skip-time history once the
+            // engine-wide budget is gone (dropped, not deferred) — at
+            // pathological rates this loop would otherwise spin for
+            // skipTime/delay iterations doing zero-work spawn rounds.
+            if (m_engine.SpawnBudgetExhausted())
+            {
+                m_engine.NoteSpawnSuppressed();
+                break;
+            }
 		    *numParticles += SpawnParticles(currentTime + skipped);
 		    skipped += GetSpawnDelay();
 	    }

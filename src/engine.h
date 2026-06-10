@@ -84,6 +84,18 @@ public:
 
     static const int NUM_SHADERS = 14;
 
+	// Preview overload guard: hard ceilings on the live simulation so no
+	// authored spawn parameters (or chain multiplication — every spawned
+	// particle with a life/death child allocates a whole child
+	// EmitterInstance) can OOM the editor. Over budget the engine
+	// SUPPRESSES spawning (existing particles live out their lives) and
+	// latches an overload flag the UI surfaces; spawning resumes when the
+	// population decays below the resume threshold (hysteresis so the
+	// boundary doesn't flicker at the 4 Hz stats rate). Authored .alo
+	// values are never clamped or modified.
+	static constexpr int kMaxLivePreviewParticles  = 100'000;
+	static constexpr int kMaxLiveEmitterInstances  = 5'000;
+
 	// Describes a camera
 	struct Camera
 	{
@@ -348,6 +360,35 @@ public:
     void OnEmitterCreated(int numParticles)   { m_numEmitters++; m_numParticles += numParticles; }
     void OnEmitterDestroyed() { m_numEmitters--; }
 
+    // --- Preview overload guard (see kMaxLivePreviewParticles) ---
+    // Per-particle gate: spend one unit of the per-frame spawn budget.
+    // Refusal flags this frame as overloaded; the caller drops the spawn.
+    bool TryConsumeSpawnBudget()
+    {
+        if (m_spawnBudget > 0) { m_spawnBudget--; return true; }
+        m_overloadThisFrame = true;
+        return false;
+    }
+    // Per-instance gate: refuse new EmitterInstances past the cap. No
+    // decrement needed — m_numEmitters is kept live by OnEmitterCreated /
+    // OnEmitterDestroyed (instance-death erase paths call the latter).
+    bool TryConsumeInstanceBudget()
+    {
+        if (m_numEmitters < kMaxLiveEmitterInstances) return true;
+        m_overloadThisFrame = true;
+        return false;
+    }
+    // Cheap loop-exit check for spawn catch-up loops: once the budget is
+    // gone there is no point iterating spawn rounds that can't spawn.
+    bool SpawnBudgetExhausted() const { return m_spawnBudget <= 0; }
+    // Catch-up loops that bail via SpawnBudgetExhausted() never reach a
+    // TryConsume* refusal, so they must register the suppression here or
+    // the latch would clear while spawning is still being suppressed.
+    void NoteSpawnSuppressed() { m_overloadThisFrame = true; }
+    // Latched flag the UI reads (stats/tick). True while any spawn was
+    // suppressed during the last completed Update.
+    bool IsSpawnOverloadActive() const { return m_overloadActive; }
+
 	void SetBackground(COLORREF color);
 	void SetLight(LightType which, const Light& light);
 	void SetAmbient(const D3DXVECTOR4& color);
@@ -479,6 +520,14 @@ private:
     std::vector<std::unique_ptr<ParticleSystemInstance>> m_instances;
     int m_numParticles;
     int m_numEmitters;
+
+    // Preview overload guard state (see kMaxLivePreviewParticles).
+    // m_spawnBudget refills at the top of Update(); m_overloadThisFrame
+    // is recomputed per frame and copied into the latched
+    // m_overloadActive at the end of Update().
+    int  m_spawnBudget       = kMaxLivePreviewParticles;
+    bool m_overloadActive    = false;
+    bool m_overloadThisFrame = false;
 
 	// Viewing
 	Camera		m_eye;

@@ -220,6 +220,12 @@ void Engine::Clear()
 	m_instances.clear();
     m_numParticles = 0;
     m_numEmitters  = 0;
+
+    // Overload guard: population is gone, so refill the spawn budget and
+    // drop the latch immediately (don't wait for the next Update tick).
+    m_spawnBudget       = kMaxLivePreviewParticles;
+    m_overloadActive    = false;
+    m_overloadThisFrame = false;
 }
 
 int Engine::ActiveSpawnerInstanceCount() const
@@ -555,6 +561,16 @@ void Engine::Update()
 {
 	TimeF currentTime = GetTimeF();
 
+	// Overload guard: refill the per-frame spawn budget. Hysteresis: once
+	// overloaded, spawning stays suppressed until the population decays
+	// below 90% of the cap, so the boundary doesn't flicker at the 4 Hz
+	// stats rate.
+	const int resumeAt = m_overloadActive
+		? (kMaxLivePreviewParticles * 9) / 10 : kMaxLivePreviewParticles;
+	m_spawnBudget = (m_numParticles < resumeAt)
+		? kMaxLivePreviewParticles - m_numParticles : 0;
+	m_overloadThisFrame = false;
+
     // Update existing instances
     for (auto it = m_instances.begin(); it != m_instances.end();)
     {
@@ -570,6 +586,18 @@ void Engine::Update()
 			++it;
 		}
     }
+
+#ifndef NDEBUG
+	// Overload guard: log only the latch TRANSITIONS — never per refusal
+	// (refusals happen per-particle on a hot path).
+	if (m_overloadThisFrame != m_overloadActive)
+	{
+		printf("[overload] spawn suppression %s (particles=%d instances=%d)\n",
+		       m_overloadThisFrame ? "ON" : "OFF", m_numParticles, m_numEmitters);
+		fflush(stdout);
+	}
+#endif
+	m_overloadActive = m_overloadThisFrame;
 }
 
 bool Engine::RecoverDeviceIfNeeded()
