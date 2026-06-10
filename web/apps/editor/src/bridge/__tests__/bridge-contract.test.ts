@@ -1475,3 +1475,41 @@ describe("MockBridge dirty-bit for batch structural mutations", () => {
     expect((await b.request({ kind: "engine/state/snapshot", params: {} })).dirty).toBe(false);
   });
 });
+
+describe("emitter tree spawn params (NT-11)", () => {
+  // NT-11: tree nodes must mirror the LIVE spawn values from the
+  // properties overlay (fixture defaults + set-properties patches), not
+  // the frozen ZERO_SPAWN placeholder the tree-store literals carry for
+  // type satisfaction. Decoration happens at the mock's emit/return
+  // choke points.
+  it("emitters/list nodes mirror the properties overlay's spawn fields", async () => {
+    const b = new MockBridge();
+    const tree = await b.request({ kind: "emitters/list", params: {} });
+    const first = tree.root.children[0]!;
+    const { properties } = await b.request({
+      kind: "emitters/get-properties", params: { id: first.id },
+    });
+    expect(first.spawn).toEqual({
+      lifetime: properties.lifetime,
+      useBursts: properties.useBursts,
+      nBursts: properties.nBursts,
+      burstDelay: properties.burstDelay,
+      nParticlesPerSecond: properties.nParticlesPerSecond,
+      nParticlesPerBurst: properties.nParticlesPerBurst,
+    });
+  });
+
+  it("a set-properties spawn patch is reflected in the next tree/changed payload", async () => {
+    const b = new MockBridge();
+    const events: EmitterTreeDto[] = [];
+    const off = b.on("emitters/tree/changed", (e) => { events.push(e.payload); });
+    await b.request({
+      kind: "emitters/set-properties",
+      params: { id: 0, patch: { nParticlesPerSecond: 4242 } },
+    });
+    off();
+    expect(events.length).toBeGreaterThan(0);
+    const node = events.at(-1)!.root.children.find((n) => n.id === 0);
+    expect(node?.spawn.nParticlesPerSecond).toBe(4242);
+  });
+});
