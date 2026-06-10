@@ -71,3 +71,32 @@ test("clicking a row updates snapshot.selectedEmitterId", async () => {
   expect(result.error).toBeUndefined();
   expect(result.selectedAfter).toBe(result.expected);
 });
+
+test("emitters/list nodes carry spawn params (NT-11)", async () => {
+  // The host serializes a `spawn` object on every EmitterTreeNode
+  // (commit a5bec9c). Assert the first root child carries all six
+  // spawn keys with the right primitive types.
+  const result = await page.evaluate(async () => {
+    const bridge = (window as Window & { bridge?: {
+      request: (req: { kind: string; params: unknown }) => Promise<unknown>;
+    } }).bridge;
+    if (!bridge) return { error: "bridge missing" };
+
+    const list = await bridge.request({ kind: "emitters/list", params: {} }) as {
+      root: { children: { spawn?: unknown }[] };
+    };
+    const first = list.root.children[0];
+    if (!first) return { error: "no emitters in tree" };
+    return { spawn: first.spawn };
+  });
+
+  expect(result.error).toBeUndefined();
+  expect(result.spawn).toMatchObject({
+    lifetime: expect.any(Number),
+    useBursts: expect.any(Boolean),
+    nBursts: expect.any(Number),
+    burstDelay: expect.any(Number),
+    nParticlesPerSecond: expect.any(Number),
+    nParticlesPerBurst: expect.any(Number),
+  });
+});
