@@ -24,6 +24,11 @@
 //      engine/action/clear to kill the lingering preview instance so
 //      later runs / specs aren't poisoned. The doc is never saved, so
 //      there's no persistence risk.
+//
+// A second test exercises the OTHER refusal path: a death child under
+// overload makes every particle death call SpawnEmitter, which the
+// instance budget (kMaxLiveEmitterInstances) refuses with nullptr —
+// KillParticle must tolerate that thousands of times per second.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
 
@@ -67,6 +72,17 @@ async function bridgeRequest<T>(kind: string, params: unknown): Promise<T> {
     },
     { kind, params },
   ) as Promise<T>;
+}
+
+// Best-effort cleanup wrapper for finally blocks: if the host died or
+// wedged, a throwing cleanup call would REPLACE the original assertion
+// error with an unhelpful bridge error. Log and continue instead.
+async function cleanupStep(label: string, fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    console.log(`[preview-overload] cleanup step '${label}' failed (ignored):`, String(err));
+  }
 }
 
 // Wait for the next stats/tick whose payload.overload matches `want`.
@@ -211,21 +227,147 @@ test("huge spawn rate plateaus at the budget, latches overload, and recovers", a
     expect(recovered.hit, "expected overload to clear after the rate drop").not.toBeNull();
     expect(recovered.hit!.overload).toBe(false);
   } finally {
-    // ── Phase 4: cleanup even on failure ─────────────────────────────
-    await bridgeRequest("emitters/set-properties", {
-      id: targetId,
-      patch: {
-        nParticlesPerSecond: orig.nParticlesPerSecond,
-        lifetime: orig.lifetime,
-        useBursts: orig.useBursts,
-      },
-    });
-    await bridgeRequest("engine/action/on-particle-system-changed", { track: -1 });
-    await bridgeRequest("spawner/stop", {});
+    // ── Phase 4: cleanup even on failure (best-effort — see cleanupStep) ──
+    await cleanupStep("restore-properties", () =>
+      bridgeRequest("emitters/set-properties", {
+        id: targetId,
+        patch: {
+          nParticlesPerSecond: orig.nParticlesPerSecond,
+          lifetime: orig.lifetime,
+          useBursts: orig.useBursts,
+        },
+      }),
+    );
+    await cleanupStep("push-live", () =>
+      bridgeRequest("engine/action/on-particle-system-changed", { track: -1 }),
+    );
+    await cleanupStep("spawner-stop", () => bridgeRequest("spawner/stop", {}));
     if (origSpawner) {
-      await bridgeRequest("spawner/start", origSpawner);
+      await cleanupStep("spawner-restore", () => bridgeRequest("spawner/start", origSpawner));
     }
     // Kill the lingering preview instance (and reset the budget latch).
-    await bridgeRequest("engine/action/clear", {});
+    await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
+  }
+});
+
+test("death-child spawns are refused under overload and the editor survives", async () => {
+  // Latch (≤15 s) + a short soak + cleanup, in a Debug build.
+  test.setTimeout(90_000);
+
+  // Defensive (same as test 1): stats flowing, clock running.
+  await bridgeRequest("stats/set-frozen", { frozen: false });
+  await bridgeRequest("engine/set/paused", { paused: false });
+
+  const tree = await bridgeRequest<{ root: { children: { id: number }[] } }>(
+    "emitters/list",
+    {},
+  );
+  const targetId = tree.root.children[0]?.id;
+  expect(targetId).not.toBeUndefined();
+
+  const before = await bridgeRequest<{
+    properties: { lifetime: number; useBursts: boolean; nParticlesPerSecond: number };
+  }>("emitters/get-properties", { id: targetId });
+  const orig = before.properties;
+
+  const snapshot = await bridgeRequest<{ spawner: unknown }>(
+    "engine/state/snapshot",
+    {},
+  );
+  const origSpawner = snapshot.spawner;
+
+  let childId: number | null = null;
+  try {
+    // ── Phase 1: wire a death child onto the root emitter ────────────
+    // Every parent-particle death now calls SpawnEmitter for the child;
+    // past kMaxLiveEmitterInstances (5,000) that returns nullptr — the
+    // refusal path inside EmitterInstance::KillParticle.
+    const added = await bridgeRequest<{ newId: number }>("emitters/add-death-child", {
+      parentId: targetId,
+    });
+    childId = added.newId;
+    // newId: -1 means the death slot was already filled — the boot doc
+    // shouldn't have one; fail loudly rather than testing nothing.
+    expect(childId, "add-death-child refused (slot already filled?)").toBeGreaterThanOrEqual(0);
+
+    // Child: moderate rate so the (≤5k) successfully spawned death
+    // children don't blow the particle budget on their own.
+    await bridgeRequest("emitters/set-properties", {
+      id: childId,
+      patch: { nParticlesPerSecond: 100, lifetime: 0.5, useBursts: false },
+    });
+    // Parent: high rate + SHORT lifetime so deaths fire constantly
+    // (~50k deaths/s at steady state — each one a SpawnEmitter attempt,
+    // refused once the instance cap is pinned).
+    await bridgeRequest("emitters/set-properties", {
+      id: targetId,
+      patch: { nParticlesPerSecond: 50_000, lifetime: 0.2, useBursts: false },
+    });
+
+    // Spawn one preview instance reading the patched values (same
+    // manual-spawner path as test 1).
+    await bridgeRequest("spawner/start", {
+      mode: "manual",
+      enabled: false,
+      burstSize: 1,
+      spacingSec: 0,
+      intervalSec: 10,
+      position: [0, 0, 0],
+      velocity: [0, 0, 0],
+      maxLifetimeSec: 0,
+      jitterPosition: [0, 0, 0],
+      jitterVelocity: [0, 0, 0],
+    });
+    await bridgeRequest("spawner/trigger", {});
+
+    // ── Phase 2: instance-budget refusals latch overload ─────────────
+    const overloaded = await waitForOverload(true, 15_000);
+    if (overloaded.hit === null) {
+      const snap = await bridgeRequest<{ paused: boolean }>("engine/state/snapshot", {});
+      console.log("[preview-overload] death-child paused:", JSON.stringify(snap.paused));
+      console.log("[preview-overload] death-child ticks seen:", JSON.stringify(overloaded.seen));
+    }
+    expect(overloaded.hit, "expected overload=true via death-child instance refusals").not.toBeNull();
+    expect(overloaded.hit!.overload).toBe(true);
+    expect(overloaded.hit!.particles).toBeLessThanOrEqual(BUDGET_SLACK);
+
+    // ── Phase 3: soak the refusal path, then prove responsiveness ────
+    // ~5 s pinned at the instance cap ≈ tens of thousands of refused
+    // KillParticle→SpawnEmitter calls. The editor must keep answering.
+    await page.waitForTimeout(5_000);
+    const alive = await bridgeRequest<{ selectedEmitterId: number | null }>(
+      "engine/state/snapshot",
+      {},
+    );
+    expect(alive).toBeTruthy();
+  } finally {
+    // ── Cleanup even on failure (best-effort — see cleanupStep) ──────
+    await cleanupStep("restore-properties", () =>
+      bridgeRequest("emitters/set-properties", {
+        id: targetId,
+        patch: {
+          nParticlesPerSecond: orig.nParticlesPerSecond,
+          lifetime: orig.lifetime,
+          useBursts: orig.useBursts,
+        },
+      }),
+    );
+    if (childId !== null) {
+      // Removes the death child from the doc AND kills its live
+      // instances (RemoveEmitter path — including their particle
+      // accounting).
+      await cleanupStep("delete-death-child", () =>
+        bridgeRequest("emitters/delete", { id: childId }),
+      );
+    }
+    await cleanupStep("push-live", () =>
+      bridgeRequest("engine/action/on-particle-system-changed", { track: -1 }),
+    );
+    await cleanupStep("spawner-stop", () => bridgeRequest("spawner/stop", {}));
+    if (origSpawner) {
+      await cleanupStep("spawner-restore", () => bridgeRequest("spawner/start", origSpawner));
+    }
+    // Kill the lingering preview instance (and reset the budget latch).
+    await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
   }
 });
