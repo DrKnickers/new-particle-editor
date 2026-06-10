@@ -1,4 +1,14 @@
-# Deferred: end-to-end audit of click-drag reorder + reparent (single + multi)
+# RESOLVED: end-to-end audit of click-drag reorder + reparent (single + multi)
+
+_**RESOLVED 2026-06-09 (session 33).** The audit was re-run as a hardened
+workflow (`wf_eab3d07f-f8e`, `isCleanRun: true` — 10 confirmed / 10 refuted /
+0 unverified). **All 10 confirmed findings are fixed + host-smoked, shipped to
+`master` via PR [#110] (`e4ef42b`).** Nothing here is open work anymore — kept
+for the record (the 10 findings + the workflow's dead-verifier trap). See
+`tasks/HANDOFF.md` (session 33) for the fixes. The original notes below are
+historical._
+
+---
 
 _Deferred 2026-06-09 (session 32) — the audit workflow hit the session token
 limit MID-RUN. Its raw output looks like a clean pass; it is NOT. Read this
