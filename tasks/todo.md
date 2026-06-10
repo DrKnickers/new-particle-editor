@@ -152,7 +152,24 @@ false. StatusBar particle counter turns amber while overloaded.
       - Verified live: bomb → overload=true on every 4 Hz tick, plateau
         16,384, FPS ~28 interactive; restore → clears at 4.7 s with
         population decayed (particles=6).
-- [ ] Task B: web banner + StatusBar tint + component tests
+- [x] Task B: web banner + StatusBar tint + component tests (`5851c83`)
+      — Implementation notes vs plan (Task B review):
+      - Copy changed from the plan's "live particle budget exceeded" to
+        "Preview spawn limit reached — spawning paused…" (review nuance:
+        the latch also fires on the per-instance render cap, not only
+        the global budget, so "budget exceeded" would mislead).
+      - Mount point: sibling of `ViewportSlot` inside PanelLayout's
+        `relative` quadrant-viewport div (absolute top-center needs no
+        extra geometry; bridge already in scope there).
+      - Occlusion: `useViewportOcclusion(bridge, "banner:preview-overload",
+        ref, 12, 12)` on a child component that mounts only while
+        overloaded (the hook needs the element present when its effect
+        runs — the OccludingContextMenuContent precedent). Tests pin
+        register-on-show + rect:null release-on-clear.
+      - Banner is `pointer-events-none` so viewport camera input passes
+        through; `role="status"` + `aria-live="polite"`.
+      - Verified: vitest 670/670 (664 baseline + 5 banner + 1 StatusBar
+        tint), `tsc -b` 0.
 - [ ] Task C: verification + docs + PR (+ CHANGELOG #120 merge-hash
       backfill `e67e5e5` rider)
 
