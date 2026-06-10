@@ -2556,6 +2556,8 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             {"role",      "root"},
             {"linkGroup", 0},
             {"visible",   true},
+            // Zero spawn: synthetic root never warns (= ZERO_SPAWN in
+            // bridge-schema, the canonical zero shape).
             {"spawn", json{
                 {"lifetime", 0.0}, {"useBursts", false}, {"nBursts", 0},
                 {"burstDelay", 0.0}, {"nParticlesPerSecond", 0}, {"nParticlesPerBurst", 0},
