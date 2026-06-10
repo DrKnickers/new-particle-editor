@@ -39,7 +39,11 @@ function OverloadBannerBody({ bridge }: { bridge: Bridge }) {
   const ref = useRef<HTMLDivElement | null>(null);
   // pad=12 / feather=12 — modest ring (smaller than the context menu's
   // 24: the banner has no shadow-xl spread to feather across).
-  useViewportOcclusion(bridge, "banner:preview-overload", ref, 12, 12);
+  // observeParent: the banner is content-sized but centered with
+  // left-1/2, so a splitter drag resizes the CONTAINER and moves the
+  // banner without resizing it — without this the alpha cut-out goes
+  // stale at the old coordinates and the viewport overpaints us.
+  useViewportOcclusion(bridge, "banner:preview-overload", ref, 12, 12, true);
   return (
     <div
       ref={ref}
