@@ -324,3 +324,38 @@ re-plan (per CLAUDE.md).
       under drag) — further work would mean raising the data rate or
       panel-content virtualization, not host smoothing. Scope with the
       user before any Phase 4.**
+
+---
+
+## Review (session 34, post-ship)
+
+**Shipped to master:** #116 (`e7cf484` — Phase 0 probes + Phase 1 revised:
+cheap per-tick ResetEx resize + FoV anchor + Fix D riders), #117
+(`9b4dcc8` — closed-dock hardening: inert splitter + collapsed mount,
+found during this session''s verification), #118 (`b37f198` — Phase 2
+pacing + GPU yield, Phase 3 C1 dedupe + C2 log hygiene; C3 chase
+REVERTED). CHANGELOG entries + hash backfills complete.
+
+**Plan vs reality.** The plan''s shape (instrument → A+D → B → C) held,
+but THREE user feel verdicts redirected the work — each cheaper than the
+alternative of shipping blind: (1) Phase 1''s defer-to-settle snap →
+redesigned to per-tick ResetEx (A2 absorbed into A, better than either
+planned separately); (2) the FoV-rescale-on-resize wart surfaced only
+once resize was smooth (anchor fix, unplanned); (3) C3''s chase-lerp
+failed the feel test in two ways the mental walk should have caught one
+of (CancelSceneAnim interaction) → reverted, L-079.
+
+**Outcome vs goal.** Window resize: smooth, no snap, no zoom — goal
+met. Splitter drag: contention removed (CPU core freed, GPU at display
+rate, log churn 4× down) but the residual stutter is Chromium''s own
+~12fps relayout under drag — producer-side, NOT addressable by host
+smoothing (L-079). Further improvement = web-side panel-relayout cost
+reduction (virtualization) — new scope, not attempted.
+
+**A2 status:** absorbed into the shipped Phase 1 (ResetEx path). The
+investigation''s standalone A2 item is moot.
+
+**Lessons recorded:** L-078 (continuous-correct > deferred-correct;
+no feel-riders bundled with headline fixes; user launches feel-test
+builds), L-079 (smoothing can''t beat the data rate; audit anim-cancel
+interactions when anim machinery gains a second client).
