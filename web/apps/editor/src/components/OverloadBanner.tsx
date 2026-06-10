@@ -10,8 +10,14 @@
 // the rate).
 //
 // Wording: the latch ALSO fires when one emitter pins its per-instance
-// render cap — not only the global budget — so the copy says "spawn
-// limit reached", not "budget exceeded".
+// render cap — not only the global budget — so the copy says "spawning
+// paused", never "budget exceeded".
+//
+// Styling: a FILLED amber pill (bg-warning is theme-independent #e0a14b)
+// with fixed near-black text. The first cut used `text-amber-400` on the
+// panel background, which was near-invisible in light mode (light yellow
+// on off-white). A solid fill with dark text reads clearly in BOTH
+// themes because the fill colour doesn't flip.
 //
 // Mount point: inside PanelLayout's `quadrant-viewport` container, as
 // a sibling of ViewportSlot. That div is `relative` and exactly spans
@@ -53,10 +59,10 @@ function OverloadBannerBody({ bridge }: { bridge: Bridge }) {
       // pointer-events-none: purely informational — viewport input
       // (camera drags, wheel zoom) passes straight through to the
       // canvas underneath.
-      className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 select-none rounded-md border border-amber-400/60 bg-bg-2 px-3 py-1.5 text-xs text-amber-400 shadow-xl"
+      className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 select-none rounded-md bg-warning px-3 py-1.5 text-xs font-medium text-[#1a1200] shadow-xl ring-1 ring-black/15"
     >
-      ⚠ Preview spawn limit reached — spawning paused. Lower spawn rates
-      to resume (the ⚠ glyph in the emitter tree marks heavy chains).
+      ⚠ Preview spawning paused — lower spawn rates to resume. The ⚠ glyph
+      marks heavy emitters.
     </div>
   );
 }

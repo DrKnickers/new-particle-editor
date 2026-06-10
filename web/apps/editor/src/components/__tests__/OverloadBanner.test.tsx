@@ -38,7 +38,7 @@ describe("OverloadBanner", () => {
     expect(screen.queryByTestId("preview-overload-banner")).not.toBeInTheDocument();
   });
 
-  it("shows the banner with the spawn-limit copy when overload latches", () => {
+  it("shows the banner with the spawn-paused copy when overload latches", () => {
     const { bridge, emit } = makeBridge();
     render(<OverloadBanner bridge={bridge} />);
     emit("stats/tick", tick(true));
@@ -47,11 +47,11 @@ describe("OverloadBanner", () => {
     expect(banner).toHaveAttribute("role", "status");
     expect(banner).toHaveAttribute("aria-live", "polite");
     // Wording nuance (review): the latch also fires when a single emitter
-    // pins its per-instance render cap — so "spawn limit reached", NOT
-    // "budget exceeded".
-    expect(banner.textContent).toContain("Preview spawn limit reached");
-    expect(banner.textContent).toContain("spawning paused");
-    expect(banner.textContent).toContain("Lower spawn rates");
+    // pins its per-instance render cap — so the copy says "spawning
+    // paused", never "budget exceeded".
+    expect(banner.textContent).toContain("Preview spawning paused");
+    expect(banner.textContent).toContain("lower spawn rates");
+    expect(banner.textContent).toContain("marks heavy emitters");
   });
 
   it("clears the banner when a later tick reports overload=false", () => {
