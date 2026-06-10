@@ -19,7 +19,7 @@ Conventions:
 
 ### Soft chain-load warning on the emitter tree (NT-11)
 
-*2026-06-10 · `TODO` · `#TODO`*
+*2026-06-10 · `TODO-merge-hash` · [#120](https://github.com/DrKnickers/new-particle-editor/pull/120)*
 
 The emitter tree now shows an advisory amber ⚠ on every row of a chain whose
 estimated alive-particle count exceeds 10,000 — the class of authoring

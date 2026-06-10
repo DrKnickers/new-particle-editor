@@ -227,7 +227,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [NT-11] ~~Soft warning when an emitter chain's particle multiplication explodes~~ ✅ Shipped (#TODO)
+### 5.1 [NT-11] ~~Soft warning when an emitter chain's particle multiplication explodes~~ ✅ Shipped (#120)
 
 *Estimate: ★★ (2/5), ~2-4 hours.*
 *Actual: ~4 hours (design conversation + 8-task subagent-driven build; the
