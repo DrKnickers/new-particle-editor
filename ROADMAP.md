@@ -30,7 +30,33 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-*No open near-term items — the near-term queue has fully shipped (see [Shipped](#5-shipped)). New quality-of-life polish ideas land here.*
+### 1.1 [NT-11] Soft warning when an emitter chain's particle multiplication explodes
+
+*Estimate: ★★ (2/5), ~2-4 hours.*
+
+Depth-3+ emitter chains are confirmed legitimate in the game engine (verified
+in-game 2026-06-10 — see the addendum in
+[`tasks/multi_child_emitter_investigation.md`](tasks/multi_child_emitter_investigation.md)),
+so the editor deliberately has **no depth guard**. But chains multiply
+*per particle*: each generation spawns one child emitter **instance per parent
+particle**, so expected live-particle count compounds roughly as
+`Π (rateᵢ × lifetimeᵢ)` down the chain. A full-rate depth-6 chain crashed the
+game outright (the v1 chain-test particle bomb); a user can author the same
+bomb today with a few reparent drags and get zero feedback until the game
+falls over.
+
+Ship a **soft, advisory warning** — never a refusal — when the estimated
+multiplication through a chain crosses a threshold: compute a rough
+expected-alive-particles product along each root→leaf path whenever the tree
+structure or spawn parameters change (rate, lifetime, bursts already live on
+the `Emitter` data model), and surface a non-blocking indicator (e.g. a
+warning glyph on the offending chain's rows + a tooltip with the estimated
+count and the per-generation breakdown). Authoring proceeds untouched —
+chains are a legitimate, engine-supported technique; the warning exists to
+keep the v1-style bomb from reaching a save unnoticed. Threshold and exact
+estimation formula to be agreed before implementation (burst vs continuous
+emitters differ; the in-editor preview's live instance counts may be a
+cheaper source of truth than a static formula).
 
 ---
 
