@@ -16,6 +16,63 @@ Conventions:
 
 ## Changelog
 
+### Smooth window resize: device reset deferred to gesture settle, plus resize-perf probes
+
+*2026-06-10 · TODO(merge hash) · [#116](https://github.com/DrKnickers/new-particle-editor/pull/116)*
+
+Resizing the app window no longer tanks: dragging a border/corner now costs
+~1 ms per tick instead of ~27 ms, because the full D3D9Ex device reset that
+used to fire on **every mouse-move tick** of the modal sizemove loop (full
+render-target/shader teardown, whole texture-cache wipe with disk re-decode,
+~20 ms of the ~24 ms total) is deferred to a **single settle reset when the
+gesture ends**. Mid-gesture the scene stays live (the engine keeps rendering
+into its old-size target with a clamped viewport); a freshly-grown band shows
+the theme background until release, then snaps crisp. Pausing mid-drag for
+150 ms also settles, so you get a crisp frame while holding. Always-on
+`[resize-perf]` log probes (1 Hz aggregates in `host.log`) now quantify the
+reset storm, the per-reset sub-stages, and the bridge scene-rect message rate
+— the measurement basis for the remaining splitter-drag fixes.
+
+**How we tackled it.** `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` handlers in
+[`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:2440) arm/clear a reset
+deferral on the layout broker
+([`src/host/LayoutBroker.cpp`](src/host/LayoutBroker.cpp:251) — gated on the
+DComp compositor so legacy arch-A is untouched), with
+`LayoutBroker::SettleDeferredReset` comparing the popup size against the size
+at the last completed reset (`m_resetW/H`) so the settle is idempotent and
+order-independent. The per-tick `RenderD3D9()` in `WM_WINDOWPOSCHANGED` was
+deliberately **kept**: inside the modal loop the idle pump is starved, so that
+call is the only frame driver — without the reset it costs a normal frame and
+keeps the scene live (no DComp stretch machinery needed, which matters because
+`Compositor::ApplyTransform` is clip-only, not scaling). A 150 ms one-shot
+quiescence timer (re-armed per size tick) backstops a lost `WM_EXITSIZEMOVE`.
+Riders: main-window `WM_ERASEBKGND → 1` during sizemove only (DefWindowProc
+was GDI-filling the full client with the class brush per tick — kept for
+normal paints since the dark brush is the deliberate first-paint theme), and
+`put_Bounds` throttled to ~30 Hz during sizemove with an exact settle re-send.
+Engine-side, `Engine::ResetPerf` ([`src/engine.h`](src/engine.h:200)) mirrors
+the existing `RenderPassTimingsUs` diagnostic pattern: the engine publishes
+per-reset sub-stage wall-clock, the host logs it.
+
+**Issues encountered and resolutions.** (1) The investigation's sketch said
+"stretch the last-presented surface via the dock-slide path" — but the
+dock-slide transform (`SetEngineVisualTransform`) only offsets and **clips**;
+it cannot scale, because a dock slide never changes the window size. Rather
+than build new DComp scale machinery, the fix keeps the per-tick render as the
+mid-gesture frame driver — simpler and visually better (live scene, not a
+stretched stale frame). (2) The smoke test was run **programmatically**: a
+`SetWindowPos` storm with and without the `WM_ENTERSIZEMOVE` bracket
+([`tasks/tool-sizemove-storm.ps1`](tasks/tool-sizemove-storm.ps1)) reproduces
+the modal loop's message sequence without interactive input — control run
+showed 21 resets/s @ 27 ms/tick, bracketed run 0 resets @ 0.9 ms/tick + one
+settle. Useful as a future regression driver. (3) The probe confirmed two
+predictions for the next phases: the scene-rect stream runs at **2×** the tick
+rate (redundant `window resize` listener in `ViewportSlot.tsx` — fix C1), and
+the idle pump free-runs at ~3000 fps with ~4000 GPU-query spins per frame
+(fix B).
+
+---
+
 ### Emitter-tree drag hardening: ten audit fixes (data-corruption, mid-drag safety, parity)
 
 *2026-06-09 · [`e4ef42b`](https://github.com/DrKnickers/new-particle-editor/commit/e4ef42b) · [#110](https://github.com/DrKnickers/new-particle-editor/pull/110)*
