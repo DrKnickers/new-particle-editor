@@ -124,7 +124,34 @@ false. StatusBar particle counter turns amber while overloaded.
 
 ## Progress (part 2)
 
-- [ ] Task A: engine budget + suppression + host wire + native spec
+- [x] Task A: engine budget + suppression + host wire + native spec
+      — Implementation notes vs plan (Task A review):
+      - `m_numEmitters` accounting verified live: `OnEmitterDestroyed()`
+        already existed and is called on both instance-death erase paths
+        (`ParticleSystemInstance::Update` + `RemoveEmitter`) — no mirror
+        needed; `TryConsumeInstanceBudget` checks without decrementing.
+      - Catch-up loop: chose the in-loop guard (`SpawnBudgetExhausted()`
+        → snap `m_nextSpawnTime` + break) PLUS a refused-round snap
+        (`spawned == 0 && m_nParticlesPerBurst > 0`): the per-instance
+        uint16 index cap (16,383) bites BEFORE the global budget for a
+        single emitter, and without the snap the loop churned ~80k
+        refused alloc/free rounds per frame (FPS 3, stats timer starved
+        — observed live). Both bail paths call `NoteSpawnSuppressed()`
+        so the latch holds while bailing skips the TryConsume refusal.
+      - `SpawnParticle` now returns bool: index-cap-refused spawns were
+        being counted (+1, never decremented) → permanent phantom
+        inflation of `m_numParticles` that would eat budget headroom.
+      - Added `kOverloadClearDelaySec = 0.5` debounce on the latch:
+        refusals only fire on spawn-round frames, so the raw per-frame
+        flag flickers at moderate rates while pinned at a cap (plan
+        risk 4-adjacent; observed live: latch cleared 0.5 s after
+        restore with 16k particles still alive).
+      - Index-cap suppression now also latches overload (judgment call:
+        "spawning suppressed" is true and user-actionable; pre-existing
+        cap dropped spawns silently).
+      - Verified live: bomb → overload=true on every 4 Hz tick, plateau
+        16,384, FPS ~28 interactive; restore → clears at 4.7 s with
+        population decayed (particles=6).
 - [ ] Task B: web banner + StatusBar tint + component tests
 - [ ] Task C: verification + docs + PR (+ CHANGELOG #120 merge-hash
       backfill `e67e5e5` rider)

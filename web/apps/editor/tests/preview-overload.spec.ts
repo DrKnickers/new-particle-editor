@@ -29,9 +29,11 @@ import { test, expect, chromium, type Page, type Browser } from "@playwright/tes
 
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
 
-// Must match Engine::kMaxLivePreviewParticles (src/engine.h). Small
-// slack: the stats counter is sampled at 4 Hz between frames.
-const PARTICLE_BUDGET = 100_000;
+// Engine::kMaxLivePreviewParticles (src/engine.h) is 100_000, plus
+// slack since the stats counter is sampled at 4 Hz between frames. In
+// practice a SINGLE emitter plateaus far lower (the per-instance uint16
+// index cap, 16,383) — the assertion only needs to prove the population
+// is bounded, not which ceiling bit first.
 const BUDGET_SLACK = 110_000;
 
 let browser: Browser;
@@ -68,26 +70,31 @@ async function bridgeRequest<T>(kind: string, params: unknown): Promise<T> {
 }
 
 // Wait for the next stats/tick whose payload.overload matches `want`.
-// Resolves null on timeout instead of throwing so assertions read better.
+// Resolves { hit: null } on timeout instead of throwing, carrying every
+// observed tick so a failure message shows exactly what the host
+// reported during the window.
+type Tick = { fps: number; particles: number; instances: number; overload: boolean };
 async function waitForOverload(
   want: boolean,
   timeoutMs: number,
-): Promise<{ particles: number; overload: boolean } | null> {
+): Promise<{ hit: Tick | null; seen: Tick[] }> {
   return page.evaluate(
     ({ want, timeoutMs }) =>
-      new Promise<{ particles: number; overload: boolean } | null>((resolve) => {
+      new Promise<{ hit: Tick | null; seen: Tick[] }>((resolve) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const b = (window as any).bridge;
+        const seen: Tick[] = [];
         const timer = setTimeout(() => {
           off();
-          resolve(null);
+          resolve({ hit: null, seen });
         }, timeoutMs);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const off = b.on("stats/tick", (e: any) => {
+          seen.push(e.payload);
           if (e.payload.overload === want) {
             clearTimeout(timer);
             off();
-            resolve({ particles: e.payload.particles, overload: e.payload.overload });
+            resolve({ hit: e.payload, seen });
           }
         });
       }),
@@ -97,12 +104,21 @@ async function waitForOverload(
 
 test("huge spawn rate plateaus at the budget, latches overload, and recovers", async () => {
   // Phases: bomb (≤10 s) + decay (≤20 s) + cleanup — needs more than the
-  // 30 s config default.
-  test.setTimeout(90_000);
+  // 30 s config default. The generous ceiling also covers inflated
+  // bridge round-trip latency while the host is simulating tens of
+  // thousands of Debug-build particles (observed: ~70 s total in a
+  // full-harness run whose document carried an extra emitter).
+  test.setTimeout(150_000);
 
   // Defensive: make sure the 4 Hz stats stream is flowing (an earlier
   // crashed a11y spec could have left stats frozen).
   await bridgeRequest("stats/set-frozen", { frozen: false });
+  // Defensive: unpause the preview clock. The a11y composition specs
+  // pause it in beforeEach (engine/set/paused: true) and their afterAll
+  // cleanup unfreezes stats + file/new but does NOT unpause — with the
+  // clock frozen no spawn round ever fires, so overload could never
+  // latch (bit this spec on its first full-harness run).
+  await bridgeRequest("engine/set/paused", { paused: false });
 
   // Locate the first root emitter and snapshot the fields we'll touch.
   const tree = await bridgeRequest<{ root: { children: { id: number }[] } }>(
@@ -153,9 +169,21 @@ test("huge spawn rate plateaus at the budget, latches overload, and recovers", a
 
     // ── Phase 2: the engine survives and latches ─────────────────────
     const overloaded = await waitForOverload(true, 10_000);
-    expect(overloaded, "expected a stats/tick with overload=true").not.toBeNull();
-    expect(overloaded!.overload).toBe(true);
-    expect(overloaded!.particles).toBeLessThanOrEqual(BUDGET_SLACK);
+    // Diagnostics on failure: show what the host reported (paused state,
+    // patched props, and every tick observed in the window).
+    if (overloaded.hit === null) {
+      const snap = await bridgeRequest<{ paused: boolean }>("engine/state/snapshot", {});
+      const props = await bridgeRequest<{ properties: unknown }>(
+        "emitters/get-properties",
+        { id: targetId },
+      );
+      console.log("[preview-overload] paused:", JSON.stringify(snap.paused));
+      console.log("[preview-overload] target props:", JSON.stringify(props.properties));
+      console.log("[preview-overload] ticks seen:", JSON.stringify(overloaded.seen));
+    }
+    expect(overloaded.hit, "expected a stats/tick with overload=true").not.toBeNull();
+    expect(overloaded.hit!.overload).toBe(true);
+    expect(overloaded.hit!.particles).toBeLessThanOrEqual(BUDGET_SLACK);
 
     // The editor is still responsive: a bridge round-trip completes.
     // (Pre-guard, the process was dead by now.)
@@ -177,8 +205,11 @@ test("huge spawn rate plateaus at the budget, latches overload, and recovers", a
     // Population decays as the 5 s-lifetime particles die; spawning
     // resumes below 90% of the cap and the latch drops.
     const recovered = await waitForOverload(false, 20_000);
-    expect(recovered, "expected overload to clear after the rate drop").not.toBeNull();
-    expect(recovered!.overload).toBe(false);
+    if (recovered.hit === null) {
+      console.log("[preview-overload] recovery ticks seen:", JSON.stringify(recovered.seen));
+    }
+    expect(recovered.hit, "expected overload to clear after the rate drop").not.toBeNull();
+    expect(recovered.hit!.overload).toBe(false);
   } finally {
     // ── Phase 4: cleanup even on failure ─────────────────────────────
     await bridgeRequest("emitters/set-properties", {
