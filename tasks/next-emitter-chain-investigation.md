@@ -54,12 +54,19 @@ flash (W_SPARKLE1, ~single burst)   gen 1 root, tiny count
 default ×3 (W_SPARKLE1)             untouched roots = control group
 ```
 
-Patched with [tool-alo-chain-patch.py](tool-alo-chain-patch.py) (rewrites only
-the 4-byte values in each emitter's `0x0036` chunk minis `0x37`/`0x39`;
-byte-size identical; format: `0x0900 → 0x0800 → 0x0700` per emitter, name
-chunk `0x0016`, texture `0x0003`, `0xFFFFFFFF` = no link). The patched file
-load-checks clean in our editor's C++ loader (launched with the file as CLI
-arg — `ParticleEditor.exe --new-ui <path>`).
+**⚠ Re-plant warning:** the v2 selective layout was applied with **ad-hoc
+`struct.pack_into` edits** (via the tool's *inspect* offsets), NOT with the
+committed tool's `--patch` mode. `tool-alo-chain-patch.py --patch` writes a
+**full all-emitter chain** (`life := i+1` for every emitter, the confounded
+v1 design) — rerunning it on this 6-emitter file would destroy the control
+group and recreate the particle bomb that crashed v1. To re-plant v2 after a
+restore, write exactly: emitter 5 (`flash`) life→1, emitter 1 (`detail`)
+life→0, all other links `0xFFFFFFFF` (offsets from the tool's inspect mode;
+4-byte LE uint32 values inside each emitter's `0x0036` chunk minis
+`0x37`=death/`0x39`=life). File format: `0x0900 → 0x0800 → 0x0700` per
+emitter, name chunk `0x0016`, texture `0x0003`. Byte-size stays identical.
+The patched file load-checks clean in our editor's C++ loader (launch with
+the file as a CLI arg — `ParticleEditor.exe --new-ui <path>`).
 
 ## Decision matrix when the user fires it
 

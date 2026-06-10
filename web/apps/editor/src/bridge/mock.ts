@@ -637,17 +637,21 @@ export class MockBridge implements Bridge {
       // FileManager + ParticleSystem which the new-UI host doesn't yet
       // own).
       case "emitters/preview-from-file":
+        // stableId parity with the native preview tree (BuildEmitterTreeNode
+        // emits it; synthetic root uses the reserved 0). The preview tree is
+        // throwaway — fixed values are fine, they just must be present+unique.
         return {
           ok: true,
           tree: {
             id: 0,
+            stableId: 0,
             name: "root",
             children: [
-              { id: 1, name: "Smoke",  children: [
-                { id: 4, name: "Smoke embers", children: [] },
+              { id: 1, stableId: 9001, name: "Smoke",  children: [
+                { id: 4, stableId: 9004, name: "Smoke embers", children: [] },
               ] },
-              { id: 2, name: "Sparks", children: [] },
-              { id: 3, name: "Flash",  children: [] },
+              { id: 2, stableId: 9002, name: "Sparks", children: [] },
+              { id: 3, stableId: 9003, name: "Flash",  children: [] },
             ],
           },
         };

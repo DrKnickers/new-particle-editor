@@ -286,7 +286,9 @@ host Debug x64 clean (VS18), dist built, native 174/0.
 - [x] Batch B: geometric resolver
 - [x] Batch C: chip magnetize
 - [x] Full verify (615/615, tsc 0, native 174/0, browser-preview drive)
-- [ ] User smoke in the real host (feel verdict + value tuning)
+- [x] User smoke in the real host — evidence: the Part 2 preamble below
+      records the smoke + the resulting feedback ("gap and chip should also
+      apply to single drag"); verdict on the polish itself was positive
 
 ## Review (session 32)
 

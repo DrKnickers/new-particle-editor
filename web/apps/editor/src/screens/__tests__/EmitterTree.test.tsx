@@ -347,6 +347,34 @@ describe("EmitterTree", () => {
     expect(calls.find((c) => c.kind === "emitters/reorder-many")).toBeUndefined();
   });
 
+  it("leaving the onto zone clears the latched reparent — a release on the no-op footprint commits NOTHING", async () => {
+    // Regression: once the onto ring was acquired, moving to a dead/no-op
+    // zone left lastParams latched (setReorderGap's idempotence check can't
+    // see onto state), so releasing over the block's own footprint silently
+    // committed the stale reparent.
+    const bridge = makeStubBridge();
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Sparks")).toBeInTheDocument());
+    stubAllRows();
+    const flashBtn  = screen.getByText("Flash").closest("button")!;
+    const sparksBtn = screen.getByText("Sparks").closest("button")!;
+
+    // Drag Flash; hover Sparks' middle third (y=84 in [80,88)) → onto ring.
+    fireEvent.pointerDown(flashBtn, { button: 0, pointerType: "mouse", clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(flashBtn, { pointerType: "mouse", clientX: 0, clientY: 84 });
+    expect(sparksBtn.className).toContain("ring-sky-400");
+
+    // Move onto Flash's own footprint (y=135 → past all block mids → gap 3,
+    // inside footprint [2,3] → no-op). Ring must clear; nothing latched.
+    fireEvent.pointerMove(flashBtn, { pointerType: "mouse", clientX: 0, clientY: 135 });
+    expect(sparksBtn.className).not.toContain("ring-sky-400");
+
+    fireEvent.pointerUp(flashBtn, { button: 0, pointerType: "mouse", clientX: 0, clientY: 135 });
+    const calls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(calls.find((c) => c.kind === "emitters/drop")).toBeUndefined();
+    expect(calls.find((c) => c.kind === "emitters/reorder-many")).toBeUndefined();
+  });
+
   // ─── SEL-13 — cancel an in-progress reorder drag ─────────────────
 
   /** Start a single-root drag and leave it ACTIVE (past the threshold) without

@@ -235,8 +235,8 @@ public:
         // here to avoid pulling LinkGroup.h into ParticleSystem.h.
         //
         // Preserves on `*this`: m_instances, parent, spawnOnDeath,
-        // spawnDuringLife, index, linkGroup, visible, plus every
-        // exempt field (name, colorTexture, normalTexture, the
+        // spawnDuringLife, index, linkGroup, visible, stableId, plus
+        // every exempt field (name, colorTexture, normalTexture, the
         // TRACK_INDEX keymap, depending on the flags supplied).
         //
         // Track aliasing is preserved: if `src` has multiple tracks

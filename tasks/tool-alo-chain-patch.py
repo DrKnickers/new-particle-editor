@@ -4,8 +4,14 @@ inside each emitter's 0x0036 chunk minis (0x37 = spawnOnDeath, 0x39 =
 spawnDuringLife) — no chunk resizing, byte-count identical, git-restorable.
 
 Usage:
-  python patch_concussion.py <path>           # inspect only
-  python patch_concussion.py <path> --patch   # chain 0->1->2->... via life slot
+  python tool-alo-chain-patch.py <path>           # inspect only
+  python tool-alo-chain-patch.py <path> --patch   # chain 0->1->2->... via life slot
+
+WARNING: --patch writes a FULL all-emitter chain (the confounded v1 test
+design -- a combinatorial particle bomb on multi-emitter files). The selective
+v2 layout in tasks/next-emitter-chain-investigation.md was applied with
+manual struct.pack_into edits using this tool's inspect offsets; do NOT
+re-run --patch to re-plant it.
 """
 import struct, sys
 

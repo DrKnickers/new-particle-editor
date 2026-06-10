@@ -38,10 +38,13 @@ keyed by `stableId`, the glide is a standard **FLIP** pass
 ([`lib/flip.ts`](web/apps/editor/src/lib/flip.ts) pure deltas + a layout
 effect in [`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx)):
 measure `offsetTop` per row before paint, apply the inverted `translateY`,
-transition to zero. The pass is **gated off during an active drag** (the
-make-room gap reflow stays instant under the pointer) but its position map
-still updates every render so the post-drop diff measures from the latest
-layout. stableIds are runtime-only — never persisted to `.alo`; undo/redo
+transition to zero. The pass is **frozen during an active drag** — no glide
+(the make-room gap reflow stays instant under the pointer) and no position-map
+update either: the drag-activation render batches the first gap in, so
+measuring there would bake gap-shifted offsets into the map and the drop
+would play a spurious gap-collapse glide. The map keeps the pre-drag resting
+layout; the post-drop diff is resting-order → new-order, one clean glide.
+stableIds are runtime-only — never persisted to `.alo`; undo/redo
 rebuilds emitters and issues fresh ids, so a reorder undo remounts (snaps)
 rather than glides: accepted.
 
@@ -53,10 +56,24 @@ NOT the spread-based clones (`{...node}` satisfies the type while silently
 duplicate/paste reassign walks now issue fresh stableIds (the C++ copy-ctor
 rule), while structural clones in reorder/reparent walkers correctly
 preserve them (same emitter). A scripted fixture update also over-matched
-one `toEqual` expectation (rename params aren't a tree node) — caught by the
-suite. Measure `offsetTop`, not `getBoundingClientRect`, in the FLIP pass:
-rect measurements include in-flight transforms and would corrupt re-measures
-mid-glide.
+TWO rename-params literals (rename params aren't a tree node): one `toEqual`
+expectation was caught by the suite, but a request-INPUT literal in the
+bridge-contract suite shipped green — the mock destructures params loosely
+and TypeScript skips excess-property checks when `request<R extends
+Request>(req: R)` infers R from the literal; an adversarial review pass
+caught it. The same review caught two real bugs the suites missed: a fourth
+Emitter-copy path (`copySharedParamsFrom`, the link-group propagation) doing
+`*this = src` without restoring `stableId` — every shared-field edit on a
+linked emitter would have stamped the source's identity onto all siblings
+(duplicate React keys); now restored + pinned by an `NDEBUG` assert. And a
+stale reparent latch: once the onto ring was acquired, moving to a no-op zone
+left `lastParams` set, so a release on the block's own footprint committed
+the stale reparent — the idempotent gap-setter couldn't see onto state; now
+cleared explicitly (+ regression test). Measure `offsetTop`, not
+`getBoundingClientRect`, in the FLIP pass — and snap any in-flight glide
+before the drag controller snapshots geometry, since `getBoundingClientRect`
+DOES include live transforms (a re-grab inside the 200 ms glide window would
+otherwise capture mid-animation positions).
 
 ---
 

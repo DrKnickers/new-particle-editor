@@ -1335,13 +1335,37 @@ export function EmitterTree({ bridge }: Props) {
   // Move Up/Down, delete, paste — anything that re-lays-out the list), rows
   // that moved glide to their new positions instead of snapping. Measure
   // offsetTop per stableId BEFORE paint, diff against the previous layout,
-  // apply the inverted translateY, then transition to zero. Gated OFF while
-  // a drag is live (the make-room gap reflow stays instant — the preview is
-  // the user's pointer, not an animation); the position map still updates
-  // every pass so the post-drop diff measures from the latest layout.
+  // apply the inverted translateY, then transition to zero. FROZEN while a
+  // drag is live — no glide (the make-room gap reflow stays instant under
+  // the pointer) and no map update either: the drag-activation render
+  // batches the first gap in, so measuring here would bake gap-shifted
+  // offsets into the map and the drop would play a spurious gap-collapse
+  // glide. The map keeps the pre-drag resting layout; the post-drop diff is
+  // resting-order → new-order, one clean glide.
   // prefers-reduced-motion: bookkeeping only, no glide.
+  // [glide] A row remount (undo/redo rebuilds emitters with FRESH stableIds,
+  // so every keyed row remounts) destroys the focused row button and drops
+  // keyboard focus to <body> — killing arrow-key nav until a re-click. Track
+  // whether focus lives inside the tree (capture handlers on the container;
+  // note removal of a focused element fires NO blur, so the flag survives the
+  // remount) and restore focus to the primary row after the commit. Only
+  // fires when focus was actually dropped (activeElement === body) so it can
+  // never steal focus from a modal or another pane.
+  const treeHadFocusRef = useRef(false);
+  useEffect(() => {
+    if (!treeHadFocusRef.current) return;
+    if (document.activeElement !== document.body) return;
+    const container = treeContainerRef.current;
+    if (container === null) return;
+    const primaryBtn = primaryId !== null
+      ? container.querySelector<HTMLElement>(`button[data-emitter-id="${primaryId}"]`)
+      : null;
+    (primaryBtn ?? container).focus();
+  }, [flatRows, primaryId]);
+
   const flipPositionsRef = useRef<FlipPositions>(new Map());
   useLayoutEffect(() => {
+    if (draggingId !== null) return;
     const sc = treeScrollRef.current;
     const prev = flipPositionsRef.current;
     const next: FlipPositions = new Map();
@@ -1354,7 +1378,6 @@ export function EmitterTree({ bridge }: Props) {
       });
     }
     flipPositionsRef.current = next;
-    if (draggingId !== null) return;
     if (
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -1472,6 +1495,7 @@ export function EmitterTree({ bridge }: Props) {
     let lastReorderGap: number | null = null;
     let active = false;
     let lastParams: DropParams | null = null;  // single-drag reparent, when resolved
+    let ontoTarget: number | null = null;      // row id currently showing the onto ring
     let rafId: number | null = null;
     const THRESHOLD = 4;
     // Geometry snapshots (captured at activation, resting layout) + the lifted
@@ -1528,12 +1552,27 @@ export function EmitterTree({ bridge }: Props) {
         toContentY(clientY, sc), lastReorderGap, liftedH,
       );
       if (res !== "noop" && res.kind === "onto") {
+        const params = reparentParamsFor(res.targetId);
         lastReorderGap = null;
-        lastParams = reparentParamsFor(res.targetId);
-        setIndicator(lastParams !== null ? { kind: "onto", targetId: res.targetId } : null);
+        lastParams = params;
+        const want = params !== null ? res.targetId : null;
+        if (want !== ontoTarget) {
+          ontoTarget = want;
+          setIndicator(want !== null ? { kind: "onto", targetId: want } : null);
+        }
         return;
       }
-      // reorder (root source) or nothing (child source / footprint no-op)
+      // Reorder (root source) or nothing (child source / footprint no-op).
+      // Leaving the onto zone MUST drop any latched reparent — otherwise a
+      // release over the no-op footprint would still commit the stale
+      // reparent and the ring would stay painted. setReorderGap's idempotence
+      // check can't see the onto state, so clear it explicitly first.
+      lastParams = null;
+      if (ontoTarget !== null) {
+        ontoTarget = null;
+        lastReorderGap = null;
+        setIndicator(null);
+      }
       setReorderGap(res !== "noop" && sourceIsRoot ? res.rootIndex : null);
     };
 
@@ -1591,10 +1630,19 @@ export function EmitterTree({ bridge }: Props) {
         active = true;
         setDraggingId(source.id);
         setDraggingIds(dimIds);
-        // Snapshot geometry NOW — the DOM is still in its resting layout (no
-        // gap rendered, no dimming applied); every later resolve is pure math
-        // against this. Both snapshots: block extents (gaps) + row extents
-        // (single-drag onto hit-test).
+        // Snapshot geometry NOW — but first finish any in-flight reorder
+        // glide instantly: the snapshot reads getBoundingClientRect, which
+        // INCLUDES live FLIP transforms, so a re-grab within the ~200ms glide
+        // window would otherwise capture mid-animation positions and corrupt
+        // every gap/onto resolution for the whole gesture.
+        treeScrollRef.current
+          ?.querySelectorAll<HTMLElement>("li[data-stable-id]")
+          .forEach((li) => {
+            li.style.transition = "none";
+            li.style.transform = "";
+          });
+        // Both snapshots against the now-resting layout: block extents
+        // (reorder gaps) + row extents (single-drag onto hit-test).
         geom = captureRootBlockGeometry(treeScrollRef.current, curRoots);
         rowGeom = captureRowGeometry(treeScrollRef.current, curRows);
         liftedH = geom !== null ? liftedBlockHeight(geom, blockRootIdxs) : 0;
@@ -1964,6 +2012,15 @@ export function EmitterTree({ bridge }: Props) {
       data-editing-id={editing?.id ?? ""}
       tabIndex={0}
       onKeyDown={handleTreeKeyDown}
+      // [glide] focus-restore bookkeeping (see treeHadFocusRef): removal of a
+      // focused element fires no blur, so this flag is the only record that
+      // the tree owned focus when a remount dropped it.
+      onFocusCapture={() => { treeHadFocusRef.current = true; }}
+      onBlurCapture={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          treeHadFocusRef.current = false;
+        }
+      }}
       className="flex h-full flex-col outline-none"
     >
       {tree === null ? (

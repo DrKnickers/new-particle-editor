@@ -597,6 +597,7 @@ void ParticleSystem::Emitter::copySharedParamsFrom(const Emitter&         src,
     size_t                     savedIndex     = index;
     uint32_t                   savedLinkGrp   = linkGroup;
     bool                       savedVisible   = visible;
+    unsigned int               savedStableId  = stableId;
 
     // Strings + names.
     std::string savedName          = name;
@@ -684,7 +685,10 @@ void ParticleSystem::Emitter::copySharedParamsFrom(const Emitter&         src,
         tracks[i] = trackContents + (src.tracks[i] - src.trackContents);
     }
 
-    // 4) Restore private + structural fields.
+    // 4) Restore private + structural fields. stableId is identity — the
+    //    propagation copies PARAMETERS between linked emitters, never which
+    //    emitter a row IS (a clobber here would give two rows the same
+    //    React key and corrupt the reorder-glide FLIP identity).
     m_instances     = savedInstances;
     parent          = savedParent;
     spawnOnDeath    = savedSpawnOD;
@@ -692,6 +696,7 @@ void ParticleSystem::Emitter::copySharedParamsFrom(const Emitter&         src,
     index           = savedIndex;
     linkGroup       = savedLinkGrp;
     visible         = savedVisible;
+    stableId        = savedStableId;
 
     // 5) Restore exempt fields per the flags.
     if (exempt.name)          name          = savedName;
@@ -786,6 +791,10 @@ void ParticleSystem::Emitter::copySharedParamsFrom(const Emitter&         src,
     if (exempt.colorTexture) assert(colorTexture == savedColorTexture);
     if (exempt.acceleration)
         assert(memcmp(acceleration, sav_acceleration, sizeof(acceleration)) == 0);
+    // stableId is IDENTITY (React row keys + FLIP maps key by it) — a clobber
+    // here gives two live emitters the same id. Unconditional, unlike the
+    // exempt checks above.
+    assert(stableId == savedStableId);
 #endif
 }
 
