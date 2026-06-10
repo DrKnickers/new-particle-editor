@@ -151,38 +151,13 @@ void LayoutBroker::Apply(int x, int y, int w, int h)
     if (w != m_lastW || h != m_lastH) CancelSceneAnim();
 
     // Reset the D3D9 swap chain so its backbuffer matches the new HWND
-    // client size. [resize-perf Fix A] Deferred during the modal
-    // sizemove loop (composition mode only) — SettleDeferredReset does
-    // the one settle reset on WM_EXITSIZEMOVE / quiescence.
-    if (m_engine && (w != m_lastW || h != m_lastH)
-        && !(m_deferEngineReset && m_dcompCompositor))
+    // client size. [resize-perf revised Fix A] Cheap ResetEx path with
+    // full-Reset fallback, shared via ResetEngineForResize.
+    if (m_engine && (w != m_lastW || h != m_lastH))
     {
         m_lastW = w;
         m_lastH = h;
-        bool resetOk = false;
-        try
-        {
-            m_engine->Reset();
-            resetOk = true;
-        }
-        catch (...)
-        {
-            // Swallow — Engine::Reset can throw on device-lost.
-            // The device is now in DEVICENOTRESET. In interactive use
-            // Render()'s next-frame guard recovers; in --test-host mode
-            // the viewport HWND is hidden so Render() isn't pumped,
-            // which would leave the device stuck (HANDOFF Open Items §1
-            // pre-2026-05-20). Recover explicitly here so any later
-            // bridge call that touches D3D — engine/set/ground-texture
-            // is the canonical example — sees a live device.
-            resetOk = false;
-        }
-        if (!resetOk)
-        {
-            m_engine->RecoverDeviceIfNeeded();
-        }
-        m_resetW = w;
-        m_resetH = h;
+        ResetEngineForResize(w, h);
     }
 
     m_lastX = x;
@@ -253,47 +228,70 @@ void LayoutBroker::PredictAndApply()
     m_lastClientW = curW;
     m_lastClientH = curH;
 
-    // [resize-perf Fix A] Skip the per-tick device reset during the
-    // modal sizemove loop (composition mode only). The engine keeps
-    // rendering into its old-size RT each tick — SetSceneViewport
-    // clamps to the RT, so the scene stays live; newly-grown area
-    // shows the theme backing until the settle reset. This collapses
-    // the 30-60 resets/sec storm (the dominant window-resize root
-    // cause) into ONE reset per gesture.
-    if (m_engine && sizeChanged && !(m_deferEngineReset && m_dcompCompositor))
+    // [resize-perf revised Fix A] Per-tick reset stays — but on the
+    // cheap ResetEx path (~3-5 ms vs the ~24 ms full reset, which spent
+    // ~20 ms re-decoding textures ResetEx lets us keep). The scene
+    // therefore renders at the CORRECT size on every sizemove tick: no
+    // deferred-settle snap, no stale-size band. Full Reset() remains the
+    // fallback inside the helper.
+    if (m_engine && sizeChanged)
     {
-        try { m_engine->Reset(); } catch (...) {}
-        m_resetW = newW;
-        m_resetH = newH;
+        ResetEngineForResize(newW, newH);
     }
 
     ReemitOcclusions();
+}
+
+void LayoutBroker::ResetEngineForResize(int w, int h)
+{
+    if (!m_engine) return;
+
+    bool resetOk = false;
+    try
+    {
+        resetOk = m_engine->ResetForResize();
+    }
+    catch (...)
+    {
+        // ResetParameters can throw on RT allocation failure after a
+        // successful ResetEx — treat like a ResetEx failure and fall
+        // through to the full path.
+        resetOk = false;
+    }
+    if (!resetOk)
+    {
+        try
+        {
+            m_engine->Reset();
+            resetOk = true;
+        }
+        catch (...)
+        {
+            // Swallow — Engine::Reset can throw on device-lost. The
+            // device is now in DEVICENOTRESET. In interactive use
+            // Render()'s next-frame guard recovers; in --test-host mode
+            // the viewport HWND is hidden so Render() isn't pumped,
+            // which would leave the device stuck (HANDOFF Open Items §1
+            // pre-2026-05-20). Recover explicitly so any later bridge
+            // call that touches D3D sees a live device.
+            resetOk = false;
+        }
+    }
+    if (!resetOk)
+    {
+        m_engine->RecoverDeviceIfNeeded();
+    }
+    m_resetW = w;
+    m_resetH = h;
 }
 
 void LayoutBroker::SettleDeferredReset()
 {
     if (!m_engine || !m_viewport) return;
     if (m_lastW <= 0 || m_lastH <= 0) return;          // collapsed popup
-    if (m_lastW == m_resetW && m_lastH == m_resetH) return;  // nothing deferred
+    if (m_lastW == m_resetW && m_lastH == m_resetH) return;  // per-tick resets all succeeded
 
-    bool resetOk = false;
-    try
-    {
-        m_engine->Reset();
-        resetOk = true;
-    }
-    catch (...)
-    {
-        resetOk = false;
-    }
-    if (!resetOk)
-    {
-        // Same rationale as Apply's recovery: don't leave the device in
-        // DEVICENOTRESET if the settle reset failed mid-gesture-end.
-        m_engine->RecoverDeviceIfNeeded();
-    }
-    m_resetW = m_lastW;
-    m_resetH = m_lastH;
+    ResetEngineForResize(m_lastW, m_lastH);
 }
 
 void LayoutBroker::ApplyFullClient()

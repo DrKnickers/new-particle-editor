@@ -1492,6 +1492,87 @@ void Engine::Reset()
 	++m_resetPerf.count;
 }
 
+// [resize-perf revised Fix A] Cheap resize-only reset. See engine.h for the
+// contract and the first-party ResetEx semantics this leans on. Mirrors
+// Reset()'s structure minus everything ResetEx makes unnecessary: no
+// OnLostDevice/OnResetDevice on shaders/effects, no skydome VB/IB release,
+// no ground/skydome texture re-decode, no TextureManager cache wipe. The
+// end-frame query is still released + lazily recreated — IDirect3DQuery9
+// invalidation across device resets was observed empirically under plain
+// Reset (MT-11 Stage 4a) and a query re-create costs nothing next frame.
+bool Engine::ResetForResize()
+{
+	if (m_pDevice == NULL) return false;
+
+	const LONGLONG _rpT0 = EngQpcNow();
+
+	// Release the size-keyed render targets so ResetParameters below can
+	// recreate them at the new backbuffer size (it CreateTexture-s into
+	// the member pointers without releasing first). NOT required by
+	// ResetEx itself — DEFAULT-pool resources persist — purely lifetime
+	// hygiene for the recreate.
+	ReleaseBloomTargets();
+	SAFE_RELEASE(m_pDistortTexture);
+	SAFE_RELEASE(m_pSceneTexture);
+	SAFE_RELEASE(m_pDepthStencilSurface);
+	SAFE_RELEASE(m_pEndFrameQuery);
+
+	m_presentationParameters.BackBufferWidth  = 0;   // size to the HWND client
+	m_presentationParameters.BackBufferHeight = 0;
+	m_presentationParameters.BackBufferCount  = 1;
+	m_presentationParameters.Windowed         = true;
+
+	const LONGLONG _rpT1 = EngQpcNow();
+	HRESULT hr = m_pDevice->ResetEx(&m_presentationParameters, NULL);
+	if (FAILED(hr))
+	{
+		// Device is now in the lost state (ResetEx docs). Caller falls
+		// back to the full Reset() / RecoverDeviceIfNeeded path.
+		char buf[96];
+		sprintf(buf, "[Engine] ResetForResize: ResetEx failed hr=0x%08lx\n", static_cast<unsigned long>(hr));
+		OutputDebugStringA(buf);
+		return false;
+	}
+	const LONGLONG _rpT2 = EngQpcNow();
+
+	// Rebuild the size-keyed targets + re-apply pipeline state and the
+	// full-RT projection (same routine the full Reset uses). Throws on
+	// allocation failure — propagate; the caller's fallback handles it.
+	ResetParameters();
+	const LONGLONG _rpT3 = EngQpcNow();
+
+	// Same tail as Reset(): the AlphaCompositor's shared RT + readback
+	// surfaces track the backbuffer size, and the cached scene viewport
+	// must be re-applied so the projection survives at scene-rect aspect.
+	if (m_pAlphaCompositor && m_presentationParameters.BackBufferWidth > 0
+	    && m_presentationParameters.BackBufferHeight > 0)
+	{
+		m_pAlphaCompositor->Resize(
+		    static_cast<int>(m_presentationParameters.BackBufferWidth),
+		    static_cast<int>(m_presentationParameters.BackBufferHeight));
+	}
+	const LONGLONG _rpT4 = EngQpcNow();
+
+	if (m_sceneViewportActive)
+	{
+		int sx = m_sceneViewportX;
+		int sy = m_sceneViewportY;
+		int sw = m_sceneViewportW;
+		int sh = m_sceneViewportH;
+		m_sceneViewportActive = false;
+		SetSceneViewport(sx, sy, sw, sh);
+	}
+
+	m_resetPerf.lastLostMs        = EngQpcUs(_rpT0, _rpT1) / 1000.0;
+	m_resetPerf.lastDeviceResetMs = EngQpcUs(_rpT1, _rpT2) / 1000.0;
+	m_resetPerf.lastReloadMs      = EngQpcUs(_rpT2, _rpT3) / 1000.0;
+	m_resetPerf.lastAlphaResizeMs = EngQpcUs(_rpT3, _rpT4) / 1000.0;
+	m_resetPerf.lastTotalMs       = EngQpcUs(_rpT0, EngQpcNow()) / 1000.0;
+	++m_resetPerf.count;
+	++m_resetPerf.cheapCount;
+	return true;
+}
+
 // [MT-11] Phase 3 Stage 2: forwarder to the AlphaCompositor's shared
 // HANDLE. Returns nullptr when the compositor isn't installed (canvas-
 // jpeg mode skips the layered-window path) or before Resize has run.

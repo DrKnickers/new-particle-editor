@@ -260,6 +260,25 @@ re-plan (per CLAUDE.md).
         uncapped-pump target.
       Native harness 174/0; Debug + Release x64 clean. Editor healthy
       (responding, no error lines) after both storms.
-      **Awaiting the user's manual feel verdict (L-033) before Phase 2.**
+- [x] **Phase 1 REVISED after the user's feel verdict** (2026-06-10:
+      "I really dislike the snap at the end … almost feels like a
+      regression"). Deferral design replaced with **cheap per-tick
+      resets** (→ L-078):
+      - New `Engine::ResetForResize()`: `IDirect3DDevice9Ex::ResetEx`
+        (first-party docs: "all other surfaces persistent" / textures,
+        shaders, state NOT lost) + rebuild of size-keyed RTs only.
+        Verified against learn.microsoft.com before building.
+      - All three LayoutBroker reset sites funnel through ONE
+        `ResetEngineForResize` helper (cheap → full `Reset()` fallback →
+        `RecoverDeviceIfNeeded`); settle/quiescence machinery kept as a
+        no-op safety net; `put_Bounds` 30 Hz throttle REVERTED (feel
+        suspect, L-078 corollary 1).
+      - Storm smoke on the revised build: every tick resets on the cheap
+        path (zero fallbacks), reset tot **3.5-4.0 ms** (was ~24 ms;
+        reload stage 20 ms → 0.4 ms), apply+render 12-14 ms/tick (was
+        27 ms), no settle snap by construction. Harness 174/0,
+        Debug + Release clean.
+      **Awaiting the user's SELF-LAUNCHED feel verdict (L-033 +
+      L-078 corollary 2) before Phase 2.**
 - [ ] Phase 2: Fix B
 - [ ] Phase 3: Fix C1/C2 (+ C3 decision)

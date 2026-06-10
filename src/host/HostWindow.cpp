@@ -88,11 +88,11 @@ constexpr int     kInitialHeight             = 800;
 constexpr wchar_t kVirtualHostName[]         = L"app.local";
 constexpr INTERNET_PORT kDevServerPort       = 5174;
 constexpr UINT_PTR    kStatsTimerId          = 0x100;  // 4 Hz stats broadcast
-// [resize-perf Fix A] one-shot quiescence fallback for the deferred
-// engine reset: re-armed on every size tick while in sizemove; fires
-// 150 ms after the ticks stop. Primary settle is WM_EXITSIZEMOVE — the
-// timer covers a lost exit message and gives a crisp frame when the
-// user pauses mid-drag.
+// [resize-perf revised Fix A] one-shot safety net: re-armed on every
+// size tick while in sizemove; fires 150 ms after the ticks stop and
+// re-resets ONLY if a per-tick cheap reset failed mid-gesture (normally
+// a no-op — see LayoutBroker::SettleDeferredReset). Covers a lost
+// WM_EXITSIZEMOVE too.
 constexpr UINT_PTR    kResizeSettleTimerId   = 0x101;
 constexpr UINT        kResizeSettleDelayMs   = 150;
 
@@ -473,12 +473,10 @@ struct HostWindowImpl
     unsigned  perfWebMsgs        = 0;
     DWORD     perfMsgLastEmit    = 0;
 
-    // [resize-perf Fix A+D] true between WM_ENTERSIZEMOVE and
-    // WM_EXITSIZEMOVE — gates the engine-reset deferral (via
-    // LayoutBroker::SetDeferEngineReset), the main-window
-    // WM_ERASEBKGND suppression, and the put_Bounds throttle.
+    // [resize-perf Fix D] true between WM_ENTERSIZEMOVE and
+    // WM_EXITSIZEMOVE — gates the main-window WM_ERASEBKGND
+    // suppression and arms the settle-safety quiescence timer.
     bool      m_inSizeMove       = false;
-    DWORD     m_lastPutBoundsTick = 0;
 
     // LT-4 D6: mod state shared with React. ModManager constructed in
     // the impl ctor (DiscoverMods + RestoreLastSelectedMod run before
@@ -995,25 +993,11 @@ void HostWindowImpl::RenderD3D9()
 void HostWindowImpl::ResizeWebViewToClient()
 {
     if (!webController) return;
-
-    // [resize-perf Fix D] ~30 Hz put_Bounds throttle during the modal
-    // sizemove loop. Every put_Bounds triggers a full Chromium
-    // relayout + re-raster (~5-30 ms off-thread) and WM_SIZE fires at
-    // mouse-move rate; 30 Hz keeps the chrome visually tracking the
-    // edge while halving-or-better the raster churn. The settle path
-    // (SettleResize, after EXITSIZEMOVE cleared the flag) calls this
-    // again un-throttled so the final bounds are always exact.
-    if (m_inSizeMove)
-    {
-        const DWORD now = GetTickCount();
-        if (m_lastPutBoundsTick != 0 && (now - m_lastPutBoundsTick) < 33)
-        {
-            layout.RefreshScreenPosition();
-            return;
-        }
-        m_lastPutBoundsTick = now;
-    }
-
+    // ([resize-perf] note: an earlier revision throttled put_Bounds to
+    // ~30 Hz during sizemove. Reverted after the user's feel verdict —
+    // halving the panels' tracking rate read as a regression, and with
+    // the per-tick reset now on the cheap ResetEx path there is no
+    // budget pressure to justify it. L-078 corollary 1.)
     RECT r;
     GetClientRect(hMain, &r);
     webController->put_Bounds(r);
@@ -2234,10 +2218,10 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             (void)wrote;
 #endif
         }
-        // [resize-perf Fix A] quiescence settle — fires 150 ms after
-        // size ticks stop. Covers a lost WM_EXITSIZEMOVE (flag stuck)
-        // and gives a crisp frame when the user pauses mid-drag (the
-        // defer flag stays armed; the next tick defers again).
+        // [resize-perf revised Fix A] quiescence safety net — fires
+        // 150 ms after size ticks stop; normally a no-op (per-tick
+        // cheap resets keep sizes in sync), it only re-resets if a
+        // mid-gesture reset failed. Covers a lost WM_EXITSIZEMOVE.
         else if (wp == kResizeSettleTimerId)
         {
             KillTimer(hwnd, kResizeSettleTimerId);
@@ -2448,20 +2432,19 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         //     frame, so a wider/taller resize reveals dark purple
         //     where the ground plane should be.
         //
-        // [resize-perf Fix A] While in sizemove, PredictAndApply skips
-        // the per-tick Engine::Reset (deferral armed on
-        // WM_ENTERSIZEMOVE); RenderD3D9 stays — it is the ONLY frame
-        // driver inside the modal loop (the idle pump is starved), and
-        // without the reset it costs a normal frame, not a device
-        // rebuild. The one settle reset happens on WM_EXITSIZEMOVE,
-        // with the kResizeSettleTimerId one-shot as the lost-exit /
-        // mid-drag-pause fallback (re-armed every size tick).
+        // [resize-perf revised Fix A] PredictAndApply's per-tick reset
+        // runs on the cheap ResetEx path (~3-5 ms — textures/shaders
+        // persist per D3D9Ex semantics; only size-keyed RTs rebuild),
+        // so the scene renders at the CORRECT size every tick — no
+        // deferred-settle snap. RenderD3D9 stays the modal-loop frame
+        // driver (the idle pump is starved in here). The
+        // kResizeSettleTimerId one-shot is a safety net that re-resets
+        // only if a mid-gesture reset failed.
         if (hViewport)
         {
             // [resize-perf] Phase-0 probe — time the per-tick chain and
-            // emit a 1 Hz aggregate with the engine's Reset sub-stage
-            // breakdown. During a border drag this is expected to show
-            // 30-60 ticks/sec each costing a full device reset.
+            // emit a 1 Hz aggregate with the engine's reset sub-stage
+            // breakdown (cheap = ResetForResize successes).
             const LONGLONG rpT0 = PerfQpcNow();
             layout.PredictAndApply();
             RenderD3D9();
@@ -2477,10 +2460,10 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 {
                     const Engine::ResetPerf& rp = engine->GetResetPerf();
                     Log("[resize-perf] wmpos: ticks=%u apply+render(ms av/mx)=%.1f/%.1f "
-                        "resets=%u last(ms tot=%.1f lost=%.1f dev=%.1f reload=%.1f alpha=%.1f)\n",
+                        "resets=%u (cheap-total=%u) last(ms tot=%.1f lost=%.1f dev=%.1f reload=%.1f alpha=%.1f)\n",
                         perfWmpos.n,
                         perfWmpos.avg() / 1000.0, perfWmpos.maxUs / 1000.0,
-                        rp.count - perfWmposResetBase,
+                        rp.count - perfWmposResetBase, rp.cheapCount,
                         rp.lastTotalMs, rp.lastLostMs, rp.lastDeviceResetMs,
                         rp.lastReloadMs, rp.lastAlphaResizeMs);
                     perfWmposResetBase = rp.count;
@@ -2504,20 +2487,19 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     // Fix A handlers below don't hide anything; they only defer the
     // per-tick engine reset.)
 
-    // [resize-perf Fix A] Modal sizemove bracket. ENTERSIZEMOVE arms
-    // the engine-reset deferral in LayoutBroker (composition mode
-    // only — the broker gates on its DComp compositor); EXITSIZEMOVE
-    // clears it and performs the one settle (reset + exact bounds +
-    // fresh frame). Both fall through to DefWindowProc, which runs
-    // its own modal-loop bookkeeping on these messages.
+    // [resize-perf revised Fix A] Modal sizemove bracket. m_inSizeMove
+    // gates the WM_ERASEBKGND suppression below; per-tick engine resets
+    // now run unconditionally on the cheap ResetEx path (LayoutBroker::
+    // ResetEngineForResize), so EXITSIZEMOVE's settle is a no-op safety
+    // net that only acts if a mid-gesture reset FAILED. Both fall
+    // through to DefWindowProc, which runs its own modal-loop
+    // bookkeeping on these messages.
     case WM_ENTERSIZEMOVE:
         m_inSizeMove = true;
-        layout.SetDeferEngineReset(true);
         break;
 
     case WM_EXITSIZEMOVE:
         m_inSizeMove = false;
-        layout.SetDeferEngineReset(false);
         KillTimer(hwnd, kResizeSettleTimerId);
         SettleResize("exitsizemove");
         break;

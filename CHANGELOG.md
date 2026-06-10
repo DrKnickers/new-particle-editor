@@ -16,60 +16,66 @@ Conventions:
 
 ## Changelog
 
-### Smooth window resize: device reset deferred to gesture settle, plus resize-perf probes
+### Smooth window resize: cheap ResetEx-based per-tick device reset, plus resize-perf probes
 
 *2026-06-10 · TODO(merge hash) · [#116](https://github.com/DrKnickers/new-particle-editor/pull/116)*
 
-Resizing the app window no longer tanks: dragging a border/corner now costs
-~1 ms per tick instead of ~27 ms, because the full D3D9Ex device reset that
-used to fire on **every mouse-move tick** of the modal sizemove loop (full
-render-target/shader teardown, whole texture-cache wipe with disk re-decode,
-~20 ms of the ~24 ms total) is deferred to a **single settle reset when the
-gesture ends**. Mid-gesture the scene stays live (the engine keeps rendering
-into its old-size target with a clamped viewport); a freshly-grown band shows
-the theme background until release, then snaps crisp. Pausing mid-drag for
-150 ms also settles, so you get a crisp frame while holding. Always-on
-`[resize-perf]` log probes (1 Hz aggregates in `host.log`) now quantify the
-reset storm, the per-reset sub-stages, and the bridge scene-rect message rate
-— the measurement basis for the remaining splitter-drag fixes.
+Resizing the app window no longer tanks: the full D3D9Ex device reset that
+fires on **every mouse-move tick** of the modal sizemove loop used to cost
+~24 ms (full render-target/shader teardown, whole texture-cache wipe with disk
+re-decode — ~20 ms of the total) and now costs **~3-5 ms**, because resize-only
+resets switched to `IDirect3DDevice9Ex::ResetEx`, which keeps all surfaces,
+textures, and shaders alive across the reset ("all other surfaces persistent"
+— first-party docs). The scene still renders at the **correct size on every
+tick** — no deferred work, no end-of-gesture snap. Always-on `[resize-perf]`
+log probes (1 Hz aggregates in `host.log`) quantify the reset rate, the
+per-reset sub-stages, and the bridge scene-rect message rate — the measurement
+basis for the remaining splitter-drag fixes.
 
-**How we tackled it.** `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` handlers in
-[`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:2440) arm/clear a reset
-deferral on the layout broker
-([`src/host/LayoutBroker.cpp`](src/host/LayoutBroker.cpp:251) — gated on the
-DComp compositor so legacy arch-A is untouched), with
-`LayoutBroker::SettleDeferredReset` comparing the popup size against the size
-at the last completed reset (`m_resetW/H`) so the settle is idempotent and
-order-independent. The per-tick `RenderD3D9()` in `WM_WINDOWPOSCHANGED` was
-deliberately **kept**: inside the modal loop the idle pump is starved, so that
-call is the only frame driver — without the reset it costs a normal frame and
-keeps the scene live (no DComp stretch machinery needed, which matters because
-`Compositor::ApplyTransform` is clip-only, not scaling). A 150 ms one-shot
-quiescence timer (re-armed per size tick) backstops a lost `WM_EXITSIZEMOVE`.
-Riders: main-window `WM_ERASEBKGND → 1` during sizemove only (DefWindowProc
-was GDI-filling the full client with the class brush per tick — kept for
-normal paints since the dark brush is the deliberate first-paint theme), and
-`put_Bounds` throttled to ~30 Hz during sizemove with an exact settle re-send.
+**How we tackled it.** New `Engine::ResetForResize`
+([`src/engine.cpp`](src/engine.cpp:1494)): `ResetEx` + rebuild of only the
+size-keyed targets (scene/distort/bloom RTs + depth-stencil via the existing
+`ResetParameters`, the AlphaCompositor shared RT via `Resize`); the
+OnLostDevice dance, texture-cache wipe, and ground/skydome re-decode that
+plain `Reset()` legally requires are all skipped — D3D9Ex semantics make them
+unnecessary for a windowed size change. All three resize-driven reset sites in
+[`src/host/LayoutBroker.cpp`](src/host/LayoutBroker.cpp:251) funnel through
+one `ResetEngineForResize` helper (cheap path → full `Reset()` fallback →
+`RecoverDeviceIfNeeded`), per the L-077 no-hand-copies rule. Full `Reset()`
+remains the device-loss recovery primitive. `WM_ENTERSIZEMOVE`/`EXITSIZEMOVE`
+handlers gate a main-window `WM_ERASEBKGND → 1` suppression (DefWindowProc was
+GDI-filling the full client with the class brush per tick) and arm a 150 ms
+quiescence timer that re-resets only if a mid-gesture reset failed.
 Engine-side, `Engine::ResetPerf` ([`src/engine.h`](src/engine.h:200)) mirrors
-the existing `RenderPassTimingsUs` diagnostic pattern: the engine publishes
-per-reset sub-stage wall-clock, the host logs it.
+the `RenderPassTimingsUs` diagnostic pattern: the engine publishes per-reset
+sub-stage wall-clock + a cheap-path counter, the host logs it at 1 Hz.
 
-**Issues encountered and resolutions.** (1) The investigation's sketch said
-"stretch the last-presented surface via the dock-slide path" — but the
-dock-slide transform (`SetEngineVisualTransform`) only offsets and **clips**;
-it cannot scale, because a dock slide never changes the window size. Rather
-than build new DComp scale machinery, the fix keeps the per-tick render as the
-mid-gesture frame driver — simpler and visually better (live scene, not a
-stretched stale frame). (2) The smoke test was run **programmatically**: a
-`SetWindowPos` storm with and without the `WM_ENTERSIZEMOVE` bracket
+**Issues encountered and resolutions.** (1) **The first iteration of this fix
+was rejected by the user and redesigned.** It deferred the reset to gesture
+settle (`WM_EXITSIZEMOVE`) — numerically a 30× win (21 resets/s @ 27 ms →
+0 resets @ 0.9 ms/tick) but the end-of-gesture snap "feels like a regression"
+(the scene rendered into the old-size target mid-gesture, then jumped). The
+probe data itself pointed at the snapless fix: ~20 ms of every reset was
+texture re-decode that `ResetEx` makes unnecessary. Lesson recorded as L-078:
+prefer making per-tick work cheap (continuous-correct) over deferring it
+(deferred-correct); measured wins don't override a feel verdict. (2) A
+`put_Bounds` ~30 Hz throttle shipped with the first iteration was **reverted**
+— it halved the panels' tracking rate during resize, plausibly reading as the
+very regression being fixed (L-078 corollary: never bundle feel-degrading
+riders with the headline fix). (3) The investigation's sketch said "stretch
+the last-presented surface via the dock-slide path" — but the dock-slide
+transform (`SetEngineVisualTransform`) only offsets and **clips**; it cannot
+scale (a dock slide never changes the window size). Moot after the redesign.
+(4) The smoke is **programmatic**: a `SetWindowPos` storm with/without the
+`WM_ENTERSIZEMOVE` bracket
 ([`tasks/tool-sizemove-storm.ps1`](tasks/tool-sizemove-storm.ps1)) reproduces
-the modal loop's message sequence without interactive input — control run
-showed 21 resets/s @ 27 ms/tick, bracketed run 0 resets @ 0.9 ms/tick + one
-settle. Useful as a future regression driver. (3) The probe confirmed two
-predictions for the next phases: the scene-rect stream runs at **2×** the tick
-rate (redundant `window resize` listener in `ViewportSlot.tsx` — fix C1), and
-the idle pump free-runs at ~3000 fps with ~4000 GPU-query spins per frame
-(fix B).
+the modal loop's message sequence without interactive input. On the final
+build: every tick resets on the cheap path (zero fallbacks), reset
+tot ≈ 3.5-4 ms (`reload` 20 ms → 0.4 ms), native harness 174/0. (5) The probes
+confirmed two predictions for the next phases: the scene-rect stream runs at
+**2×** the tick rate (redundant `window resize` listener in
+`ViewportSlot.tsx` — fix C1), and the idle pump free-runs at ~3000 fps with
+~4000 GPU-query spins per frame (fix B).
 
 ---
 

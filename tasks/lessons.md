@@ -4407,3 +4407,36 @@ replacing all three loops; new `tests/test_emitter_reorder.cpp` reproduces the
 swap through both bridge-reachable entry points (red→green, 15/15).
 Cross-reference [L-075](#l-075) (grep the wire-kind to find ALL sites — same
 "duplicated logic, duplicated bug" family).
+
+## L-078 — Feel-fixes: prefer making per-frame work CHEAP over deferring it to gesture end; an end-of-gesture snap reads as a regression even when the numbers improved 30x
+
+**Rule.** When per-tick work is too expensive inside an interactive gesture
+(resize, drag), the first fix to evaluate is making the per-tick work cheap
+enough to keep running every tick (continuous-correct). Deferring the work to
+gesture settle (deferred-correct) trades a mid-gesture artifact + an
+end-of-gesture snap for the perf win — and the user FEELS the snap far more
+than the removed stalls. Measured wins (resets/sec 21→0, tick cost 27 ms→0.9 ms)
+do not override a "this feels like a regression" verdict.
+
+**Corollary 1 — don't bundle feel-degrading riders with the headline fix.**
+A put_Bounds 30 Hz throttle shipped in the same PR halved the panels' resize
+tracking rate; the panels are most of what the user SEES during a resize, so
+the rider plausibly cancelled the perceived win of the main fix and confounded
+the verdict. Riders that change anything user-visible get their own
+feel-check, or ship after the headline fix is approved.
+
+**Corollary 2 — the user launches the build for a feel test, never the
+agent.** [L-033](#l-033) says agent-shell launches misrender arch-C
+compositing; this session the agent ALSO launched the build FOR the user's
+verdict (Start-Process from the worktree), making the verdict potentially
+environment-tainted. Hand the user the exe path; they double-click it.
+
+**Source incident (2026-06-10, resize-perf Fix A, PR #116).** Deferring the
+per-tick D3D9Ex device reset to WM_EXITSIZEMOVE eliminated the reset storm but
+introduced a visible settle snap (mid-gesture the scene rendered into the
+old-size RT) — user verdict: "I really dislike the snap … almost feels like a
+regression." The continuous-correct fix existed all along: the per-reset
+probe showed ~20 ms of the ~24 ms reset was texture re-decode that
+IDirect3DDevice9Ex::ResetEx makes unnecessary ("all other surfaces
+persistent" — first-party docs), so a resize-only ResetEx path keeps per-tick
+resets at ~3-5 ms with no snap at all.
