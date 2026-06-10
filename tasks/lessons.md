@@ -4440,3 +4440,35 @@ probe showed ~20 ms of the ~24 ms reset was texture re-decode that
 IDirect3DDevice9Ex::ResetEx makes unnecessary ("all other surfaces
 persistent" — first-party docs), so a resize-only ResetEx path keeps per-tick
 resets at ~3-5 ms with no snap at all.
+
+## L-079 — Stream smoothing cannot beat the data rate: a chase-lerp''s steady-state lag is one packet interval, and under real load that reads as lag-plus-snap — worse than the discrete steps it replaced
+
+**Rule.** When a continuously-moving target is driven by a low-rate data
+stream (rects, positions arriving at 10-30/s), interpolating toward each
+arrival ("chase lerp", duration ≈ inter-arrival gap) does not make the
+motion track better — it trades visible discrete steps for a constant lag
+of one packet interval plus an end snap. Under real load the stream rate
+DROPS (the producer is the contended component), so the lag grows exactly
+when the user is looking. If the visible "judder" is actually the
+producer''s own update cadence (Chromium relayout under drag), instant
+application already tracks it as tightly as the architecture allows; the
+only real fixes are raising the data rate or synchronizing the two
+presenters, not smoothing.
+
+**Corollary — gate stream-smoothers off during orthogonal gestures.** The
+chase interacted with window resizes: PredictAndApply cancels the scene
+anim on every size tick (a dock-slide rule), so chases died mid-flight
+every tick and the applied clip crawled — newly revealed window area sat
+on backing colour for ~a second. A smoother that can be cancelled by an
+unrelated per-tick path needs an explicit interaction analysis BEFORE the
+feel test (this one was findable in the mental walk: grep every
+CancelSceneAnim call site the moment the anim machinery gained a second
+client).
+
+**Source incident (2026-06-10, resize-perf Fix C3, PR #118).** Measured
+22-28 scene-rects/s in test-host; designed duration=gap chase (16..100ms
+clamp); user verdict: "splitter still laggy, viewport lags the splitter
+then snaps at the end; window resize is WORSE — background colour in newly
+revealed area for a second." Reverted same day; C1 (dedupe) + C2 (log
+hygiene) + Fix B (pacing) kept. Cross-reference L-078 (prefer
+continuous-correct; measured wins don''t override feel verdicts).

@@ -280,5 +280,47 @@ re-plan (per CLAUDE.md).
         Debug + Release clean.
       **Awaiting the user's SELF-LAUNCHED feel verdict (L-033 +
       L-078 corollary 2) before Phase 2.**
-- [ ] Phase 2: Fix B
-- [ ] Phase 3: Fix C1/C2 (+ C3 decision)
+- [x] Phase 2: Fix B (branch `claude/resize-perf-phase2`, two commits:
+      B2 `c33cc08` spin-yield, B1 `1bed29a` paced pump). Measured on the
+      240 Hz dev box: **rps 3000 → ~190**, idle CPU **one full core →
+      ~20%**, GPU wait avg ~0.3 ms. Input wakes the pump instantly
+      (MsgWaitForMultipleObjectsEx + MWMO_INPUTAVAILABLE), so latency is
+      unchanged; capture mode untouched. `[PERF]` line gains `rps=`
+      (true cadence — the fps field is 1/frame-cost and can't show the
+      cap). Regression: resize storm still all-cheap resets + one
+      settle; native harness 174/0; Debug + Release clean.
+      **Awaiting the user's splitter-drag feel verdict (L-033,
+      self-launched).** Phase 1's FOV anchor + the #117 dock fixes are
+      independent of this branch.
+- [x] Phase 3: Fix C1+C2+C3 (same branch — user verdict on B was "still
+      stutters", so C3 was promoted). Attribution FIRST (per-kind bridge
+      probe + real-mouse SendInput driver,
+      `tasks/tool-splitter-drag-probe.mjs`): drag stream =
+      layout/scene-rect 22-28/s; the user's ~104/s mystery =
+      viewport/input at mouse rate over the viewport (functional arch-C
+      input traffic). C1 `e66f811`: (rect,DPR) send dedupe. C2+C3
+      `a2e7418`: scene-rect stream → host-clocked LINEAR chase lerps
+      (duration = inter-arrival gap 16..100ms, supersede-on-next;
+      dock anim still authoritative); per-message log hygiene (WebMsg
+      skip for interactive kinds, SetSceneViewport printf 1 Hz,
+      transform log quiet-on-anim-frames → 3s drag = ~50 log lines, was
+      200+). Two native specs re-pinned to the new timing contract
+      (dispatch spacing > the 250ms stream window; snapshot waits out
+      the ≤100ms chase). Suites: web 637, tsc 0, native 174/0,
+      Debug + Release clean.
+      **Awaiting the user's splitter-drag feel verdict (self-launched).**
+- [x] **C3 REVERTED after the user''s feel verdict** (2026-06-10: "app
+      resize is worse — background colour in newly revealed area for a
+      second; splitter still laggy, viewport lags then snaps"). Root
+      causes: (a) chase steady-state lag = one packet interval, and the
+      real stream under load is ~12/s → 80-160ms lag + end snap; (b)
+      window resizes starve chases (PredictAndApply cancels the anim
+      per size tick) → the clip crawls behind the revealed area. →
+      L-079: smoothing cannot beat the data rate; the residual splitter
+      stutter is Chromium''s own relayout cadence under drag. C1+C2+B
+      kept (all objective, no feel change); both specs reverted to the
+      instant-apply contract; harness 174/0, Debug+Release clean.
+      **Remaining stutter is producer-side (Chromium relayout rate
+      under drag) — further work would mean raising the data rate or
+      panel-content virtualization, not host smoothing. Scope with the
+      user before any Phase 4.**
