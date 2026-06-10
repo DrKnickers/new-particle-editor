@@ -30,8 +30,30 @@ This file is split into six parts:
 Quality-of-life polish on existing workflows. Each item is contained, low
 risk, and doesn't touch the rendering pipeline or file format.
 
-*No near-term items currently. The [NT-11] soft chain warning shipped
-2026-06-10 — see the [NT-11] entry in Shipped §5.*
+### 1.1 [NT-12] Styled, animated tooltips (app-wide tooltip pass)
+
+*Estimate: ★★ (2/5), ~3-5 hours.*
+
+The editor surfaces every hover hint through the native HTML `title`
+attribute — emitter-tree glyphs (the NT-11 heavy-emitter ⚠ chain-warning
+glyph, the lifetime/death role glyphs, the eye/visibility toggle), toolbar
+buttons, status-bar readouts, and more. Native `title` is unstyled, fires
+on a fixed ~1 s delay, can't be themed, and renders inconsistently inside
+WebView2. Replace it with **one shared styled tooltip primitive**: a themed
+surface + arrow, a short open/close animation, a sensible hover delay,
+dark/light-aware, and `prefers-reduced-motion` honored.
+
+**Concrete requirement (user-flagged 2026-06-10):** the heavy-emitter ⚠
+chain-warning glyph in the emitter list must surface a clear *"what this
+means"* tooltip. It currently carries a native `title` with the numeric
+per-generation breakdown (`formatChainWarning`) plus an `aria-label` —
+keep the breakdown, but make the *meaning* explicit (e.g. a lead line like
+"This chain may spawn far too many particles") and the presentation styled.
+
+Overlaps the queued **modal + banner entrance/exit animation** work
+(greenlit 2026-06-10; animated tooltips are the same motion family) — share
+the easing/duration tokens and the mount/exit-animation primitive so
+motion feels uniform across the app.
 
 ---
 
