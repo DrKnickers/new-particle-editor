@@ -19,7 +19,7 @@ Conventions:
 
 ### Preview overload guard: the editor survives any spawn parameters
 
-*2026-06-10 · `TODO` · `#TODO`*
+*2026-06-10 · [`2ed99d5`](https://github.com/DrKnickers/new-particle-editor/commit/2ed99d5) · [#121](https://github.com/DrKnickers/new-particle-editor/pull/121)*
 
 The live preview can no longer be crashed by extreme spawn values. During
 the NT-11 feel test an accidental Shift (the spinner's ×10 step modifier)
