@@ -8,6 +8,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ZERO_SPAWN } from "@particle-editor/bridge-schema";
 import type { Bridge, EmitterTreeDto, EmitterTreeNode } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
+import { MockBridge } from "@/bridge/mock";
+import { useMockEmitterProperties } from "@/bridge/mock-state";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitters";
@@ -1025,5 +1027,39 @@ describe("EmitterTree delete gating (helper-level)", () => {
     requestDeleteEmitters(bridge, [0]);
     expect(calls).toEqual([]);
     expect(useDeleteConfirmStore.getState().pending?.ids).toEqual([0]);
+  });
+});
+
+// ─── NT-11 — chain-load warning glyph ────────────────────────────────
+//
+// These render against the REAL MockBridge (not the stub) because the
+// mock decorates tree payloads with live spawn values from the
+// properties overlay (`decorateSpawn` in bridge/mock.ts) — patching the
+// overlay then rendering exercises the same data path the browser-mode
+// editor uses.
+describe("chain-load warning glyph (NT-11)", () => {
+  beforeEach(() => {
+    // The overlay is module-scoped; reset so a patched spawn value can't
+    // leak between tests.
+    useMockEmitterProperties.getState().reset();
+  });
+
+  it("renders no glyph at fixture-default spawn values", async () => {
+    render(<EmitterTree bridge={new MockBridge()} />);
+    await waitFor(() => {
+      expect(screen.getByText("Smoke")).toBeInTheDocument();
+    });
+    // Fixture defaults (10/s × 1-5 s lifetime) estimate far below the
+    // 10,000 threshold — no row warns.
+    expect(screen.queryAllByTestId(/^emitter-chain-warning-/)).toHaveLength(0);
+  });
+
+  it("shows the glyph with a breakdown tooltip when an emitter crosses the threshold", async () => {
+    // Smoke is id 0 in the mock fixture; 20,000/s × 1 s = 20,000 > 10,000.
+    useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 20_000, lifetime: 1 });
+    render(<EmitterTree bridge={new MockBridge()} />);
+    const glyph = await screen.findByTestId("emitter-chain-warning-0");
+    expect(glyph.getAttribute("title")).toContain("20,000");
+    expect(glyph.getAttribute("title")).toContain("Soft warning");
   });
 });
