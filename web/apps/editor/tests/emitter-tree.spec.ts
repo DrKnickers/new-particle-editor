@@ -4,8 +4,10 @@
 //      first paint — the host seeds with one root emitter at startup).
 //   2. Clicking a row updates engine/state/snapshot.selectedEmitterId
 //      and fires emitters/selected.
+//   3. emitters/list nodes carry the spawn params (NT-11 chain-load
+//      warning input).
 //
-// Both specs talk to the host's real ParticleSystem via window.bridge —
+// All specs talk to the host's real ParticleSystem via window.bridge —
 // no seeding mocks; the native host owns the live system.
 
 import { test, expect, chromium, type Page, type Browser } from "@playwright/test";
