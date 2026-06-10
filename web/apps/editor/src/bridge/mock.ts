@@ -247,7 +247,7 @@ export class MockBridge implements Bridge {
     // NT-11: decorate tree payloads with live spawn values at the single
     // event choke point (see decorateSpawn above).
     if (e.kind === "emitters/tree/changed") {
-      e = { ...e, payload: { root: decorateSpawn(e.payload.root) } };
+      e = { ...e, payload: { ...e.payload, root: decorateSpawn(e.payload.root) } };
     }
     const bucket = this.listeners.get(e.kind);
     bucket?.forEach((h) => h(e));
