@@ -56,6 +56,9 @@ describe("estimatePerEmitter", () => {
   it("zero-rate emitter estimates 0", () => {
     expect(estimatePerEmitter(ZERO_SPAWN)).toBe(0);
   });
+  it("negative rate clamps to 0 (corrupt DTO defense)", () => {
+    expect(estimatePerEmitter(spawn({ nParticlesPerSecond: -5, lifetime: 2 }))).toBe(0);
+  });
 });
 
 describe("estimateChainLoad", () => {
@@ -127,5 +130,14 @@ describe("formatChainWarning", () => {
     expect(text.split("\n")).toHaveLength(3); // header + 2 generations
     expect(text).toContain("sparkle");
     expect(text).toContain("→ smoke");
+  });
+  it("sub-1 multipliers render with a decimal, not ×0", () => {
+    // 50,000 × 0.4 = 20,000 — offending, with a sub-1 child multiplier.
+    const child = node("dust", { nParticlesPerSecond: 2, lifetime: 0.2 }, [], "death");
+    const root = node("blast", { nParticlesPerSecond: 50_000, lifetime: 1 }, [child]);
+    const w = estimateChainLoad(syntheticRoot([root])).get(child.stableId)!;
+    const text = formatChainWarning(w);
+    expect(text).toContain("×0.4");
+    expect(text).not.toContain("×0 ");
   });
 });

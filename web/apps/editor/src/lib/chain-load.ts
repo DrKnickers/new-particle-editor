@@ -18,15 +18,23 @@ const DEGENERATE_CAP = 1_000_000_000;
 // bursts whose particles coexist (lifetime / burstDelay, capped by
 // nBursts; nBursts === 0 means infinite).
 export function estimatePerEmitter(s: SpawnParamsDto): number {
-  if (!s.useBursts) return s.nParticlesPerSecond * s.lifetime;
-  const infinite = s.nBursts === 0;
-  if (s.burstDelay <= 0) {
-    if (infinite) return s.nParticlesPerBurst > 0 ? DEGENERATE_CAP : 0;
-    return s.nParticlesPerBurst * s.nBursts;
+  // Clamped to ≥0 at the single exit: a corrupt DTO with two negative rates
+  // along a chain would otherwise multiply into a positive spurious warning.
+  let result: number;
+  if (!s.useBursts) {
+    result = s.nParticlesPerSecond * s.lifetime;
+  } else if (s.burstDelay <= 0) {
+    const infinite = s.nBursts === 0;
+    result = infinite
+      ? s.nParticlesPerBurst > 0 ? DEGENERATE_CAP : 0
+      : s.nParticlesPerBurst * s.nBursts;
+  } else {
+    const infinite = s.nBursts === 0;
+    const concurrent = Math.floor(s.lifetime / s.burstDelay) + 1;
+    const bursts = infinite ? concurrent : Math.min(concurrent, s.nBursts);
+    result = s.nParticlesPerBurst * Math.max(1, bursts);
   }
-  const concurrent = Math.floor(s.lifetime / s.burstDelay) + 1;
-  const bursts = infinite ? concurrent : Math.min(concurrent, s.nBursts);
-  return s.nParticlesPerBurst * Math.max(1, bursts);
+  return Math.max(0, result);
 }
 
 export type ChainWarning = {
@@ -50,15 +58,14 @@ export function estimateChainLoad(root: EmitterTreeNode): Map<number, ChainWarni
     const cumulative = parentCumulative * perEmitter;
     const path = [...trail, { stableId: node.stableId, name: node.name, perEmitter, cumulative }];
     if (cumulative > CHAIN_WARN_THRESHOLD) {
+      // One shared copy is safe: the display array is never mutated downstream.
+      const display = path.map(({ name, perEmitter: e, cumulative: a }) => ({
+        name, perEmitter: e, cumulative: a,
+      }));
       for (const entry of path) {
         const prev = out.get(entry.stableId);
         if (prev === undefined || cumulative > prev.estimate) {
-          out.set(entry.stableId, {
-            estimate: cumulative,
-            path: path.map(({ name, perEmitter: e, cumulative: a }) => ({
-              name, perEmitter: e, cumulative: a,
-            })),
-          });
+          out.set(entry.stableId, { estimate: cumulative, path: display });
         }
       }
     }
@@ -72,10 +79,13 @@ export function estimateChainLoad(root: EmitterTreeNode): Map<number, ChainWarni
 // line breaks).
 export function formatChainWarning(w: ChainWarning): string {
   const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+  // Sub-10 multipliers keep a decimal so e.g. ×0.4 doesn't render as ×0.
+  const fmtSmall = (n: number) =>
+    n >= 10 ? Math.round(n).toLocaleString("en-US") : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
   const lines = w.path.map((p, i) =>
     i === 0
-      ? `${p.name}: ~${fmt(p.perEmitter)} alive`
-      : `→ ${p.name}: ×${fmt(p.perEmitter)} → ~${fmt(p.cumulative)}`,
+      ? `${p.name}: ~${fmtSmall(p.perEmitter)} alive`
+      : `→ ${p.name}: ×${fmtSmall(p.perEmitter)} → ~${fmt(p.cumulative)}`,
   );
   return [
     `Soft warning: ~${fmt(w.estimate)} particles estimated alive through this chain`,
