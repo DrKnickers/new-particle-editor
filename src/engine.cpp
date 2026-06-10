@@ -1619,6 +1619,17 @@ void Engine::IssueEndFrameQuery()
 // partially-finished VRAM (visible tearing). Safer than blocking the
 // host message pump indefinitely on a hung GPU. Returns the spin count
 // (0 = signalled on the first poll) so the host can log GPU-wait pressure.
+//
+// [resize-perf Fix B2] The wait now YIELDS between polls past a short
+// tight burst. The original no-yield spin burned a full core while the
+// GPU drained (measured ~4000 spins/frame at the unpaced ~3000 fps idle
+// — engine.cpp's share of the splitter-drag contention). The first 64
+// polls stay tight for the common already-signalled / sub-µs case;
+// after that each poll SwitchToThread()s, handing the rest of the
+// timeslice to any ready thread (WebView2's renderer, the compositor)
+// instead of re-polling a bit that hasn't flipped. Cap semantics
+// unchanged: a hung GPU still exits after 100k polls (wall-clock longer
+// now that late polls yield — irrelevant next to a hung GPU).
 int Engine::WaitEndFrameQuery()
 {
 	if (m_pEndFrameQuery == NULL) return 0;
@@ -1631,6 +1642,7 @@ int Engine::WaitEndFrameQuery()
 			OutputDebugStringA("[Engine] D3D9 sync query never signalled after 100k spins\n");
 			break;
 		}
+		if (spins > 64) SwitchToThread();
 	}
 	return spins;
 }
