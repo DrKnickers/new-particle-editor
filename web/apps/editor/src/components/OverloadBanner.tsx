@@ -5,13 +5,13 @@
 // emitter pinning its per-instance render cap) and latches an overload
 // flag onto the 4 Hz `stats/tick` bridge event. While that flag is
 // true, this banner floats over the viewport's top-center telling the
-// user spawning is paused and how to recover; it auto-clears when the
+// user spawning is limited and how to recover; it auto-clears when the
 // latch drops (population decays under budget after the user lowers
 // the rate).
 //
 // Wording: the latch ALSO fires when one emitter pins its per-instance
 // render cap — not only the global budget — so the copy says "spawning
-// paused", never "budget exceeded".
+// limited", never "budget exceeded".
 //
 // Styling: a FILLED amber pill (bg-warning is theme-independent #e0a14b)
 // with fixed near-black text. The first cut used `text-amber-400` on the
@@ -61,8 +61,8 @@ function OverloadBannerBody({ bridge }: { bridge: Bridge }) {
       // canvas underneath.
       className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 select-none rounded-md bg-warning px-3 py-1.5 text-xs font-medium text-[#1a1200] shadow-xl ring-1 ring-black/15"
     >
-      ⚠ Preview spawning paused — lower spawn rates to resume. The ⚠ glyph
-      marks heavy emitters.
+      Preview spawning limited — lower spawn rates to resume. ⚠ marks
+      heavy emitters.
     </div>
   );
 }
