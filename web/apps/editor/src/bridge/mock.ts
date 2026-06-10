@@ -188,7 +188,10 @@ function pickSpawn(id: number): SpawnParamsDto {
 function decorateSpawn(node: EmitterTreeNode): EmitterTreeNode {
   return {
     ...node,
-    spawn: pickSpawn(node.id),
+    // The synthetic root (id -1) keeps its stored ZERO_SPAWN — host parity
+    // (the native synthetic roots serialize all-zeros, and the estimator
+    // never reads the root's spawn).
+    spawn: node.id === -1 ? node.spawn : pickSpawn(node.id),
     children: node.children.map(decorateSpawn),
   };
 }

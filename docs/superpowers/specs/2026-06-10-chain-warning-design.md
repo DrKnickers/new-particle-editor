@@ -76,10 +76,14 @@ spawn: {
   useBursts: boolean;
   nBursts: number;             // 0 = infinite
   burstDelay: number;          // seconds
-  particlesPerSecond: number;
-  particlesPerBurst: number;
+  nParticlesPerSecond: number;
+  nParticlesPerBurst: number;
 }
 ```
+
+*(Implementation note: the shipped field names keep the `n` prefix —
+`nParticlesPerSecond`/`nParticlesPerBurst` — because `SpawnParamsDto` is a
+`Pick` of `EmitterPropertiesDto`, whose names they match verbatim.)*
 
 - **Host:** the existing tree builder in `BridgeDispatcher` copies these from
   the `Emitter` struct fields it already reads
@@ -110,7 +114,10 @@ The emitter-tree row grid (`EmitterTree.tsx`, currently
   no new tooltip dependency), multi-line: estimated total + per-generation
   breakdown, e.g.
   `~21,600 particles est. alive\nsparkle: 12/s × 1.5s = 18\n→ highlight: ×30 = 540\n→ smoke: ×40 = 21,600`.
-- `aria-label` mirrors the title.
+- `aria-label` carries a one-line summary ("Chain load warning: about N
+  particles estimated alive") rather than the full multi-line breakdown —
+  a deliberate deviation: screen readers announce a sentence better than a
+  table, and the breakdown stays available via the title.
 - Fully non-blocking; no other surface changes.
 
 ## §4 Testing

@@ -100,9 +100,47 @@ and passes `chainWarning` per row. Full signatures + code in the plan doc.
 ## Progress
 
 - [x] Spec written + user-approved (`ff8c517`)
-- [x] Implementation plan written
-- [ ] Tasks 1–8 (see plan doc)
+- [x] Implementation plan written (`7c41128`)
+- [x] Task 1 schema + sweep (`c2e0fe1` + freeze follow-up `a9bd7c4`)
+- [x] Task 2 chain-load TDD (`b30ee3d` + formatter/clamp follow-up `9971e04`)
+- [x] Task 3 mock decoration (`7063019` + payload-spread `54ddf94`)
+- [x] Task 4 host serialization (`a5bec9c` + comment `c3ea2d4`)
+- [x] Task 5 glyph UI (`9c48c18` + test hardening `2f4e7ac`)
+- [x] Task 6 native spec (`245cb2f` + header `db80032`)
+- [x] Task 7 automated verification (user feel pass PENDING — checklist below)
+- [x] Task 8 ship bookkeeping (PR number backfilled on PR creation)
 
 ## Review
 
-_(to be appended at completion)_
+**Executed subagent-driven: 6 implementation tasks, each spec-reviewed +
+quality-reviewed by fresh agents, plus a final whole-range integration
+review.** Review-driven fixes folded in: frozen `ZERO_SPAWN` (shared-mutable
+singleton hazard), sub-1 tooltip multipliers rendering `×0`, negative-input
+clamp, mock `emit()` payload spread (future DTO fields), glyph-wiring
+negative assertions + ancestor-path component test, mock synthetic-root
+spawn parity, two spec-deviation notes (n-prefixed field names, one-line
+aria-label).
+
+**Plan-vs-reality deltas worth remembering:**
+- The plan named TWO synthetic-root literals in BridgeDispatcher.cpp; a
+  THIRD lives in `EmitEmittersTreeChanged()` (the event payload — the
+  most-trafficked path). Caught by the Task 4 implementer.
+- 4 of the 12 predicted fixture files were never flagged by tsc (they build
+  nodes via `as unknown as` casts) — "every file tsc flags" was the right
+  rule, the prediction list was advisory.
+- PS 5.1 `Get-Content -Raw`/`Set-Content` mojibake'd ROADMAP.md's UTF-8
+  during renumbering → use `[System.IO.File]::ReadAllText/WriteAllText`
+  with `UTF8Encoding($false)`.
+
+**Verification (all re-run on the final tree):** web vitest **664/664**
+(72 files), `tsc -b` 0, vite build clean, host Debug **and** Release x64
+clean (benign LNK4098), native harness **175/0** (30 skipped, zero golden
+diffs — the new spec is #175).
+
+**User feel pass (pending — L-033, user launches):**
+- [ ] Open a real `.alo` with children at vanilla values → no glyphs.
+- [ ] Crank a child's Particles/sec until the chain product crosses 10k →
+      amber ⚠ on the whole chain within one edit.
+- [ ] Hover → tooltip total + per-generation lines read sensibly.
+- [ ] Revert the rate → glyph disappears.
+- [ ] Save / undo / reparent behave normally with the glyph showing.
