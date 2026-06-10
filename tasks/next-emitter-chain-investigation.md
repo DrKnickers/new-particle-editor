@@ -1,8 +1,14 @@
-# Deferred: do emitter chains (children of children) work in the real game?
+# RESOLVED: emitter chains (children of children) WORK in the real game
 
-_Deferred 2026-06-09 (session 32) at the user's request, mid-experiment. The
-**v2 test file is still planted in the user's mod** — see "Live state" below
-before doing anything else._
+_**RESOLVED 2026-06-10 (session 33): depth-3 chains spawn correctly in
+`StarWarsG.exe`.** The v3 test fired in-game; the user observed all three
+generations (sparkles → highlight flecks → smoke puffs). Decision-matrix row
+"Smoke anywhere": chains work, the v1 crash was the combinatorial particle
+bomb, **no editor depth-guard needed**. The mod file is RESTORED to vanilla —
+nothing is planted anymore. Verdict + corollaries recorded in
+[`multi_child_emitter_investigation.md`](multi_child_emitter_investigation.md)
+(addendum). One open design question, unscheduled: a soft warning when a
+chain's per-particle multiplication explodes. Historical notes below._
 
 ## The question
 
@@ -12,15 +18,56 @@ the game even supports that. If the game crashes or silently ignores depth ≥ 3
 the editor must guard against authoring chains (reparent-onto, Add
 Lifetime/Death Child, paste-as-child onto child targets).
 
-## Live state (handle FIRST on resume)
+## Live state (CLEAN as of 2026-06-10)
 
-- **`P_S_ASSAULTCONC.ALO` in the user's mod is the patched v2 test file**
-  (depth-3 chain), UNTESTED — the user deferred before firing it.
+- **`P_S_ASSAULTCONC.ALO` is RESTORED to vanilla** — the v3 test was fired
+  (smoke confirmed) and the planted file removed. Nothing in the user's mod
+  is ours anymore.
   - Mod repo: `D:\SteamLibrary\steamapps\common\Star Wars Empire at War\corruption\Mods\EmpireAtWarExpanded`
   - Restore: `git -C <mod> checkout -- Data/Art/Models/P_S_ASSAULTCONC.ALO`
+  - Re-plant: rebuild with `tests/build_make_chain_test_alo.bat`, then
+    `tests\make_chain_test_alo.exe <vanilla.alo> <out.alo>` and copy over —
+    no byte patching needed (see v3 below).
   - The mod repo also carries PRE-EXISTING unrelated modifications
     (`.gitignore`, `P_EXPLOSION_GODDAMNHUGE00.ALO`) — NOT ours, do not touch.
 - `P_CONCUSSION.ALO` (the v1 test) was already restored to vanilla.
+
+## v2 result (2026-06-10): SPARKLES ONLY — inconclusive, root starved
+
+The user fired v2 and saw **sparkles only, no highlights** — decision-matrix
+row 1: gen-2 never fired, so the test says nothing about depth-3. Root cause
+of the dud: the v2 chain hung off `flash`, which is a near-zero-output
+single-burst emitter (nBursts=1, perBurst=1) — a child emitter spawns *per
+parent particle*, so the chain was starved at gen-1. (The sparkles seen were
+the untouched `default` controls + flash's own particle.) v2 restored;
+superseded by v3.
+
+## The v3 test (FIRED 2026-06-10 — smoke confirmed, chains work)
+
+Authored with the **editor's own data model** instead of byte patches —
+[`tests/make_chain_test_alo.cpp`](../tests/make_chain_test_alo.cpp) (build:
+[`tests/build_make_chain_test_alo.bat`](../tests/build_make_chain_test_alo.bat))
+loads vanilla via `ParticleSystem(IFile*)`, rewires with the editor's
+validated `reparentEmitter`, clamps spawn rates, writes with `ps.write()`,
+then **reloads its own output and asserts the chain round-tripped** (all
+checks green). Layout:
+
+```
+default (#2, W_SPARKLE1, 4/sec, life 0.70)   gen 1 — PROVEN to fire (v2 sparkles)
+└─ life → detail (#1, W_NemSmoke_Highlight, clamped 200→6/sec, life 0.08)  gen 2
+   └─ life → Smoke (#0, w_smoke, clamped 100→30/sec, life 1.20)           gen 3
+default ×2 (#3, #4) + flash (#5)             untouched roots = controls
+```
+
+Design notes: the root is a `default` sparkle emitter because v2 proved those
+fire in-game; all three textures are proven visible (in vanilla all six
+emitters are ROOTS and the user has seen the full effect). Smoke's clamp is
+deliberately higher (30/sec, not single digits): its instances ride detail
+particles that live only 0.08 s, so a low rate could emit zero gen-3
+particles and read as a false "depth stops at 2". Expected volume ~tens of
+particles per volley — no v1-style particle bomb. Expected look if chains
+work: sparkles + brief highlight flecks off the chain-root's sparkles + soft
+smoke puffs (~1.2 s) trailing the highlights.
 
 ## Evidence so far
 
@@ -43,7 +90,7 @@ Lifetime/Death Child, paste-as-child onto child targets).
    No exception dump was written (only session lifecycle in
    `corruption\log\PGCrashCollector.txt`).
 
-## The v2 test (planted, unfired)
+## The v2 test (HISTORICAL — fired 2026-06-10, sparkles only; superseded by v3 above)
 
 Depth-3, low-count, texture-unambiguous chain in `P_S_ASSAULTCONC.ALO`:
 
