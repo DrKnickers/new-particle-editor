@@ -27,10 +27,14 @@ re-decode — ~20 ms of the total) and now costs **~3-5 ms**, because resize-onl
 resets switched to `IDirect3DDevice9Ex::ResetEx`, which keeps all surfaces,
 textures, and shaders alive across the reset ("all other surfaces persistent"
 — first-party docs). The scene still renders at the **correct size on every
-tick** — no deferred work, no end-of-gesture snap. Always-on `[resize-perf]`
-log probes (1 Hz aggregates in `host.log`) quantify the reset rate, the
-per-reset sub-stages, and the bridge scene-rect message rate — the measurement
-basis for the remaining splitter-drag fixes.
+tick** — no deferred work, no end-of-gesture snap. Resizing the window also
+no longer **rescales the world**: the per-pixel-FoV projection now anchors to
+a fixed reference (45° per 768 px of viewport height) instead of the current
+render-target height, so growing the window reveals more scene at the edges —
+the dock-slide behaviour — rather than zooming the existing content. Always-on
+`[resize-perf]` log probes (1 Hz aggregates in `host.log`) quantify the reset
+rate, the per-reset sub-stages, and the bridge scene-rect message rate — the
+measurement basis for the remaining splitter-drag fixes.
 
 **How we tackled it.** New `Engine::ResetForResize`
 ([`src/engine.cpp`](src/engine.cpp:1494)): `ResetEx` + rebuild of only the
@@ -75,7 +79,16 @@ tot ≈ 3.5-4 ms (`reload` 20 ms → 0.4 ms), native harness 174/0. (5) The prob
 confirmed two predictions for the next phases: the scene-rect stream runs at
 **2×** the tick rate (redundant `window resize` listener in
 `ViewportSlot.tsx` — fix C1), and the idle pump free-runs at ~3000 fps with
-~4000 GPU-query spins per frame (fix B).
+~4000 GPU-query spins per frame (fix B). (6) Smooth resize **exposed a
+pre-existing framing wart**: `SetSceneViewport`'s per-pixel-FoV reference was
+the *current* RT height ([`src/engine.cpp`](src/engine.cpp:1765)), so a window
+resize rescaled the world while a dock slide revealed it (the user noticed
+the inconsistency only once resize was smooth enough to watch). Anchoring the
+reference to a constant (45°/768 px, ≈ the default window's client height so
+default framing is unchanged within ~1%) unifies both gestures on the reveal
+behaviour; fovY clamps at 120° to stay clear of the perspective-projection
+breakdown at extreme heights. Legacy arch-A's `ResetParameters` 45° full-RT
+projection is deliberately untouched.
 
 ---
 
