@@ -5,9 +5,9 @@ import type { EmitterTreeDto, EmitterTreeNode } from "@particle-editor/bridge-sc
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 function tree(): EmitterTreeDto {
   const children: EmitterTreeNode[] = LETTERS.map((name, id) => ({
-    id, name, role: "root", linkGroup: 0, visible: true, children: [],
+    id, stableId: 100 + id, name, role: "root", linkGroup: 0, visible: true, children: [],
   }));
-  return { root: { id: -1, name: "", role: "root", linkGroup: 0, visible: true, children } };
+  return { root: { id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true, children } };
 }
 const order = (t: EmitterTreeDto | null) =>
   t === null ? null : t.root.children.map((c) => c.name).join("");

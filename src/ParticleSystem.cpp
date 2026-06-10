@@ -97,6 +97,12 @@ static void writeMiniInteger(ChunkWriter& writer, ChunkType type, unsigned long 
 //
 // Emitter class
 //
+
+// Process-monotonic counter for Emitter::stableId. UI-thread-only (every
+// Emitter is constructed on the editor's UI thread), so a plain unsigned
+// suffices. Starts at 1 so 0 stays free as the synthetic-root sentinel.
+static unsigned int s_nextEmitterStableId = 1;
+
 void ParticleSystem::Emitter::writeProperties(ChunkWriter& writer) const
 {
 	writer.beginChunk(0x0002);
@@ -550,6 +556,11 @@ ParticleSystem::Emitter::Emitter(const Emitter& emitter)
     // here so the clone starts with no runtime presence; the engine
     // re-populates m_instances as it spawns instances against the clone.
     m_instances.clear();
+
+    // A clone is a NEW emitter: `*this = emitter` copied the source's
+    // stableId, which would give two live rows the same React key (and the
+    // FLIP pass an ambiguous identity). Issue a fresh one.
+    stableId = s_nextEmitterStableId++;
 }
 
 void ParticleSystem::Emitter::detachFromLinkGroup()
@@ -801,6 +812,7 @@ void ParticleSystem::Emitter::setDefaults()
 	parent          = NULL;
     visible         = true;
     linkGroup       = 0;
+    stableId        = s_nextEmitterStableId++;
 
 	name          = "default";
 	colorTexture  = "p_particle_master.tga";

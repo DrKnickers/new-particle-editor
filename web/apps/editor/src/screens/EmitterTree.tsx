@@ -86,6 +86,7 @@ import {
 import { markEmittersCopied, useEmitterClipboardHasContent } from "@/lib/emitter-clipboard";
 import { rectFromPoints, emittersInMarquee, mergeMarqueeSelection } from "@/lib/marquee";
 import { computeAutoscrollDelta } from "@/lib/drag-autoscroll";
+import { computeFlipDeltas, type FlipPositions } from "@/lib/flip";
 import {
   computeRootGapIndex,
   isDescendant,
@@ -629,7 +630,14 @@ function EmitterRow({
   const fontClass = isPrimary ? "font-medium" : "";
 
   return (
-    <li role="treeitem" aria-selected={isSelected} className="relative">
+    <li
+      role="treeitem"
+      aria-selected={isSelected}
+      // [glide] the FLIP pass measures + animates rows via this attribute;
+      // stableId survives reorders (unlike the positional node.id).
+      data-stable-id={node.stableId}
+      className="relative"
+    >
       {/* The reorder affordance is the "make room" gap — a flow spacer in the
           EmitterTree list (see the flatRows map), not a per-row overlay, so the
           rows shift to reveal where the dragged emitter(s) will land. This row
@@ -1323,6 +1331,47 @@ export function EmitterTree({ bridge }: Props) {
   const flatRows  = useMemo(() => flattenTree(tree), [tree]);
   const orderedIds = useMemo(() => flatRows.map((r) => r.node.id), [flatRows]);
 
+  // [glide] FLIP pass: when the rendered row order changes (drag drop,
+  // Move Up/Down, delete, paste — anything that re-lays-out the list), rows
+  // that moved glide to their new positions instead of snapping. Measure
+  // offsetTop per stableId BEFORE paint, diff against the previous layout,
+  // apply the inverted translateY, then transition to zero. Gated OFF while
+  // a drag is live (the make-room gap reflow stays instant — the preview is
+  // the user's pointer, not an animation); the position map still updates
+  // every pass so the post-drop diff measures from the latest layout.
+  // prefers-reduced-motion: bookkeeping only, no glide.
+  const flipPositionsRef = useRef<FlipPositions>(new Map());
+  useLayoutEffect(() => {
+    const sc = treeScrollRef.current;
+    const prev = flipPositionsRef.current;
+    const next: FlipPositions = new Map();
+    const els = new Map<number, HTMLElement>();
+    if (sc !== null) {
+      sc.querySelectorAll<HTMLElement>("li[data-stable-id]").forEach((li) => {
+        const stableId = Number(li.dataset.stableId);
+        next.set(stableId, li.offsetTop);
+        els.set(stableId, li);
+      });
+    }
+    flipPositionsRef.current = next;
+    if (draggingId !== null) return;
+    if (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    for (const [stableId, dy] of computeFlipDeltas(prev, next)) {
+      const el = els.get(stableId);
+      if (el === undefined) continue;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${dy}px)`;
+      void el.offsetHeight; // commit the inverted transform before transitioning
+      el.style.transition = "transform 200ms ease";
+      el.style.transform = "";
+    }
+  }, [flatRows, draggingId]);
+
   // Phase 4.1 Fix dispatch 5 — subscribe to menu-driven rename
   // requests. The MenuBar's "Rename Emitter" item writes the target
   // id into the tree-action atom; we pick it up, begin inline edit
@@ -1961,7 +2010,9 @@ export function EmitterTree({ bridge }: Props) {
               />
             ) : null;
             return (
-              <Fragment key={row.node.id}>
+              // [glide] keyed by stableId so a reorder MOVES row elements
+              // (FLIP can animate them) instead of remounting per-position.
+              <Fragment key={row.node.stableId}>
                 {gap}
                 <EmitterRow
                   row={row}

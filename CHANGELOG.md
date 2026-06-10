@@ -16,6 +16,50 @@ Conventions:
 
 ## Changelog
 
+### Emitter rows glide to their new positions on reorder
+
+*2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+
+Reordering emitters — drag-drop (single or multi), Move Up/Down, delete,
+paste — now **glides** the affected rows to their new positions (~200 ms ease)
+instead of snapping. `prefers-reduced-motion` disables the glide.
+
+**How we tackled it.** The blocker was identity: an emitter "id" is a
+positional index that reshuffles on every structural change, so React keyed
+by it had to unmount/remount rows on reorder — unanimatable. Fixed at the
+root: every `ParticleSystem::Emitter` now carries a **`stableId`** assigned
+from a process-monotonic counter in all three constructors
+([`ParticleSystem.cpp`](src/ParticleSystem.cpp) — the copy ctor deliberately
+issues a *fresh* id, since a duplicate is a new emitter), surfaced on the
+`emitters/list` DTO ([`BridgeDispatcher.cpp`](src/host/BridgeDispatcher.cpp))
+and required by the schema. The mock mirrors it with an offset counter
+(stableIds ≠ ids) so code confusing the two fails fast in tests. With rows
+keyed by `stableId`, the glide is a standard **FLIP** pass
+([`lib/flip.ts`](web/apps/editor/src/lib/flip.ts) pure deltas + a layout
+effect in [`EmitterTree.tsx`](web/apps/editor/src/screens/EmitterTree.tsx)):
+measure `offsetTop` per row before paint, apply the inverted `translateY`,
+transition to zero. The pass is **gated off during an active drag** (the
+make-room gap reflow stays instant under the pointer) but its position map
+still updates every render so the post-drop diff measures from the latest
+layout. stableIds are runtime-only — never persisted to `.alo`; undo/redo
+rebuilds emitters and issues fresh ids, so a reorder undo remounts (snaps)
+rather than glides: accepted.
+
+**Issues encountered and resolutions.** Making the schema field *required*
+turned `tsc -b` into an exhaustive call-site inventory (the L-075 lesson,
+compiler-enforced): it flagged every fixture and mock creation site — but
+NOT the spread-based clones (`{...node}` satisfies the type while silently
+*duplicating* the source's stableId). Those needed manual auditing: mock
+duplicate/paste reassign walks now issue fresh stableIds (the C++ copy-ctor
+rule), while structural clones in reorder/reparent walkers correctly
+preserve them (same emitter). A scripted fixture update also over-matched
+one `toEqual` expectation (rename params aren't a tree node) — caught by the
+suite. Measure `offsetTop`, not `getBoundingClientRect`, in the FLIP pass:
+rect measurements include in-flight transforms and would corrupt re-measures
+mid-glide.
+
+---
+
 ### Multi-select drag-reorder: drag a whole selection as one block
 
 *2026-06-09 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*

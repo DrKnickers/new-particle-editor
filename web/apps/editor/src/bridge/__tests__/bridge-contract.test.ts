@@ -538,7 +538,7 @@ describe("MockBridge contract", () => {
 
     await b.request({
       kind: "emitters/rename",
-      params: { id: 0, name: "Smoke (renamed)" },
+      params: { id: 0, stableId: 100, name: "Smoke (renamed)" },
     });
     expect(lastTree).not.toBeNull();
     expect(lastTree!.root.children[0].name).toBe("Smoke (renamed)");
@@ -1336,9 +1336,9 @@ describe("MockBridge emitters/move-many (preserve order at the edge)", () => {
   function rootsTree(names: string[]): EmitterTreeDto {
     return {
       root: {
-        id: -1, name: "", role: "root", linkGroup: 0, visible: true,
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
         children: names.map((name, i) => ({
-          id: i, name, role: "root", linkGroup: 0, visible: true, children: [],
+          id: i, stableId: 100 + i, name, role: "root", linkGroup: 0, visible: true, children: [],
         })),
       },
     };

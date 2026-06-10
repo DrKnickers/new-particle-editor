@@ -131,6 +131,15 @@ public:
 		Emitter* parent;
         bool     visible;   // Not stored, for use in editor only
 
+        // Stable per-emitter identity (reorder glide). `index` is positional
+        // and reshuffles on every structural change; `stableId` is assigned
+        // once at construction from a process-monotonic counter and never
+        // changes across reorder/reparent. Runtime-only — never persisted to
+        // .alo, so undo/redo (which rebuilds emitters from a snapshot)
+        // issues fresh ids. Surfaced on the emitters/list DTO so the React
+        // tree can key rows by it. Assigned in ALL THREE constructors.
+        unsigned int stableId;
+
         // Link-group membership (MT-5). 0 = unlinked; non-zero IDs are
         // unique within a ParticleSystem and stable across save/load.
         // Persisted in an editor-only optional chunk (0x0100); ignored

@@ -16,7 +16,7 @@ function node(
   role: EmitterTreeNode["role"],
   children: EmitterTreeNode[] = [],
 ): EmitterTreeNode {
-  return { id, name, role, linkGroup: 0, visible: true, children };
+  return { id, stableId: 100 + id, name, role, linkGroup: 0, visible: true, children };
 }
 
 // A two-root tree; root id 1 ("Alpha") has no children (both slots free).

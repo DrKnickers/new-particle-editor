@@ -139,6 +139,13 @@ export type EmitterRole = "root" | "lifetime" | "death";
 
 export type EmitterTreeNode = {
   id: number;
+  // Stable per-emitter identity (reorder glide). `id` is a POSITIONAL index
+  // that reshuffles on every structural change; `stableId` is a monotonic
+  // handle assigned at emitter creation, stable across reorder/reparent —
+  // the React tree keys rows by it so an order change MOVES (FLIP-animates)
+  // rows instead of remounting them. Runtime-only (never persisted to .alo);
+  // undo/redo rebuilds emitters and therefore issues fresh stableIds.
+  stableId: number;
   name: string;
   role: EmitterRole;
   linkGroup: number;

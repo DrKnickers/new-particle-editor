@@ -534,6 +534,7 @@ json BuildEmitterTreeNode(const ParticleSystem* sys, size_t idx)
 
     return json{
         {"id",        static_cast<int>(idx)},
+        {"stableId",  emit.stableId},
         {"name",      emit.name},
         {"role",      role},
         {"linkGroup", static_cast<unsigned int>(emit.linkGroup)},
@@ -2531,6 +2532,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // strictly.
         json tree = {
             {"id",        0},
+            {"stableId",  0},  // synthetic root: 0 is reserved (real ids start at 1)
             {"name",      "root"},
             {"role",      "root"},
             {"linkGroup", 0},
@@ -2564,6 +2566,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         }
         json tree = {
             {"id",        -1},
+            {"stableId",  0},  // synthetic root: 0 is reserved (real ids start at 1)
             {"name",      ""},
             {"role",      "root"},
             {"linkGroup", 0},

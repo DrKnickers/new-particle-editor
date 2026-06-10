@@ -14,23 +14,23 @@ import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitt
 function fixtureTree(): EmitterTreeDto {
   return {
     root: {
-      id: -1, name: "", role: "root", linkGroup: 0, visible: true,
+      id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
       children: [
         {
-          id: 0, name: "Smoke", role: "root", linkGroup: 1, visible: true,
+          id: 0, stableId: 100, name: "Smoke", role: "root", linkGroup: 1, visible: true,
           children: [
-            { id: 1, name: "Smoke embers", role: "lifetime", linkGroup: 0, visible: true, children: [] },
-            { id: 2, name: "Smoke puff",   role: "death",    linkGroup: 0, visible: true, children: [] },
+            { id: 1, stableId: 101, name: "Smoke embers", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+            { id: 2, stableId: 102, name: "Smoke puff",   role: "death",    linkGroup: 0, visible: true, children: [] },
           ],
         },
         {
-          id: 3, name: "Sparks", role: "root", linkGroup: 1, visible: true,
+          id: 3, stableId: 103, name: "Sparks", role: "root", linkGroup: 1, visible: true,
           children: [
-            { id: 4, name: "Spark trail", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+            { id: 4, stableId: 104, name: "Spark trail", role: "lifetime", linkGroup: 0, visible: true, children: [] },
           ],
         },
         {
-          id: 5, name: "Flash", role: "root", linkGroup: 0, visible: true,
+          id: 5, stableId: 105, name: "Flash", role: "root", linkGroup: 0, visible: true,
           children: [],
         },
       ],
@@ -63,6 +63,32 @@ beforeEach(() => {
   useEmitterSelectionStore.getState().clear();
 });
 
+/** Stub bridge whose served tree can be swapped and whose tree/changed
+ *  subscription is capturable — for tests that simulate a HOST-side reorder
+ *  (positional ids reshuffle, stableIds follow the emitters). */
+function makeMutableTreeBridge(initial: EmitterTreeDto) {
+  let tree = initial;
+  const subs: Array<() => void> = [];
+  const bridge = {
+    request: vi.fn().mockImplementation((req: { kind: string }) => {
+      if (req.kind === "emitters/list") return Promise.resolve(tree);
+      if (req.kind === "engine/state/snapshot") {
+        return Promise.resolve({ selectedEmitterId: null });
+      }
+      return Promise.resolve({});
+    }),
+    on: vi.fn().mockImplementation((kind: string, cb: () => void) => {
+      if (kind === "emitters/tree/changed") subs.push(cb);
+      return () => {};
+    }),
+  } as unknown as Bridge & { request: ReturnType<typeof vi.fn> };
+  const pushTree = (next: EmitterTreeDto) => {
+    tree = next;
+    subs.forEach((cb) => cb());
+  };
+  return { bridge, pushTree };
+}
+
 describe("EmitterTree", () => {
   it("renders 3 root rows with their lifetime/death children", async () => {
     const bridge = makeStubBridge();
@@ -87,6 +113,52 @@ describe("EmitterTree", () => {
     // rendered as a row.
     const items = screen.getAllByRole("treeitem");
     expect(items).toHaveLength(6);
+  });
+
+  // ─── Reorder glide — stableId keying ─────────────────────────────
+
+  it("a host-side reorder (positional ids reshuffled, stableIds follow) MOVES row elements instead of remounting them", async () => {
+    // Two roots; the host reorders them: after the swap, positional ids are
+    // reassigned by position (Beta is now id 0!) but each emitter keeps its
+    // stableId. Rows are keyed by stableId, so the <li> elements must be the
+    // SAME DOM nodes after the update — that element identity is what lets
+    // the FLIP pass glide them. (Keying by the positional id would remount:
+    // brand-new elements, snap instead of glide — the pre-glide behavior.)
+    const before: EmitterTreeDto = {
+      root: {
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+        children: [
+          { id: 0, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 1, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, children: [] },
+        ],
+      },
+    };
+    const after: EmitterTreeDto = {
+      root: {
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+        children: [
+          { id: 0, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 1, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, children: [] },
+        ],
+      },
+    };
+    const { bridge, pushTree } = makeMutableTreeBridge(before);
+    render(<EmitterTree bridge={bridge} />);
+    await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
+
+    const alphaLi = screen.getByText("Alpha").closest("li")!;
+    const betaLi  = screen.getByText("Beta").closest("li")!;
+    expect(alphaLi.getAttribute("data-stable-id")).toBe("501");
+
+    pushTree(after);
+    await waitFor(() => {
+      const rows = [...document.querySelectorAll("li[data-stable-id]")];
+      expect(rows.map((r) => r.getAttribute("data-stable-id"))).toEqual(["502", "501"]);
+    });
+
+    // Same DOM elements, new order — moved, not remounted.
+    expect(screen.getByText("Alpha").closest("li")).toBe(alphaLi);
+    expect(screen.getByText("Beta").closest("li")).toBe(betaLi);
   });
 
   it("clicking a row fires emitters/select with the row's id", async () => {

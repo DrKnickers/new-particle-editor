@@ -14,7 +14,7 @@ import {
 import type { EmitterTreeNode } from "@particle-editor/bridge-schema";
 
 const roots: EmitterTreeNode[] = [0, 1, 2, 3].map((id) => ({
-  id, name: String(id), role: "root", linkGroup: 0, visible: true, children: [],
+  id, stableId: 100 + id, name: String(id), role: "root", linkGroup: 0, visible: true, children: [],
 }));
 
 describe("selectedRootIdsInOrder", () => {
@@ -32,15 +32,15 @@ describe("isMultiDrag", () => {
 describe("collectSubtreeIds", () => {
   it("returns the node's id plus every descendant id, depth-first", () => {
     const node: EmitterTreeNode = {
-      id: 0, name: "A", role: "root", linkGroup: 0, visible: true,
+      id: 0, stableId: 100, name: "A", role: "root", linkGroup: 0, visible: true,
       children: [
         {
-          id: 1, name: "A1", role: "lifetime", linkGroup: 0, visible: true,
+          id: 1, stableId: 101, name: "A1", role: "lifetime", linkGroup: 0, visible: true,
           children: [
-            { id: 2, name: "A1a", role: "death", linkGroup: 0, visible: true, children: [] },
+            { id: 2, stableId: 102, name: "A1a", role: "death", linkGroup: 0, visible: true, children: [] },
           ],
         },
-        { id: 4, name: "A2", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+        { id: 4, stableId: 104, name: "A2", role: "lifetime", linkGroup: 0, visible: true, children: [] },
       ],
     };
     expect(collectSubtreeIds(node)).toEqual([0, 1, 2, 4]);

@@ -72,9 +72,19 @@ the chain investigation (deferred, see next-emitter-chain-investigation.md).
   switch; no glide mid-drag.
 
 ## Part 3 progress
-- [ ] Host stableId + DTO + schema + mock (+ contract tests)
-- [ ] Web: key by stableId + lib/flip.ts + useFlipReorder (gated off-drag)
-- [ ] Full verify + user smoke
+- [x] Host stableId (all 3 Emitter ctors + fresh-on-copy; counter at
+      ParticleSystem.cpp top) + DTO (`BuildEmitterTreeNode` + both synthetic
+      roots) + schema (required field) + mock (offset counter 1001+ so
+      id≠stableId fails fast; fresh ids in duplicate/paste reassign walks)
+- [x] Web: rows keyed by stableId + `lib/flip.ts` (pure deltas, tested) +
+      FLIP layout effect in EmitterTree (offsetTop measure, gated off-drag,
+      reduced-motion = bookkeeping only)
+- [x] Verify: web 624/624 (incl. element-identity no-remount test), tsc 0,
+      host Debug x64 clean, native 174/0; browser-verified live glide
+      (Move Up mid-animation transform translateY(40px)→0 observed)
+- [ ] User smoke (L-033): glide feel on all three paths; the drop-path
+      double-motion question (gap collapse + reorder are two renders — does
+      it read as one glide or a stutter? tune/suppress if it stutters)
 
 ---
 
