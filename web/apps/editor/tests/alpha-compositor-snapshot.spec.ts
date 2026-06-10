@@ -145,7 +145,13 @@ test("snapshot dimensions follow viewport resize (readback uses current RT, not 
       kind: "layout/scene-rect",
       params: { x: 0, y: 0, w: 800, h: 600 },
     });
-    await new Promise((r) => setTimeout(r, 50));
+    // [resize-perf C3] 300ms, not 50: scene-rects arriving < 250ms after
+    // the previous one become a host-clocked chase lerp (≤100ms) instead
+    // of applying instantly, and the snapshot crops to the CURRENT scene
+    // rect — capturing mid-chase reads an interpolated size. What this
+    // spec guards is the stale-readback-CACHE bug, not sub-100ms timing,
+    // so wait out the chase before capturing.
+    await new Promise((r) => setTimeout(r, 300));
     const small = (await b.request({
       kind: "viewport/capture-snapshot",
       params: {},
@@ -159,7 +165,7 @@ test("snapshot dimensions follow viewport resize (readback uses current RT, not 
       kind: "layout/scene-rect",
       params: { x: 0, y: 0, w: 1600, h: 900 },
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 300));
     const large = (await b.request({
       kind: "viewport/capture-snapshot",
       params: {},

@@ -173,9 +173,15 @@ test("three sequential scene-rect dispatches produce three transform lines in or
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const b = (window as any).bridge;
       await b.request({ kind: "layout/scene-rect", params: rect });
-      // Tiny per-dispatch settle so each transform gets queued + applied
-      // before the next dispatch overwrites the pending queue.
-      await new Promise((res) => setTimeout(res, 80));
+      // [resize-perf C3] Per-dispatch settle, ≥300ms: scene-rects that
+      // arrive < 250ms apart are treated as an interactive STREAM and
+      // become host-clocked chase lerps (whose mid-flight applies are
+      // deliberately quiet in the log). Spacing the dispatches past the
+      // stream window keeps each on the INSTANT path, which logs one
+      // [COMP-engine-transform] per dispatch — the contract this spec
+      // pins. (The old 80ms settle was only about the pending-queue
+      // flush.)
+      await new Promise((res) => setTimeout(res, 300));
     }, d);
   }
 

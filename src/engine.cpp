@@ -1818,13 +1818,23 @@ void Engine::SetSceneViewport(int x, int y, int w, int h)
 		m_pDevice->SetTransform(D3DTS_PROJECTION, &m_projection);
 	}
 
-	char buf[224];
-	snprintf(buf, sizeof(buf),
-	    "[engine] SetSceneViewport x=%d y=%d w=%d h=%d (fovY=%.2f° aspect=%.3f anchorH=%.0f)\n",
-	    x, y, w, h, fovY * (180.0f / 3.14159265f), aspect, kFovAnchorHeightPx);
-	OutputDebugStringA(buf);
-	printf("%s", buf);
-	fflush(stdout);
+	// [resize-perf C2] Throttled to 1 Hz: this used to print + fflush +
+	// OutputDebugStringA on EVERY apply, and splitter drags apply at the
+	// stream rate (~28/s) — ODS alone is ms-class with a debugger
+	// attached. One line per second is plenty to see the live rect.
+	static DWORD s_lastSvpLogTick = 0;
+	const DWORD svpNow = GetTickCount();
+	if (s_lastSvpLogTick == 0 || (svpNow - s_lastSvpLogTick) >= 1000)
+	{
+		s_lastSvpLogTick = svpNow;
+		char buf[224];
+		snprintf(buf, sizeof(buf),
+		    "[engine] SetSceneViewport x=%d y=%d w=%d h=%d (fovY=%.2f° aspect=%.3f anchorH=%.0f)\n",
+		    x, y, w, h, fovY * (180.0f / 3.14159265f), aspect, kFovAnchorHeightPx);
+		OutputDebugStringA(buf);
+		printf("%s", buf);
+		fflush(stdout);
+	}
 }
 
 bool Engine::GetSceneViewport(int& x, int& y, int& w, int& h) const

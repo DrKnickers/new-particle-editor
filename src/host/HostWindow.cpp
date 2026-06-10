@@ -39,6 +39,7 @@
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
 
+#include <algorithm>   // [resize-perf] per-kind bridge-probe sort
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -46,6 +47,7 @@
 #include <cstring>
 #include <share.h>     // [MT-11] Stage 4f: _SH_DENYNO for _wfsopen sharing
 #include <filesystem>
+#include <map>         // [resize-perf] per-kind bridge-probe tally
 #include <memory>
 #include <mutex>
 #include <string>
@@ -471,9 +473,11 @@ struct HostWindowImpl
     PerfStage perfWmpos;
     unsigned  perfWmposResetBase = 0;
     DWORD     perfWmposLastEmit  = 0;
-    unsigned  perfSceneRectMsgs  = 0;
     unsigned  perfWebMsgs        = 0;
     DWORD     perfMsgLastEmit    = 0;
+    // [resize-perf] per-kind tally for the bridge probe (cleared each
+    // 1 Hz emit). Keyed by the wire `kind` string.
+    std::map<std::wstring, unsigned> perfMsgKinds;
 
     // [resize-perf Fix D] true between WM_ENTERSIZEMOVE and
     // WM_EXITSIZEMOVE — gates the main-window WM_ERASEBKGND
@@ -1030,16 +1034,40 @@ void HostWindowImpl::SettleResize(const char* why)
 
 void HostWindowImpl::OnWebMessage(const std::wstring& json)
 {
-    Log("[host] WebMsg (%zu chars)\n", json.size());
-
-    // [resize-perf] Phase-0 probe — bridge message rate, split out the
-    // layout/scene-rect stream (the per-display-frame ResizeObserver
-    // round-trips during splitter drags). Substring scan is trivially
-    // cheap next to the UTF16→8 + JSON parse that follows. 1 Hz emit;
-    // idle (no messages) emits nothing by construction.
+    // [resize-perf] Phase-0 probe — bridge message rate, tallied PER
+    // KIND (the user's live splitter drag showed ~104/s of NON-scene-rect
+    // traffic the dimension audit hadn't ranked; attribution found it was
+    // viewport/input at mouse rate). Extracting the kind is a cheap
+    // substring scan next to the UTF16→8 + JSON parse that follows.
+    // 1 Hz emit of the top kinds; idle emits nothing by construction.
     ++perfWebMsgs;
-    if (json.find(L"layout/scene-rect") != std::wstring::npos)
-        ++perfSceneRectMsgs;
+    std::wstring msgKind;
+    {
+        static const std::wstring kKindNeedle = L"\"kind\":\"";
+        const size_t kp = json.find(kKindNeedle);
+        if (kp != std::wstring::npos)
+        {
+            const size_t vs = kp + kKindNeedle.size();
+            const size_t ve = json.find(L'"', vs);
+            if (ve != std::wstring::npos && ve > vs && ve - vs < 64)
+            {
+                msgKind = json.substr(vs, ve - vs);
+                ++perfMsgKinds[msgKind];
+            }
+        }
+    }
+
+    // [resize-perf C2] Per-message log hygiene: the interactive streams
+    // (layout/scene-rect at ~28/s during a splitter drag, viewport/input
+    // at mouse rate ~60-140/s whenever the cursor crosses the viewport)
+    // each paid a host.log write + fflush — a synchronous DISK flush per
+    // message on the UI thread. Skip their per-message line; the 1 Hz
+    // [resize-perf] bridge tally above carries their rates, and every
+    // other (low-frequency) kind keeps the full per-message log.
+    const bool highFrequencyKind =
+        msgKind == L"layout/scene-rect" || msgKind == L"viewport/input";
+    if (!highFrequencyKind)
+        Log("[host] WebMsg (%zu chars)\n", json.size());
     const DWORD rpNow = GetTickCount();
     if (perfMsgLastEmit == 0)
     {
@@ -1047,10 +1075,24 @@ void HostWindowImpl::OnWebMessage(const std::wstring& json)
     }
     else if ((rpNow - perfMsgLastEmit) >= 1000)
     {
-        Log("[resize-perf] bridge: msgs=%u scene-rect=%u (per ~1s)\n",
-            perfWebMsgs, perfSceneRectMsgs);
+        // Top-4 kinds by count, formatted "kind=count".
+        std::vector<std::pair<std::wstring, unsigned>> kinds(
+            perfMsgKinds.begin(), perfMsgKinds.end());
+        std::sort(kinds.begin(), kinds.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+        char detail[256] = "";
+        size_t off = 0;
+        for (size_t i = 0; i < kinds.size() && i < 4; ++i)
+        {
+            const int n = _snprintf_s(detail + off, sizeof(detail) - off, _TRUNCATE,
+                                      "%s%ls=%u", i ? " " : "",
+                                      kinds[i].first.c_str(), kinds[i].second);
+            if (n < 0) break;
+            off += static_cast<size_t>(n);
+        }
+        Log("[resize-perf] bridge: msgs=%u top[%s] (per ~1s)\n", perfWebMsgs, detail);
         perfWebMsgs = 0;
-        perfSceneRectMsgs = 0;
+        perfMsgKinds.clear();
         perfMsgLastEmit = rpNow;
     }
 
