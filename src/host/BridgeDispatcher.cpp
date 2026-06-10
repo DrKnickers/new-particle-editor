@@ -539,6 +539,18 @@ json BuildEmitterTreeNode(const ParticleSystem* sys, size_t idx)
         {"role",      role},
         {"linkGroup", static_cast<unsigned int>(emit.linkGroup)},
         {"visible",   emit.visible},
+        // NT-11 chain-load warning: spawn-quantity params mirrored onto
+        // every tree node so the React side can estimate per-chain alive
+        // counts without N get-properties round-trips. Field names match
+        // EmitterPropertiesDto / SpawnParamsDto in bridge-schema.
+        {"spawn", json{
+            {"lifetime",            emit.lifetime},
+            {"useBursts",           emit.useBursts},
+            {"nBursts",             static_cast<unsigned int>(emit.nBursts)},
+            {"burstDelay",          emit.burstDelay},
+            {"nParticlesPerSecond", static_cast<unsigned int>(emit.nParticlesPerSecond)},
+            {"nParticlesPerBurst",  static_cast<unsigned int>(emit.nParticlesPerBurst)},
+        }},
         {"children",  children},
     };
 }
@@ -2544,6 +2556,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             {"role",      "root"},
             {"linkGroup", 0},
             {"visible",   true},
+            {"spawn", json{
+                {"lifetime", 0.0}, {"useBursts", false}, {"nBursts", 0},
+                {"burstDelay", 0.0}, {"nParticlesPerSecond", 0}, {"nParticlesPerBurst", 0},
+            }},
             {"children",  children},
         };
         sendOk(json{{"ok", true}, {"tree", tree}});
@@ -2578,6 +2594,10 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
             {"role",      "root"},
             {"linkGroup", 0},
             {"visible",   true},
+            {"spawn", json{
+                {"lifetime", 0.0}, {"useBursts", false}, {"nBursts", 0},
+                {"burstDelay", 0.0}, {"nParticlesPerSecond", 0}, {"nParticlesPerBurst", 0},
+            }},
             {"children",  children},
         };
         sendOk(json{{"root", tree}});
@@ -5039,6 +5059,10 @@ void BridgeDispatcher::EmitEmittersTreeChanged()
         {"role",      "root"},
         {"linkGroup", 0},
         {"visible",   true},
+        {"spawn", json{
+            {"lifetime", 0.0}, {"useBursts", false}, {"nBursts", 0},
+            {"burstDelay", 0.0}, {"nParticlesPerSecond", 0}, {"nParticlesPerBurst", 0},
+        }},
         {"children",  children},
     };
     json env = {
