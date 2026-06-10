@@ -452,6 +452,20 @@ struct HostWindowImpl
     unsigned           perfWaitSpinsMax = 0;
     DWORD              perfLastEmitTick = 0;
 
+    // [resize-perf] Phase-0 probes (tasks/resize-perf-investigation.md).
+    // Always-on 1 Hz aggregates, same convention as [PERF] above.
+    // perfWmpos times the per-tick PredictAndApply+RenderD3D9 chain in
+    // WM_WINDOWPOSCHANGED (the suspected reset storm); the reset counter
+    // baseline turns Engine's monotonic ResetPerf.count into resets/sec.
+    // perfSceneRectMsgs counts layout/scene-rect arrivals in OnWebMessage
+    // (the RO→bridge stream rate during splitter drags).
+    PerfStage perfWmpos;
+    unsigned  perfWmposResetBase = 0;
+    DWORD     perfWmposLastEmit  = 0;
+    unsigned  perfSceneRectMsgs  = 0;
+    unsigned  perfWebMsgs        = 0;
+    DWORD     perfMsgLastEmit    = 0;
+
     // LT-4 D6: mod state shared with React. ModManager constructed in
     // the impl ctor (DiscoverMods + RestoreLastSelectedMod run before
     // any UI shows); SetEngine called in WM_CREATE once the Engine
@@ -977,6 +991,29 @@ void HostWindowImpl::ResizeWebViewToClient()
 void HostWindowImpl::OnWebMessage(const std::wstring& json)
 {
     Log("[host] WebMsg (%zu chars)\n", json.size());
+
+    // [resize-perf] Phase-0 probe — bridge message rate, split out the
+    // layout/scene-rect stream (the per-display-frame ResizeObserver
+    // round-trips during splitter drags). Substring scan is trivially
+    // cheap next to the UTF16→8 + JSON parse that follows. 1 Hz emit;
+    // idle (no messages) emits nothing by construction.
+    ++perfWebMsgs;
+    if (json.find(L"layout/scene-rect") != std::wstring::npos)
+        ++perfSceneRectMsgs;
+    const DWORD rpNow = GetTickCount();
+    if (perfMsgLastEmit == 0)
+    {
+        perfMsgLastEmit = rpNow;
+    }
+    else if ((rpNow - perfMsgLastEmit) >= 1000)
+    {
+        Log("[resize-perf] bridge: msgs=%u scene-rect=%u (per ~1s)\n",
+            perfWebMsgs, perfSceneRectMsgs);
+        perfWebMsgs = 0;
+        perfSceneRectMsgs = 0;
+        perfMsgLastEmit = rpNow;
+    }
+
     if (dispatcher)
         dispatcher->Dispatch(Utf16ToUtf8(json));
 }
@@ -2343,8 +2380,33 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         //     where the ground plane should be.
         if (hViewport)
         {
+            // [resize-perf] Phase-0 probe — time the per-tick chain and
+            // emit a 1 Hz aggregate with the engine's Reset sub-stage
+            // breakdown. During a border drag this is expected to show
+            // 30-60 ticks/sec each costing a full device reset.
+            const LONGLONG rpT0 = PerfQpcNow();
             layout.PredictAndApply();
             RenderD3D9();
+            perfWmpos.add(PerfUsSince(rpT0));
+
+            const DWORD rpNow = GetTickCount();
+            if (perfWmposLastEmit == 0 || (rpNow - perfWmposLastEmit) >= 1000)
+            {
+                if (engine)
+                {
+                    const Engine::ResetPerf& rp = engine->GetResetPerf();
+                    Log("[resize-perf] wmpos: ticks=%u apply+render(ms av/mx)=%.1f/%.1f "
+                        "resets=%u last(ms tot=%.1f lost=%.1f dev=%.1f reload=%.1f alpha=%.1f)\n",
+                        perfWmpos.n,
+                        perfWmpos.avg() / 1000.0, perfWmpos.maxUs / 1000.0,
+                        rp.count - perfWmposResetBase,
+                        rp.lastTotalMs, rp.lastLostMs, rp.lastDeviceResetMs,
+                        rp.lastReloadMs, rp.lastAlphaResizeMs);
+                    perfWmposResetBase = rp.count;
+                }
+                perfWmpos.reset();
+                perfWmposLastEmit = rpNow;
+            }
         }
         break;  // fall through so DefWindowProc continues processing
 

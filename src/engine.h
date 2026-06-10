@@ -197,6 +197,26 @@ public:
 	RenderPassTimingsUs GetLastRenderTimings() const { return m_lastRenderTimings; }
 	RenderPassTimingsUs m_lastRenderTimings = {};
 
+	// [resize-perf] Phase-0 probe — per-Reset() sub-stage wall-clock (ms)
+	// plus a monotonic call counter, so the host's 1 Hz [resize-perf]
+	// log line can show the device-reset storm during window resize and
+	// size the A2 (cheap settle-reset) payoff. Same diagnostic pattern as
+	// RenderPassTimingsUs above; see tasks/resize-perf-investigation.md.
+	// `lost` = OnLostDevice + releases + texture-cache wipe (pre-Reset);
+	// `reload` = shader OnReset + skydome/ground re-decode + ResetParameters;
+	// `alpha` = AlphaCompositor::Resize (shared RT + SYSTEMMEM + DIB rebuild).
+	struct ResetPerf
+	{
+		unsigned count = 0;            // completed Reset() calls this run
+		double lastTotalMs       = 0.0;
+		double lastLostMs        = 0.0;
+		double lastDeviceResetMs = 0.0;
+		double lastReloadMs      = 0.0;
+		double lastAlphaResizeMs = 0.0;
+	};
+	const ResetPerf& GetResetPerf() const { return m_resetPerf; }
+	ResetPerf m_resetPerf = {};
+
 	// [MT-11] Phase 3 Stage 4b — adapter LUID for the multi-GPU
 	// guard. Compositor::AttachEngineVisual compares this against
 	// the D3D11 device's adapter LUID; on mismatch (hybrid laptops

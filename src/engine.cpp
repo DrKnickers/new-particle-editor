@@ -1350,6 +1350,10 @@ const Engine::Light& Engine::GetLight(LightType which) const
 
 void Engine::Reset()
 {
+	// [resize-perf] Phase-0 probe — sub-stage QPC brackets filled into
+	// m_resetPerf at the end; the host logs them at 1 Hz. See engine.h.
+	const LONGLONG _rpT0 = EngQpcNow();
+
 	ReleaseBloomTargets();
 	SAFE_RELEASE(m_pDistortTexture);
 	SAFE_RELEASE(m_pSceneTexture);
@@ -1409,10 +1413,12 @@ void Engine::Reset()
 	// resources. Lazy-recreated by the next IssueEndFrameQuery call
 	// against the post-Reset device.
 	SAFE_RELEASE(m_pEndFrameQuery);
+	const LONGLONG _rpT1 = EngQpcNow();   // [resize-perf] lost ends / device Reset begins
 	if (FAILED(m_pDevice->Reset(&m_presentationParameters)))
 	{
 		throw wruntime_error(LoadString(IDS_ERROR_RENDERER_RESET));
 	}
+	const LONGLONG _rpT2 = EngQpcNow();   // [resize-perf] device Reset ends / reload begins
 	m_pDistortShader->OnResetDevice();
     for (int i = 0; i < NUM_SHADERS; i++)
     {
@@ -1431,6 +1437,8 @@ void Engine::Reset()
 
 	ResetParameters();
 
+	const LONGLONG _rpT3 = EngQpcNow();   // [resize-perf] reload ends / alpha resize begins
+
 	// FD9b: the alpha compositor owns D3D9 resources (RT + sysmem
 	// surface) sized to the popup client area. Refresh them so the
 	// off-screen RT keeps pace with the swap-chain's back-buffer
@@ -1443,6 +1451,8 @@ void Engine::Reset()
 		    static_cast<int>(m_presentationParameters.BackBufferWidth),
 		    static_cast<int>(m_presentationParameters.BackBufferHeight));
 	}
+
+	const LONGLONG _rpT4 = EngQpcNow();   // [resize-perf] alpha resize ends
 
 	// [MT-11] Phase 3 Stage 5 R8 mitigation — re-apply the cached scene
 	// viewport so its projection aspect ratio survives Reset.
@@ -1470,6 +1480,16 @@ void Engine::Reset()
 		m_sceneViewportActive = false;
 		SetSceneViewport(sx, sy, sw, sh);
 	}
+
+	// [resize-perf] publish this Reset's sub-stage costs. count increments
+	// only on a COMPLETED reset (the device-Reset throw above skips this),
+	// so the host's delta-per-second reads as successful resets.
+	m_resetPerf.lastLostMs        = EngQpcUs(_rpT0, _rpT1) / 1000.0;
+	m_resetPerf.lastDeviceResetMs = EngQpcUs(_rpT1, _rpT2) / 1000.0;
+	m_resetPerf.lastReloadMs      = EngQpcUs(_rpT2, _rpT3) / 1000.0;
+	m_resetPerf.lastAlphaResizeMs = EngQpcUs(_rpT3, _rpT4) / 1000.0;
+	m_resetPerf.lastTotalMs       = EngQpcUs(_rpT0, EngQpcNow()) / 1000.0;
+	++m_resetPerf.count;
 }
 
 // [MT-11] Phase 3 Stage 2: forwarder to the AlphaCompositor's shared
