@@ -16,9 +16,45 @@ Conventions:
 
 ## Changelog
 
+### Closed right-dock can no longer be dragged open (disabled splitter)
+
+*2026-06-10 · TODO(merge hash) · TODO(PR)*
+
+With the Spawner/Lighting dock closed, dragging at the window's right edge
+could open the empty dock slot — the splitter was invisible but still live.
+It is now fully inert while the dock is closed: no resize cursor, no drag,
+no keyboard resize. Open behaviour is unchanged.
+
+**How we tackled it.** The dock `Separator` in
+[`src/components/PanelLayout.tsx`](web/apps/editor/src/components/PanelLayout.tsx)
+already carried `invisible pointer-events-none` while closed — but
+react-resizable-panels (4.11) hit-tests separators by **document-level
+pointer coordinates against their rects**, not via DOM events on the element,
+so CSS could never block the drag (an invisible element still has a rect).
+The supported switch is the `disabled` prop, applied to BOTH the `Separator`
+("cannot be used to resize its neighboring panels") and the `Panel` (per the
+lib's own docs, else it can still be resized indirectly). Verified in the lib
+source that the imperative `expand()`/`collapse()` the dock toggle uses
+bypasses `disabled` (`trigger === "imperative-api"` sets
+`overrideDisabledPanels`), so open/close animation is unaffected.
+
+**Issues encountered and resolutions.** Verification used a synthetic
+pointer-drag in the vite preview with a **positive control**: with the dock
+open the same dispatched pointer sequence resizes it 260→360 px (proving the
+synthetic events drive the library), with it closed the drag is a no-op and
+the lib renders `aria-disabled`/`data-disabled` (also asserted by two new
+vitest cases). The investigation surfaced a SEPARATE pre-existing bug —
+a closed dock renders open-and-empty at mount when a stale
+`alo:layout:outer:3col` blob exists (the Group's `defaultLayout` beats the
+Panel's `0%` `defaultSize`, and the mount-time `collapse()` never applies).
+Confirmed present without this change via an A/B stash test; tracked as its
+own follow-up task rather than scope-crept into this fix.
+
+---
+
 ### Smooth window resize: cheap ResetEx-based per-tick device reset, plus resize-perf probes
 
-*2026-06-10 · TODO(merge hash) · [#116](https://github.com/DrKnickers/new-particle-editor/pull/116)*
+*2026-06-10 · [`e7cf484`](https://github.com/DrKnickers/new-particle-editor/commit/e7cf484) · [#116](https://github.com/DrKnickers/new-particle-editor/pull/116)*
 
 Resizing the app window no longer tanks: the full D3D9Ex device reset that
 fires on **every mouse-move tick** of the modal sizemove loop used to cost

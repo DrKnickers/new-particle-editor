@@ -469,8 +469,21 @@ export function PanelLayout({ bridge }: Props) {
           handle floats at the edge. Pixel minSize (260) keeps the docked
           labels readable; the Panel id stays "spawner" regardless of content
           so the persistence key (alo:layout:outer:3col) is stable — the
-          slot's identity is the right-dock, not the tool inside it. */}
+          slot's identity is the right-dock, not the tool inside it.
+
+          While CLOSED, both the separator and the panel are `disabled` —
+          the CSS classes alone do NOT stop a drag, because the library
+          hit-tests separators by document-level pointer COORDINATES
+          against their rects (an invisible, pointer-events-none element
+          still has a rect), so the user could drag an empty slot open
+          (bug, 2026-06-10). Separator.disabled removes it from that
+          hit-test; Panel.disabled stops indirect resizes (the lib's own
+          docs: "to prevent a panel from being resized at all, it needs
+          to also be disabled"). The dock toggle's imperative
+          p.expand()/p.collapse() still works — trigger="imperative-api"
+          overrides disabled-panel constraints in the lib. */}
       <Separator
+        disabled={!dockVisible}
         className={
           "ce-splitter ce-splitter-v" +
           (dockVisible ? "" : " invisible pointer-events-none")
@@ -479,6 +492,7 @@ export function PanelLayout({ bridge }: Props) {
       <Panel
         id="spawner"
         panelRef={dockPanelRef}
+        disabled={!dockVisible}
         collapsible
         collapsedSize={0}
         defaultSize={dockVisibleAtMount ? `${outerDefaultLayout.spawner ?? 20}%` : "0%"}

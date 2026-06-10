@@ -183,6 +183,64 @@ describe("PanelLayout — DOM structure", () => {
     expect(screen.getByTestId("quadrant-curve-editor")).toBeInTheDocument();
   });
 
+  it("disables the dock separator AND panel while the dock is closed (drag-open guard)", () => {
+    // Regression (2026-06-10): with the dock closed, the user could DRAG
+    // the invisible dock splitter and open an empty slot. CSS
+    // `pointer-events-none` on the Separator does NOT stop it — the
+    // library hit-tests separators by document-level pointer
+    // coordinates against their rects, not via DOM events on the
+    // element. The supported switch is the `disabled` prop, on both the
+    // Separator ("cannot be used to resize its neighboring panels") and
+    // the Panel (else it can still be resized indirectly). The lib
+    // surfaces these as aria-disabled / data-disabled.
+    localStorage.setItem("alo:right-dock", "none");
+    __resetRightDockForTests();
+
+    const bridge = makeStubBridge();
+    const { container } = render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+
+    const separators = Array.from(container.querySelectorAll("[data-separator]"));
+    expect(separators.length).toBeGreaterThan(0);
+    const disabled = separators.filter(
+      (s) => s.getAttribute("aria-disabled") === "true",
+    );
+    // Exactly one disabled separator: the dock's (the hidden vertical one).
+    expect(disabled).toHaveLength(1);
+    expect(disabled[0]!.className).toContain("invisible");
+
+    const slotPanel = screen
+      .getByTestId("quadrant-spawner")
+      .closest("[data-panel]");
+    expect(slotPanel).not.toBeNull();
+    expect(slotPanel!.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("keeps the dock separator and panel resizable while the dock is open", () => {
+    // Default right-dock is "spawner" (lib/right-dock.ts) — open.
+    const bridge = makeStubBridge();
+    const { container } = render(
+      <BridgeContext.Provider value={bridge}>
+        <PanelLayout bridge={bridge} />
+      </BridgeContext.Provider>,
+    );
+
+    const separators = Array.from(container.querySelectorAll("[data-separator]"));
+    expect(separators.length).toBeGreaterThan(0);
+    expect(
+      separators.filter((s) => s.getAttribute("aria-disabled") === "true"),
+    ).toHaveLength(0);
+
+    const slotPanel = screen
+      .getByTestId("quadrant-spawner")
+      .closest("[data-panel]");
+    expect(slotPanel).not.toBeNull();
+    expect(slotPanel!.hasAttribute("data-disabled")).toBe(false);
+  });
+
   it("quadrant-viewport rect is the innermost wrapper (Modal portal target preservation)", () => {
     const bridge = makeStubBridge();
     render(
