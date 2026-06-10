@@ -274,24 +274,12 @@ private:
     struct ViewportAnim
     {
         bool      active   = false;
-        // [resize-perf C3] true = a target-chasing lerp smoothing the
-        // interactive scene-rect STREAM (splitter drags): linear easing,
-        // and the next incoming scene-rect SUPERSEDES it (re-targets from
-        // the current interpolated rect). false = the dock-slide anim:
-        // CSS-ease, authoritative (external scene-rects are dropped while
-        // it runs).
-        bool      chase    = false;
         float     fromX = 0, fromY = 0, fromW = 0, fromH = 0;
         float     toX   = 0, toY   = 0, toW   = 0, toH   = 0;
         long long startQpc = 0;
         double    durMs    = 0.0;
     };
     ViewportAnim m_sceneAnim;
-
-    // [resize-perf C3] QPC timestamp of the last SetSceneRect arrival —
-    // detects the interactive stream (arrivals < ~250 ms apart chase;
-    // isolated sends apply instantly, today's behaviour).
-    long long m_lastSceneArrivalQpc = 0;
 };
 
 } // namespace host

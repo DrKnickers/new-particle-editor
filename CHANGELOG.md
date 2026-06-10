@@ -16,56 +16,51 @@ Conventions:
 
 ## Changelog
 
-### Smooth splitter drags: scene-rect stream chase-lerped, send dedupe, per-message log hygiene
+### Splitter-drag cost trims: scene-rect send dedupe + per-message log hygiene (chase-lerp built and reverted)
 
 *2026-06-10 · TODO(merge hash) · TODO(PR — ships with the render-loop pacing below)*
 
-Dragging panel splitters no longer stutters the viewport edge: the
-`layout/scene-rect` stream (~22-28 msgs/s while dragging) used to apply each
-rect as a discrete jump on the engine's render clock while the DOM panel edge
-tweened continuously on browser vsync — the judder named in the resize-perf
-investigation. Streamed rects now become short host-clocked glides that land
-just as the next rect arrives, so the engine edge moves continuously with the
-panel. The web side also stops re-sending identical rects (a measured 2× send
-rate during window resizes), and the host stops paying a synchronous disk
-flush per interactive bridge message.
+Two objective cost trims on the splitter-drag path: the web side stops
+re-sending identical scene rects (a measured 2× send rate during window
+resizes), and the host stops paying a synchronous disk flush per interactive
+bridge message (a 3 s drag now adds ~50 host.log lines, was 200+). A third
+piece — smoothing the scene-rect stream with host-clocked chase lerps — was
+built, user-tested, and **reverted**; see issues below for the lesson.
 
-**How we tackled it.** Attribution first: the per-kind bridge probe + a
-real-mouse `SendInput` drag driver
+**How we tackled it.** Attribution first: a per-kind tally in the bridge
+probe + a real-mouse `SendInput` drag driver
 ([`tasks/tool-splitter-drag-probe.mjs`](tasks/tool-splitter-drag-probe.mjs))
-identified the actual streams — scene-rect at ~22-28/s while dragging, plus
-`viewport/input` at mouse rate (~60-140/s) whenever the cursor crosses the
-viewport (the unranked ~104/s in the user's live log; it's the arch-C input
-pipeline, functional traffic). **C3**:
-[`LayoutBroker::SetSceneRect`](src/host/LayoutBroker.cpp:314) turns rects
-arriving < 250 ms apart into LINEAR chase lerps from the current applied rect,
-duration = the inter-arrival gap (16..100 ms), reusing the dock-slide
-`AdvanceSceneAnim` machinery via a `chase` flavour — superseded by the next
-rect, while the dock anim stays authoritative; isolated sends still apply
-instantly. **C1**: `ViewportSlot`'s `send()` dedupes on (rect, DPR) — DPR in
-the key so a monitor swap at an identical CSS rect is never dropped; the
-"redundant" listeners stay as the mid-dock-slide safety net, dedupe makes
-their overlap free. **C2**: the per-message `WebMsg` host.log line is skipped
-for the two interactive kinds (the 1 Hz per-kind tally carries their rates);
-`SetSceneViewport`'s per-apply printf is 1 Hz-throttled; the DComp transform
-log moved to a `quiet` flag — per-frame anim applies are silent, instant +
-anim-terminal applies log, so the settled clip always appears and the rate
-self-throttles by construction (a 3 s drag now adds ~50 host.log lines, was
-200+).
+identified the actual streams — `layout/scene-rect` at ~22-28/s while
+dragging, plus `viewport/input` at mouse rate (~60-140/s) whenever the cursor
+crosses the viewport (the unranked ~104/s in the user's live log; it's the
+arch-C input pipeline, functional traffic). **C1**: `ViewportSlot`'s `send()`
+dedupes on (rect, DPR) — DPR in the key so a monitor swap at an identical CSS
+rect is never dropped; the "redundant" listeners stay as the mid-dock-slide
+safety net, dedupe makes their overlap free. **C2**: the per-message `WebMsg`
+host.log line is skipped for the two interactive kinds (the 1 Hz per-kind
+tally carries their rates); `SetSceneViewport`'s per-apply printf is
+1 Hz-throttled; the DComp transform log moved to a `quiet` flag — per-frame
+anim applies (the dock slide) are silent, instant + anim-terminal applies
+log, so the settled clip always appears and the rate self-throttles by
+construction.
 
-**Issues encountered and resolutions.** (1) A first C2 attempt time-throttled
-the transform log to 1 Hz — wrong: it dropped the SETTLE line (the one state
-you want), and broke a spec that pins per-dispatch transform logging. The
-quiet-flag design keeps both. (2) Two native specs pinned pre-chase timing
-contracts and needed updating, not the code: `dxgi-scene-rect`'s
-three-dispatch test now spaces dispatches past the 250 ms stream window
-(instant path = logged per dispatch), and `alpha-compositor-snapshot` waits
-out the ≤100 ms chase before capturing — its failure (684 px instead of 800)
-was the snapshot cropping a mid-chase interpolated rect, i.e. the chase
-working as designed. (3) The investigation's audit had "refuted" the log-flush
-materiality per message — correct in isolation, but at the measured combined
-stream rates the per-message flushes sum to real UI-thread time; the per-kind
-attribution is what made the call defensible either way.
+**Issues encountered and resolutions.** (1) **C3 (chase-lerp) built and
+reverted — L-079.** Streamed scene-rects became short host-clocked glides
+(duration = inter-arrival gap) to fix the engine-edge-vs-panel-edge judder.
+The numbers looked right; the feel was wrong, twice over: a chase's
+steady-state lag is ONE PACKET INTERVAL by construction, and under real drag
+load the stream runs ~12/s → 80-160 ms of visible edge lag plus an end snap;
+and during window resizes `PredictAndApply` cancels the anim every size tick,
+starving the chases so newly revealed window area sat on backing colour for
+up to a second. Smoothing cannot beat the data rate — the residual splitter
+stutter is Chromium's own relayout cadence under drag, which instant
+application already tracks as tightly as the architecture allows. (2) A first
+C2 attempt time-throttled the transform log to 1 Hz — wrong: it dropped the
+SETTLE line (the one state you want) and broke a spec pinning per-dispatch
+transform logging; the quiet-flag design keeps both. (3) The investigation's
+audit had "refuted" per-message log-flush materiality — correct in isolation,
+but at the measured combined stream rates the flushes sum to real UI-thread
+time; per-kind attribution is what made the call defensible either way.
 
 ---
 

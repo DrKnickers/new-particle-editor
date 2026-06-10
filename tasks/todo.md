@@ -309,3 +309,18 @@ re-plan (per CLAUDE.md).
       the ≤100ms chase). Suites: web 637, tsc 0, native 174/0,
       Debug + Release clean.
       **Awaiting the user's splitter-drag feel verdict (self-launched).**
+- [x] **C3 REVERTED after the user''s feel verdict** (2026-06-10: "app
+      resize is worse — background colour in newly revealed area for a
+      second; splitter still laggy, viewport lags then snaps"). Root
+      causes: (a) chase steady-state lag = one packet interval, and the
+      real stream under load is ~12/s → 80-160ms lag + end snap; (b)
+      window resizes starve chases (PredictAndApply cancels the anim
+      per size tick) → the clip crawls behind the revealed area. →
+      L-079: smoothing cannot beat the data rate; the residual splitter
+      stutter is Chromium''s own relayout cadence under drag. C1+C2+B
+      kept (all objective, no feel change); both specs reverted to the
+      instant-apply contract; harness 174/0, Debug+Release clean.
+      **Remaining stutter is producer-side (Chromium relayout rate
+      under drag) — further work would mean raising the data rate or
+      panel-content virtualization, not host smoothing. Scope with the
+      user before any Phase 4.**

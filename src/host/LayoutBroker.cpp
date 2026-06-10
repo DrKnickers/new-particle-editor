@@ -351,64 +351,24 @@ void LayoutBroker::RemoveOcclusion(const std::string& id)
 
 void LayoutBroker::SetSceneRect(int x, int y, int w, int h)
 {
-    // [Item 3] Self-defense: while a DOCK-SLIDE anim owns the scene rect,
-    // drop external (stray / late) scene-rects so they can't clobber the
-    // host's smooth interpolation. The authoritative settle send arrives
-    // AFTER the anim ends (web schedules it at 260ms > the 200ms tween, by
-    // which point m_sceneAnim.active is false), so it is not dropped; and a
-    // re-toggle arrives as a fresh animate-scene-rect (StartSceneAnim), not
-    // via this path. A CHASE anim (below) is the opposite: the next rect
-    // SUPERSEDES it.
-    if (m_sceneAnim.active && !m_sceneAnim.chase) return;
-
-    // [resize-perf C3] Target-chasing smoothing for the interactive
-    // scene-rect STREAM (splitter drags, ~12-28 msgs/s measured). Applying
-    // each rect instantly steps the engine viewport edge in discrete jumps
-    // on the render clock while the DOM panel edge tweens continuously on
-    // the browser's vsync — the visible judder named in the resize-perf
-    // investigation. Instead, when rects arrive in a stream (< 250 ms
-    // apart), each becomes a short LINEAR glide from the CURRENT applied
-    // rect to the new target, with duration = the inter-arrival gap
-    // (clamped 16..100 ms): the glide lands just as the next rect arrives,
-    // so the edge moves continuously with ~one-packet latency — the same
-    // average latency the discrete jumps already had. Isolated sends
-    // (boot seed, settle, occasional relayout) apply instantly, exactly as
-    // before. Composition-mode only — under --legacy there is no DComp
-    // anim path (AdvanceSceneAnim's consumers are arch-C; matches
-    // StartSceneAnim's gating).
-    long long nowQpc = 0;
-    {
-        LARGE_INTEGER li;
-        if (QueryPerformanceCounter(&li)) nowQpc = li.QuadPart;
-    }
-    const double qpcPerMs = QpcPerMs();
-    const double gapMs = (m_lastSceneArrivalQpc > 0 && qpcPerMs > 0.0 && nowQpc > 0)
-        ? static_cast<double>(nowQpc - m_lastSceneArrivalQpc) / qpcPerMs
-        : 1e9;
-    m_lastSceneArrivalQpc = nowQpc;
-
-    const bool streaming = gapMs < 250.0;
-    const bool haveCurrent = m_sceneW > 0 && m_sceneH > 0;
-    const bool clearing = w <= 0 || h <= 0;
-    if (!m_dcompCompositor || !streaming || !haveCurrent || clearing || qpcPerMs <= 0.0)
-    {
-        CancelSceneAnim();
-        ApplySceneRect(x, y, w, h);
-        return;
-    }
-
-    m_sceneAnim.active   = true;
-    m_sceneAnim.chase    = true;
-    m_sceneAnim.fromX    = static_cast<float>(m_sceneX);
-    m_sceneAnim.fromY    = static_cast<float>(m_sceneY);
-    m_sceneAnim.fromW    = static_cast<float>(m_sceneW);
-    m_sceneAnim.fromH    = static_cast<float>(m_sceneH);
-    m_sceneAnim.toX      = static_cast<float>(x);
-    m_sceneAnim.toY      = static_cast<float>(y);
-    m_sceneAnim.toW      = static_cast<float>(w);
-    m_sceneAnim.toH      = static_cast<float>(h);
-    m_sceneAnim.durMs    = gapMs < 16.0 ? 16.0 : (gapMs > 100.0 ? 100.0 : gapMs);
-    m_sceneAnim.startQpc = nowQpc;
+    // [Item 3] Self-defense: while a dock-slide anim owns the scene rect, drop
+    // external (stray / late) scene-rects so they can't clobber the host's
+    // smooth interpolation. The authoritative settle send arrives AFTER the anim
+    // ends (web schedules it at 260ms > the 200ms tween, by which point
+    // m_sceneAnim.active is false), so it is not dropped; and a re-toggle arrives
+    // as a fresh animate-scene-rect (StartSceneAnim), not via this path.
+    //
+    // [resize-perf C3, REVERTED 2026-06-10] A chase-lerp variant smoothed the
+    // interactive scene-rect stream here (each rect a short host-clocked glide).
+    // User verdict killed it: a chase's steady-state lag is ONE PACKET INTERVAL
+    // by construction, and under real drag load the stream runs ~12/s →
+    // 80-160 ms of visible edge lag + an end snap; worse, window resizes
+    // starved the chases (PredictAndApply cancels the anim every size tick),
+    // leaving backing colour in newly revealed areas. Smoothing cannot beat the
+    // data rate — instant application tracks the panels' own relayout cadence
+    // as tightly as the architecture allows (L-079).
+    if (m_sceneAnim.active) return;
+    ApplySceneRect(x, y, w, h);
 }
 
 void LayoutBroker::ApplySceneRect(int x, int y, int w, int h, bool animFrame)
@@ -522,7 +482,6 @@ void LayoutBroker::StartSceneAnim(int fromX, int fromY, int fromW, int fromH,
     if (msElapsedAtSend < 0.0) msElapsedAtSend = 0.0;
 
     m_sceneAnim.active = true;
-    m_sceneAnim.chase  = false;   // dock-slide flavour: authoritative, CSS-ease
     m_sceneAnim.fromX  = static_cast<float>(fromX);
     m_sceneAnim.fromY  = static_cast<float>(fromY);
     m_sceneAnim.fromW  = static_cast<float>(fromW);
@@ -564,13 +523,9 @@ bool LayoutBroker::AdvanceSceneAnim(long long qpcNow)
         return true;
     }
 
-    // [resize-perf C3] Chase anims progress LINEARLY: an ease curve on a
-    // continuous stream of short re-targets makes the edge's velocity
-    // wobble (slow-fast-slow per packet). The dock slide keeps its CSS
-    // ease — it is ONE long tween matched to the panel's CSS curve.
     // animFrame=true: mid-flight applies skip the per-apply transform
     // log (they run at the render rate; the terminal apply above logs).
-    const double e = m_sceneAnim.chase ? t : CssEaseY(t);
+    const double e = CssEaseY(t);  // only the in-flight frames need the curve
     ApplySceneRect(static_cast<int>(std::lround(Lerpf(m_sceneAnim.fromX, m_sceneAnim.toX, e))),
                    static_cast<int>(std::lround(Lerpf(m_sceneAnim.fromY, m_sceneAnim.toY, e))),
                    static_cast<int>(std::lround(Lerpf(m_sceneAnim.fromW, m_sceneAnim.toW, e))),
