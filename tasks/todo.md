@@ -292,4 +292,20 @@ re-plan (per CLAUDE.md).
       **Awaiting the user's splitter-drag feel verdict (L-033,
       self-launched).** Phase 1's FOV anchor + the #117 dock fixes are
       independent of this branch.
-- [ ] Phase 3: Fix C1/C2 (+ C3 decision) — scope C3 after B's verdict.
+- [x] Phase 3: Fix C1+C2+C3 (same branch — user verdict on B was "still
+      stutters", so C3 was promoted). Attribution FIRST (per-kind bridge
+      probe + real-mouse SendInput driver,
+      `tasks/tool-splitter-drag-probe.mjs`): drag stream =
+      layout/scene-rect 22-28/s; the user's ~104/s mystery =
+      viewport/input at mouse rate over the viewport (functional arch-C
+      input traffic). C1 `e66f811`: (rect,DPR) send dedupe. C2+C3
+      `a2e7418`: scene-rect stream → host-clocked LINEAR chase lerps
+      (duration = inter-arrival gap 16..100ms, supersede-on-next;
+      dock anim still authoritative); per-message log hygiene (WebMsg
+      skip for interactive kinds, SetSceneViewport printf 1 Hz,
+      transform log quiet-on-anim-frames → 3s drag = ~50 log lines, was
+      200+). Two native specs re-pinned to the new timing contract
+      (dispatch spacing > the 250ms stream window; snapshot waits out
+      the ≤100ms chase). Suites: web 637, tsc 0, native 174/0,
+      Debug + Release clean.
+      **Awaiting the user's splitter-drag feel verdict (self-launched).**
