@@ -240,8 +240,26 @@ re-plan (per CLAUDE.md).
 - [x] All investigation claims re-verified against code (file:line anchors
       in §2 above). One precision upgrade: the per-tick `WM_ERASEBKGND` fill
       happens on the **main** window (popup already suppresses it).
-- [ ] **Awaiting user scope confirmation** (phases, sequencing, C3 deferral).
-- [ ] Phase 0 instrumentation
-- [ ] Phase 1: Fix A + D (one PR)
+- [x] User confirmed scope 2026-06-10 ("proceed as proposed").
+- [x] Phase 0 instrumentation (`9088838`) — wmpos/reset-substage/bridge
+      probes; probe 4 (pump fps + spins) already existed as `[PERF]`.
+      Deviation from plan: probes are **always-on** (matching the existing
+      `[PERF]` precedent) instead of NDEBUG-gated — 1 Hz aggregates,
+      negligible cost, and they work in the Release builds users run.
+- [x] Phase 1: Fix A + D (`8550f07`) — **smoked with a programmatic
+      sizemove storm** (`tasks/tool-sizemove-storm.ps1` documents the
+      repro; run inline against the live editor):
+      - control (no bracket): 21 ticks/s = **21 resets/s** @ ~27 ms/tick
+        (reset tot ~24 ms, reload stage ~20 ms = texture re-decode —
+        sizes the A2 payoff);
+      - bracketed: **0 resets** mid-gesture @ **0.9 ms/tick** (30×),
+        one `settle (exitsizemove)`;
+      - bridge probe: scene-rect **42/s vs ~21 ticks/s** — confirms the
+        2× redundant window-resize listener (C1 target);
+      - `[PERF]` idle: **fps≈3000, spins≈4000/frame** — confirms B's
+        uncapped-pump target.
+      Native harness 174/0; Debug + Release x64 clean. Editor healthy
+      (responding, no error lines) after both storms.
+      **Awaiting the user's manual feel verdict (L-033) before Phase 2.**
 - [ ] Phase 2: Fix B
 - [ ] Phase 3: Fix C1/C2 (+ C3 decision)
