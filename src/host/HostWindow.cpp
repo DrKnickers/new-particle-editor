@@ -24,9 +24,11 @@
 #include <winhttp.h>
 #include <shlwapi.h>  // [MT-11] Phase 0: SHCreateMemStream for WebResourceRequested response
 #include <dwmapi.h>   // title-bar dark-mode (DWMWA_USE_IMMERSIVE_DARK_MODE)
+#include <timeapi.h>  // [resize-perf Fix B1] timeBeginPeriod/timeEndPeriod for the paced pump
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "winmm.lib")   // [resize-perf Fix B1] timeBeginPeriod
 
 // See BridgeDispatcher.cpp for the runtime (theme-toggle) title-bar sync;
 // this is the startup default. Guarded for older SDKs (value 20 on modern
@@ -931,9 +933,13 @@ void HostWindowImpl::RenderD3D9()
         const double fps     = favg > 0.0 ? 1.0e6 / favg : 0.0;
         const double spinAvg = perfWait.n
             ? static_cast<double>(perfWaitSpinsSum) / static_cast<double>(perfWait.n) : 0.0;
-        Log("[PERF] win=%ldx%ld fps=%.0f frame=%.0f/%.0f update=%.0f/%.0f "
+        // [resize-perf Fix B1] rps = RenderD3D9 calls in this ~1s window —
+        // the REAL render cadence (the fps field is 1/frame-cost, the
+        // theoretical max, and stopped tracking cadence once the pump
+        // was paced).
+        Log("[PERF] win=%ldx%ld rps=%u fps=%.0f frame=%.0f/%.0f update=%.0f/%.0f "
             "render=%.0f/%.0f wait=%.0f/%.0f spins=%.0f/%u composite=%.0f/%.0f (us avg/max)\n",
-            pr.right - pr.left, pr.bottom - pr.top, fps,
+            pr.right - pr.left, pr.bottom - pr.top, perfFrame.n, fps,
             perfFrame.avg(), perfFrame.maxUs,
             perfUpdate.avg(), perfUpdate.maxUs,
             perfRender.avg(), perfRender.maxUs,
@@ -3500,15 +3506,55 @@ int HostWindowImpl::Run(int nCmdShow)
     // LT-4 main loop: switched from blocking GetMessage to PeekMessage
     // idle-render. The blocking variant produces no continuous WM_PAINT
     // events, so the per-frame spawner tick + engine render had no driver.
-    // Now: drain queued messages, then render once on idle, loop until
+    // Now: drain queued messages, then render on idle, loop until
     // WM_QUIT. Mirrors legacy src/main.cpp:8023.
     //
     // No IsDialogMessage routing — the host has no modeless Win32
     // dialogs; tool panels live in React under WebView2 (which has its
     // own input routing and doesn't need TranslateAccelerator either).
+    //
+    // [resize-perf Fix B1] The render is PACED to the display's refresh
+    // cadence instead of free-running. The unpaced loop measured ~3000 fps
+    // at idle ([PERF] probe): one core pegged and the GPU saturated with
+    // queued frames, starving WebView2's renderer during splitter drags
+    // (the dominant splitter-jank amplifier — see
+    // tasks/resize-perf-investigation.md, fix B). Mechanics:
+    //   - render only when the per-frame QPC budget has elapsed;
+    //   - between frames, MsgWaitForMultipleObjectsEx sleeps until EITHER
+    //     input/messages arrive (instant wake — input latency unchanged)
+    //     or the next frame is due. MWMO_INPUTAVAILABLE because we consume
+    //     via PeekMessage: input queued before the wait must still wake it.
+    //   - timeBeginPeriod(1) for the loop's lifetime — without it the wait
+    //     quantizes to the default ~15.6 ms timer and the cadence judders.
+    //   - budget = one period of the primary display's refresh rate read at
+    //     startup (fallback 60 Hz). This is a CAP, not vsync — Present
+    //     stays unsynchronized; DWM composes whatever is latest.
+    //   - QPC-frequency failure degrades to budget 0 = today's free-run.
+    // Capture mode keeps its own Sleep(16) pacing and renders every
+    // iteration (path unchanged).
     MSG m = {};
     bool quit = false;
     int  capturedFrames = 0;
+
+    DWORD displayHz = 60;
+    {
+        DEVMODEW dm = {};
+        dm.dmSize = sizeof(dm);
+        // 0 and 1 mean "hardware default" per EnumDisplaySettings docs —
+        // treat anything below 30 as unknown and keep the 60 Hz fallback.
+        if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm)
+            && dm.dmDisplayFrequency >= 30)
+        {
+            displayHz = dm.dmDisplayFrequency;
+        }
+    }
+    const LONGLONG frameBudgetQpc =
+        PerfQpcFreq() > 0 ? PerfQpcFreq() / static_cast<LONGLONG>(displayHz) : 0;
+    LONGLONG nextFrameQpc = PerfQpcNow();
+    timeBeginPeriod(1);
+    Log("[resize-perf] pump paced to %lu Hz (budget %.2f ms)\n",
+        static_cast<unsigned long>(displayHz), 1000.0 / static_cast<double>(displayHz));
+
     while (!quit)
     {
         while (PeekMessage(&m, nullptr, 0, 0, PM_REMOVE))
@@ -3525,10 +3571,37 @@ int HostWindowImpl::Run(int nCmdShow)
         // without rendering (exit code set below).
         if (captureFailed) break;
 
-        // Idle: render one frame. Cheap enough to always run (Engine has
-        // its own paused / IsPreviewPaused gates that skip the simulation
-        // step when set; render still presents to keep the surface valid).
-        if (engine)
+        // Idle: render one frame per budget slot. Cheap enough to always
+        // run (Engine has its own paused / IsPreviewPaused gates that skip
+        // the simulation step when set; render still presents to keep the
+        // surface valid).
+        if (engine && !captureMode)
+        {
+            const LONGLONG now = PerfQpcNow();
+            if (now >= nextFrameQpc)
+            {
+                RenderD3D9();
+                // Schedule from "now", not "+= budget": a slow frame must
+                // not bank catch-up renders (cap semantics, not vsync).
+                nextFrameQpc = now + frameBudgetQpc;
+            }
+            // Sleep until input or the next frame slot, whichever first.
+            // Round the wait UP to whole ms so an early wake doesn't spin
+            // through sub-ms remainders.
+            const LONGLONG remainTicks = nextFrameQpc - PerfQpcNow();
+            const LONGLONG f = PerfQpcFreq();
+            if (remainTicks > 0 && f > 0)
+            {
+                const DWORD waitMs =
+                    static_cast<DWORD>((remainTicks * 1000 + f - 1) / f);
+                if (waitMs > 0)
+                {
+                    MsgWaitForMultipleObjectsEx(0, nullptr, waitMs,
+                                                QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                }
+            }
+        }
+        else if (engine)
         {
             RenderD3D9();
 
@@ -3569,6 +3642,9 @@ int HostWindowImpl::Run(int nCmdShow)
             WaitMessage();
         }
     }
+
+    // [resize-perf Fix B1] matching release for the timeBeginPeriod above.
+    timeEndPeriod(1);
 
     g_self = nullptr;
     // B1.3.1.1: matching shutdown for the GdiplusStartup above. Safe
