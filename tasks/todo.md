@@ -1,3 +1,206 @@
+# Session 33 — Drag-audit fixes (10 confirmed findings)
+
+_Resumed the deferred 6-dimension drag audit as a hardened multi-agent
+workflow (run `wf_eab3d07f-f8e`, `isCleanRun: true` — 10 confirmed / 10
+refuted / 0 unverified / 0 dead dimensions). User approved fixing **all 10**.
+The original audit's `confirmed: []` was a rate-limited dead run; the
+re-run's verdict accounting now distinguishes refuted from unverified.
+Branch: `claude/pedantic-mestorf-5b04dc` off `master` @ `788d012`._
+
+## 1. Goal + scope
+
+Fix all 10 adversarially-confirmed correctness defects in the emitter-tree
+click-drag reorder/reparent feature, across the C++ host, the React
+controller, and the mock. One worst case (C) writes a corrupt `.alo` on a
+routine reorder; one (A1) commits a move against stale ids after a mid-drag
+undo. The rest are stuck-drag / double-commit / parity / selection / minor
+UX defects.
+
+**In:** the 10 confirmed findings below. **Out:** the 10 refuted findings
+(self-admitted "not a live bug" / future-fragility — verifiers correctly
+tossed them, incl. the junk-undo-on-refused-drop prep note); the chain
+investigation (still deferred, `next-emitter-chain-investigation.md`); any
+re-litigation of #108's already-hardened items (stableId clobber, reparent
+latch, mid-glide snapshot, FLIP staleness — fixed + tested, off-limits).
+
+### The 10 confirmed findings, grouped by root cause
+
+| # | Sev | Finding | Site |
+|---|-----|---------|------|
+| C  | 🔴 | Reorder silently SWAPS a parent's life/death child slots (corrupts saved file) | `ParticleSystem.cpp` ×3 KEEP-IN-SYNC fns (:1462/:1562/:1668) |
+| A1 | 🔴 | Mid-drag Ctrl+Z/V commits stale positional ids → moves wrong emitters | `EmitterTree.tsx` tree/changed sub (~1289) + finish |
+| A2 | 🟠 | Mid-drag refetch renders make-room gap before the wrong root | `EmitterTree.tsx` gap render (~2101) |
+| A3 | 🟠 | Mid-drag refetch dims the wrong rows | `EmitterTree.tsx` row dim (~614) |
+| B1 | 🟠 | No re-entrancy guard → 2nd pointerdown = duplicate listeners, double commit | `EmitterTree.tsx` startDrag (:1475) |
+| B2 | 🟠 | No pointer-capture/blur handler → alt-tab mid-drag = stuck drag, leaked rAF | `EmitterTree.tsx` listeners (:1752) |
+| D  | 🟠 | Mock marks doc dirty on REFUSED commits; host only on success (parity) | `bridge/mock.ts` request (~157) |
+| E  | 🟠 | Dragging a root drops a non-root selection member from highlight | `lib/emitter-reorder.ts` applyNewSelection (~16) |
+| F1 | 🟡 | Autoscroll scrolls wrong direction in <56px viewport (end gap unreachable) | `lib/drag-autoscroll.ts` (:33) |
+| F2 | 🟡 | Global draggedRef swallows an unrelated click after a cross-row drag | `EmitterTree.tsx` finish (:1723) / click (:1441) |
+
+## 2. What the codebase already gives us
+
+- **C (C++):** all three fns already compute `oldIndices[k]` aligned to the
+  reordered vector and reassign `e->index` before the spawn-field rewrite —
+  the only defect is the read-modify-WRITE against the live field. A pre-loop
+  snapshot of each parent's two fields is a minimal, local change.
+- **A1/A2/A3 (React):** `startDrag.finish(false)` is the single teardown path
+  and is in-closure; the `emitters/tree/changed` subscription (~1289) already
+  calls `refreshTree()`. One `activeDragCancelRef` bridges them.
+- **B1/B2:** `finish()` already centralises listener removal + rAF cancel;
+  `onKey`/`onCtx` show the activation-time add/remove pattern to mirror for a
+  blur/visibility listener. The `CurveEditor` drag uses `setPointerCapture` +
+  pointerId scoping — proven pattern to copy.
+- **D:** host's exact predicates exist to mirror — `markDirty()` is gated on
+  the success branch in every drag handler (`BridgeDispatcher.cpp` ~4650 drop,
+  ~4741 reorder-many, ~4391 move-many's `anyMoved`).
+- **E:** `applyNewSelection` already has `oldPrimary`/`newIds`; `stableId` is
+  on every node for stable re-resolution after the reindex.
+- **F1:** `computeAutoscrollDelta` is pure → a clamp + a unit test.
+- Test scaffolds exist for every testable finding: `multi-drag.test.ts`,
+  `EmitterTree.test.tsx`/`.multidrag.test.tsx`, `bridge-contract.test.ts`,
+  the native ParticleSystem tests, `drag-autoscroll` unit tests.
+
+## 3. Architecture / implementation approach
+
+**C — two-pass spawn-field rewrite (×3, identical):** before the rewrite
+loop, snapshot `(spawnDuringLife, spawnOnDeath)` per affected parent into a
+small map keyed on the parent pointer; in the loop compare each child's
+`oldIndices[k]` against the SNAPSHOT, assign to the live field. Reads
+pre-loop state → no aliasing. Apply byte-identically to all three fns (they
+are documented KEEP-IN-SYNC). Native test reproduces the swap through
+`reorderManyRootsToIndex` and `moveEmitter` (life→C1/death→C2 parent, reorder
+that aliases new==old index) and asserts the slots survive.
+
+**A1/A2/A3 — cancel the in-flight drag on any mid-drag structural change
+(one fix, three findings):** add `const activeDragCancelRef = useRef<(()=>
+void)|null>(null)`. On drag activation set it to `() => finish(false)`; clear
+it at the top of `finish`. In the `emitters/tree/changed` handler, if the ref
+is set, call it (abort the stale gesture) THEN `refreshTree()`. Aborting tears
+down dims/gap/chip and prevents the stale-id commit — so A2 (wrong gap) and A3
+(wrong dim) can't occur because no active drag survives the refetch. Supersedes
+the audit's alternative stableId-rekey for A3 (fewer changes; the dim only
+lives during an active drag we now abort). Accepted: a benign tree/changed
+during a drag aborts it — rare, recoverable (re-drag).
+
+**B1 — re-entrancy guard:** `dragPointerRef` set to `e.pointerId` at the top
+of `startDrag` (after the button/editing guards); bail if already set;
+cleared at the top of `finish` (before the `!active` early return).
+
+**B2 — pointer capture + focus-loss teardown:** `setPointerCapture(e.pointerId)`
+on the row element; filter `onMove`/`onUp`/`onCancel` by `ev.pointerId !==
+pointerId`; add `window` `blur` + `document` `visibilitychange` listeners (on
+activation, removed in `finish`) calling `finish(false)`. Capture makes
+Chromium synthesize `pointercancel` on blur, covering the swallowed-up case.
+
+**D — gate mock markDirty on the handler result:** in `MockBridge.request`,
+replace the unconditional `if (isMutating) markDirty()` with a
+`didMutate(req, result)` check mirroring the host branch-by-branch:
+`ok === false` → no dirty (drop, reorder-many); move-many → dirty only if
+something moved. Bridge-contract tests for refused-drop / refused-reorder /
+no-op-move-many stay clean; success marks dirty.
+
+**E — preserve untouched selection members:** in `applyNewSelection` (or its
+caller `reorderManyEmitters`), capture the full selection's `stableId`s before
+the commit, re-resolve them to positional ids from the fresh tree after, and
+`setIds(union(remainder, newIds))` so a dragged-along child (e.g. `childX` in
+a `[rootA, childX]` selection) stays highlighted.
+
+**F1 — split the edge zones:** clamp each edge's effective zone to
+`min(zone, viewportHeight/2)` (or pick the nearer edge) so the bottom branch
+is reachable when `H < 2*zone`. Unit test at `H = 40`, pointer near bottom →
+positive (down) delta.
+
+**F2 — scope the click suppression:** after `draggedRef.current = true` in
+`finish`, schedule `setTimeout(() => { draggedRef.current = false }, 0)` so the
+flag clears right after the (possibly absent) synthetic click, never latching
+into a later unrelated click.
+
+## 4. Risks named up front + mitigations
+
+1. **KEEP-IN-SYNC drift on C.** Fixing 2 of 3 fns, or fixing them
+   differently, re-opens the corruption in the untouched path. *Mitigation:*
+   apply a byte-identical two-pass block to all three; native test drives the
+   repro through `reorderManyRootsToIndex` (reorder-many) AND `moveEmitter`
+   (Move Up/Down) — the two bridge-reachable entry points — so a missed copy
+   fails a test.
+2. **Spurious drag cancel (A).** A non-structural `tree/changed` mid-drag
+   would abort a legit gesture. *Mitigation:* `tree/changed` is structural by
+   contract; if it fires, the captured geometry/ids are already suspect, so
+   aborting is the conservative-correct choice. Documented; recoverable.
+3. **Pointer-capture breaks existing synthetic-drag tests (B2).** The Vitest
+   drag tests dispatch document-level pointer events; pointerId filtering or
+   `setPointerCapture` (no-op/throw in jsdom) could break them. *Mitigation:*
+   capture `pointerId` from the down event (tests use one consistent pointer →
+   filter passes); guard `setPointerCapture` behind a `typeof ... === function`
+   / try so jsdom's absence is harmless; run the full EmitterTree suites.
+4. **E re-resolution by stableId is subtly wrong** (drops or duplicates a
+   member). *Mitigation:* TDD the mixed `[root, child]` case + keep the
+   existing follow tests (single/multi/reparent) green.
+5. **D predicate mismatch with host** (over/under-dirty). *Mitigation:* mirror
+   each host branch exactly; contract tests for refused + no-op + success.
+6. **Fresh worktree not built** (L-039/L-040). *Mitigation:* pre-flight
+   NuGet copy + `pnpm build` before native/host build; baseline green first.
+
+## 5. Testing & verification
+
+- **Pre-flight baseline (before any edit):** `pnpm install` (web/) if needed;
+  `pnpm --filter @particle-editor/editor test` → **630**; `tsc -b` 0; vite
+  build clean. L-039 NuGet copy + L-040 `pnpm build`; native build → **174/0**;
+  host Debug x64 (VS18) clean.
+- **C (native, TDD red→green):** new ParticleSystem test — parent with life=C1
+  death=C2 + extra root; reorder that aliases new==old index; assert
+  `spawnDuringLife`/`spawnOnDeath` still point at C1/C2. Run through both
+  `reorderManyRootsToIndex` and `moveEmitter`. Native harness count grows.
+- **D (TDD):** bridge-contract — refused `emitters/drop` (own-footprint),
+  refused `emitters/reorder-many`, no-op `emitters/move-many` → `dirty===false`;
+  a successful reorder → `dirty===true`.
+- **E (TDD):** vitest — `[rootA, childX]` drag rootA → after commit, selection
+  still contains childX's logical emitter; single/multi/reparent follow tests
+  stay green.
+- **F1 (TDD):** `computeAutoscrollDelta` unit — `rect` height 40, pointer near
+  bottom → positive delta; existing cases unchanged.
+- **A1/A2/A3, B1, B2, F2 (React behavior):** vitest where the harness can
+  drive it (re-entrancy: two pointerdowns → one controller; cancel-on-
+  tree/changed: dispatch a synthetic tree/changed mid-drag → drag torn down,
+  no commit). Blur/alt-tab + true second-physical-pointer need host smoke —
+  flagged as the only items needing the user's hands; everything else is
+  unit-proven.
+- **Whole-suite gates:** web full suite green (count > 630), `tsc -b` 0, vite
+  clean; native build + harness green incl. new C test; host Debug x64 clean.
+- **Per-finding manual host smoke (where relevant):** mid-drag Ctrl+Z aborts
+  the drag (no wrong move); alt-tab mid-drag clears the drag; second mouse
+  during a drag doesn't double-commit; drag-then-click-other-row selects.
+
+## Review (all 10 fixed, verified)
+
+**Outcome.** All ten confirmed findings fixed. Verification:
+- web **636 / 636** (630 baseline + 6 new tests), `tsc -b` **0**, vite build clean.
+- native **C unit test 15/15** (`tests/test_emitter_reorder.cpp` — slot-swap fixed
+  through `reorderManyRootsToIndex` + `moveEmitter` + `moveEmitterToRootIndex`).
+- host **Debug x64** clean (benign LNK4098), native a11y **174 / 0** (30 skipped,
+  zero golden diff — no a11y surface touched).
+
+**What changed vs the plan.**
+- **C** consolidated the three KEEP-IN-SYNC loops into one helper
+  (`rewriteParentSpawnIndices`) rather than patching each in place — kills the
+  duplication that caused the bug. Confirmed `insertEmitterAfter`'s +1 shift is a
+  *different*, non-aliasing pattern; left untouched (out of audit scope).
+- **A1/A2/A3** done as one `activeDragCancelRef` (cancel-on-`tree/changed`, the
+  user-approved choice); supersedes the stableId-rekey the audit suggested for A3.
+- **E** uses `emitters/list` round-trips (reliable on both backends, unlike the
+  async `tree/changed` event), guarded to the mixed-selection case only.
+
+**Verified-by-unit:** C, D, E, F1, and A1/A2/A3 (synthetic mid-drag `tree/changed`).
+**Needs live host smoke (no unit harness can drive them):** B1 second *physical*
+pointer; B2 real OS window-blur / alt-tab. Both unit-covered for the reachable
+parts; flagged for the user's manual pass.
+
+**Artifacts.** `tests/test_emitter_reorder.cpp` + `tests/build_test_emitter_reorder.bat`
+committed (regression harness); the built `.exe`/`obj/`/logs are gitignored.
+
+---
+
 # Session 32 — Part 3: reorder glide animation (stable id + FLIP)
 
 _User-directed start while they work elsewhere; design pre-agreed in

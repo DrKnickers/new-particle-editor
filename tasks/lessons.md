@@ -4370,3 +4370,40 @@ masked in mock mode because mock-state keeps node ids stable across a drop —
 exactly the "stable-id mock hides it" trap. Cross-reference
 [L-033](#l-033) (host-only behaviour needs the real host, not the agent's
 mock-mode view).
+
+## L-077 — Rewriting index references IN PLACE while comparing against the live field aliases when a new index equals another entry's old index; snapshot-then-write, and DON'T hand-copy the loop across functions
+
+**Rule.** A loop that remaps stored indices (`if (ref == oldIndex) ref =
+newIndex`) by reading and writing the SAME live field within one pass will
+mis-fire whenever one entry's *new* index equals another entry's *old* index:
+the first write makes the live field hold a value that the second iteration's
+`== oldIndex` test then matches by accident. Two-pass it — **snapshot every
+field you'll compare against BEFORE writing any of them**, then compare against
+the snapshot. And if the same remap is needed in several functions, write it
+ONCE (a shared helper), never hand-copy — a duplicated loop means a duplicated
+bug, and "KEEP-IN-SYNC" comments don't enforce themselves.
+
+**Trigger.** Any in-place renumbering after a reorder/move/delete that touches
+a parent/owner's stored child/neighbour indices — especially when an owner has
+MORE THAN ONE such slot (life vs death child, prev/next, left/right). One slot
+can't alias itself; two can swap.
+
+**How to apply.** (1) Capture the owner's slot values into a map keyed by owner
+BEFORE the rewrite loop; in the loop, test `snapshot[owner].slotN == oldIndex`
+and assign the live field. (2) Factor the rewrite into a single helper called
+from every reorder entry point. (3) Test it by driving the **aliasing** case
+(new == other's old) through EVERY reachable entry point — a passing test on
+one function says nothing about its hand-copied siblings.
+
+**Source incident (2026-06-09, audit fix C).** `ParticleSystem`'s three
+KEEP-IN-SYNC reorder functions (`moveEmitter`, `moveEmitterToRootIndex`,
+`reorderManyRootsToIndex`) each rewrote `parent->spawnDuringLife` /
+`spawnOnDeath` in place against the live field. Dragging a parent (life-child
+C1 at idx i, death-child C2 at idx i+1) so C1's new index landed on C2's old
+index **silently swapped the parent's life and death children** — written to
+the `.alo` on save. Existing tests missed it (they never hit the aliasing
+case). Fix: one `rewriteParentSpawnIndices` helper (snapshot-then-write),
+replacing all three loops; new `tests/test_emitter_reorder.cpp` reproduces the
+swap through both bridge-reachable entry points (red→green, 15/15).
+Cross-reference [L-075](#l-075) (grep the wire-kind to find ALL sites — same
+"duplicated logic, duplicated bug" family).
