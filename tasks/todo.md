@@ -170,8 +170,42 @@ false. StatusBar particle counter turns amber while overloaded.
         through; `role="status"` + `aria-live="polite"`.
       - Verified: vitest 670/670 (664 baseline + 5 banner + 1 StatusBar
         tint), `tsc -b` 0.
-- [ ] Task C: verification + docs + PR (+ CHANGELOG #120 merge-hash
+- [x] Task C: verification + docs + PR (+ CHANGELOG #120 merge-hash
       backfill `e67e5e5` rider)
+
+## Review (part 2)
+
+**Executed subagent-driven (A: engine+host+spec, B: banner+tint), each
+spec- and quality-reviewed; review fixes folded in:** RemoveEmitter
+live-particle accounting leak (same actual-vs-intended counter class as
+the SpawnParticle-bool fix), overload-flag reset moved after latch
+evaluation (inter-frame refusals now count), death-child refusal spec
+phase (the plan promised it; the riskiest pointer path), best-effort
+spec cleanup, burst-burn + weather-zombie comments, and the
+`observeParent` occlusion fix (splitter drag moved the content-sized
+banner without resizing it → stale alpha cut-out).
+
+**Plan-vs-reality:** the per-instance uint16 index cap (16,383) bites
+BEFORE the global budget for a single emitter — the plan's "1e9/s alone
+exceeds the budget" was wrong; the refused-churn FPS collapse forced the
+refused-round snap, and index-cap refusals latching the banner forced
+the "spawn limit reached" wording. The a11y pause leak (user chip) was
+fixed across all 8 a11y specs in the same branch.
+
+**Verification:** web vitest **670/670** (73 files; 6 banner/tint tests
+new), `tsc -b` 0, vite build clean, host Debug + Release x64 clean,
+native harness **177/0** (30 skipped; the 2 overload specs run LAST by
+design). Final clean-tree harness rerun green after the a11y unpause
+sweep.
+
+**User feel pass (pending — user launches):**
+- [ ] Repeat the Shift-×10 accident → editor SURVIVES, banner appears.
+- [ ] FPS stays interactive while overloaded.
+- [ ] Lower the rate → banner clears on its own (~1-6 s as population
+      decays), spawning resumes.
+- [ ] StatusBar particle count tints amber during overload.
+- [ ] Banner doesn't get overpainted by the viewport, including after a
+      splitter drag while it's up.
 
 ---
 
