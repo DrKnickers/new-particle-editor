@@ -16,6 +16,49 @@ Conventions:
 
 ## Changelog
 
+### Render loop paced to display cadence; GPU sync wait yields
+
+*2026-06-10 · TODO(merge hash) · TODO(PR)*
+
+The editor's render loop no longer free-runs: it used to render ~3000 fps at
+idle (measured by the `[PERF]` probe), pegging one CPU core and saturating
+the GPU with queued frames — headroom WebView2's renderer needed during
+splitter drags, making panel resizes feel far heavier than they are. The
+loop now renders once per display refresh period (~240 Hz cap on a 240 Hz
+monitor, ~60 on a 60 Hz one) and sleeps between frames; input still wakes it
+instantly, so interaction latency is unchanged. Idle CPU dropped from a full
+core to ~20% of one. The cross-device GPU sync wait also yields its
+timeslice while polling instead of burning the core.
+
+**How we tackled it.** Fix B of the resize-perf plan, two independent
+commits. B1 ([`src/host/HostWindow.cpp`](src/host/HostWindow.cpp:3500)): the
+LT-4 main loop renders only when a QPC frame budget elapses (one display
+refresh period, read via `EnumDisplaySettings` at startup, 60 Hz fallback)
+and otherwise blocks in `MsgWaitForMultipleObjectsEx(…, QS_ALLINPUT,
+MWMO_INPUTAVAILABLE)` — messages wake it immediately, the timeout wakes the
+next frame; `timeBeginPeriod(1)` for the loop's lifetime keeps the wait from
+quantizing to the ~15.6 ms default timer; a slow frame schedules from "now"
+(cap semantics — no vsync, no catch-up bursts); QPC failure degrades to the
+old free-run; capture mode keeps its `Sleep(16)` path untouched. B2
+([`src/engine.cpp`](src/engine.cpp:1622)): `WaitEndFrameQuery` polls tight
+for 64 iterations (the common already-signalled case) then `SwitchToThread()`s
+between polls; the 100k hung-GPU cap is unchanged. The `[PERF]` line gains
+`rps=` — actual renders/sec — because its `fps` field is `1/frame-cost`
+(theoretical max) and stopped tracking cadence once the loop was paced.
+
+**Issues encountered and resolutions.** (1) Exactly that `fps` field
+initially made the pacing look broken (`fps=2400` post-fix) — it never
+measured cadence, the unpaced loop just made cost and cadence coincide;
+`rps=` disambiguates permanently. (2) The 1 ms wait quantization means the
+cap runs slightly under the budget on fast monitors (~190 rps at a 4.17 ms /
+240 Hz budget) — accepted: it's a load cap, not vsync, and sub-ms spin-waits
+to hit exact cadence would reintroduce the burn being removed. (3) Verified
+the timing-sensitive surfaces explicitly: the native a11y/bridge harness
+(174/0 — bridge round-trips now ride a ≤1-frame-budget pump latency) and the
+resize-storm regression (per-tick cheap resets + one settle, unchanged).
+
+---
+
 ### Smooth window resize: cheap ResetEx-based per-tick device reset, plus resize-perf probes
 
 *2026-06-10 · TODO(merge hash) · [#116](https://github.com/DrKnickers/new-particle-editor/pull/116)*

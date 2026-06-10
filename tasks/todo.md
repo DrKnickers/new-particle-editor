@@ -280,5 +280,16 @@ re-plan (per CLAUDE.md).
         Debug + Release clean.
       **Awaiting the user's SELF-LAUNCHED feel verdict (L-033 +
       L-078 corollary 2) before Phase 2.**
-- [ ] Phase 2: Fix B
-- [ ] Phase 3: Fix C1/C2 (+ C3 decision)
+- [x] Phase 2: Fix B (branch `claude/resize-perf-phase2`, two commits:
+      B2 `c33cc08` spin-yield, B1 `1bed29a` paced pump). Measured on the
+      240 Hz dev box: **rps 3000 → ~190**, idle CPU **one full core →
+      ~20%**, GPU wait avg ~0.3 ms. Input wakes the pump instantly
+      (MsgWaitForMultipleObjectsEx + MWMO_INPUTAVAILABLE), so latency is
+      unchanged; capture mode untouched. `[PERF]` line gains `rps=`
+      (true cadence — the fps field is 1/frame-cost and can't show the
+      cap). Regression: resize storm still all-cheap resets + one
+      settle; native harness 174/0; Debug + Release clean.
+      **Awaiting the user's splitter-drag feel verdict (L-033,
+      self-launched).** Phase 1's FOV anchor + the #117 dock fixes are
+      independent of this branch.
+- [ ] Phase 3: Fix C1/C2 (+ C3 decision) — scope C3 after B's verdict.
