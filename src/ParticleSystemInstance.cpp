@@ -160,11 +160,19 @@ void ParticleSystemInstance::RemoveEmitter(EmitterInstance* instance)
 	{
 		if (it->get() == instance)
 		{
+			// Budget-leak fix: this path can destroy an instance that
+			// still holds live particles (e.g. deleting an emitter while
+			// it previews). Without subtracting them the engine's
+			// m_numParticles stays inflated until Clear(), permanently
+			// shrinking the overload guard's spawn budget. Kill() returns
+			// the negative live-particle delta — mirror
+			// Engine::KillParticleSystem's accounting.
+			const int particleDelta = instance->Kill();
 			// erase() destroys the unique_ptr, which calls ~EmitterInstance.
 			// That dtor unregisters from its Emitter::m_instances, so the
 			// caller's iteration over m_instances stays consistent.
 			m_emitters.erase(it);
-			m_engine.OnEmitterDestroyed();
+			m_engine.OnEmitterDestroyed(particleDelta);
 			return;
 		}
 	}

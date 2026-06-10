@@ -939,6 +939,12 @@ void EmitterInstance::Render(IDirect3DDevice9* pDevice)
 // Spawns another round of particles
 int EmitterInstance::SpawnParticles(TimeF spawnTime)
 {
+    // Overload guard asymmetry, deliberate: a round that gets here but
+    // is then refused (budget runs out mid-burst) still consumes
+    // m_currentBurst — finite-burst emitters can burn out with fewer
+    // particles emitted during overload. "Dropped, not deferred": we
+    // never replay refused work, so the burst is spent either way.
+    // (The pre-round bail in Update never reaches here, preserving it.)
     if (m_emitter.useBursts && m_emitter.nBursts > 0)
 	{
 		if (++m_currentBurst == m_emitter.nBursts)
@@ -982,6 +988,9 @@ bool EmitterInstance::IsFrozen(TimeF currentTime) const
 	return m_freezeTime > 0.0f && currentTime >= m_freezeTime;
 }
 
+// Returns the NEGATIVE count of live particles destroyed, i.e. a delta
+// callers feed straight into the engine's m_numParticles accounting
+// (Engine::KillParticleSystem, ParticleSystemInstance::RemoveEmitter).
 int EmitterInstance::Kill()
 {
 	// Stop spawning
@@ -1022,6 +1031,8 @@ EmitterInstance::EmitterInstance(TimeF currentTime, ParticleSystemInstance& syst
         // Overload guard: budget-gated like every other spawn path, and
         // *numParticles must report what was ACTUALLY spawned (it feeds
         // Engine::OnEmitterCreated's live particle accounting).
+        // Accepted edge: a weather instance fully starved here never
+        // spawns again and never dies (zombie until Clear/restart).
         *numParticles = 0;
         for (unsigned long i = 0; i < m_emitter.nParticlesPerSecond; i++)
 	    {

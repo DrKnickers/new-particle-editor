@@ -364,7 +364,11 @@ public:
     int ActiveSpawnerInstanceCount() const;
 
     void OnEmitterCreated(int numParticles)   { m_numEmitters++; m_numParticles += numParticles; }
-    void OnEmitterDestroyed() { m_numEmitters--; }
+    // numParticles is a (negative) live-particle delta for paths that
+    // destroy an instance which still holds live particles (see
+    // ParticleSystemInstance::RemoveEmitter). Death-by-decay paths pass
+    // the default 0: IsDead() implies m_primitives is already empty.
+    void OnEmitterDestroyed(int numParticles = 0) { m_numEmitters--; m_numParticles += numParticles; }
 
     // --- Preview overload guard (see kMaxLivePreviewParticles) ---
     // Per-particle gate: spend one unit of the per-frame spawn budget.
@@ -529,8 +533,10 @@ private:
 
     // Preview overload guard state (see kMaxLivePreviewParticles).
     // m_spawnBudget refills at the top of Update(); m_overloadThisFrame
-    // is recomputed per frame and copied into the latched
-    // m_overloadActive at the end of Update().
+    // accumulates refusals from the end of one Update to the end of the
+    // next (so inter-frame refusals — bridge/spawner-driven instance
+    // construction — count too), is folded into the latched
+    // m_overloadActive at the end of Update(), then reset there.
     int  m_spawnBudget       = kMaxLivePreviewParticles;
     bool m_overloadActive    = false;
     bool m_overloadThisFrame = false;

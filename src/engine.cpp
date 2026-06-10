@@ -570,7 +570,11 @@ void Engine::Update()
 		? (kMaxLivePreviewParticles * 9) / 10 : kMaxLivePreviewParticles;
 	m_spawnBudget = (m_numParticles < resumeAt)
 		? kMaxLivePreviewParticles - m_numParticles : 0;
-	m_overloadThisFrame = false;
+	// NOTE: m_overloadThisFrame is deliberately NOT reset here — it is
+	// reset at the END of Update, after the latch evaluation. Refusals
+	// recorded BETWEEN frames (bridge/spawner-driven instance
+	// construction) must count toward this frame's latch; a reset here
+	// would erase them.
 
     // Update existing instances
     for (auto it = m_instances.begin(); it != m_instances.end();)
@@ -607,6 +611,10 @@ void Engine::Update()
 	}
 #endif
 	m_overloadActive = overloadNow;
+
+	// Reset AFTER the latch evaluation so refusals between now and the
+	// next Update (inter-frame spawns) accumulate into the next frame.
+	m_overloadThisFrame = false;
 }
 
 bool Engine::RecoverDeviceIfNeeded()
