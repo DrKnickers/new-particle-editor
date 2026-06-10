@@ -23,6 +23,7 @@ import type {
   EngineStateDto,
   Event,
 } from "@particle-editor/bridge-schema";
+import { ZERO_SPAWN } from "@particle-editor/bridge-schema";
 
 beforeEach(() => {
   // Reset the store between tests so state mutations don't leak.
@@ -1336,9 +1337,9 @@ describe("MockBridge emitters/move-many (preserve order at the edge)", () => {
   function rootsTree(names: string[]): EmitterTreeDto {
     return {
       root: {
-        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN,
         children: names.map((name, i) => ({
-          id: i, stableId: 100 + i, name, role: "root", linkGroup: 0, visible: true, children: [],
+          id: i, stableId: 100 + i, name, role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [],
         })),
       },
     };

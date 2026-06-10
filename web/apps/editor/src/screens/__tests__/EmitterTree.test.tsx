@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { ZERO_SPAWN } from "@particle-editor/bridge-schema";
 import type { Bridge, EmitterTreeDto, EmitterTreeNode } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
@@ -14,23 +15,23 @@ import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitt
 function fixtureTree(): EmitterTreeDto {
   return {
     root: {
-      id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+      id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN,
       children: [
         {
-          id: 0, stableId: 100, name: "Smoke", role: "root", linkGroup: 1, visible: true,
+          id: 0, stableId: 100, name: "Smoke", role: "root", linkGroup: 1, visible: true, spawn: ZERO_SPAWN,
           children: [
-            { id: 1, stableId: 101, name: "Smoke embers", role: "lifetime", linkGroup: 0, visible: true, children: [] },
-            { id: 2, stableId: 102, name: "Smoke puff",   role: "death",    linkGroup: 0, visible: true, children: [] },
+            { id: 1, stableId: 101, name: "Smoke embers", role: "lifetime", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
+            { id: 2, stableId: 102, name: "Smoke puff",   role: "death",    linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
           ],
         },
         {
-          id: 3, stableId: 103, name: "Sparks", role: "root", linkGroup: 1, visible: true,
+          id: 3, stableId: 103, name: "Sparks", role: "root", linkGroup: 1, visible: true, spawn: ZERO_SPAWN,
           children: [
-            { id: 4, stableId: 104, name: "Spark trail", role: "lifetime", linkGroup: 0, visible: true, children: [] },
+            { id: 4, stableId: 104, name: "Spark trail", role: "lifetime", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
           ],
         },
         {
-          id: 5, stableId: 105, name: "Flash", role: "root", linkGroup: 0, visible: true,
+          id: 5, stableId: 105, name: "Flash", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN,
           children: [],
         },
       ],
@@ -126,19 +127,19 @@ describe("EmitterTree", () => {
     // brand-new elements, snap instead of glide — the pre-glide behavior.)
     const before: EmitterTreeDto = {
       root: {
-        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN,
         children: [
-          { id: 0, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, children: [] },
-          { id: 1, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 0, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
+          { id: 1, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
         ],
       },
     };
     const after: EmitterTreeDto = {
       root: {
-        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true,
+        id: -1, stableId: 0, name: "", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN,
         children: [
-          { id: 0, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, children: [] },
-          { id: 1, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, children: [] },
+          { id: 0, stableId: 502, name: "Beta",  role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
+          { id: 1, stableId: 501, name: "Alpha", role: "root", linkGroup: 0, visible: true, spawn: ZERO_SPAWN, children: [] },
         ],
       },
     };
@@ -1010,7 +1011,7 @@ describe("EmitterTree", () => {
 });
 
 const node = (id: number, name: string, children: EmitterTreeNode[] = []) =>
-  ({ id, name, role: "root", visible: true, children } as unknown as EmitterTreeNode);
+  ({ id, name, role: "root", visible: true, spawn: ZERO_SPAWN, children } as unknown as EmitterTreeNode);
 
 describe("EmitterTree delete gating (helper-level)", () => {
   beforeEach(() => {
