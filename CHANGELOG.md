@@ -32,11 +32,14 @@ vector-editor selection cue, calmer and clearer, fading in over 150 ms
 ([`src/screens/CurveEditor.tsx`](web/apps/editor/src/screens/CurveEditor.tsx:2024))
 the visible dot's radius is now constant (no select-grow) and a sibling
 `.curve-key-ring` circle (r9, `fill: none`) renders per focus key,
-invisible until `data-selected="true"`. The old
-`saturate()`/`drop-shadow()` filter is gone. The ring's lightened colour
-is `color-mix(in srgb, var(--ring-color) 60%, white)` set in a stylesheet
-rule, with the channel colour threaded in as the `--ring-color` inline
-custom property.
+invisible until `data-selected="true"`. The old harsh
+`saturate()`/`drop-shadow()` filter is gone; in its place the selected
+key group (dot + ring together) wears a **soft elevation shadow**
+(`--marker-shadow`, a per-theme `drop-shadow()` in the `--shadow-soft`
+family) so the lightened ring stays defined against a light canvas. The
+ring's lightened colour is `color-mix(in srgb, var(--ring-color) 60%,
+white)` set in a stylesheet rule, with the channel colour threaded in as
+the `--ring-color` inline custom property.
 
 **Issues encountered and resolutions.** The first cut set the ring
 stroke as an SVG **presentation attribute**:

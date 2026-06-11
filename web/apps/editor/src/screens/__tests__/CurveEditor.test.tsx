@@ -1439,6 +1439,13 @@ describe("CurveEditor — channel-colored selection ring (focus channel)", () =>
     // jsdom stores custom properties set via React's style object;
     // getPropertyValue("--ring-color") returns them directly.
     expect((selectedRing as SVGElement).style.getPropertyValue("--ring-color")).toBe(RING_CHANNEL.color);
+
+    // The enclosing key group carries data-selected so the CSS soft
+    // elevation shadow (.curve-key-group[data-selected="true"] { filter:
+    // var(--marker-shadow) }) applies to the dot + ring together.
+    const group = selectedRing.closest(".curve-key-group");
+    expect(group).not.toBeNull();
+    expect(group!.getAttribute("data-selected")).toBe("true");
   });
 
   it("unselected key's .curve-key-ring has data-selected='false'", () => {

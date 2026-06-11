@@ -62,6 +62,13 @@
      reads equally soft on both themes. Worn by tooltips + the overload
      banner. */
   --shadow-soft: 0 4px 16px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  /* Soft elevation for the SELECTED curve marker (dot + ring). Same
+     tight-contact geometry as --shadow-soft's second layer, but a
+     drop-shadow() FILTER (SVG can't take the multi-layer box-shadow),
+     and the alpha is tuned so the lightened selection ring stays
+     defined on a LIGHT canvas (where it would otherwise wash out).
+     Per-theme alpha like --shadow-soft. Feel-tunable. */
+  --marker-shadow: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
   --radius: 8px;
   --radius-sm: 5px;
   --row-h: 26px;

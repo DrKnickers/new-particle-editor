@@ -1230,6 +1230,14 @@
 .curve-key-ring[data-selected="true"] {
   opacity: 1;
 }
+/* Selected marker (dot + ring together) gets a soft elevation shadow so
+   the lightened ring doesn't wash out on a LIGHT canvas. Applied to the
+   key group, not each circle, so the dot + ring cast one combined
+   shadow rather than two overlapping ones. The transparent hit-pad in
+   the group casts nothing. */
+.curve-key-group[data-selected="true"] {
+  filter: var(--marker-shadow);
+}
 @media (prefers-reduced-motion: reduce) {
   .curve-key-ring { transition: none; }
 }

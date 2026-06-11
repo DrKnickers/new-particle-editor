@@ -1985,7 +1985,11 @@ function MultiChannelCurves({
               const hitR = selected ? 18 : 14;
               const visR = 5;
               return (
-                <g key={i}>
+                <g
+                  key={i}
+                  className="curve-key-group"
+                  data-selected={selected ? "true" : "false"}
+                >
                   <circle
                     data-testid="curve-key"
                     data-channel-id={channel.id}
@@ -2031,7 +2035,7 @@ function MultiChannelCurves({
                     cy={p.y}
                     r={9}
                     fill="none"
-                    strokeWidth={1.75}
+                    strokeWidth={1.5}
                     pointerEvents="none"
                     style={{ ["--ring-color" as string]: channel.color }}
                   />
