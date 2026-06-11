@@ -74,7 +74,7 @@ banner is unchanged; the refusal takes precedence for its 5 s window).
 **Issues encountered and resolutions.** The native regression suite
 surfaced a real interaction between the live push hook and the four
 existing **runtime-backstop** specs (the two 1e9 "bomb" specs and the
-two cap-bound specs). Those specs prove the backstop by cranking an
+two cap-bound specs). Those specs proved the backstop by cranking an
 emitter to rate 1e9 *while the guard is enabled*, then spawning. With
 the push hook live, that rate-crank fires `emitters/tree/changed` → the
 hook recomputes an astronomical `estimateSystemLoad` → pushes it → and
@@ -83,12 +83,18 @@ new gate, so the live population stays at 0 and the backstop never
 engages. A defensive `engine/set/estimated-load { perInstance: 0 }`
 reset at the top of each bomb spec is **not** sufficient on its own,
 because the hook re-pushes the huge estimate on the rate-crank that
-follows the reset. The five NEW gate specs (cumulative / edit-time /
+follows the reset. The resolution is to accept that the preemptive gate
+makes the old visible-rate backstop scenarios **unreachable by design**:
+any spawn the estimate can see is refused before the runtime budget
+engages. The four obsolete bomb / cap-bound specs were therefore
+**retired**, since the five NEW gate specs (cumulative / edit-time /
 single-instance-repeat / spawner-churn-stop / disabled-guard-bypass)
-all pass and prove the gate; the backstop specs need to reach the
-runtime budget via a path the *estimate cannot see* (or by holding the
-estimate at 0 across the spawn) rather than by cranking a visible rate
-under an enabled guard — tracked as the follow-up below.
+prove those over-budget cases are now *prevented* up front. The
+engine's runtime particle/instance budget is **kept in the code** as
+belt-and-suspenders for the hard-to-trigger case the estimate
+undercounts (deep runtime chains, death-spawn storms) — it just no
+longer has a dedicated regression spec, because no visible-rate test can
+reach it past the gate.
 
 ---
 
