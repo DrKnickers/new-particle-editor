@@ -4569,6 +4569,26 @@ only the stops/opacity of a vertical gradient (`y2=1`) but not the
 coordinates yields a different-looking fill that a stop-checking test
 won't catch — verify the coordinates, the failure mode tests miss.
 
+**Corollary 2 — `color-mix()` (and other newer CSS color functions) are
+unreliable as SVG PRESENTATION ATTRIBUTES; put them in a stylesheet
+rule.** A bare `var()` resolves fine as a presentation attribute in this
+Chromium host (the curve dots use `fill="var(--x-axis)"` and render
+colored), but `stroke="color-mix(in srgb, var(--x-axis) 60%, white)"` —
+color-mix wrapping a var as an attribute VALUE — can fall back to an
+invalid/black stroke. Drive it from a CSS property instead: set a
+per-element custom property inline (`style={{ "--ring-color":
+channel.color }}`) and do the mix in a stylesheet rule
+(`.curve-key-ring { stroke: color-mix(in srgb, var(--ring-color) 60%,
+white) }`), where it resolves at computed-value time. Tests with raw-hex
+fixtures pass either way (hex+color-mix is valid as an attribute), so a
+unit test does NOT catch the var()-specific failure — assert the inline
+custom property is set, and rely on the stylesheet for the resolution
+(jsdom can't compute it; the host does). Caught in review on the
+selected-key ring (session 37); the reviewer's stated mechanism ("var()
+never resolves in presentation attributes") was itself wrong — the
+codebase disproves it — so the lesson is the narrower, verified one:
+*newer color FUNCTIONS belong in CSS rules, not SVG attributes.*
+
 **Source incident (2026-06-11, session 37, curve morph Part B #128).**
 The morph overlay drew a flat 0.12-alpha fill instead of the static
 layer's vertical gradient, "imperceptible over 180 ms." It passed every

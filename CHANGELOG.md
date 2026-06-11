@@ -17,6 +17,41 @@ Conventions:
 ## Changelog
 
 
+### Selected curve key: a colour ring instead of a grow + drop shadow
+
+*2026-06-11 · TODO-hash · TODO-PR*
+
+The selected key on the focus curve no longer balloons and casts a dark
+drop shadow (which read as a smudge at marker scale and covered the
+curve). Instead the dot stays its size and gains a thin concentric
+**ring in a lightened shade of the channel's own colour** — the standard
+vector-editor selection cue, calmer and clearer, fading in over 150 ms
+(and off under `prefers-reduced-motion`).
+
+**How we tackled it.** In the focus-layer key render
+([`src/screens/CurveEditor.tsx`](web/apps/editor/src/screens/CurveEditor.tsx:2024))
+the visible dot's radius is now constant (no select-grow) and a sibling
+`.curve-key-ring` circle (r9, `fill: none`) renders per focus key,
+invisible until `data-selected="true"`. The old
+`saturate()`/`drop-shadow()` filter is gone. The ring's lightened colour
+is `color-mix(in srgb, var(--ring-color) 60%, white)` set in a stylesheet
+rule, with the channel colour threaded in as the `--ring-color` inline
+custom property.
+
+**Issues encountered and resolutions.** The first cut set the ring
+stroke as an SVG **presentation attribute**:
+`stroke="color-mix(in srgb, var(--x-axis) 60%, white)"`. A bare `var()`
+resolves fine as an attribute in the WebView2 Chromium host (the dots
+use `fill="var(--x-axis)"`), but `color-mix()` wrapping a `var()` as an
+attribute value does not reliably resolve and can fall back to a black
+ring — while unit tests pass because the fixture uses a raw-hex colour.
+Moved the `color-mix` into the stylesheet rule (driven by the
+`--ring-color` custom property), where it resolves at computed-value
+time. The 60/40 white blend is a deliberate feel-tune point for
+light-theme legibility. (Captured as a corollary on lesson L-083.)
+
+---
+
 ### Group-drag now live-updates the Time/Value spinners
 
 *2026-06-11 · [`d5b6f1d`](https://github.com/DrKnickers/new-particle-editor/commit/d5b6f1d) · [#130](https://github.com/DrKnickers/new-particle-editor/pull/130)*
