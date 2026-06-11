@@ -500,6 +500,12 @@ export function CurveEditorPanel({ bridge }: Props) {
     return tracks.find((t) => t.name === focusedChannel.trackName) ?? null;
   }, [tracks, focusedChannel]);
 
+  // Locked-now flag: when the focus channel is currently a read-only
+  // alias of another channel, every edit affordance (Insert mode,
+  // interpolation toggle, Delete, drag, marquee) should be disabled.
+  // Lock dropdown itself stays enabled so the user can unlock.
+  const focusLocked = focusedTrack !== null && focusedTrack.lockedTo !== null;
+
   // CRV-1 robustness: after a tree/changed refetch the engine's float32 key
   // times can land an ULP away from the times we optimistically put in
   // `selectedKeyTimes` (e.g. a group move commits N keys; the real engine
@@ -1069,12 +1075,6 @@ export function CurveEditorPanel({ bridge }: Props) {
     setOptimisticSelected(null);
   }, [bridge, selectedId, focusedChannel.trackName, lockToValue]);
 
-  // Locked-now flag: when the focus channel is currently a read-only
-  // alias of another channel, every edit affordance (Insert mode,
-  // interpolation toggle, Delete, drag, marquee) should be disabled.
-  // Lock dropdown itself stays enabled so the user can unlock.
-  const focusLocked = focusedTrack !== null && focusedTrack.lockedTo !== null;
-
   // Delete-button disabled state for the toolbar.
   const deletableCount = useMemo(() => {
     let n = 0;
@@ -1170,6 +1170,28 @@ export function CurveEditorPanel({ bridge }: Props) {
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); };
   }, [handleCopyKeys, handleCutKeys, handlePasteKeys, selectedKeyTimes]);
+
+  // Read-only mirror (spec §2.1): a locked focus channel gets NO
+  // interactive handlers — drag, insert, key-click, marquee, and the
+  // key context menu are all selection/mutation gateways. onCanvasClick
+  // and onCanvasContextMenu stay wired (clear-selection / mode-drop UX).
+  // Renderer-side focusReadOnly gates are the second layer of the same
+  // defense (CurveEditor.tsx).
+  const interactiveHandlers = focusLocked
+    ? {}
+    : {
+        onKeyClick: handleKeyClick,
+        insertMode: mode === "insert",
+        onCanvasAdd: handleCanvasAdd,
+        onKeyContextMenu: (time: number, isBorder: boolean, x: number, y: number) =>
+          setKeyContextMenu({ time, isBorder, x, y }),
+        onKeyDragEnd: handleKeyDragEnd,
+        onKeyDragStart: handleKeyDragStart,
+        onKeyDragMove: handleKeyDragMove,
+        onKeyDragCancel: handleKeyDragCancel,
+        onGroupDragEnd: handleGroupDragEnd,
+        onCanvasMarqueeSelect: handleCanvasMarqueeSelect,
+      };
 
   return (
     <div
@@ -1485,7 +1507,8 @@ export function CurveEditorPanel({ bridge }: Props) {
                 onGutterPointerDown={(e) => {
                   // Gutter press starts a marquee only in Select mode (Insert
                   // needs an in-plot coordinate, so a gutter press is a no-op).
-                  if (mode === "select") {
+                  // Locked focus: withheld entirely (no mutation on a read-only mirror).
+                  if (mode === "select" && !focusLocked) {
                     curveRef.current?.startMarquee(e.clientX, e.clientY, e.shiftKey, e.pointerId);
                   }
                 }}
@@ -1498,10 +1521,7 @@ export function CurveEditorPanel({ bridge }: Props) {
                   focusChannel={focusChannel}
                   valueRange={unifiedRange}
                   selectedKeyTimes={selectedKeyTimes}
-                  onKeyClick={handleKeyClick}
                   onCanvasClick={handleCanvasClick}
-                  insertMode={mode === "insert"}
-                  onCanvasAdd={handleCanvasAdd}
                   onCanvasContextMenu={() => {
                     // CRV-7: mirror legacy WM_RBUTTONDOWN. In Insert mode a
                     // right-click drops back to Select mode without
@@ -1513,15 +1533,7 @@ export function CurveEditorPanel({ bridge }: Props) {
                     setOptimisticSelected(null);
                     setSelectedKeyTimes((prev) => (prev.size === 0 ? prev : new Set()));
                   }}
-                  onKeyContextMenu={(time, isBorder, x, y) =>
-                    setKeyContextMenu({ time, isBorder, x, y })
-                  }
-                  onKeyDragEnd={handleKeyDragEnd}
-                  onKeyDragStart={handleKeyDragStart}
-                  onKeyDragMove={handleKeyDragMove}
-                  onKeyDragCancel={handleKeyDragCancel}
-                  onGroupDragEnd={handleGroupDragEnd}
-                  onCanvasMarqueeSelect={handleCanvasMarqueeSelect}
+                  {...interactiveHandlers}
                 />
               </CanvasWithAxisLabels>
             )}

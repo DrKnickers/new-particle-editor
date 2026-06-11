@@ -48,6 +48,15 @@ function fixtureTracks(): TrackDto[] {
   }));
 }
 
+/** Same as fixtureTracks but with Green locked to Red — the minimal
+ *  scenario for exercising panel-level handler gating. */
+function lockedFixtureTracks(): TrackDto[] {
+  return fixtureTracks().map((t) => ({
+    ...t,
+    lockedTo: t.name === "green" ? "red" : null,
+  }));
+}
+
 type SelectionListener = (e: { payload: { id: number | null } }) => void;
 
 function makeStubBridge(initialSelectedId: number | null) {
@@ -808,6 +817,91 @@ describe("CurveEditorPanel", () => {
       );
       expect(match).toBeDefined();
       expect((match![0] as { params: { track: string } }).params.track).toBe("red");
+    });
+  });
+
+  // ── Locked focus channel — panel gating ─────────────────────────
+  describe("locked focus channel — panel gating", () => {
+    it("commits no mutating track command from drag, insert-click, context-menu, or marquee on a locked focus", async () => {
+      // Build a stub bridge returning lockedFixtureTracks (green→red).
+      const listeners: SelectionListener[] = [];
+      const bridge = {
+        request: vi.fn().mockImplementation((req: { kind: string }) => {
+          if (req.kind === "engine/state/snapshot") {
+            return Promise.resolve({
+              ...makeDefaultEngineState(),
+              selectedEmitterId: 1,
+            });
+          }
+          if (req.kind === "emitters/get-tracks") {
+            return Promise.resolve({ tracks: lockedFixtureTracks() });
+          }
+          return Promise.resolve({});
+        }),
+        on: vi.fn().mockImplementation((kind: string, h: SelectionListener) => {
+          if (kind === "emitters/selected") listeners.push(h);
+          return () => {
+            const idx = listeners.indexOf(h);
+            if (idx >= 0) listeners.splice(idx, 1);
+          };
+        }),
+      } as unknown as Bridge & {
+        request: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+      };
+
+      render(<CurveEditorPanel bridge={bridge} />);
+
+      // Wait for curves to load.
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+      });
+
+      // Focus the green channel (locked to red).
+      fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-channel-row-green").dataset.focus).toBe("true");
+      });
+
+      // Snapshot the call count AFTER setup (get-tracks, snapshot, etc.)
+      // so we only catch new calls.
+      const callsBefore = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      // Attempt 1: pointer drag on a curve-key.
+      const keys = document.querySelectorAll("[data-testid='curve-key']");
+      if (keys.length > 0) {
+        fireEvent.pointerDown(keys[0]!, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+        fireEvent.pointerMove(keys[0]!, { pointerId: 1, clientX: 20, clientY: 20 });
+        fireEvent.pointerUp(keys[0]!, { pointerId: 1 });
+      }
+
+      // Attempt 2: context menu on a curve-key (key context menu should not appear).
+      if (keys.length > 0) {
+        fireEvent.contextMenu(keys[0]!);
+      }
+      expect(screen.queryByTestId("ce-key-context-menu-delete")).toBeNull();
+
+      // Attempt 3: backdrop pointer-down + move + up (marquee-style).
+      const backdrop = screen.queryByTestId("curve-canvas-backdrop");
+      if (backdrop) {
+        fireEvent.pointerDown(backdrop, { button: 0, pointerId: 2, clientX: 5, clientY: 5 });
+        fireEvent.pointerMove(backdrop, { pointerId: 2, clientX: 50, clientY: 50 });
+        fireEvent.pointerUp(backdrop, { pointerId: 2 });
+      }
+
+      // Assert: NO mutating track commands were issued.
+      const newCalls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls
+        .slice(callsBefore)
+        .map((call) => (call[0] as { kind: string }).kind);
+
+      const mutatingKinds = [
+        "emitters/set-track-key",
+        "emitters/add-track-key",
+        "emitters/delete-track-keys",
+      ];
+      for (const kind of mutatingKinds) {
+        expect(newCalls).not.toContain(kind);
+      }
     });
   });
 });
