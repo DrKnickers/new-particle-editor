@@ -305,7 +305,12 @@ function drawJob(
   const { markers, input: { color } } = job;
   if (job.markerCircles.length !== markers.length) {
     // Remove any stale circles from the DOM and recreate.
-    for (const c of job.markerCircles) el.removeChild(c);
+    // Guard with try/catch: if the overlay <g> was re-created between ticks
+    // the node may no longer be a child → NotFoundError. Matches the
+    // defensive posture of the classification-effect's pre-clear path.
+    for (const c of job.markerCircles) {
+      try { el.removeChild(c); } catch { /* already detached */ }
+    }
     job.markerCircles = [];
     for (let i = 0; i < markers.length; i++) {
       const circle = document.createElementNS(SVG_NS, "circle") as SVGCircleElement;

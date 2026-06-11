@@ -1072,6 +1072,15 @@ describe("curve morph (structural changes)", () => {
       expect(overlay.querySelectorAll("circle").length).toBe(4);
     });
 
+    // Structural diversity check: the 4 circles must not all share the same cx.
+    // Move markers sit at px 0 and 600 (keys at time 0 and 100 are stable).
+    // The "in" marker sits at px 450 (time 75) and the "out" at px 300 (time 50).
+    // A regression that creates 4 circles with wrong choreography (e.g. all at
+    // the same position) will fail here even if the count is still 4.
+    const circles4 = Array.from(overlay.querySelectorAll("circle"));
+    const cxValues = new Set(circles4.map((c) => c.getAttribute("cx")));
+    expect(cxValues.size, "all 4 marker circles must have distinct cx values").toBe(4);
+
     await waitFor(() => {
       expect(container.querySelector('[data-testid="curve-morph-overlay"]')).toBeNull();
     }, { timeout: 2000 });
