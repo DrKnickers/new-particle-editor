@@ -1184,49 +1184,60 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
           </Menubar.Portal>
         </Menubar.Menu>
       </Menubar.Root>
+      {/* T6 span shims: disabled buttons fire no pointer events, so the Tip
+          listens on a wrapping span that stays interactive while the button
+          inside is disabled. */}
       <Tip content="Duplicate" occlusionId="tip:tree-footer:duplicate">
-        <button
-          type="button"
-          className={TOOLBAR_BTN}
-          aria-label="Duplicate emitter"
-          disabled={!hasPrimary}
-          onClick={duplicatePrimary}
-        >
-          <Copy className="size-4" />
-        </button>
+        <span className="inline-block">
+          <button
+            type="button"
+            className={TOOLBAR_BTN}
+            aria-label="Duplicate emitter"
+            disabled={!hasPrimary}
+            onClick={duplicatePrimary}
+          >
+            <Copy className="size-4" />
+          </button>
+        </span>
       </Tip>
       <Tip content="Delete" occlusionId="tip:tree-footer:delete">
-        <button
-          type="button"
-          className={TOOLBAR_BTN}
-          aria-label="Delete emitter"
-          disabled={!hasPrimary}
-          onClick={del}
-        >
-          <Trash2 className="size-4" />
-        </button>
+        <span className="inline-block">
+          <button
+            type="button"
+            className={TOOLBAR_BTN}
+            aria-label="Delete emitter"
+            disabled={!hasPrimary}
+            onClick={del}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </span>
       </Tip>
       <Tip content="Move Up" occlusionId="tip:tree-footer:move-up">
-        <button
-          type="button"
-          className={TOOLBAR_BTN}
-          aria-label="Move emitter up"
-          disabled={!canMoveUp}
-          onClick={moveUp}
-        >
-          <ChevronUp className="size-4" />
-        </button>
+        <span className="inline-block">
+          <button
+            type="button"
+            className={TOOLBAR_BTN}
+            aria-label="Move emitter up"
+            disabled={!canMoveUp}
+            onClick={moveUp}
+          >
+            <ChevronUp className="size-4" />
+          </button>
+        </span>
       </Tip>
       <Tip content="Move Down" occlusionId="tip:tree-footer:move-down">
-        <button
-          type="button"
-          className={TOOLBAR_BTN}
-          aria-label="Move emitter down"
-          disabled={!canMoveDown}
-          onClick={moveDown}
-        >
-          <ChevronDown className="size-4" />
-        </button>
+        <span className="inline-block">
+          <button
+            type="button"
+            className={TOOLBAR_BTN}
+            aria-label="Move emitter down"
+            disabled={!canMoveDown}
+            onClick={moveDown}
+          >
+            <ChevronDown className="size-4" />
+          </button>
+        </span>
       </Tip>
       <Tip content="Show All Emitters" occlusionId="tip:tree-footer:show-all-emitters">
         <button
