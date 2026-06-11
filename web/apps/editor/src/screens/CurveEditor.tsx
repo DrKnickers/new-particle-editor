@@ -2031,9 +2031,9 @@ function MultiChannelCurves({
                     cy={p.y}
                     r={9}
                     fill="none"
-                    stroke={`color-mix(in srgb, ${channel.color} 60%, white)`}
                     strokeWidth={1.75}
                     pointerEvents="none"
+                    style={{ ["--ring-color" as string]: channel.color }}
                   />
                   <circle
                     className="curve-key-marker"

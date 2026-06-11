@@ -1416,7 +1416,7 @@ describe("CurveEditor — channel-colored selection ring (focus channel)", () =>
     );
   }
 
-  it("selected key's .curve-key-ring has data-selected='true', fill='none', stroke contains 'color-mix' and the channel colour, r='9'", () => {
+  it("selected key's .curve-key-ring carries --ring-color custom property with the channel colour, has data-selected='true', fill='none', r='9', and no stroke attribute", () => {
     const { container } = renderRingFixture(new Set([50]));
 
     // There should be 3 ring elements — one per key.
@@ -1428,12 +1428,17 @@ describe("CurveEditor — channel-colored selection ring (focus channel)", () =>
     const selectedRing = rings[1]!;
     expect(selectedRing.getAttribute("data-selected")).toBe("true");
     expect(selectedRing.getAttribute("fill")).toBe("none");
-
-    const stroke = selectedRing.getAttribute("stroke") ?? "";
-    expect(stroke).toContain("color-mix");
-    expect(stroke).toContain(RING_CHANNEL.color);
-
     expect(selectedRing.getAttribute("r")).toBe("9");
+    expect(selectedRing.getAttribute("pointer-events")).toBe("none");
+
+    // The ring no longer carries a stroke ATTRIBUTE — color-mix now lives in
+    // the stylesheet rule (.curve-key-ring { stroke: color-mix(...) }) where
+    // var() inside color-mix() is reliably resolved. The channel colour is
+    // threaded via the --ring-color inline custom property instead.
+    expect(selectedRing.getAttribute("stroke")).toBeNull();
+    // jsdom stores custom properties set via React's style object;
+    // getPropertyValue("--ring-color") returns them directly.
+    expect((selectedRing as SVGElement).style.getPropertyValue("--ring-color")).toBe(RING_CHANNEL.color);
   });
 
   it("unselected key's .curve-key-ring has data-selected='false'", () => {
