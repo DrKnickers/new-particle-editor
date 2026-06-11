@@ -4515,3 +4515,33 @@ golden regen for kbd-tab-cycle-stop-2 produced a 65-line wrong-context
 diff (selection lost, tabpanel empty); the correct full-run regen was
 +3 lines. Related: the goldens were also FLAKY until captureDomA11y
 settled tooltip exit animations — see the NT-12 CHANGELOG entry.
+
+
+## L-082 — Tailwind v4 compiles `translate`/`scale`/`rotate` utilities to the standalone CSS PROPERTIES, not `transform`; a keyframe that animates `transform` COMPOSES with them rather than overriding
+
+**Rule.** In Tailwind v4, `-translate-x-1/2 -translate-y-1/2` emits
+`translate: -50% -50%` (the standalone `translate` CSS property), NOT
+`transform: translate(...)`. CSS applies `translate`, then `rotate`, then
+`scale`, then `transform` as INDEPENDENT, COMPOSING transforms. So a
+`@keyframes` rule that sets `transform: translate(-50%, ...)` on a
+Tailwind-centered element does not replace the centering — it STACKS on top
+of it (total -100% shift), and only "snaps" back to the right place when the
+animation ends and `transform` reverts to `none`. Keyframes for a
+Tailwind-centered surface must animate ONLY the delta (e.g.
+`transform: translateY(8px)`) and leave the `-50%/-50%` centering to the
+`translate` property. This is the OPPOSITE of Tailwind v3, where translate
+utilities went through `transform` (so a keyframe `transform` overrode them
+cleanly).
+
+**Source incident (2026-06-10, session 36, NT-12 #123).** The modal and
+overload banner entrance keyframes repeated `translate(-50%, …)` inside
+`transform` (carried verbatim from a standalone HTML mockup that centered via
+`transform`). In the real app both surfaces spawned mis-centered — the modal
+flung toward top-left then snapped to center mid-animation, the banner stuck
+in the top-left corner (its `both` fill made the bad position persist). The
+mockup never showed it because it had no Tailwind `translate` property to
+compose with. Diagnosed by inspecting `getComputedStyle(el).translate` vs
+`.transform` in the live preview: `translate: "-50% -50%"`, `transform`
+carrying the keyframe's second -50%. Cross-reference L-033 (agent mockups /
+screenshots differ from the real host — verify in the actual app), and the
+NT-12 CHANGELOG entry (issue 4).

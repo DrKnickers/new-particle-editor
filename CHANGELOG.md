@@ -21,14 +21,16 @@ Conventions:
 
 *2026-06-10 · `TODO` · [#123](https://github.com/DrKnickers/new-particle-editor/pull/123)*
 
-Every hover hint in the editor is now a styled, animated tooltip instead of
-a native HTML `title` — themed surface with a soft drop shadow that adapts
-to dark/light mode, a fade + 4px slip entrance/exit, a 400 ms first-open
-delay that collapses to instant when sweeping across controls, and full
-`prefers-reduced-motion` support. The NT-11 heavy-emitter ⚠ glyph gained a
+Interactive controls (buttons, toolbar glyphs, the emitter-tree affordances)
+now carry a styled, animated tooltip instead of a native HTML `title` —
+themed surface with a soft drop shadow that adapts to dark/light mode, a
+fade + 4px slip entrance/exit, a 400 ms first-open delay that collapses to
+instant when sweeping across controls, and full `prefers-reduced-motion`
+support. Passive readouts (property-tab labels, the status-bar counts) carry
+no tooltip — they don't need one. The NT-11 heavy-emitter ⚠ glyph gained a
 rich tooltip: an amber header band stating plainly *"This chain may spawn
-far too many particles — Soft warning, nothing is blocked"* over an aligned
-per-generation breakdown of the multiplication chain. The same motion
+too many particles"* (or *"…emitter…"* when a single emitter pins the
+threshold on its own) over an aligned per-generation breakdown. The same motion
 family now animates the Modal (fade + 8 px rise; its previous entrance
 classes were silent no-ops) and the preview-overload banner (fade + 6 px
 drop, soft shadow replacing the old hard ring), driven by shared
@@ -71,8 +73,14 @@ sometimes mounted, sometimes not. `captureDomA11y` now settles
 capturing; the only legitimate golden delta is tab-stop-2's open tooltip,
 and regenerating goldens via a single-test `--grep` is invalid anyway
 (earlier spec files establish selection state — regenerate from the full
-run only). Verified: web 687, `tsc -b` 0, native 177/0 twice, host Debug
-x64 clean.
+run only). (4, found at the user feel test) The modal and overload banner
+spawned mis-centered and snapped into place mid-animation: Tailwind v4
+compiles `-translate-x/y-1/2` to the standalone CSS `translate` PROPERTY,
+not `transform`, so keyframes that repeated `translate(-50%, …)` inside
+`transform` double-shifted the surface; the keyframes now slip via
+`transform` only and leave centering to the `translate` property (the two
+compose). Verified: web 688, `tsc -b` 0, native 177/0, host Debug x64
+clean; modal + banner centering reconfirmed in-browser.
 
 ---
 

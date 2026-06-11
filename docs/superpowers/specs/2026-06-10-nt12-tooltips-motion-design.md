@@ -324,3 +324,29 @@ shadow; reduced-motion spot check (OS setting).
    drags** (the observeParent fix from #121). Unchanged code path — the body
    still registers with `observeParent=true`; the only new state is 150 ms of
    exit. Accepted: not worth designing around beyond the §7 timeout fallback.
+
+
+## Addendum — feel-test refinements (2026-06-10, post-build)
+
+The user feel-tested the shipped build; four adjustments followed, all on
+the same PR:
+
+1. **Tooltips only on interactive controls.** The §5 T3 truncation labels,
+   the status-bar readout, and the import-path display lost their tooltips
+   entirely — passive non-buttons do not need a hover hint. Tooltips remain
+   on buttons, role=button affordances (eye toggle, link-group bracket),
+   and the deliberate ⚠ glyph.
+2. **Warning copy.** §4's band now reads *"This {chain|emitter} may spawn
+   too many particles"* — "emitter" when the offending path is a single
+   row (one emitter pins the threshold), "chain" when multi-generation.
+   Dropped "far"; dropped the "Soft warning — nothing is blocked"
+   sub-line; the first breakdown row reads "~N particles" not "~N alive".
+   `formatChainWarning` (the aria-label) mirrors the same wording.
+3. **Modal/banner alignment (§6/§7).** The keyframes must NOT repeat the
+   `-translate-x/y-1/2` centering inside `transform`: Tailwind v4 emits
+   that centering as the standalone `translate` PROPERTY, so a `transform`
+   that also did `translate(-50%, …)` double-shifted the surface (it spawned
+   mis-centered and snapped on animation end). Corrected to slip via
+   `transform: translateY()` only; `translate` owns centering; the two
+   compose. (The standalone-mockup brainstorm missed this because it
+   centered via `transform` — a mockup≠real-host gap → see lessons L-082.)
