@@ -12,9 +12,10 @@
 // No active mod ⇒ the list is empty and the popover shows an honest hint.
 
 import * as Popover from "@radix-ui/react-popover";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import type { Bridge, PaletteEntry } from "@particle-editor/bridge-schema";
 import { OccludingPopover } from "@/components/OccludingPopover";
+import { Tip } from "@/primitives/Tip";
 
 type Slot = "color" | "bump";
 
@@ -22,13 +23,27 @@ type Props = {
   bridge: Bridge;
   slot: Slot;
   onApply: (filename: string) => void;
-  children: ReactNode;
+  /** Optional tooltip for the trigger. Rendered here (Tooltip.Trigger
+   *  wrapping Popover.Trigger — the Radix-blessed nesting) because a Tip
+   *  placed around the child at the call site would sit under
+   *  Popover.Trigger asChild and swallow the trigger props. Side/occlusion
+   *  are fixed for the single production caller (TexturePickerField in the
+   *  right dock, which opens toward the viewport). */
+  tip?: string;
+  children: ReactElement;
 };
 
-export function TexturePalettePopover({ bridge, slot, onApply, children }: Props) {
+export function TexturePalettePopover({ bridge, slot, onApply, tip, children }: Props) {
+  const trigger = <Popover.Trigger asChild>{children}</Popover.Trigger>;
   return (
     <Popover.Root>
-      <Popover.Trigger asChild>{children}</Popover.Trigger>
+      {tip ? (
+        <Tip content={tip} side="left" occlusionId="tip:props:texture-palette">
+          {trigger}
+        </Tip>
+      ) : (
+        trigger
+      )}
       <Popover.Portal>
         <OccludingPopover
           bridge={bridge}
