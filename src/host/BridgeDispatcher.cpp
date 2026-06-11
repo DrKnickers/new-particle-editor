@@ -5362,9 +5362,16 @@ void BridgeDispatcher::EmitStatsTick(float fps, int emitters,
             m_emit(env.dump());
             // The engine's SpawnerDriver self-disabled on the refusal
             // (enabled=false), but the cached spawner config + the web's
-            // panel toggle don't know. Mirror spawner/stop: sync the JSON
-            // cache and broadcast engine/state/changed so the panel toggle
+            // panel toggle don't know. Mirror spawner/stop: update the
+            // live driver first (EmitEngineStateChanged reads it), then
+            // sync the JSON cache, then broadcast so the panel toggle
             // reflects the disabled state.
+            if (m_spawnerDriver)
+            {
+                SpawnerConfig cfg = m_spawnerDriver->GetConfig();
+                cfg.enabled = false;
+                m_spawnerDriver->SetConfig(cfg);
+            }
             if (m_spawnerConfig.is_object())
             {
                 m_spawnerConfig["enabled"] = false;
