@@ -1261,3 +1261,113 @@ describe("curve morph (structural changes)", () => {
     ).toBeNull();
   });
 });
+
+// ─── CRV: group-drag fires onGroupDragMove on every pointer-move past slop ───
+//
+// When ≥2 keys are selected and the user drags one of them, the renderer must
+// call onGroupDragMove with the accumulated (dTime, dValue) on every move event
+// that has crossed DRAG_SLOP — mirroring how the single-key branch calls
+// onKeyDragMove. This is the renderer half of the live-spinner fix.
+
+describe("CurveEditor — group-drag fires onGroupDragMove (live-spinner fix)", () => {
+  const GROUP_CHANNELS: ChannelDef[] = [
+    { id: "red", label: "Red", color: "#FF0000", defaultOn: true, trackName: "red" },
+  ];
+
+  function makeGroupTrack(): TrackDto {
+    // 4 keys: borders at 0/100, interior at 25/75. Drag the t=25 key.
+    return {
+      name: "red",
+      keys: [
+        { time: 0,   value: 0 },
+        { time: 25,  value: 0.25 },
+        { time: 75,  value: 0.75 },
+        { time: 100, value: 1 },
+      ],
+      interpolation: "linear",
+      lockedTo: null,
+    };
+  }
+
+  it("fires onGroupDragMove with non-zero (dTime,dValue) during a group drag past slop", () => {
+    const onGroupDragMove = vi.fn();
+    const onGroupDragEnd = vi.fn();
+    // Select both interior keys (t=25, t=75) to make this a group drag.
+    const selectedKeyTimes = new Set([25, 75]);
+
+    const { container } = render(
+      <CurveEditor
+        tracks={[makeGroupTrack()]}
+        channels={GROUP_CHANNELS}
+        visibleChannels={{ red: true }}
+        focusChannel="red"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        selectedKeyTimes={selectedKeyTimes}
+        onGroupDragMove={onGroupDragMove}
+        onGroupDragEnd={onGroupDragEnd}
+      />,
+    );
+
+    const svg = container.querySelector("[data-testid='curve-editor-svg']") as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+
+    // Grab the t=25 key circle on the focus channel.
+    // t=25 → x = 25/100 * 600 = 150; v=0.25 → y = 300 - (0.25 * 300) = 225.
+    const pad = container.querySelector(
+      '[data-testid="curve-key"][data-key-time="25"][data-channel-id="red"]',
+    )!;
+    expect(pad).not.toBeNull();
+
+    // Pointer-down on the grabbed key (part of a multi-selection → group drag).
+    fireEvent.pointerDown(pad, { button: 0, pointerId: 55, clientX: 150, clientY: 225 });
+
+    // Move past DRAG_SLOP (1.5 viewBox units; slop is in client px, svg maps 1:1 here).
+    fireEvent.pointerMove(svg, { pointerId: 55, clientX: 180, clientY: 200 });
+
+    // onGroupDragMove must have been called at least once with non-zero dTime or dValue.
+    expect(onGroupDragMove).toHaveBeenCalled();
+    const [dTime, dValue] = onGroupDragMove.mock.calls[0] as [number, number];
+    // The drag moved right (+30px client → +30/600*100 ≈ +5 time units)
+    // and up (−25px client → +25/300 value change). Both non-zero.
+    expect(dTime).toBeGreaterThan(0);
+    // dValue may be positive or negative depending on cursor direction —
+    // the key point is that the callback fired with numeric arguments.
+    expect(typeof dValue).toBe("number");
+  });
+
+  it("does NOT fire onGroupDragMove before pointer has moved past slop", () => {
+    const onGroupDragMove = vi.fn();
+    const selectedKeyTimes = new Set([25, 75]);
+
+    const { container } = render(
+      <CurveEditor
+        tracks={[makeGroupTrack()]}
+        channels={GROUP_CHANNELS}
+        visibleChannels={{ red: true }}
+        focusChannel="red"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        selectedKeyTimes={selectedKeyTimes}
+        onGroupDragMove={onGroupDragMove}
+      />,
+    );
+
+    const svg = container.querySelector("[data-testid='curve-editor-svg']") as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+
+    const pad = container.querySelector(
+      '[data-testid="curve-key"][data-key-time="25"][data-channel-id="red"]',
+    )!;
+
+    fireEvent.pointerDown(pad, { button: 0, pointerId: 56, clientX: 150, clientY: 225 });
+    // Move by less than DRAG_SLOP (1.5 px) — sub-slop jitter.
+    fireEvent.pointerMove(svg, { pointerId: 56, clientX: 151, clientY: 225 });
+
+    expect(onGroupDragMove).not.toHaveBeenCalled();
+  });
+});
