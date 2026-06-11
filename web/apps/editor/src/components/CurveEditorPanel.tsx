@@ -506,6 +506,12 @@ export function CurveEditorPanel({ bridge }: Props) {
   // Lock dropdown itself stays enabled so the user can unlock.
   const focusLocked = focusedTrack !== null && focusedTrack.lockedTo !== null;
 
+  // Read-only mirror: never leave Insert active on a locked focus —
+  // covers lock-while-insert AND focus-switch-onto-locked (spec §3.3).
+  useEffect(() => {
+    if (focusLocked && mode === "insert") setMode("select");
+  }, [focusLocked, mode]);
+
   // CRV-1 robustness: after a tree/changed refetch the engine's float32 key
   // times can land an ULP away from the times we optimistically put in
   // `selectedKeyTimes` (e.g. a group move commits N keys; the real engine
@@ -1224,11 +1230,12 @@ export function CurveEditorPanel({ bridge }: Props) {
               aria-pressed={mode === "select"}
               data-state={mode === "select" ? "on" : "off"}
               data-testid="ce-tool-select"
+              disabled={focusLocked}
               onClick={() => setMode("select")}
               className={
                 mode === "select"
-                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent"
-                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2"
+                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
               }
             >
               <MousePointer2 className="size-3.5" aria-hidden="true" />
@@ -1241,11 +1248,12 @@ export function CurveEditorPanel({ bridge }: Props) {
               aria-pressed={mode === "insert"}
               data-state={mode === "insert" ? "on" : "off"}
               data-testid="ce-tool-insert"
+              disabled={focusLocked}
               onClick={() => setMode("insert")}
               className={
                 mode === "insert"
-                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent"
-                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2"
+                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
               }
             >
               <Plus className="size-3.5" aria-hidden="true" />
