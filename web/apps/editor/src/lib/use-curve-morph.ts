@@ -107,33 +107,59 @@ function currentSamples(job: Job): Float64Array {
 
 /** Check whether the diff between prevTrack and nextTrack is fully
  *  explained by the recorded suppressed moves (within KEY_MATCH_EPS).
- *  Returns true → suppress (snap, no morph). */
-function movesMatch(
+ *  Returns true → suppress (snap, no morph).
+ *
+ *  Reorder-tolerant: a GROUP drag can move a selected key past an
+ *  unselected neighbour; the optimistic overlay re-sorts by time
+ *  (CurveEditorPanel.tsx ~:902), so index-paired comparison silently
+ *  fails. Instead we build the EXPECTED post-move multiset from prev's
+ *  keys + the recorded moves and verify a bijection (order-independent)
+ *  against next's keys. */
+export function movesMatch(
   prevTrack: TrackDto,
   nextTrack: TrackDto,
   moves: Array<{ oldTime: number; newTime: number; newValue: number }>,
 ): boolean {
   // Same key count is required (a structural insert/delete is not a suppressed move).
   if (prevTrack.keys.length !== nextTrack.keys.length) return false;
-  // For each prev key, find the corresponding next key (matched by old time or new time).
-  // Every diff between prev and next must be explained by one of the recorded moves.
-  for (let i = 0; i < prevTrack.keys.length; i++) {
-    const pk = prevTrack.keys[i]!;
-    const nk = nextTrack.keys[i]!;
-    const timeDiff = Math.abs(pk.time - nk.time);
-    const valueDiff = Math.abs(pk.value - nk.value);
-    if (timeDiff <= KEY_MATCH_EPS && valueDiff <= KEY_MATCH_EPS) {
-      // This key didn't change — that's fine.
-      continue;
-    }
-    // This key changed — find a recorded move that explains it.
-    const explained = moves.some(
-      (m) =>
-        Math.abs(pk.time - m.oldTime) <= KEY_MATCH_EPS &&
-        Math.abs(nk.time - m.newTime) <= KEY_MATCH_EPS &&
-        Math.abs(nk.value - m.newValue) <= KEY_MATCH_EPS,
+
+  // Defensive: every recorded move's oldTime must match some prev key.
+  // A stale / garbage suppression whose anchors have no match in prev
+  // should never suppress a real morph.
+  for (const m of moves) {
+    const found = prevTrack.keys.some(
+      (pk) => Math.abs(pk.time - m.oldTime) <= KEY_MATCH_EPS,
     );
-    if (!explained) return false;
+    if (!found) return false;
+  }
+
+  // Build expected = prev.keys mapped through the recorded moves.
+  const expected = prevTrack.keys.map((pk) => {
+    const m = moves.find((mv) => Math.abs(pk.time - mv.oldTime) <= KEY_MATCH_EPS);
+    return m
+      ? { time: m.newTime, value: m.newValue }
+      : { time: pk.time, value: pk.value };
+  });
+
+  // Require a bijection between expected and next.keys, matched within EPS
+  // on BOTH time and value, order-independent (greedy on time-sorted lists).
+  // n is tiny (typical: 2–8) so O(n²) is fine.
+  const used = new Array<boolean>(expected.length).fill(false);
+  for (const nk of nextTrack.keys) {
+    let matched = false;
+    for (let i = 0; i < expected.length; i++) {
+      if (used[i]) continue;
+      const ek = expected[i]!;
+      if (
+        Math.abs(nk.time - ek.time) <= KEY_MATCH_EPS &&
+        Math.abs(nk.value - ek.value) <= KEY_MATCH_EPS
+      ) {
+        used[i] = true;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) return false;
   }
   return true;
 }

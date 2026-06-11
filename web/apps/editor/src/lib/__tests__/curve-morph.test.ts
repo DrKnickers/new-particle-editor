@@ -5,6 +5,7 @@ import {
   classifyTrackChange, matchKeys, easeOutCubic,
   MORPH_MS, KEY_MATCH_EPS,
 } from "../curve-morph";
+import { movesMatch } from "../use-curve-morph";
 
 const track = (
   keys: Array<{ time: number; value: number }>,
@@ -178,5 +179,76 @@ describe("easing/constants", () => {
   it("exports the tunables", () => {
     expect(MORPH_MS).toBeGreaterThan(0);
     expect(KEY_MATCH_EPS).toBeGreaterThan(0);
+  });
+});
+
+describe("movesMatch", () => {
+  const mk = (keys: Array<{ time: number; value: number }>): TrackDto => ({
+    name: "red",
+    keys,
+    interpolation: "linear",
+    lockedTo: null,
+  });
+
+  it("single move, in-order → true", () => {
+    const prev = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]);
+    const next = mk([{ time: 0, value: 0 }, { time: 70, value: 0.7 }, { time: 100, value: 1 }]);
+    const moves = [{ oldTime: 50, newTime: 70, newValue: 0.7 }];
+    expect(movesMatch(prev, next, moves)).toBe(true);
+  });
+
+  it("group move that REORDERS keys → true (the reorder-tolerant case)", () => {
+    // prev: [0, 30, 60, 100]; selected key at t=30 is dragged to t=80,
+    // crossing the unselected key at t=60. The optimistic overlay re-sorts
+    // next to [0, 60, 80, 100]. Index-paired comparison would fail here.
+    const prev = mk([
+      { time: 0, value: 0 },
+      { time: 30, value: 0.3 },
+      { time: 60, value: 0.6 },
+      { time: 100, value: 1 },
+    ]);
+    const next = mk([
+      { time: 0, value: 0 },
+      { time: 60, value: 0.6 },
+      { time: 80, value: 0.8 },
+      { time: 100, value: 1 },
+    ]);
+    const moves = [{ oldTime: 30, newTime: 80, newValue: 0.8 }];
+    expect(movesMatch(prev, next, moves)).toBe(true);
+  });
+
+  it("unexplained extra structural change (an added key) → false", () => {
+    const prev = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]);
+    // next has 4 keys — count mismatch
+    const next = mk([
+      { time: 0, value: 0 },
+      { time: 50, value: 0.5 },
+      { time: 75, value: 0.75 },
+      { time: 100, value: 1 },
+    ]);
+    const moves = [{ oldTime: 50, newTime: 50, newValue: 0.5 }];
+    expect(movesMatch(prev, next, moves)).toBe(false);
+  });
+
+  it("move whose oldTime matches no prev key → false", () => {
+    const prev = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]);
+    const next = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]);
+    // oldTime: 999 doesn't exist in prev
+    const moves = [{ oldTime: 999, newTime: 50, newValue: 0.5 }];
+    expect(movesMatch(prev, next, moves)).toBe(false);
+  });
+
+  it("unchanged track with no moves → true", () => {
+    const prev = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }]);
+    const next = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }]);
+    expect(movesMatch(prev, next, [])).toBe(true);
+  });
+
+  it("next key value diverges from recorded move's newValue → false", () => {
+    const prev = mk([{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]);
+    const next = mk([{ time: 0, value: 0 }, { time: 70, value: 0.9 }, { time: 100, value: 1 }]);
+    // Move says newValue=0.7 but next key landed at 0.9
+    const moves = [{ oldTime: 50, newTime: 70, newValue: 0.7 }];
+    expect(movesMatch(prev, next, moves)).toBe(false);
   });
 });

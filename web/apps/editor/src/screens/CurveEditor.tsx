@@ -1494,6 +1494,10 @@ function MultiChannelCurves({
           for (const k of allKeys) {
             if (!selectedKeyTimes.has(k.time)) continue;
             const isBorder = focusBorderTimes.has(k.time);
+            // NOTE: newTime/newValue must match the values committed by
+            // applyGroupShift in CurveEditorPanel.tsx (~:883-884) within
+            // KEY_MATCH_EPS; movesMatch() in use-curve-morph.ts uses them
+            // to verify the incoming track change. Keep in sync.
             const newTime = isBorder
               ? k.time
               : Math.max(timeMin + eps, Math.min(timeMax - eps, k.time + groupDTime));
@@ -1518,10 +1522,16 @@ function MultiChannelCurves({
       dragConsumedClickRef.current = true;
       // Record suppression BEFORE firing the callback so the hook
       // sees it when the parent re-renders with the committed tracks.
-      morphSuppressRef.current = {
-        channelId: focusLayer!.channel.id,
-        moves: [{ oldTime: keyTime, newTime: currentTime, newValue: currentValue }],
-      };
+      if (focusLayer !== null) {
+        // NOTE: newTime/newValue here must equal the committed key values
+        // within KEY_MATCH_EPS; movesMatch() in use-curve-morph.ts uses
+        // them to verify the incoming track change. Keep in sync with the
+        // group-clamp in CurveEditorPanel.tsx applyGroupShift (~:883-884).
+        morphSuppressRef.current = {
+          channelId: focusLayer.channel.id,
+          moves: [{ oldTime: keyTime, newTime: currentTime, newValue: currentValue }],
+        };
+      }
       onKeyDragEnd(keyTime, currentTime, currentValue);
     } else if (!moved && onKeyClick) {
       onKeyClick(keyTime, event);
