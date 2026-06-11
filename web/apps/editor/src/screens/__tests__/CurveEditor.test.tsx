@@ -1330,12 +1330,12 @@ describe("CurveEditor — group-drag fires onGroupDragMove (live-spinner fix)", 
     // onGroupDragMove must have been called at least once with non-zero dTime or dValue.
     expect(onGroupDragMove).toHaveBeenCalled();
     const [dTime, dValue] = onGroupDragMove.mock.calls[0] as [number, number];
-    // The drag moved right (+30px client → +30/600*100 ≈ +5 time units)
-    // and up (−25px client → +25/300 value change). Both non-zero.
-    expect(dTime).toBeGreaterThan(0);
-    // dValue may be positive or negative depending on cursor direction —
-    // the key point is that the callback fired with numeric arguments.
-    expect(typeof dValue).toBe("number");
+    // The drag moved right (150→180 px → +30/600*100 = +5 time units) and
+    // up (225→200 px → −25 px y → +25/300 ≈ +0.083 value). Both non-zero,
+    // with the signs the cursor delta implies (guards a swapped/zeroed arg).
+    expect(dTime).toBeCloseTo(5, 1);
+    expect(dValue).toBeGreaterThan(0);
+    expect(dValue).toBeCloseTo(0.083, 2);
   });
 
   it("does NOT fire onGroupDragMove before pointer has moved past slop", () => {

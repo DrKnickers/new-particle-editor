@@ -1972,4 +1972,77 @@ describe("CurveEditorPanel — group-drag live-updates spinners", () => {
       expect(readValue()).toBeCloseTo(0.5, 2);
     });
   });
+
+  it("Time spinner live-updates during a horizontal group drag", async () => {
+    const { bridge } = makeStubBridgeRedInterior();
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument());
+
+    const keyAt25 = screen.getAllByTestId("curve-key")
+      .find((k) => k.getAttribute("data-key-time") === "25" && k.getAttribute("data-channel-id") === "red")!;
+    const keyAt75 = screen.getAllByTestId("curve-key")
+      .find((k) => k.getAttribute("data-key-time") === "75" && k.getAttribute("data-channel-id") === "red")!;
+    fireEvent.click(keyAt25);
+    fireEvent.click(keyAt75, { ctrlKey: true });
+    const panel = screen.getByTestId("curve-editor-panel");
+    await waitFor(() => expect(panel.getAttribute("data-selected-key-count")).toBe("2"));
+
+    const svg = document.querySelector("[data-testid='curve-editor-svg']") as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+
+    // Both interior keys selected → avgTime = (25+75)/2 = 50 before the drag.
+    const readTime = () =>
+      Number((screen.getByLabelText("Selected key time") as HTMLInputElement).value);
+    await waitFor(() =>
+      expect((screen.getByLabelText("Selected key time") as HTMLInputElement).disabled).toBe(false),
+    );
+    expect(readTime()).toBeCloseTo(50, 1);
+
+    // Grab t=25 (x=150) and drag RIGHT by 60px → +60/600*100 = +10 time units.
+    fireEvent.pointerDown(keyAt25, { button: 0, pointerId: 81, clientX: 150, clientY: 225 });
+    fireEvent.pointerMove(svg, { pointerId: 81, clientX: 210, clientY: 225 });
+
+    await waitFor(() => {
+      const t = readTime();
+      expect(t).not.toBeCloseTo(50, 1); // Time spinner must live-update too
+      expect(t).toBeGreaterThan(50);    // dragged right → average time increased
+    });
+  });
+
+  it("all-border group drag live-updates value only; time spinner stays disabled", async () => {
+    const { bridge } = makeStubBridgeRedInterior();
+    render(<CurveEditorPanel bridge={bridge} />);
+    await waitFor(() => expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument());
+
+    // Select BOTH border keys (t=0, t=100) — no interior in the selection.
+    const keyAt0 = screen.getAllByTestId("curve-key")
+      .find((k) => k.getAttribute("data-key-time") === "0" && k.getAttribute("data-channel-id") === "red")!;
+    const keyAt100 = screen.getAllByTestId("curve-key")
+      .find((k) => k.getAttribute("data-key-time") === "100" && k.getAttribute("data-channel-id") === "red")!;
+    fireEvent.click(keyAt0);
+    fireEvent.click(keyAt100, { ctrlKey: true });
+    const panel = screen.getByTestId("curve-editor-panel");
+    await waitFor(() => expect(panel.getAttribute("data-selected-key-count")).toBe("2"));
+
+    const svg = document.querySelector("[data-testid='curve-editor-svg']") as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+
+    // Time spinner disabled (all-border selection); value spinner enabled at avg (0+1)/2 = 0.5.
+    const timeInput = () => screen.getByLabelText("Selected key time") as HTMLInputElement;
+    const readValue = () =>
+      Number((screen.getByLabelText("Selected key value") as HTMLInputElement).value);
+    await waitFor(() => expect(timeInput().disabled).toBe(true));
+    expect(readValue()).toBeCloseTo(0.5, 2);
+
+    // Grab t=0 (x=0, v=0 → y=300) and drag UP 30px → value +0.1.
+    fireEvent.pointerDown(keyAt0, { button: 0, pointerId: 82, clientX: 0, clientY: 300 });
+    fireEvent.pointerMove(svg, { pointerId: 82, clientX: 0, clientY: 270 });
+
+    await waitFor(() => {
+      expect(readValue()).toBeGreaterThan(0.5); // borders shift in value
+    });
+    expect(timeInput().disabled).toBe(true);     // time still pinned for all-border
+  });
 });
