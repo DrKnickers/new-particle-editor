@@ -159,3 +159,36 @@ confirmed, modal keyframes live, ?demo=primitives renders).
 over the viewport, the rich warning glyph tooltip on a real heavy chain
 (mock data could not provoke one), modal open/close, banner appear/clear,
 both themes, reduced-motion. CHANGELOG hash is TODO until merge.
+
+
+---
+
+## Review — configurable overload guard (post-execution, session 36)
+
+**Shipped onto PR [#123](https://github.com/DrKnickers/new-particle-editor/pull/123)
+(folded in per the user's call; awaits feel test + merge OK).** 7 plan tasks
+executed subagent-driven (implementer + spec + quality review per task; every
+finding closed). Commits ae59659 (engine) → 11c85e2 (host) → 2697333 (bridge/mock)
+→ 7fda54e/02c454b (lib + freeze fix) → be6e5ac (Preferences UI) → 18df6d1 (native specs).
+
+**Verified:** web 700, tsc -b 0, vite build clean, native 180/0 (reproduced twice,
+zero golden drift), host Debug x64 clean.
+
+**Deviations from plan (all reviewed + justified):**
+1. Engine accessor is IsSpawnOverloadActive (not the assumed IsOverloaded); 2 comment
+   stragglers in EmitterInstance.cpp/ParticleSystemInstance.cpp also retargeted.
+2. SetEngine body moved to the .cpp (Engine forward-declared in the header).
+3. Dirty-query in the contract test is engine/state/snapshot.dirty (the plan's
+   file/state placeholder does not exist).
+4. OVERLOAD_GUARD_DEFAULT frozen (quality review caught a by-ref singleton-mutation hazard).
+5. PreferencesDialog call site is in MenuBar.tsx, not App.tsx (bridge already in scope there).
+6. Native existing tests pinned to 25k, NOT 100k: a 100k plateau OOM-crashes the Debug
+   test host at the tail of the long single-process harness run (cumulative heap, NOT a
+   product regression — enabled path is byte-equivalent to #121's 100k). STOP-and-re-plan
+   per CLAUDE.md; the new tests assert tight explicit caps (5k/50k->5k/disabled-2k).
+
+**Open for the user (feel test, L-033):** Preferences -> Preview toggle + cap field;
+lower the cap and bomb an emitter (banner at the lower ceiling); uncheck and confirm the
+warning + genuinely uncapped behavior on a MODERATE effect; restart the editor and confirm
+the setting survived (apply-on-mount). Tune the 25k default by feel. Merge #123 only on
+explicit OK. CHANGELOG hash is TODO until merge (both #123 entries backfill together).
