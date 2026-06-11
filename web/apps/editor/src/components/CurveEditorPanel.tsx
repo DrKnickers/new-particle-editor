@@ -1223,41 +1223,54 @@ export function CurveEditorPanel({ bridge }: Props) {
           className="ce-toolbar"
         >
           {/* Mode toggle (Select / Insert) */}
-          <Tip content="Select (click a key to select; click empty area to clear)" occlusionId="tip:curve:select">
-            <button
-              type="button"
-              aria-label="Select tool"
-              aria-pressed={mode === "select"}
-              data-state={mode === "select" ? "on" : "off"}
-              data-testid="ce-tool-select"
-              disabled={focusLocked}
-              onClick={() => setMode("select")}
-              className={
-                mode === "select"
-                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
-                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
-              }
-            >
-              <MousePointer2 className="size-3.5" aria-hidden="true" />
-            </button>
+          {/* T6: disabled buttons fire no pointer events, so the Tip rides an
+              inline-block span wrapper. Copy flips to the lock hint while
+              the channel is locked, mirroring the Delete button pattern. */}
+          <Tip
+            content={focusLocked ? "Channel is locked — unlock to edit" : "Select (click a key to select; click empty area to clear)"}
+            occlusionId="tip:curve:select"
+          >
+            <span className="inline-block">
+              <button
+                type="button"
+                aria-label="Select tool"
+                aria-pressed={mode === "select"}
+                data-state={mode === "select" ? "on" : "off"}
+                data-testid="ce-tool-select"
+                disabled={focusLocked}
+                onClick={() => setMode("select")}
+                className={
+                  mode === "select"
+                    ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                    : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
+                }
+              >
+                <MousePointer2 className="size-3.5" aria-hidden="true" />
+              </button>
+            </span>
           </Tip>
-          <Tip content="Insert (click empty canvas to add a key)" occlusionId="tip:curve:insert">
-            <button
-              type="button"
-              aria-label="Insert tool"
-              aria-pressed={mode === "insert"}
-              data-state={mode === "insert" ? "on" : "off"}
-              data-testid="ce-tool-insert"
-              disabled={focusLocked}
-              onClick={() => setMode("insert")}
-              className={
-                mode === "insert"
-                  ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
-                  : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
-              }
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-            </button>
+          <Tip
+            content={focusLocked ? "Channel is locked — unlock to edit" : "Insert (click empty canvas to add a key)"}
+            occlusionId="tip:curve:insert"
+          >
+            <span className="inline-block">
+              <button
+                type="button"
+                aria-label="Insert tool"
+                aria-pressed={mode === "insert"}
+                data-state={mode === "insert" ? "on" : "off"}
+                data-testid="ce-tool-insert"
+                disabled={focusLocked}
+                onClick={() => setMode("insert")}
+                className={
+                  mode === "insert"
+                    ? "grid h-6 w-6 place-items-center rounded border border-accent bg-accent-soft text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                    : "grid h-6 w-6 place-items-center rounded border border-border-2 bg-bg-2 text-text-2 hover:border-border-2 disabled:cursor-not-allowed disabled:opacity-40"
+                }
+              >
+                <Plus className="size-3.5" aria-hidden="true" />
+              </button>
+            </span>
           </Tip>
 
           <span className="mx-1 h-4 w-px bg-panel-2" aria-hidden />

@@ -1240,6 +1240,11 @@ describe("CurveEditorPanel", () => {
       expect(screen.getByTestId("ce-tool-select").getAttribute("data-state")).toBe("on");
       expect(screen.getByTestId("ce-tool-select")).toBeDisabled();
 
+      // T6 span-shim: both buttons must still be in the DOM (the inline-block
+      // wrapper span must not swallow the testid or prevent discovery).
+      expect(screen.getByTestId("ce-tool-select").closest("span.inline-block")).not.toBeNull();
+      expect(screen.getByTestId("ce-tool-insert").closest("span.inline-block")).not.toBeNull();
+
       // Clear call history so we only catch calls after the lock landed.
       (bridge.request as ReturnType<typeof vi.fn>).mockClear();
 
