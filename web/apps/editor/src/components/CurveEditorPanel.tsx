@@ -1238,7 +1238,7 @@ export function CurveEditorPanel({ bridge }: Props) {
             const isActive = focusedTrack?.interpolation === kind;
             const label = kind[0]!.toUpperCase() + kind.slice(1);
             return (
-              <Tip key={kind} content={`${label} interpolation`} occlusionId={`tip:curve:interp-${label}`}>
+              <Tip key={kind} content={`${label} interpolation`} occlusionId={`tip:curve:interp-${kind}`}>
                 <button
                   type="button"
                   disabled={interpDisabled}

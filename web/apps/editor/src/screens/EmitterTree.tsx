@@ -2330,59 +2330,59 @@ export function EmitterTree({ bridge }: Props) {
                     side="right"
                     occlusionId={`tip:tree-linkgroup:${b.groupId}`}
                   >
-                  <div
-                    data-testid={`link-group-bracket-${b.groupId}`}
-                    data-link-group={b.groupId}
-                    data-lane={b.lane}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Select link group ${b.groupId}`}
-                    className="pointer-events-auto absolute cursor-pointer"
-                    style={{ top, left: left - HITZONE_INSET, width: LANE_WIDTH_PX, height }}
-                    onPointerEnter={() => setHoveredLinkGroup(b.groupId)}
-                    onPointerLeave={() => setHoveredLinkGroup(null)}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelectLinkGroup(b.groupId);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
+                    <div
+                      data-testid={`link-group-bracket-${b.groupId}`}
+                      data-link-group={b.groupId}
+                      data-lane={b.lane}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Select link group ${b.groupId}`}
+                      className="pointer-events-auto absolute cursor-pointer"
+                      style={{ top, left: left - HITZONE_INSET, width: LANE_WIDTH_PX, height }}
+                      onPointerEnter={() => setHoveredLinkGroup(b.groupId)}
+                      onPointerLeave={() => setHoveredLinkGroup(null)}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
                         e.stopPropagation();
                         handleSelectLinkGroup(b.groupId);
-                      }
-                    }}
-                  >
-                    {/* The visible coloured line. */}
-                    <div
-                      aria-hidden
-                      className="absolute"
-                      style={{
-                        left: HITZONE_INSET,
-                        top: 0,
-                        width: hovered ? 3 : 2,
-                        height,
-                        background: b.color,
-                        opacity: hovered ? 1 : 0.85,
                       }}
-                    />
-                    {b.memberRowIndices.map((rowIdx) => (
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleSelectLinkGroup(b.groupId);
+                        }
+                      }}
+                    >
+                      {/* The visible coloured line. */}
                       <div
-                        key={rowIdx}
                         aria-hidden
-                        data-testid={`link-group-stub-${b.groupId}-${rowIdx}`}
                         className="absolute"
                         style={{
-                          top: (rowIdx - b.firstRowIndex) * ROW_HEIGHT_PX - 1,
-                          left: 0,
-                          width: 5,
-                          height: 2,
+                          left: HITZONE_INSET,
+                          top: 0,
+                          width: hovered ? 3 : 2,
+                          height,
                           background: b.color,
+                          opacity: hovered ? 1 : 0.85,
                         }}
                       />
-                    ))}
-                  </div>
+                      {b.memberRowIndices.map((rowIdx) => (
+                        <div
+                          key={rowIdx}
+                          aria-hidden
+                          data-testid={`link-group-stub-${b.groupId}-${rowIdx}`}
+                          className="absolute"
+                          style={{
+                            top: (rowIdx - b.firstRowIndex) * ROW_HEIGHT_PX - 1,
+                            left: 0,
+                            width: 5,
+                            height: 2,
+                            background: b.color,
+                          }}
+                        />
+                      ))}
+                    </div>
                   </Tip>
                 );
               })}

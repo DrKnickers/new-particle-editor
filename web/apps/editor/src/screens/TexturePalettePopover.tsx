@@ -257,44 +257,44 @@ function PaletteCell({
           occlusionId across grid cells is safe: only one tooltip is ever
           open at a time (app-level Tooltip.Provider). */}
       <Tip content={entry.filename} occlusionId="tip:texpop:entry">
-      <Popover.Close asChild>
-        <button
-          type="button"
-          onClick={() => onApply(entry.filename)}
-          aria-label={`Apply ${entry.filename}`}
-          className="relative block aspect-square w-full overflow-hidden rounded border border-border-2 transition hover:border-accent"
-        >
-          {thumb?.dataUri ? (
-            <img src={thumb.dataUri} alt="" className="absolute inset-0 h-full w-full object-cover" />
-          ) : (
-            <div
-              data-testid={`palette-thumb-placeholder-${entry.filename}`}
-              data-thumb-status={thumb ? thumb.status : "loading"}
-              className={`absolute inset-0 flex flex-col items-center justify-center gap-0.5 ${
-                thumb?.status === "broken"
-                  ? "bg-red-950/40 text-red-300"
-                  : thumb?.status === "missing"
-                    ? "bg-bg-2 text-text-3"
-                    : "bg-bg-2"
-              }`}
-            >
-              {thumb && (
-                <>
-                  <span aria-hidden="true" className="text-base leading-none">
-                    {thumb.status === "broken" ? "⚠" : "?"}
-                  </span>
-                  <span className="text-[9px] uppercase tracking-wide">
-                    {thumb.status === "broken" ? "broken" : "missing"}
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-          <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-1 py-0.5 text-left text-[10px] text-text backdrop-blur-sm">
-            {entry.filename}
-          </span>
-        </button>
-      </Popover.Close>
+        <Popover.Close asChild>
+          <button
+            type="button"
+            onClick={() => onApply(entry.filename)}
+            aria-label={`Apply ${entry.filename}`}
+            className="relative block aspect-square w-full overflow-hidden rounded border border-border-2 transition hover:border-accent"
+          >
+            {thumb?.dataUri ? (
+              <img src={thumb.dataUri} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <div
+                data-testid={`palette-thumb-placeholder-${entry.filename}`}
+                data-thumb-status={thumb ? thumb.status : "loading"}
+                className={`absolute inset-0 flex flex-col items-center justify-center gap-0.5 ${
+                  thumb?.status === "broken"
+                    ? "bg-red-950/40 text-red-300"
+                    : thumb?.status === "missing"
+                      ? "bg-bg-2 text-text-3"
+                      : "bg-bg-2"
+                }`}
+              >
+                {thumb && (
+                  <>
+                    <span aria-hidden="true" className="text-base leading-none">
+                      {thumb.status === "broken" ? "⚠" : "?"}
+                    </span>
+                    <span className="text-[9px] uppercase tracking-wide">
+                      {thumb.status === "broken" ? "broken" : "missing"}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
+            <span className="absolute inset-x-0 bottom-0 truncate bg-bg/80 px-1 py-0.5 text-left text-[10px] text-text backdrop-blur-sm">
+              {entry.filename}
+            </span>
+          </button>
+        </Popover.Close>
       </Tip>
       <button
         type="button"
