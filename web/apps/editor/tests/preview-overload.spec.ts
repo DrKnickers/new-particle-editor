@@ -35,7 +35,7 @@ import { test, expect, chromium, type Page, type Browser } from "@playwright/tes
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT ?? "http://localhost:9222";
 
 // The overload guard cap is now runtime-configurable (engine default
-// 25_000, user-adjustable). The two 1e9-bomb tests pin the cap explicitly
+// 15_000, user-adjustable). The two 1e9-bomb tests pin the cap explicitly
 // at the top of each test (engine/set/overload-guard) so they don't
 // depend on the default. The slack stays 110_000 — well above any pinned
 // cap below — since the stats counter is sampled at 4 Hz between frames.
@@ -140,12 +140,12 @@ test("huge spawn rate plateaus at the budget, latches overload, and recovers", a
   await bridgeRequest("engine/set/paused", { paused: false });
 
   // [guard-config] Pin the cap explicitly so this spec doesn't depend on
-  // the engine default. 25_000 is pinned deliberately rather than the old
+  // the engine default. 15_000 is pinned deliberately rather than the old
   // hardcoded 100_000: in a full-harness Debug run the 1e9 bomb below
   // plateaus AT the cap, and a 100k plateau OOM-crashes the Debug host at
   // cleanup (reproduced 2/2), cascading into the next test's timeout. 25k
   // plateaus comfortably and stays well under BUDGET_SLACK.
-  await bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 });
+  await bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 });
 
   // Locate the first root emitter and snapshot the fields we'll touch.
   const tree = await bridgeRequest<{ root: { children: { id: number }[] } }>(
@@ -260,7 +260,7 @@ test("huge spawn rate plateaus at the budget, latches overload, and recovers", a
     await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
     // Restore the engine default cap for any later run / spec.
     await cleanupStep("guard-restore", () =>
-      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 }),
+      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 }),
     );
   }
 });
@@ -274,9 +274,9 @@ test("death-child spawns are refused under overload and the editor survives", as
   await bridgeRequest("engine/set/paused", { paused: false });
 
   // [guard-config] Pin the cap explicitly so this spec doesn't depend on
-  // the engine default. 25_000 pinned deliberately (see test 1): a 100k
+  // the engine default. 15_000 pinned deliberately (see test 1): a 100k
   // particle plateau crashes the Debug host under the full harness.
-  await bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 });
+  await bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 });
 
   const tree = await bridgeRequest<{ root: { children: { id: number }[] } }>(
     "emitters/list",
@@ -391,7 +391,7 @@ test("death-child spawns are refused under overload and the editor survives", as
     await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
     // Restore the engine default cap for any later run / spec.
     await cleanupStep("guard-restore", () =>
-      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 }),
+      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 }),
     );
   }
 });
@@ -459,7 +459,7 @@ test("a lowered cap bounds the plateau at the configured value", async () => {
     }
     await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
     await cleanupStep("guard-restore", () =>
-      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 }),
+      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 }),
     );
   }
 });
@@ -546,7 +546,7 @@ test("lowering the cap mid-run suppresses and decays to the new ceiling", async 
     }
     await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
     await cleanupStep("guard-restore", () =>
-      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 }),
+      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 }),
     );
   }
 });
@@ -629,7 +629,7 @@ test("disabled guard lets the population exceed the cap with no overload latch",
     }
     await cleanupStep("engine-clear", () => bridgeRequest("engine/action/clear", {}));
     await cleanupStep("guard-restore", () =>
-      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 25_000 }),
+      bridgeRequest("engine/set/overload-guard", { enabled: true, maxParticles: 15_000 }),
     );
   }
 });

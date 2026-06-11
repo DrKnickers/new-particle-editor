@@ -1467,7 +1467,7 @@ json BridgeDispatcher::DispatchInternal(const nlohmann::json& parsed)
         // (the engine re-clamps on every apply, so the cache needs no
         // clamping of its own).
         const bool enabled      = params.value("enabled", true);
-        const int  maxParticles = params.value("maxParticles", 25'000);
+        const int  maxParticles = params.value("maxParticles", 15'000);
         m_overloadGuardCached       = true;
         m_overloadGuardEnabled      = enabled;
         m_overloadGuardMaxParticles = maxParticles;

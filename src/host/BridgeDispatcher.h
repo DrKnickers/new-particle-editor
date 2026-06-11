@@ -278,7 +278,7 @@ private:
     // reapplied by SetEngine (see above).
     bool m_overloadGuardCached       = false;
     bool m_overloadGuardEnabled      = true;
-    int  m_overloadGuardMaxParticles = 25'000;
+    int  m_overloadGuardMaxParticles = 15'000;
     LayoutBroker&      m_layout;
     AcceleratorBridge& m_accel;
     EmitFn             m_emit;

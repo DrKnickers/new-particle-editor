@@ -23,14 +23,14 @@ Conventions:
 
 The preview overload guard shipped in #121 (which stops an extreme effect from
 OOM-crashing the editor) is now configurable from **Preferences → Preview**.
-The live-particle ceiling defaults to **25,000** — a quarter of the old fixed
+The live-particle ceiling defaults to **15,000** — well under the old fixed
 100k, so the preview stays light — and is adjustable in a number field
 (1,000–1,000,000). A **"Limit preview particle count"** checkbox turns the
 guard off entirely: spawning then runs fully uncapped (the pre-#121 behavior),
 which *can* OOM the editor on an extreme effect — an amber line under the
 toggle says so, and autosave is the backstop. The setting persists and applies
 at startup; the instance ceiling derives from the particle cap (the same 20:1
-ratio #121 used, so the default allows 1,250 live instances).
+ratio #121 used, so the default allows 750 live instances).
 
 **How we tackled it.** The engine's compile-time budget constants became
 runtime members behind one clamped setter
@@ -57,7 +57,7 @@ mutate-the-singleton hazard. (3) The native regression specs couldn't be pinned
 to 100k as first planned — a 100k particle plateau OOM-crashes the *Debug test
 host* at the tail of the full 178-spec single-process harness run (cumulative
 heap pressure, not an engine fault — the enabled path is byte-equivalent to
-#121's 100k behavior). Pinned the existing bomb tests to 25k and added three
+#121's 100k behavior). Pinned the existing bomb tests to the default cap and added three
 new specs (cap honored at 5k, mid-run lowering decays to the new ceiling,
 disabled = no latch on a moderate effect). Verified: web 700, `tsc -b` 0,
 native 180/0, host Debug x64 clean.

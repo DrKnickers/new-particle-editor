@@ -14,7 +14,7 @@ preview still gets heavy on the climb toward 100k — the user wants the
 preview to *stay light* by default, with the ceiling under their control.
 
 Ship: the budgets become **runtime-configurable** with a **lower default
-(25,000 particles)**, plus a Preferences **toggle**. Toggle ON (default):
+(15,000 particles)**, plus a Preferences **toggle**. Toggle ON (default):
 cap at the user's chosen value. Toggle OFF: **fully uncapped** — the
 pre-#121 power-user behavior, which genuinely can OOM the editor on an
 extreme effect (user-accepted tradeoff; the UI says so out loud).
@@ -38,7 +38,7 @@ Non-goals (explicitly out):
 | What to protect | **Preview feel** — the editor preview should stay light; 100k is too heavy a ceiling. (The preview's crash-safety itself was already #121.) |
 | Toggle OFF semantics | **Fully uncapped** — no overload budget at all; can OOM. Power-user mode, dangers stated in the UI. (Rejected: falling back to the 100k net.) |
 | Cap configurability | **Approach B: user-configurable number** (rejected fixed lower cap) — preview feel is the user's judgment (L-033), so the ceiling is tunable in Preferences without a rebuild. |
-| Default / range | **25,000** particles, enabled. Input clamps to **1,000 – 1,000,000** (1M lets a power user exceed the old 100k without going uncapped). |
+| Default / range | **15,000** particles, enabled. Input clamps to **1,000 – 1,000,000** (1M lets a power user exceed the old 100k without going uncapped). |
 | Sequencing | Folded into the NT-12 branch / PR #123 (user's call). |
 
 ## §1 Engine (C++): budgets become runtime state
@@ -48,11 +48,11 @@ Non-goals (explicitly out):
 - `kMaxLivePreviewParticles` / `kMaxLiveEmitterInstances` stop being the
   live values. New members:
   - `bool m_overloadGuardEnabled = true;`
-  - `int  m_maxPreviewParticles = kDefaultMaxPreviewParticles;  // 25'000`
+  - `int  m_maxPreviewParticles = kDefaultMaxPreviewParticles;  // 15'000`
   - `int  m_maxPreviewInstances = kDefaultMaxPreviewParticles / kInstancesDivisor;`
-  - `static constexpr int kDefaultMaxPreviewParticles = 25'000;`
+  - `static constexpr int kDefaultMaxPreviewParticles = 15'000;`
   - `static constexpr int kInstancesDivisor = 20;` — preserves #121's
-    100k:5k ratio. At the default this allows **1,250 live instances**
+    100k:5k ratio. At the default this allows **750 live instances**
     (documented choice: vanilla effects run tens of instances; chains that
     legitimately need more raise the particle knob, which raises this too).
   - Clamp constants `kMinConfigurableParticles = 1'000`,
@@ -124,7 +124,7 @@ restore at the same construction site.)
 
   ```ts
   export type OverloadGuardConfig = { enabled: boolean; maxParticles: number };
-  export const OVERLOAD_GUARD_DEFAULT: OverloadGuardConfig = { enabled: true, maxParticles: 25_000 };
+  export const OVERLOAD_GUARD_DEFAULT: OverloadGuardConfig = { enabled: true, maxParticles: 15_000 };
   export function readOverloadGuard(): OverloadGuardConfig;   // localStorage, clamped
   export function writeOverloadGuard(c: OverloadGuardConfig): void;
   export function clampMaxParticles(n: number): number;       // [1_000, 1_000_000], NaN → default
@@ -170,7 +170,7 @@ line visible only while unchecked); App mount sends the stored config once;
 bridge-contract test for the new command shape + mock storage.
 
 Host build + full suites per the standard gates; then the user feel test
-tunes the 25k default (the whole feature exists to serve preview feel —
+tunes the 15k default (the whole feature exists to serve preview feel —
 L-033).
 
 ## §6 Risks
