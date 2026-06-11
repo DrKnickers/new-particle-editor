@@ -767,7 +767,7 @@ export function CurveEditorPanel({ bridge }: Props) {
 
   // Delete — filters border keys + fires bridge call.
   const handleDelete = useCallback(() => {
-    if (selectedId === null) return;
+    if (selectedId === null || focusLocked) return;
     const candidates: number[] = [];
     for (const t of selectedKeyTimes) {
       if (!borderKeyTimes.has(t)) candidates.push(t);
@@ -780,7 +780,7 @@ export function CurveEditorPanel({ bridge }: Props) {
       setSelectedKeyTimes(new Set());
       setOptimisticSelected(null);
     }).catch(() => { /* silent */ });
-  }, [bridge, selectedId, focusedChannel.trackName, selectedKeyTimes, borderKeyTimes]);
+  }, [bridge, selectedId, focusLocked, focusedChannel.trackName, selectedKeyTimes, borderKeyTimes]);
 
   const handleInterpolationClick = useCallback(
     (kind: InterpolationType) => {
@@ -940,7 +940,7 @@ export function CurveEditorPanel({ bridge }: Props) {
   const spinnerTimeValue = singleSelected?.time ?? multiSelected?.avgTime ?? 0;
   const spinnerValueValue = singleSelected?.value ?? multiSelected?.avgValue ?? 0;
   const spinnersDisabled =
-    selectedId === null || (singleSelected === null && multiSelected === null);
+    selectedId === null || (singleSelected === null && multiSelected === null) || focusLocked;
   const timeSpinnerDisabled =
     spinnersDisabled ||
     (singleSelected !== null
@@ -951,7 +951,7 @@ export function CurveEditorPanel({ bridge }: Props) {
 
   const handleTimeSpinner = useCallback(
     (nextTime: number) => {
-      if (selectedId === null || focusedTrack === null) return;
+      if (selectedId === null || focusedTrack === null || focusLocked) return;
       // F8: multi-key → shift the group's times by (new avg − old avg).
       if (multiSelected !== null) {
         if (!multiSelected.editable) return;
@@ -987,12 +987,12 @@ export function CurveEditorPanel({ bridge }: Props) {
         },
       }).catch(() => { /* silent */ });
     },
-    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusedChannel.trackName, focusedTrack],
+    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusLocked, focusedChannel.trackName, focusedTrack],
   );
 
   const handleValueSpinner = useCallback(
     (nextValue: number) => {
-      if (selectedId === null) return;
+      if (selectedId === null || focusLocked) return;
       // F8: multi-key → shift the group's values by (new avg − old avg).
       if (multiSelected !== null) {
         const dValue = nextValue - multiSelected.avgValue;
@@ -1018,7 +1018,7 @@ export function CurveEditorPanel({ bridge }: Props) {
         },
       }).catch(() => { /* silent */ });
     },
-    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusedChannel.trackName],
+    [multiSelected, applyGroupShift, singleSelected, bridge, selectedId, focusLocked, focusedChannel.trackName],
   );
 
   // ── Delete keyboard handler (window-scoped, TYPING_TAGS guard) ────
