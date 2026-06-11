@@ -16,6 +16,12 @@ import { useEmitterSelectionStore } from "@/lib/emitter-selection";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitters";
 
+// [NT-12]: EmitterTree mounts Tips (Radix Tooltip.Root) on the per-row eye
+// toggles and the footer toolbar, which requires the Tooltip.Provider that
+// App.tsx supplies in production — this helper stands in for it here.
+const renderWithTooltips = (ui: ReactElement) =>
+  render(<Tooltip.Provider delayDuration={0} skipDelayDuration={0}>{ui}</Tooltip.Provider>);
+
 function fixtureTree(): EmitterTreeDto {
   return {
     root: {
@@ -97,7 +103,7 @@ function makeMutableTreeBridge(initial: EmitterTreeDto) {
 describe("EmitterTree", () => {
   it("renders 3 root rows with their lifetime/death children", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
 
     // Wait for the async emitters/list to resolve.
     await waitFor(() => {
@@ -148,7 +154,7 @@ describe("EmitterTree", () => {
       },
     };
     const { bridge, pushTree } = makeMutableTreeBridge(before);
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
 
     const alphaLi = screen.getByText("Alpha").closest("li")!;
@@ -168,7 +174,7 @@ describe("EmitterTree", () => {
 
   it("clicking a row fires emitters/select with the row's id", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke embers")).toBeInTheDocument();
     });
@@ -186,7 +192,7 @@ describe("EmitterTree", () => {
 
   it("Ctrl+click on an unselected row toggles it into the multi-selection (primary updates)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -209,7 +215,7 @@ describe("EmitterTree", () => {
     localStorage.removeItem("alo:confirm-delete"); // confirm-before-delete on (default)
     useDeleteConfirmStore.setState({ pending: null });
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
 
     // Multi-select Smoke(0) + the childless leaf Flash(5).
@@ -232,7 +238,7 @@ describe("EmitterTree", () => {
     localStorage.removeItem("alo:confirm-delete"); // confirm-before-delete on (default)
     useDeleteConfirmStore.setState({ pending: null });
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
 
     // Multi-select Smoke(0) + the childless leaf Flash(5).
@@ -292,7 +298,7 @@ describe("EmitterTree", () => {
 
   it("single-drag reorder above a root fires reorder-many (selection follows) + shows the make-room gap", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Sparks")).toBeInTheDocument();
     });
@@ -322,7 +328,7 @@ describe("EmitterTree", () => {
 
   it("single-drag onto the middle third of a row fires emitters/drop reparent with auto-picked slot", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Flash")).toBeInTheDocument();
     });
@@ -358,7 +364,7 @@ describe("EmitterTree", () => {
     // see onto state), so releasing over the block's own footprint silently
     // committed the stale reparent.
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Sparks")).toBeInTheDocument());
     stubAllRows();
     const flashBtn  = screen.getByText("Flash").closest("button")!;
@@ -400,7 +406,7 @@ describe("EmitterTree", () => {
 
   it("Escape cancels an in-progress reorder drag without committing", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Sparks")).toBeInTheDocument();
     });
@@ -418,7 +424,7 @@ describe("EmitterTree", () => {
 
   it("right-click cancels an in-progress reorder drag and suppresses the menu", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Sparks")).toBeInTheDocument();
     });
@@ -440,7 +446,7 @@ describe("EmitterTree", () => {
 
   it("a completed drag swallows the trailing click so the row isn't re-selected", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Sparks")).toBeInTheDocument();
     });
@@ -472,7 +478,7 @@ describe("EmitterTree", () => {
 
   it("Shift+click on a downstream row selects the range from primary to clicked", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -491,7 +497,7 @@ describe("EmitterTree", () => {
 
   it("renders link-group brackets in the right gutter for grouped rows", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -516,7 +522,7 @@ describe("EmitterTree", () => {
 
   it("bracket layer is absolutely positioned to hug the names (no fixed gutter width)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -535,7 +541,7 @@ describe("EmitterTree", () => {
 
   it("rendered brackets carry a data-lane attribute matching their assigned lane", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -550,7 +556,7 @@ describe("EmitterTree", () => {
 
   it("F2 on the focused row enters inline rename mode (input renders with current name)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -568,7 +574,7 @@ describe("EmitterTree", () => {
 
   it("Enter on the inline-rename input commits via emitters/rename", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -587,7 +593,7 @@ describe("EmitterTree", () => {
 
   it("Esc on the inline-rename input cancels (no emitters/rename dispatched)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -609,7 +615,7 @@ describe("EmitterTree", () => {
 
   it("ArrowDown on the tree shifts primary to the next row in flat order", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -627,7 +633,7 @@ describe("EmitterTree", () => {
 
   it("Ctrl+C on the tree dispatches emitters/copy with the current selection ids", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -647,7 +653,7 @@ describe("EmitterTree", () => {
 
   it("each row renders a per-row visibility eye button", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -660,7 +666,7 @@ describe("EmitterTree", () => {
 
   it("clicking the per-row eye dispatches emitters/set-visible with toggled state", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -677,7 +683,7 @@ describe("EmitterTree", () => {
 
   it("clicking the per-row eye does NOT change selection", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -695,7 +701,7 @@ describe("EmitterTree", () => {
 
   it("per-row link-group dot is no longer rendered (gutter brackets are the only affordance)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -708,7 +714,7 @@ describe("EmitterTree", () => {
 
   it("row uses a 3-column grid (eye / role-glyph / name) — visual reorder", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -739,7 +745,7 @@ describe("EmitterTree", () => {
 
   it("toolbar renders AFTER the tree's <ul> in DOM order", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -755,7 +761,7 @@ describe("EmitterTree", () => {
 
   it("toolbar uses the .tree-actions class for design-aligned chrome", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -766,7 +772,7 @@ describe("EmitterTree", () => {
 
   it("toolbar no longer has the eye-toggle button (per-row eyes replace it)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -777,7 +783,7 @@ describe("EmitterTree", () => {
 
   it("toolbar renders a Duplicate button between New and Delete in DOM order", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -793,7 +799,7 @@ describe("EmitterTree", () => {
 
   it("clicking Duplicate dispatches emitters/duplicate-many with the selection", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -814,7 +820,7 @@ describe("EmitterTree", () => {
 
   it("Move Up/Down disabled state is selection-aware and symmetric at both edges", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
     const up = () => screen.getByLabelText("Move emitter up") as HTMLButtonElement;
     const down = () => screen.getByLabelText("Move emitter down") as HTMLButtonElement;
@@ -840,7 +846,7 @@ describe("EmitterTree", () => {
 
   it("Duplicate button is disabled when no emitter is selected", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -852,7 +858,7 @@ describe("EmitterTree", () => {
 
   it("Show All / Hide All render as icon buttons (no SHOW / HIDE text)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -879,7 +885,7 @@ describe("EmitterTree", () => {
 
   it("renders a decorative link dot on rows whose linkGroup !== 0", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -897,7 +903,7 @@ describe("EmitterTree", () => {
 
   it("does NOT render a link dot on unlinked rows (linkGroup === 0)", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke embers")).toBeInTheDocument();
     });
@@ -912,7 +918,7 @@ describe("EmitterTree", () => {
 
   it("clicking the link-group bracket selects all members of that group", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -941,7 +947,7 @@ describe("EmitterTree", () => {
 
   it("hovering a LINKED row tints its whole group (data-link-hover), cleared on leave", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -962,7 +968,7 @@ describe("EmitterTree", () => {
 
   it("hovering an UNLINKED row tints nothing", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Flash")).toBeInTheDocument();
     });
@@ -978,7 +984,7 @@ describe("EmitterTree", () => {
 
   it("Dissolve Link Group on a linked row unlinks every member at once", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });
@@ -1000,7 +1006,7 @@ describe("EmitterTree", () => {
 
   it("Dissolve Link Group is disabled on an unlinked row", async () => {
     const bridge = makeStubBridge();
-    render(<EmitterTree bridge={bridge} />);
+    renderWithTooltips(<EmitterTree bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByText("Flash")).toBeInTheDocument();
     });
@@ -1038,12 +1044,9 @@ describe("EmitterTree delete gating (helper-level)", () => {
 // mock decorates tree payloads with live spawn values from the
 // properties overlay (`decorateSpawn` in bridge/mock.ts) — patching the
 // overlay then rendering exercises the same data path the browser-mode
-// editor uses. [NT-12]: warned rows mount a Tip (Radix Tooltip.Root),
-// which requires the Tooltip.Provider that App.tsx supplies in
-// production — renderWithTooltips stands in for it here.
-const renderWithTooltips = (ui: ReactElement) =>
-  render(<Tooltip.Provider delayDuration={0} skipDelayDuration={0}>{ui}</Tooltip.Provider>);
-
+// editor uses. [NT-12]: every render goes through renderWithTooltips
+// (defined near the imports) because EmitterTree now mounts Tips
+// unconditionally (per-row eye toggles + footer toolbar).
 describe("chain-load warning glyph (NT-11)", () => {
   beforeEach(() => {
     // The overlay is module-scoped; reset so a patched spawn value can't
@@ -1052,7 +1055,7 @@ describe("chain-load warning glyph (NT-11)", () => {
   });
 
   it("renders no glyph at fixture-default spawn values", async () => {
-    render(<EmitterTree bridge={new MockBridge()} />);
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
     await waitFor(() => {
       expect(screen.getByText("Smoke")).toBeInTheDocument();
     });

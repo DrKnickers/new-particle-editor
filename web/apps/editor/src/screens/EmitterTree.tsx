@@ -728,36 +728,41 @@ function EmitterRow({
             {/* F1: visibility toggle on the LEFT (replaces the old role
                 dot). Always rendered so the grid columns stay stable
                 during inline rename. */}
-            <span
-              role="button"
-              tabIndex={0}
-              data-testid={`emitter-vis-${node.id}`}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                void bridge.request({
-                  kind: "emitters/set-visible",
-                  params: { id: node.id, visible: !node.visible },
-                });
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
+            <Tip
+              content={node.visible ? "Hide emitter" : "Show emitter"}
+              side="right"
+              occlusionId={`tip:tree-eye:${node.id}`}
+            >
+              <span
+                role="button"
+                tabIndex={0}
+                data-testid={`emitter-vis-${node.id}`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
                   e.stopPropagation();
                   void bridge.request({
                     kind: "emitters/set-visible",
                     params: { id: node.id, visible: !node.visible },
                   });
-                }
-              }}
-              title={node.visible ? "Hide emitter" : "Show emitter"}
-              aria-label={node.visible ? "Hide emitter" : "Show emitter"}
-              className="grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
-            >
-              {node.visible
-                ? <Eye className="size-3" />
-                : <EyeOff className="size-3" />}
-            </span>
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void bridge.request({
+                      kind: "emitters/set-visible",
+                      params: { id: node.id, visible: !node.visible },
+                    });
+                  }
+                }}
+                aria-label={node.visible ? "Hide emitter" : "Show emitter"}
+                className="grid place-items-center w-4 h-4 shrink-0 rounded text-text-3 hover:bg-panel-2 hover:text-text cursor-pointer"
+              >
+                {node.visible
+                  ? <Eye className="size-3" />
+                  : <EyeOff className="size-3" />}
+              </span>
+            </Tip>
             {isEditing ? (
               // Inline-rename input. Stops click + drag propagation so
               // typing doesn't accidentally re-trigger row selection /
@@ -1141,13 +1146,14 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
     >
       <Menubar.Root>
         <Menubar.Menu>
-          <Menubar.Trigger
-            className={TOOLBAR_BTN}
-            title="New Emitter"
-            aria-label="New Emitter"
-          >
-            <Plus className="size-4" />
-          </Menubar.Trigger>
+          <Tip content="New Emitter" occlusionId="tip:tree-footer:new-emitter">
+            <Menubar.Trigger
+              className={TOOLBAR_BTN}
+              aria-label="New Emitter"
+            >
+              <Plus className="size-4" />
+            </Menubar.Trigger>
+          </Tip>
           <Menubar.Portal>
             <Menubar.Content
               className="min-w-[160px] rounded-md border border-border bg-bg-2 p-1 shadow-xl z-50"
@@ -1178,64 +1184,70 @@ function EmitterTreeToolbar({ bridge, tree, primaryId }: ToolbarProps) {
           </Menubar.Portal>
         </Menubar.Menu>
       </Menubar.Root>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Duplicate"
-        aria-label="Duplicate emitter"
-        disabled={!hasPrimary}
-        onClick={duplicatePrimary}
-      >
-        <Copy className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Delete"
-        aria-label="Delete emitter"
-        disabled={!hasPrimary}
-        onClick={del}
-      >
-        <Trash2 className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Move Up"
-        aria-label="Move emitter up"
-        disabled={!canMoveUp}
-        onClick={moveUp}
-      >
-        <ChevronUp className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Move Down"
-        aria-label="Move emitter down"
-        disabled={!canMoveDown}
-        onClick={moveDown}
-      >
-        <ChevronDown className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Show All Emitters"
-        aria-label="Show all emitters"
-        onClick={showAll}
-      >
-        <Eye className="size-4" />
-      </button>
-      <button
-        type="button"
-        className={TOOLBAR_BTN}
-        title="Hide All Emitters"
-        aria-label="Hide all emitters"
-        onClick={hideAll}
-      >
-        <EyeOff className="size-4" />
-      </button>
+      <Tip content="Duplicate" occlusionId="tip:tree-footer:duplicate">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Duplicate emitter"
+          disabled={!hasPrimary}
+          onClick={duplicatePrimary}
+        >
+          <Copy className="size-4" />
+        </button>
+      </Tip>
+      <Tip content="Delete" occlusionId="tip:tree-footer:delete">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Delete emitter"
+          disabled={!hasPrimary}
+          onClick={del}
+        >
+          <Trash2 className="size-4" />
+        </button>
+      </Tip>
+      <Tip content="Move Up" occlusionId="tip:tree-footer:move-up">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Move emitter up"
+          disabled={!canMoveUp}
+          onClick={moveUp}
+        >
+          <ChevronUp className="size-4" />
+        </button>
+      </Tip>
+      <Tip content="Move Down" occlusionId="tip:tree-footer:move-down">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Move emitter down"
+          disabled={!canMoveDown}
+          onClick={moveDown}
+        >
+          <ChevronDown className="size-4" />
+        </button>
+      </Tip>
+      <Tip content="Show All Emitters" occlusionId="tip:tree-footer:show-all-emitters">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Show all emitters"
+          onClick={showAll}
+        >
+          <Eye className="size-4" />
+        </button>
+      </Tip>
+      <Tip content="Hide All Emitters" occlusionId="tip:tree-footer:hide-all-emitters">
+        <button
+          type="button"
+          className={TOOLBAR_BTN}
+          aria-label="Hide all emitters"
+          onClick={hideAll}
+        >
+          <EyeOff className="size-4" />
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -2301,15 +2313,19 @@ export function EmitterTree({ bridge }: Props) {
                 // also lights the group (the click affordance).
                 const HITZONE_INSET = 4;
                 return (
-                  <div
+                  <Tip
                     key={b.groupId}
+                    content={`Select link group ${b.groupId}`}
+                    side="right"
+                    occlusionId={`tip:tree-linkgroup:${b.groupId}`}
+                  >
+                  <div
                     data-testid={`link-group-bracket-${b.groupId}`}
                     data-link-group={b.groupId}
                     data-lane={b.lane}
                     role="button"
                     tabIndex={0}
                     aria-label={`Select link group ${b.groupId}`}
-                    title={`Select link group ${b.groupId}`}
                     className="pointer-events-auto absolute cursor-pointer"
                     style={{ top, left: left - HITZONE_INSET, width: LANE_WIDTH_PX, height }}
                     onPointerEnter={() => setHoveredLinkGroup(b.groupId)}
@@ -2356,6 +2372,7 @@ export function EmitterTree({ bridge }: Props) {
                       />
                     ))}
                   </div>
+                  </Tip>
                 );
               })}
             </div>
