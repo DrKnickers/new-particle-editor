@@ -1143,4 +1143,82 @@ describe("curve morph (structural changes)", () => {
     // Explicitly confirm no rgba(NaN,...) was emitted.
     expect(fillPath!.getAttribute("fill")).not.toContain("NaN");
   });
+
+  it("a drag-committed move does not re-morph the dragged channel, but its locked follower morphs", async () => {
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    // red is focus; green is locked-to-red — both have identical keys.
+    const t0 = [
+      trk("red",   [k(0, 0), k(50, 0.5), k(100, 1)], "linear"),
+      trk("green", [k(0, 0), k(50, 0.5), k(100, 1)], "linear", "red"),
+    ];
+    const onKeyDragEnd = vi.fn();
+
+    const { rerender, container } = render(
+      <CurveEditor
+        tracks={t0}
+        channels={[MORPH_RED_CHANNEL, MORPH_GREEN_CHANNEL]}
+        visibleChannels={{ red: true, green: true }}
+        focusChannel="red"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        onKeyDragEnd={onKeyDragEnd}
+      />,
+    );
+
+    // Stub getBoundingClientRect so eventToViewBox gets a valid scale.
+    const svg = container.querySelector('[data-testid="curve-editor-svg"]') as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 600, bottom: 300, width: 600, height: 300, x: 0, y: 0, toJSON: () => "" } as DOMRect);
+
+    // Find the hit-pad for the t=50 key on the red (focus) channel.
+    // data-key-time="50" on the focus channel's <circle>.
+    const pad = container.querySelector(
+      '[data-testid="curve-key"][data-key-time="50"][data-channel-id="red"]',
+    )!;
+    expect(pad).not.toBeNull();
+
+    // Simulate a drag: down at key position, move past slop, up.
+    // t=50 → x=300; v=0.5 → y=150.
+    fireEvent.pointerDown(pad, { button: 0, pointerId: 99, clientX: 300, clientY: 150 });
+    fireEvent.pointerMove(svg, { pointerId: 99, clientX: 340, clientY: 120 });
+    fireEvent.pointerUp(svg,  { pointerId: 99, clientX: 340, clientY: 120 });
+
+    // onKeyDragEnd must have fired with (oldTime=50, newTime, newValue).
+    expect(onKeyDragEnd).toHaveBeenCalledTimes(1);
+    const [, committedTime, committedValue] = onKeyDragEnd.mock.calls[0] as [number, number, number];
+
+    // Build t1: red's 50-key is now at the committed position; green mirrors it.
+    // Both tracks get the moved key; the other keys stay in place.
+    const t1 = [
+      trk("red",   [k(0, 0), k(committedTime, committedValue), k(100, 1)], "linear"),
+      trk("green", [k(0, 0), k(committedTime, committedValue), k(100, 1)], "linear", "red"),
+    ];
+
+    rerender(
+      <CurveEditor
+        tracks={t1}
+        channels={[MORPH_RED_CHANNEL, MORPH_GREEN_CHANNEL]}
+        visibleChannels={{ red: true, green: true }}
+        focusChannel="red"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        onKeyDragEnd={onKeyDragEnd}
+      />,
+    );
+
+    // The locked follower (green) MUST morph — its change wasn't the dragged channel.
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="green"]'),
+      ).not.toBeNull();
+    });
+
+    // The dragged channel (red) must NOT morph — suppression swallows it.
+    expect(
+      container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="red"]'),
+    ).toBeNull();
+  });
 });

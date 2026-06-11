@@ -1485,6 +1485,28 @@ function MultiChannelCurves({
       // plain key click so it falls back to single-select).
       if (moved && onGroupDragEnd) {
         dragConsumedClickRef.current = true;
+        // Record suppression BEFORE firing the callback so the hook
+        // sees it when the parent re-renders with the committed tracks.
+        if (focusLayer !== null && selectedKeyTimes) {
+          const eps = 1e-4;
+          const allKeys = focusLayer.track.keys;
+          const suppMoves: Array<{ oldTime: number; newTime: number; newValue: number }> = [];
+          for (const k of allKeys) {
+            if (!selectedKeyTimes.has(k.time)) continue;
+            const isBorder = focusBorderTimes.has(k.time);
+            const newTime = isBorder
+              ? k.time
+              : Math.max(timeMin + eps, Math.min(timeMax - eps, k.time + groupDTime));
+            const newValue = Math.max(focusVMin, Math.min(focusVMax, k.value + groupDValue));
+            suppMoves.push({ oldTime: k.time, newTime, newValue });
+          }
+          if (suppMoves.length > 0) {
+            morphSuppressRef.current = {
+              channelId: focusLayer.channel.id,
+              moves: suppMoves,
+            };
+          }
+        }
         onGroupDragEnd(groupDTime, groupDValue);
       } else if (!moved && onKeyClick) {
         onKeyClick(keyTime, event);
@@ -1494,6 +1516,12 @@ function MultiChannelCurves({
       // `dragConsumedClickRef`'s comment. Without this the backdrop
       // would clear the selection we set in handleKeyDragEnd.
       dragConsumedClickRef.current = true;
+      // Record suppression BEFORE firing the callback so the hook
+      // sees it when the parent re-renders with the committed tracks.
+      morphSuppressRef.current = {
+        channelId: focusLayer!.channel.id,
+        moves: [{ oldTime: keyTime, newTime: currentTime, newValue: currentValue }],
+      };
       onKeyDragEnd(keyTime, currentTime, currentValue);
     } else if (!moved && onKeyClick) {
       onKeyClick(keyTime, event);
