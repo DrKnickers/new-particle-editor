@@ -17,6 +17,28 @@ Conventions:
 ## Changelog
 
 
+### Spinner arrow buttons no longer paint over the box outline
+
+*2026-06-11 · TODO-hash · TODO-PR*
+
+Pressing (or hovering) a spinner's up/down arrow no longer breaks the
+look of the field's rounded border. The arrow column sat flush against
+the input's right edge, so its hover/active background painted over the
+right border line and the rounded corners. The column is now inset 1px
+inside the border and clipped with matching rounded-right corners, so
+the button background stays contained within the box outline.
+
+**How we tackled it.** In
+[`src/primitives/Spinner.tsx`](web/apps/editor/src/primitives/Spinner.tsx:364)
+the absolutely-positioned arrow column changed from `right-0 top-0`
+(full height, flush to the edge) to a 1px inset (`top/right/bottom: 1`,
+`width: ARROW_W - 1`) with `overflow-hidden rounded-r-[3px]`. The 3px
+radius is concentric with the input's 4px `rounded` corner, exactly 1px
+inside — the border sits in the gap, and `overflow-hidden` clips the
+square-cornered button fills to the rounded column.
+
+---
+
 ### Group-drag now live-updates the Time/Value spinners
 
 *2026-06-11 · [`d5b6f1d`](https://github.com/DrKnickers/new-particle-editor/commit/d5b6f1d) · [#130](https://github.com/DrKnickers/new-particle-editor/pull/130)*
