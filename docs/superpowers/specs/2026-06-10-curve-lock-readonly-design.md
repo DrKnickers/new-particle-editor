@@ -44,8 +44,9 @@ upward.
 |---|---|
 | Lock semantics | **Live one-way mirror.** Follower shows + follows the master; follower is read-only; follower can never mutate the master. |
 | Data model | **Keep the pointer alias** (`tracks[i] == &trackContents[j]`). No separate per-follower buffer — once read-only is airtight the alias yields the mirror for free, with no master→follower re-sync duty and no save/load reconciliation risk. |
-| Read-only cue | Adapt legacy's "grey out the whole curve page" to the multi-curve overlay: the locked focus curve stays **emphasized** (you're still focused on it) but its markers go **non-interactive**, the Select/Insert toggle disables, and a small **"Mirrors {Master} — read-only"** indicator (pill + lock glyph) appears in the toolbar. |
-| Scope | New React UI only. Legacy Win32 `TrackEditor` already greys the page correctly (it sets `control->editable = (sel == 0)` and disables its toolbar buttons at [`TrackEditor.cpp:184-193`](src/UI/TrackEditor.cpp:184)); no native change. |
+| Read-only cue | Legacy greys the whole page; the multi-curve overlay can't (colour = channel identity, and opacity is already the dim-the-unfocused signal). Instead: the locked focus curve renders as a **dashed line in the follower's OWN colour** (green stays green) at the emphasized stroke width + full opacity, with **hollow (outline-only) key markers**. The Select/Insert toggle disables, and a small **lock glyph** beside the Lock-to dropdown carries the worded explanation as an NT-12 `Tip` (replaces the earlier verbose pill — the dropdown already shows "Lock to: Red"). A **hover tooltip on the curve itself** is an optional bonus, not the primary cue. |
+| Dash colour rationale | The follower aliases the master's buffer, so a locked Green renders the **same points** as Red — the two curves are coincident. Colouring the dash green (not red) preserves "which channel is the mirror" and avoids a redundant red-on-red line; the green dashes over the dimmed solid red read as the lock relationship. Dash array `7 5` (recommended), feel-tunable. |
+| Scope | New React UI only — panel **and** a small renderer branch in `MultiChannelCurves` (the dashed/hollow treatment). No bridge command, no schema change, **no native/C++ change**: legacy Win32 `TrackEditor` already greys the page correctly (`control->editable = (sel == 0)` + toolbar disable at [`TrackEditor.cpp:184-193`](src/UI/TrackEditor.cpp:184)). |
 
 ## §1 What the codebase already gives us
 
@@ -77,8 +78,9 @@ upward.
 
 ## §2 Implementation approach
 
-All changes are in `CurveEditorPanel.tsx` (panel→renderer boundary);
-the `CurveEditor` renderer is correct as-is.
+Most changes are in `CurveEditorPanel.tsx` (panel→renderer boundary);
+one small render branch is added to `MultiChannelCurves` in
+`CurveEditor.tsx` for the dashed/hollow locked-curve treatment.
 
 1. **Gate the mutation handlers on `focusLocked`.** At the
    `<CurveEditor>` render
@@ -108,14 +110,31 @@ the `CurveEditor` renderer is correct as-is.
    `focusLocked` becomes true — so a curve locked while Insert is
    active can't leave a live crosshair on a read-only canvas.
 
-3. **Read-only indicator.** In the toolbar, when `focusLocked`, render a
-   compact pill: a lock glyph + `Mirrors {lockToValue} — read-only`
-   (e.g. "Mirrors Red — read-only"), styled with the existing
-   `--warning`/accent token vocabulary used elsewhere in the toolbar,
-   wrapped in the NT-12 `Tip` for the longer explanation ("This channel
-   is locked to Red and shows Red's curve. Unlock to edit."). Placement:
-   adjacent to the Lock-to dropdown so the cause (dropdown) and effect
-   (read-only) read together.
+3. **Read-only indicator (toolbar).** When `focusLocked`, render a
+   compact **lock glyph** (Tabler `ti-lock`-equivalent / the icon set
+   already in use) beside the Lock-to dropdown, accent-toned, wrapped in
+   an NT-12 `Tip`: "Green is locked to Red and shows Red's curve. Unlock
+   to edit." No verbose pill — the dropdown already reads "Lock to: Red",
+   so the glyph + tooltip is the minimal always-on, keyboard-reachable
+   worded cue (a `Tip` on a disabled-looking glyph rides an
+   `inline-block`/`span` shim per the NT-12 disabled-trigger pattern).
+
+4. **Locked-curve render treatment (`MultiChannelCurves`).** Thread a
+   `focusReadOnly` boolean (true when the focus channel's track is
+   locked) into the renderer. When set, the focus layer draws:
+   - the curve `<path>`/`<polyline>` with `stroke-dasharray` (`7 5`
+     default, feel-tunable) in the channel's **own** colour at the
+     emphasized stroke width + full opacity — NOT greyed, NOT faded;
+   - key markers as **hollow rings** (`fill="none"`, channel-colour
+     stroke) instead of filled grabbable dots, and without the
+     `cursor: pointer` (which is already gone once `onKeyClick` is
+     withheld).
+   The non-focus dimmed layers are unchanged. This is the only renderer
+   change; the emphasis/dim machinery and projection are untouched.
+
+A hover tooltip on the curve itself was considered and **cut** (user
+call) — see §5. The dashed line + toolbar lock glyph are the read-only
+cue.
 
 No new bridge command, no schema change, no native change.
 
@@ -142,9 +161,14 @@ No new bridge command, no schema change, no native change.
    *Mitigation:* the `mode → select` reset keys off `focusLocked`
    (channel-change-driven), not only the lock-dispatch, so any path
    into "focused + locked" lands in Select.
-4. **Indicator copy drifts from the dropdown.** The pill says "Mirrors
-   Red"; the dropdown says "Lock to: Red". *Mitigation:* both derive
+4. **Indicator copy drifts from the dropdown.** The glyph tooltip names
+   "Red"; the dropdown says "Lock to: Red". *Mitigation:* both derive
    from the same `lockToValue` memo — single source, no drift.
+5. **Two followers locked to the same master overlap.** Green and Blue
+   both locked to Red render coincident dashes. *Mitigation:* only the
+   focus channel is emphasized at a time (the others dim), so the user
+   inspects one mirror at a time over the dimmed master — no two bright
+   dashed lines compete. Accepted.
 
 ## §4 Testing & verification
 
@@ -165,9 +189,12 @@ locked focus channel (`focusedTrack.lockedTo = "red"`):
 - **Mode reset:** locking the focus channel while `mode === "insert"`
   flips `mode` to `"select"`; `data-state` on the Insert button reflects
   it.
-- **Indicator:** the "Mirrors Red — read-only" pill + lock glyph render
-  only when `focusLocked`; copy matches `lockToValue`; gone after
-  unlock.
+- **Indicator + render treatment:** the lock glyph renders only when
+  `focusLocked`, its tooltip copy matches `lockToValue`, and it's gone
+  after unlock. The focus curve carries `stroke-dasharray` and hollow
+  (`fill="none"`) markers only when `focusReadOnly`; an unlocked focus
+  curve is solid with filled markers. (Assert via the rendered
+  `stroke-dasharray` attr + marker `fill`.)
 - **Unlock round-trip:** unlock restores interactivity (drag commits a
   `set-track-key` again; Insert re-enables).
 
@@ -189,4 +216,9 @@ pill styling.
 - **Separate per-follower storage buffer** — explicitly rejected above;
   revisit only if a hard leak-back guarantee is wanted beyond read-only
   enforcement.
+- **Hover tooltip on the curve line itself** — cut (user call). A
+  hover-only cue can't announce read-only before an edit attempt, and
+  the thin `pointerEvents="none"` stroke would need a fat hit-area +
+  pointer-events handling that competes with the backdrop's
+  marquee/click. The dashed line + toolbar lock glyph cover the cue.
 - **Legacy Win32 `TrackEditor` changes** — already correct; untouched.
