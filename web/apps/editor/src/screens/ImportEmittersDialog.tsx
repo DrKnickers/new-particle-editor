@@ -20,7 +20,6 @@ import type {
   EmitterTreeNode,
 } from "@particle-editor/bridge-schema";
 import { Modal } from "@/components/Modal";
-import { Tip } from "@/primitives/Tip";
 
 type Props = {
   bridge: Bridge;
@@ -186,13 +185,9 @@ export function ImportEmittersDialog({ bridge, open, onOpenChange }: Props) {
           {/* Source file row */}
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-text-2">Source file:</span>
-            {/* No occlusionId: inside a modal, which already occludes the
-                whole viewport. */}
-            <Tip content={sourcePath ?? undefined}>
-              <span className="flex-1 truncate rounded border border-border bg-bg px-2 py-1 text-xs text-text-2">
-                {sourcePath ? basename(sourcePath) : "(not selected)"}
-              </span>
-            </Tip>
+            <span className="flex-1 truncate rounded border border-border bg-bg px-2 py-1 text-xs text-text-2">
+              {sourcePath ? basename(sourcePath) : "(not selected)"}
+            </span>
             <button
               type="button"
               onClick={() => void handleBrowse()}

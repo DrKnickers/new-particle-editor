@@ -426,7 +426,7 @@ export function BasicTab({
           left_panel.jsx:100. Outside any Section so it always
           shows at the top of the tab. */}
       <div className="form-row name-row">
-        <Tip content="Name" side="left" occlusionId="tip:props:lbl-name"><span className="lbl">Name</span></Tip>
+        <span className="lbl">Name</span>
         <FieldText
           value={properties.name}
           onCommit={(v) => onCommit({ name: v })}
@@ -679,7 +679,7 @@ function FieldText({
   }
   return (
     <div className="form-row form-row-text">
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl">{label}</span></Tip>
+      <span className="lbl">{label}</span>
       {input}
     </div>
   );
@@ -746,7 +746,7 @@ export function TexturePickerField({
 
   return (
     <div className="form-row form-row-texture">
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl">{label}</span></Tip>
+      <span className="lbl">{label}</span>
       <FieldText wide label={label} value={value} onCommit={commit} />
       <div className="texture-btns">
         <Tip content="Browse for a texture file" side="left" occlusionId="tip:props:texture-browse">
@@ -860,7 +860,7 @@ export function FieldSpinner({
           : "form-row";
   return (
     <div className={rowClass} data-testid={testId}>
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl">{label}</span></Tip>
+      <span className="lbl">{label}</span>
       {/* Task 2.5: the design's .form-row 3rd column carries the unit
           hint, so we suppress the Spinner's inline trailing-unit overlay
           here. Outside .form-row callers still get the inline unit. */}
@@ -906,7 +906,7 @@ function FieldCheckbox({
   // `justify-self-end` keeps the checkbox flush right within its column.
   return (
     <div className={`form-row form-row-check${inlineLabel ? " form-row-check-inline" : ""}`}>
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl">{label}</span></Tip>
+      <span className="lbl">{label}</span>
       <Checkbox.Root
         checked={checked}
         disabled={disabled}
@@ -957,7 +957,7 @@ function FieldSelect({
           : "form-row";
   return (
     <div className={rowClass}>
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl">{label}</span></Tip>
+      <span className="lbl">{label}</span>
       <Select.Root
         value={String(value)}
         onValueChange={(v) => onCommit(Number(v))}
@@ -1122,7 +1122,7 @@ export function AppearanceTab({
             cell is twice as wide as a 4-up layout — easier to read at
             the inspector's typical column width. */}
         <div className="form-row form-row-cluster items-start">
-          <Tip content="RGBA:" side="left" occlusionId="tip:props:lbl-rgba"><span className="lbl pt-1">RGBA:</span></Tip>
+          <span className="lbl pt-1">RGBA:</span>
           <div className="grid grid-cols-2 gap-1">
             <div className="axis-cell">
               <span className="axis-lbl">R</span>
@@ -1392,7 +1392,7 @@ export function PhysicsTab({
             Combined "X / Y / Z:" label per legacy IDD_EMITTER_PROPS3
             (.rc:350). */}
         <div className="form-row form-row-cluster items-start">
-          <Tip content="X / Y / Z:" side="left" occlusionId="tip:props:lbl-xyz"><span className="lbl pt-1">X / Y / Z:</span></Tip>
+          <span className="lbl pt-1">X / Y / Z:</span>
           <div className="grid grid-cols-3 gap-1">
             <div className="axis-cell">
               <span className="axis-lbl">X</span>
@@ -1628,7 +1628,7 @@ function Vec3Row({
 }) {
   return (
     <div className="form-row form-row-cluster items-start">
-      <Tip content={label} side="left" occlusionId={`tip:props:lbl-${label}`}><span className="lbl pt-1">{label}</span></Tip>
+      <span className="lbl pt-1">{label}</span>
       <div className="grid grid-cols-3 gap-1">
         <div className="axis-cell">
           <span className="axis-lbl">X</span>
