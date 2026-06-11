@@ -629,6 +629,32 @@ describe("locked focus channel (read-only mirror)", () => {
     }
   });
 
+  it("smooth interpolation on a locked focus also carries stroke-dasharray", () => {
+    // Re-render the locked fixture but with smooth interpolation so the
+    // renderer takes the <path data-testid="curve-path"> branch instead
+    // of the linear <polyline data-testid="curve-polyline"> branch.
+    const smoothRed: TrackDto = { ...makeLockedTrack("red", null), interpolation: "smooth" };
+    const smoothGreen: TrackDto = { ...makeLockedTrack("green", "red"), interpolation: "smooth" };
+    const { container } = render(
+      <CurveEditor
+        tracks={[smoothRed, smoothGreen]}
+        channels={[LOCK_RED_CHANNEL, LOCK_GREEN_CHANNEL]}
+        visibleChannels={{ red: true, green: true }}
+        focusChannel="green"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+      />,
+    );
+    const focusG = container.querySelector(
+      '[data-channel-id="green"][data-focus="true"]',
+    ) as Element;
+    expect(focusG).not.toBeNull();
+    const path = focusG.querySelector('[data-testid="curve-path"]') as SVGPathElement | null;
+    expect(path).not.toBeNull();
+    expect(path!.getAttribute("stroke-dasharray")).toBe("7 5");
+  });
+
   it("solid + filled when unlocked", () => {
     const { container } = renderLockFixture(null);
     const focusG = container.querySelector(
@@ -657,7 +683,8 @@ describe("locked focus channel (read-only mirror)", () => {
     });
     const hitPads = container.querySelectorAll('[data-testid="curve-key"][data-channel-id="green"]');
     expect(hitPads.length).toBeGreaterThan(0);
-    const pad = hitPads[1]! as SVGCircleElement;
+    const pad = container.querySelector('[data-testid="curve-key"][data-key-time="50"]') as SVGCircleElement;
+    expect(pad).not.toBeNull();
     // Pointer-down on the middle key hit-pad.
     fireEvent.pointerDown(pad, { pointerId: 50, button: 0, clientX: 300, clientY: 150 });
     // Pointer-move past slop on the SVG.
@@ -685,5 +712,36 @@ describe("locked focus channel (read-only mirror)", () => {
     // Plain click on the backdrop should still fire onCanvasClick.
     fireEvent.click(backdrop);
     expect(onCanvasClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("insertMode + locked focus: pointer-down does NOT call onCanvasAdd", () => {
+    // Fix 1: the focusReadOnly guard is hoisted before the insertMode branch,
+    // so insert is suppressed on a locked canvas even when insertMode=true.
+    const onCanvasAdd = vi.fn();
+    const { backdrop } = renderLockFixture("red", {
+      insertMode: true,
+      onCanvasAdd,
+    });
+    fireEvent.pointerDown(backdrop, { pointerId: 60, button: 0, clientX: 180, clientY: 90 });
+    expect(onCanvasAdd).not.toHaveBeenCalled();
+  });
+
+  it("right-click and click on a locked hit pad do NOT invoke onKeyContextMenu / onKeyClick", () => {
+    // Fixes 2 + 3: context-menu and click handlers bail immediately when
+    // focusReadOnly, so the callbacks are never reached.
+    const onKeyContextMenu = vi.fn();
+    const onKeyClick = vi.fn();
+    const { container } = renderLockFixture("red", {
+      onKeyContextMenu,
+      onKeyClick,
+    });
+    const pad = container.querySelector(
+      '[data-testid="curve-key"][data-channel-id="green"][data-key-time="50"]',
+    ) as SVGCircleElement;
+    expect(pad).not.toBeNull();
+    fireEvent.contextMenu(pad);
+    expect(onKeyContextMenu).not.toHaveBeenCalled();
+    fireEvent.click(pad);
+    expect(onKeyClick).not.toHaveBeenCalled();
   });
 });
