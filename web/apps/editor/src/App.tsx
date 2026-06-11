@@ -286,14 +286,31 @@ export function App() {
     logReactHostingMode();
   }, []);
 
+  // [NT-12] The demo routes bypass AppShell and therefore its app-level
+  // Tooltip.Provider — but demo'd components (ColorButton, TexturePalette)
+  // mount Tips, and Radix Tooltip.Root THROWS without a Provider (the
+  // ?demo=primitives gallery white-screened in the native harness). Wrap
+  // every demo return so standalone mounts stay viable.
   if (DEMO_PARAM === "primitives") {
-    return <PrimitivesGallery />;
+    return (
+      <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
+        <PrimitivesGallery />
+      </Tooltip.Provider>
+    );
   }
   if (DEMO_PARAM === "mod-nickname") {
-    return <ModNicknameDemo />;
+    return (
+      <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
+        <ModNicknameDemo />
+      </Tooltip.Provider>
+    );
   }
   if (DEMO_PARAM === "autosave-recovery") {
-    return <AutosaveRecoveryDemo />;
+    return (
+      <Tooltip.Provider delayDuration={400} skipDelayDuration={300}>
+        <AutosaveRecoveryDemo />
+      </Tooltip.Provider>
+    );
   }
   return <AppShell />;
 }
