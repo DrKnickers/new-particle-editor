@@ -95,6 +95,8 @@ import {
 } from "@/lib/drop-zone";
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
 import { estimateChainLoad, formatChainWarning, type ChainWarning } from "@/lib/chain-load";
+import { Tip } from "@/primitives/Tip";
+import { ChainWarningTip } from "./ChainWarningTip";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { requestDeleteEmitters } from "@/lib/delete-emitters";
 import { moveEmitters, duplicateEmitters, reorderManyEmitters } from "@/lib/emitter-reorder";
@@ -847,18 +849,27 @@ function EmitterRow({
                 col 5 (right of the name) via grid-column but rendered
                 LAST in DOM — same convention as the role glyph / link
                 dot, so unwarned rows' accessible names stay byte-
-                identical and the a11y goldens hold. The native `title`
-                carries the multi-line root→offender breakdown. */}
+                identical and the a11y goldens hold. [NT-12]: the rich
+                ChainWarningTip carries the root→offender breakdown for
+                sighted users; the aria-label keeps the FULL plain-text
+                breakdown for screen readers (spec §4). side="right" +
+                occlusion because tree tooltips open toward the D3D
+                viewport. */}
             {chainWarning !== null && (
-              <span
-                style={{ gridColumn: 5, gridRow: 1 }}
-                data-testid={`emitter-chain-warning-${node.id}`}
-                title={formatChainWarning(chainWarning)}
-                aria-label={`Chain load warning: about ${Math.round(chainWarning.estimate).toLocaleString("en-US")} particles estimated alive`}
-                className="grid place-items-center w-4 h-4 shrink-0 justify-self-center text-amber-400"
+              <Tip
+                content={<ChainWarningTip warning={chainWarning} />}
+                side="right"
+                occlusionId={`tip:chain-warn:${node.id}`}
               >
-                <TriangleAlert className="size-3" />
-              </span>
+                <span
+                  style={{ gridColumn: 5, gridRow: 1 }}
+                  data-testid={`emitter-chain-warning-${node.id}`}
+                  aria-label={formatChainWarning(chainWarning)}
+                  className="grid place-items-center w-4 h-4 shrink-0 justify-self-center text-amber-400"
+                >
+                  <TriangleAlert className="size-3" />
+                </span>
+              </Tip>
             )}
           </button>
         </ContextMenu.Trigger>

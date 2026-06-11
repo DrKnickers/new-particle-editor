@@ -5,6 +5,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { ZERO_SPAWN } from "@particle-editor/bridge-schema";
 import type { Bridge, EmitterTreeDto, EmitterTreeNode } from "@particle-editor/bridge-schema";
 import { EmitterTree } from "../EmitterTree";
@@ -1036,7 +1038,12 @@ describe("EmitterTree delete gating (helper-level)", () => {
 // mock decorates tree payloads with live spawn values from the
 // properties overlay (`decorateSpawn` in bridge/mock.ts) — patching the
 // overlay then rendering exercises the same data path the browser-mode
-// editor uses.
+// editor uses. [NT-12]: warned rows mount a Tip (Radix Tooltip.Root),
+// which requires the Tooltip.Provider that App.tsx supplies in
+// production — renderWithTooltips stands in for it here.
+const renderWithTooltips = (ui: ReactElement) =>
+  render(<Tooltip.Provider delayDuration={0} skipDelayDuration={0}>{ui}</Tooltip.Provider>);
+
 describe("chain-load warning glyph (NT-11)", () => {
   beforeEach(() => {
     // The overlay is module-scoped; reset so a patched spawn value can't
@@ -1057,10 +1064,13 @@ describe("chain-load warning glyph (NT-11)", () => {
   it("shows the glyph with a breakdown tooltip when an emitter crosses the threshold", async () => {
     // Smoke is id 0 in the mock fixture; 20,000/s × 1 s = 20,000 > 10,000.
     useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 20_000, lifetime: 1 });
-    render(<EmitterTree bridge={new MockBridge()} />);
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
     const glyph = await screen.findByTestId("emitter-chain-warning-0");
-    expect(glyph.getAttribute("title")).toContain("20,000");
-    expect(glyph.getAttribute("title")).toContain("Soft warning");
+    // [NT-12]: the native `title` is gone (the rich Tip replaced it); the
+    // aria-label now carries the FULL formatChainWarning breakdown.
+    expect(glyph.getAttribute("title")).toBeNull();
+    expect(glyph.getAttribute("aria-label")).toContain("20,000");
+    expect(glyph.getAttribute("aria-label")).toContain("Soft warning");
     // Only the offending chain glyphs: Smoke + its two children (the
     // cumulative product carries down), NOT the sane siblings Sparks (3)
     // and Flash (5). Pins the per-row prop wiring, not just presence.
@@ -1075,9 +1085,9 @@ describe("chain-load warning glyph (NT-11)", () => {
     // 10 × 2,000 = 20,000 > 10,000. The root glyphs as an ancestor and
     // the child's tooltip carries the per-generation breakdown.
     useMockEmitterProperties.getState().patch(1, { nParticlesPerSecond: 2_000, lifetime: 1 });
-    render(<EmitterTree bridge={new MockBridge()} />);
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
     const childGlyph = await screen.findByTestId("emitter-chain-warning-1");
-    expect(childGlyph.getAttribute("title")).toContain("→ Smoke embers");
+    expect(childGlyph.getAttribute("aria-label")).toContain("→ Smoke embers");
     expect(screen.getByTestId("emitter-chain-warning-0")).toBeInTheDocument();
   });
 });

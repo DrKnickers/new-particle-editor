@@ -75,20 +75,23 @@ export function estimateChainLoad(root: EmitterTreeNode): Map<number, ChainWarni
   return out;
 }
 
-// Multi-line tooltip body (the native `title` attribute renders \n as
-// line breaks).
+// Number formatting shared by the plain-text tooltip body and the
+// [NT-12] rich ChainWarningTip — one set of rules, two presentations.
+export const fmtCount = (n: number) => Math.round(n).toLocaleString("en-US");
+// Sub-10 multipliers keep a decimal so e.g. ×0.4 doesn't render as ×0.
+export const fmtMultiplier = (n: number) =>
+  n >= 10 ? fmtCount(n) : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+
+// Multi-line tooltip body (line breaks render in plain-text contexts,
+// e.g. the glyph's aria-label / a native `title` attribute).
 export function formatChainWarning(w: ChainWarning): string {
-  const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
-  // Sub-10 multipliers keep a decimal so e.g. ×0.4 doesn't render as ×0.
-  const fmtSmall = (n: number) =>
-    n >= 10 ? Math.round(n).toLocaleString("en-US") : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
   const lines = w.path.map((p, i) =>
     i === 0
-      ? `${p.name}: ~${fmtSmall(p.perEmitter)} alive`
-      : `→ ${p.name}: ×${fmtSmall(p.perEmitter)} → ~${fmt(p.cumulative)}`,
+      ? `${p.name}: ~${fmtMultiplier(p.perEmitter)} alive`
+      : `→ ${p.name}: ×${fmtMultiplier(p.perEmitter)} → ~${fmtCount(p.cumulative)}`,
   );
   return [
-    `Soft warning: ~${fmt(w.estimate)} particles estimated alive through this chain`,
+    `Soft warning: ~${fmtCount(w.estimate)} particles estimated alive through this chain`,
     ...lines,
   ].join("\n");
 }
