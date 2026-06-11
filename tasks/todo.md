@@ -122,3 +122,40 @@ re-latch mid-exit cancels the unmount.
   toolbar; ⚠ tooltip over the real viewport (occlusion); modal open/close;
   banner appear/clear via a deliberate overload; both themes; merge gate
   = explicit OK.
+
+
+---
+
+## Review (post-execution, session 36)
+
+**Shipped as PR [#123](https://github.com/DrKnickers/new-particle-editor/pull/123)
+(awaits user feel test + explicit merge OK).** All 13 plan tasks executed
+subagent-driven (implementer + spec review + quality review per task; every
+finding closed before moving on).
+
+**Verified:** web **687 passed** (670 baseline + 17 new), tsc -b 0, vite
+build clean, grep gate zero DOM title=, host Debug x64 clean (LNK4098
+benign), native harness **177/0 twice** (update + compare runs), browser
+smoke (tooltip styling token-exact in both themes, collision flip
+confirmed, modal keyframes live, ?demo=primitives renders).
+
+**Deviations from plan (all verified, all in the PR description):**
+1. Radix renders tooltip content twice (visible + VisuallyHidden dupe) —
+   occlusion arms only for the visible copy (closest('[role=tooltip]')
+   discriminator, dist-verified). TDD caught it.
+2. Census was wrong twice (plan said ~42; Toolbar alone had 12) — the
+   grep gate was authoritative, as planned (L-022).
+3. No T5 sites existed in EmitterTree (footer buttons are icon-only T1);
+   the four disabled-able ones got T6 shims (controller call).
+4. Demo routes (?demo=*) bypassed the app Tooltip.Provider →
+   white-screen; Provider-wrapped (plan missed standalone mounts).
+5. Two keyboard a11y goldens were FLAKY, not just churned: the previous
+   tab stop's tooltip races its 110ms exit at snapshot time.
+   captureDomA11y now settles exit animations; single-test --grep golden
+   regeneration is INVALID in this suite (earlier spec files establish
+   selection state) — regenerate from full runs only.
+
+**Open for the user (feel test, L-033):** toolbar sweep feel + occlusion
+over the viewport, the rich warning glyph tooltip on a real heavy chain
+(mock data could not provoke one), modal open/close, banner appear/clear,
+both themes, reduced-motion. CHANGELOG hash is TODO until merge.

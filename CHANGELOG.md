@@ -17,6 +17,65 @@ Conventions:
 ## Changelog
 
 
+### Styled, animated tooltips app-wide + one motion family for modal and banner
+
+*2026-06-10 · `TODO` · [#123](https://github.com/DrKnickers/new-particle-editor/pull/123)*
+
+Every hover hint in the editor is now a styled, animated tooltip instead of
+a native HTML `title` — themed surface with a soft drop shadow that adapts
+to dark/light mode, a fade + 4px slip entrance/exit, a 400 ms first-open
+delay that collapses to instant when sweeping across controls, and full
+`prefers-reduced-motion` support. The NT-11 heavy-emitter ⚠ glyph gained a
+rich tooltip: an amber header band stating plainly *"This chain may spawn
+far too many particles — Soft warning, nothing is blocked"* over an aligned
+per-generation breakdown of the multiplication chain. The same motion
+family now animates the Modal (fade + 8 px rise; its previous entrance
+classes were silent no-ops) and the preview-overload banner (fade + 6 px
+drop, soft shadow replacing the old hard ring), driven by shared
+`--motion-*` / `--slip-*` / `--shadow-soft` tokens in
+[`src/styles/tokens.css`](web/apps/editor/src/styles/tokens.css:48).
+
+**How we tackled it.** One `Tip` primitive
+([`src/primitives/Tip.tsx`](web/apps/editor/src/primitives/Tip.tsx:1)) on
+`@radix-ui/react-tooltip` (asChild trigger, portaled content), with motion
+as hand-rolled CSS keyframes keyed to Radix `data-state`/`data-side` — the
+shipped `popover-animate` pattern extended, no animation library. Two
+architectural points worth remembering: (1) tooltips are portaled DOM, so
+any site whose tooltip can reach the D3D-composited viewport popup
+registers `useViewportOcclusion` via an opt-in `occlusionId` prop (the
+OccludingPopover precedent), and (2) Radix Tooltip renders its content
+TWICE (visible + a VisuallyHidden a11y duplicate), so the occlusion body
+arms only for the visible copy via a `closest('[role="tooltip"]')`
+discriminator — without it the hidden copy clobbers the occlusion rect.
+The ~45-site sweep used six per-site classes (keep/add `aria-label`,
+truncation labels get NO added label so a11y goldens stay byte-stable,
+titles inside Radix menus deleted as redundant, disabled controls get a
+span shim because they fire no pointer events). The OverloadBanner's exit
+plays through a new generic `usePresence` hook
+([`src/lib/use-presence.ts`](web/apps/editor/src/lib/use-presence.ts:1)) —
+animationend unmount with a timeout fallback so reduced-motion (which
+fires no animationend) can never leak the banner's occlusion registration.
+
+**Issues encountered and resolutions.** Three gotchas a future contributor
+would step on. (1) Radix Tooltip's `data-state` vocabulary is
+`delayed-open`/`instant-open`/`closed` — NOT Dialog/Popover's `open`;
+verified against the installed dist before writing the CSS selectors.
+(2) The `?demo=` routes return before the AppShell and so bypassed the
+app-level `Tooltip.Provider` — `Tooltip.Root` throws without one, which
+white-screened `?demo=primitives` in the native harness; every demo
+return is now Provider-wrapped. (3) Keyboard-focus a11y goldens flaked:
+tabbing opens the focused control's tooltip (deterministic) but the
+PREVIOUS stop's tooltip is mid-exit-animation at snapshot time —
+sometimes mounted, sometimes not. `captureDomA11y` now settles
+(`waitForFunction` for no `.tip-animate[data-state="closed"]`) before
+capturing; the only legitimate golden delta is tab-stop-2's open tooltip,
+and regenerating goldens via a single-test `--grep` is invalid anyway
+(earlier spec files establish selection state — regenerate from the full
+run only). Verified: web 687, `tsc -b` 0, native 177/0 twice, host Debug
+x64 clean.
+
+---
+
 ### Preview overload guard: the editor survives any spawn parameters
 
 *2026-06-10 · [`2ed99d5`](https://github.com/DrKnickers/new-particle-editor/commit/2ed99d5) · [#121](https://github.com/DrKnickers/new-particle-editor/pull/121)*
