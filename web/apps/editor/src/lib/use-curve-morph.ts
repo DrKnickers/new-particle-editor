@@ -21,6 +21,7 @@ import {
   buildMorphGrid,
   classifyTrackChange,
   easeOutCubic,
+  matchKeys,
   MORPH_MS,
   resampleOntoGrid,
   sampleTrackPx,
@@ -44,6 +45,17 @@ export type SuppressedMove = {
   moves: Array<{ oldTime: number; newTime: number; newValue: number }>;
 } | null;
 
+/** A single key-marker descriptor. x0/y0 are pixel coords from the OLD
+ *  projection; x1/y1 from the NEW projection. For "in" x0/y0 are unused;
+ *  for "out" x1/y1 are unused. */
+type Marker = {
+  mode: "move" | "in" | "out";
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+};
+
 type Job = {
   input: MorphChannelInput;   // latest target styling
   gridX: Float64Array;        // data-space xs
@@ -55,7 +67,9 @@ type Job = {
   // imperative children, created on first tick:
   line?: SVGPolylineElement;
   fill?: SVGPathElement;
-  // Task 3 adds marker state here.
+  // Marker choreography (Task 3): only populated when input.isFocus.
+  markers: Marker[];
+  markerCircles: SVGCircleElement[];
 };
 
 // ─── Private helpers ───────────────────────────────────────────────────────
@@ -170,6 +184,64 @@ function hexToRgba(hex: string, alpha: number): string {
   return hex;
 }
 
+/** Project a key's (time, value) to pixel coordinates using the same
+ *  formula as sampleTrackPx / the curve sampler:
+ *   x = (time - timeMin) / (timeMax - timeMin) * width
+ *   y = height - clamp01((value - vMin) / (vMax - vMin)) * height  */
+function projectKey(
+  time: number,
+  value: number,
+  timeMin: number,
+  timeMax: number,
+  width: number,
+  proj: { vMin: number; vMax: number; height: number },
+): { x: number; y: number } {
+  const tRange = timeMax - timeMin;
+  const x = tRange > 0 ? ((time - timeMin) / tRange) * width : 0;
+  const vRange = proj.vMax - proj.vMin;
+  const tnorm = vRange > 0 ? (value - proj.vMin) / vRange : 0;
+  const clamped = Math.max(0, Math.min(1, tnorm));
+  const y = proj.height - clamped * proj.height;
+  return { x, y };
+}
+
+/** Compute the marker list for a focus channel.
+ *  prevTrack/prevProj describe the old shape; nextInput.track/vMin/vMax
+ *  describe the new target. Returns [] for non-focus channels. */
+function computeMarkers(
+  prevTrack: TrackDto,
+  prevProj: { vMin: number; vMax: number },
+  nextInput: MorphChannelInput,
+  timeMin: number,
+  timeMax: number,
+  width: number,
+  height: number,
+): Marker[] {
+  if (!nextInput.isFocus) return [];
+
+  const oldProj = { vMin: prevProj.vMin, vMax: prevProj.vMax, height };
+  const newProj = { vMin: nextInput.vMin, vMax: nextInput.vMax, height };
+
+  const result = matchKeys(prevTrack, nextInput.track);
+  const markers: Marker[] = [];
+
+  for (const { from, to } of result.moved) {
+    const p0 = projectKey(from.time, from.value, timeMin, timeMax, width, oldProj);
+    const p1 = projectKey(to.time, to.value, timeMin, timeMax, width, newProj);
+    markers.push({ mode: "move", x0: p0.x, y0: p0.y, x1: p1.x, y1: p1.y });
+  }
+  for (const k of result.added) {
+    const p1 = projectKey(k.time, k.value, timeMin, timeMax, width, newProj);
+    markers.push({ mode: "in", x0: 0, y0: 0, x1: p1.x, y1: p1.y });
+  }
+  for (const k of result.removed) {
+    const p0 = projectKey(k.time, k.value, timeMin, timeMax, width, oldProj);
+    markers.push({ mode: "out", x0: p0.x, y0: p0.y, x1: 0, y1: 0 });
+  }
+
+  return markers;
+}
+
 /** Draw a single morph frame into job.el, creating the imperative SVG
  *  children on the first call. The flat fill uses ~0.12 alpha (see the
  *  file-level note on gradient simplification). */
@@ -225,6 +297,45 @@ function drawJob(
   // Update geometry every frame.
   job.fill.setAttribute("d", buildFillD(xs, ys, dims.height));
   job.line.setAttribute("points", buildPointsString(xs, ys));
+
+  // ── Marker circles (focus channel only) ─────────────────────────────────
+  // On the first tick (or after a retarget that changed the marker count),
+  // create/recreate the circle elements. On subsequent ticks, just update
+  // their attributes.
+  const { markers, input: { color } } = job;
+  if (job.markerCircles.length !== markers.length) {
+    // Remove any stale circles from the DOM and recreate.
+    for (const c of job.markerCircles) el.removeChild(c);
+    job.markerCircles = [];
+    for (let i = 0; i < markers.length; i++) {
+      const circle = document.createElementNS(SVG_NS, "circle") as SVGCircleElement;
+      circle.setAttribute("fill", color);
+      circle.setAttribute("stroke", "none");
+      el.appendChild(circle);
+      job.markerCircles.push(circle);
+    }
+  }
+  for (let i = 0; i < markers.length; i++) {
+    const m = markers[i]!;
+    const circle = job.markerCircles[i]!;
+    if (m.mode === "move") {
+      circle.setAttribute("cx", String((m.x0 + (m.x1 - m.x0) * e).toFixed(2)));
+      circle.setAttribute("cy", String((m.y0 + (m.y1 - m.y0) * e).toFixed(2)));
+      circle.setAttribute("r", "5");
+      circle.setAttribute("fill-opacity", "1");
+    } else if (m.mode === "in") {
+      circle.setAttribute("cx", String(m.x1.toFixed(2)));
+      circle.setAttribute("cy", String(m.y1.toFixed(2)));
+      circle.setAttribute("r", String((5 * e).toFixed(3)));
+      circle.setAttribute("fill-opacity", String(e.toFixed(3)));
+    } else {
+      // "out"
+      circle.setAttribute("cx", String(m.x0.toFixed(2)));
+      circle.setAttribute("cy", String(m.y0.toFixed(2)));
+      circle.setAttribute("r", String((5 * (1 - e)).toFixed(3)));
+      circle.setAttribute("fill-opacity", String((1 - e).toFixed(3)));
+    }
+  }
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
@@ -306,6 +417,25 @@ export function useCurveMorph(args: {
         from = sampleTrackPx(p.track, gridX, { vMin: p.vMin, vMax: p.vMax, height });
       }
 
+      // Compute markers for focus channel; retarget rebuilds the list.
+      const markers = computeMarkers(
+        p.track,
+        { vMin: p.vMin, vMax: p.vMax },
+        c,
+        timeMin,
+        timeMax,
+        width,
+        height,
+      );
+      // On retarget, clear existing marker circles so drawJob recreates them
+      // (count may have changed).
+      const existingCircles = existing?.markerCircles ?? [];
+      if (existingCircles.length > 0 && existing?.el) {
+        for (const circle of existingCircles) {
+          try { existing.el.removeChild(circle); } catch { /* already removed */ }
+        }
+      }
+
       jobs.current.set(c.channelId, {
         input: c,
         gridX,
@@ -316,6 +446,8 @@ export function useCurveMorph(args: {
         el: existing?.el ?? null,
         line: existing?.line,
         fill: existing?.fill,
+        markers,
+        markerCircles: [],
       });
       anyStarted = true;
     }

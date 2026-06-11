@@ -1052,6 +1052,52 @@ describe("curve morph (structural changes)", () => {
     }, { timeout: 2000 });
   });
 
+  it("focus-channel markers: matched keys glide, added key pops in, removed key ghosts out", async () => {
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    const t0 = [trk("red", [k(0, 0), k(50, 0.5), k(100, 1)], "linear")];
+    const { rerender, container } = render(mcCurve(t0, "red"));
+
+    // delete the 50-key, add a 75-key in one change (paste-like)
+    rerender(mcCurve([trk("red", [k(0, 0), k(75, 0.9), k(100, 1)], "linear")], "red"));
+
+    const overlay = await waitFor(() => {
+      const el = container.querySelector('[data-testid="curve-morph-overlay"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    // mid-morph: overlay carries marker circles — 2 moved (0, 100) + 1 in (75) + 1 ghost (50) = 4
+    await waitFor(() => {
+      expect(overlay.querySelectorAll("circle").length).toBe(4);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="curve-morph-overlay"]')).toBeNull();
+    }, { timeout: 2000 });
+  });
+
+  it("non-focus channels morph their line but render no overlay markers", async () => {
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    const t0 = [trk("red", KEYS3, "linear"), trk("green", KEYS3, "linear")];
+    const { rerender, container } = render(mcCurve(t0, "red")); // focus red; green is background
+
+    rerender(mcCurve([trk("red", KEYS3, "linear"),
+                      trk("green", [k(0, 0), k(40, 1), k(100, 0.5)], "linear")], "red"));
+
+    const overlay = await waitFor(() => {
+      const el = container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="green"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    // Give at least one rAF tick so drawJob runs.
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    expect(overlay.querySelectorAll("circle").length).toBe(0);
+  });
+
   it("var(...) channel colour: overlay polyline stroke is the var string; fill path uses fill-opacity '0.12' (not rgba(NaN,...))", async () => {
     // Covers the hexToRgba else-branch: CSS-var colour strings (e.g.
     // var(--x-axis)) are not parseable as hex, so drawJob sets fill-opacity
