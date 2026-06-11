@@ -8,6 +8,8 @@ import {
   clampMaxParticles,
   readOverloadGuard,
   writeOverloadGuard,
+  MIN_MAX_PARTICLES,
+  MAX_MAX_PARTICLES,
   type OverloadGuardConfig,
 } from "@/lib/overload-guard";
 
@@ -97,8 +99,8 @@ export function PreferencesDialog({ bridge, open, onOpenChange }: Props) {
                 aria-label="Max preview particles"
                 disabled={!guard.enabled}
                 value={capDraft}
-                min={1000}
-                max={1000000}
+                min={MIN_MAX_PARTICLES}
+                max={MAX_MAX_PARTICLES}
                 onChange={(e) => setCapDraft(e.target.value)}
                 onBlur={() => commitGuard({ ...guard, maxParticles: Number(capDraft) })}
                 onKeyDown={(e) => {
