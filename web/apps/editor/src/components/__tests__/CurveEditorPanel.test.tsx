@@ -1260,6 +1260,41 @@ describe("CurveEditorPanel", () => {
       );
       expect(calls).not.toContain("emitters/add-track-key");
     });
+
+    it("shows the lock glyph with master-naming aria-label only while locked", async () => {
+      // ── Locked half ──
+      const { bridge: lockedBridge } = makeStubBridge(1, lockedFixtureTracks());
+      const { unmount } = render(<CurveEditorPanel bridge={lockedBridge} />);
+
+      // Wait for the lock trigger to appear (curves loaded + green focused).
+      fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("ce-lock-to-trigger").getAttribute("data-locked"),
+        ).toBe("true");
+      });
+
+      expect(screen.getByTestId("ce-lock-glyph").getAttribute("aria-label")).toBe(
+        "Green is locked to Red — read-only",
+      );
+
+      unmount();
+
+      // ── Unlocked half ──
+      const { bridge: unlockedBridge } = makeStubBridge(1, fixtureTracks());
+      render(<CurveEditorPanel bridge={unlockedBridge} />);
+
+      // Wait for curves to load then focus green.
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-channel-row-green").dataset.focus).toBe("true");
+      });
+
+      expect(screen.queryByTestId("ce-lock-glyph")).toBeNull();
+    });
   });
 });
 

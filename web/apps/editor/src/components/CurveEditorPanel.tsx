@@ -43,7 +43,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import * as Select from "@radix-ui/react-select";
-import { ChevronDown, MousePointer2, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Lock, MousePointer2, Plus, Trash2 } from "lucide-react";
 import type {
   Bridge,
   InterpolationType,
@@ -1350,6 +1350,26 @@ export function CurveEditorPanel({ bridge }: Props) {
               </Select.Content>
             </Select.Portal>
           </Select.Root>
+
+          {/* Read-only mirror cue: a deliberate info glyph naming the master.
+              The dashed curve is the in-canvas signal; this is the worded one.
+              Non-interactive span (not a button) — the Tip carries the
+              explanation; the aria-label is the always-on accessible name. */}
+          {focusLocked && (
+            <Tip
+              content={`${focusedChannel.label} is locked to ${lockToValue} and shows ${lockToValue}'s curve. Unlock to edit.`}
+              occlusionId="tip:curve:lock"
+            >
+              <span
+                data-testid="ce-lock-glyph"
+                role="img"
+                aria-label={`${focusedChannel.label} is locked to ${lockToValue} — read-only`}
+                className="inline-flex h-6 items-center text-accent"
+              >
+                <Lock className="size-3.5" aria-hidden="true" />
+              </span>
+            </Tip>
+          )}
 
           <span className="mx-1 h-4 w-px bg-panel-2" aria-hidden />
 
