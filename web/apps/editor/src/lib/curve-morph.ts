@@ -55,6 +55,9 @@ export function sampleTrackY(
   const a = keys[i]!;
   const b = keys[i + 1]!;
   if (interp === "step") return a.value;
+  // The while loop above advances i until keys[i+1].time > x, so b.time > a.time
+  // (the half-open interval [a.time, b.time) is non-empty); duplicate-time keys
+  // render as a vertical jump and can never cause a divide-by-zero here.
   const u = (x - a.time) / (b.time - a.time);
   if (interp === "linear") return a.value + (b.value - a.value) * u;
   const t = tForU(u);
@@ -73,6 +76,7 @@ export function buildMorphGrid(
   timeMax: number,
   n: number = MORPH_SAMPLES,
 ): Float64Array {
+  if (n < 1) n = 1;
   const range = timeMax - timeMin;
   const eps = range * 1e-6;
   const xs: number[] = [];
@@ -111,6 +115,8 @@ export function resampleOntoGrid(
   ysOld: Float64Array,
   xsNew: Float64Array,
 ): Float64Array {
+  if (xsOld.length === 0) return new Float64Array(xsNew.length);
+  if (xsOld.length === 1) return new Float64Array(xsNew.length).fill(ysOld[0]!);
   const out = new Float64Array(xsNew.length);
   let j = 0;
   for (let i = 0; i < xsNew.length; i++) {

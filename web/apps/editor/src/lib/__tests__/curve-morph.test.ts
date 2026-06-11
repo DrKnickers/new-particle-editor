@@ -48,6 +48,23 @@ describe("sampleTrackY", () => {
     expect(sampleTrackY(keys, "smooth", -10)).toBe(0);
     expect(sampleTrackY(keys, "smooth", 200)).toBe(0.5);
   });
+
+  it("duplicate-time keys produce finite values (vertical jump, no NaN)", () => {
+    // Two keys share time=50; the while-loop advances past the first duplicate
+    // so b.time > a.time is always satisfied — no divide-by-zero.
+    const dupKeys = [
+      { time: 0, value: 0 },
+      { time: 50, value: 0.2 },
+      { time: 50, value: 0.8 },
+      { time: 100, value: 1 },
+    ];
+    for (const interp of ["linear", "smooth"] as const) {
+      for (const x of [49.999, 50, 50.001]) {
+        const y = sampleTrackY(dupKeys, interp, x);
+        expect(Number.isFinite(y)).toBe(true);
+      }
+    }
+  });
 });
 
 describe("buildMorphGrid", () => {
@@ -97,6 +114,26 @@ describe("sampleTrackPx / resampleOntoGrid", () => {
     const ys = new Float64Array([0, 100, 0]);
     const out = resampleOntoGrid(xs, ys, new Float64Array([0, 25, 50, 75, 100]));
     expect(Array.from(out)).toEqual([0, 50, 100, 50, 0]);
+  });
+
+  it("resampleOntoGrid: empty xsOld → all-zero output of the right length", () => {
+    const out = resampleOntoGrid(
+      new Float64Array(0),
+      new Float64Array(0),
+      new Float64Array([0, 25, 50, 75, 100]),
+    );
+    expect(out.length).toBe(5);
+    expect(Array.from(out)).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("resampleOntoGrid: single-point xsOld → every output equals ysOld[0]", () => {
+    const out = resampleOntoGrid(
+      new Float64Array([42]),
+      new Float64Array([7.5]),
+      new Float64Array([0, 25, 50, 75, 100]),
+    );
+    expect(out.length).toBe(5);
+    expect(Array.from(out)).toEqual([7.5, 7.5, 7.5, 7.5, 7.5]);
   });
 });
 
