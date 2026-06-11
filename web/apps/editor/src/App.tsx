@@ -25,6 +25,7 @@ import { BridgeContext } from "@/lib/bridge-context";
 import { useBackingColorSync } from "@/lib/backing-color-sync";
 import { useAppAccelerators } from "@/lib/use-app-accelerators";
 import { applyMode, readStoredMode } from "@/lib/theme";
+import { applyOverloadGuard, readOverloadGuard } from "@/lib/overload-guard";
 
 // ?demo=primitives → render the primitives gallery instead of the app shell.
 // Evaluated once at module load; a page navigation to ?demo=primitives
@@ -87,6 +88,14 @@ function AppShell() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
+
+  // [guard-config] Push the persisted overload-guard config to the engine
+  // once at startup — mirrors the theme apply-on-mount above. Without
+  // this the engine would sit on its built-in defaults until the user
+  // first opens Preferences.
+  useEffect(() => {
+    applyOverloadGuard(bridge, readOverloadGuard());
+  }, [bridge]);
 
   // Screen 8 Batch 3: subscribe to file-state events (dirty/changed,
   // recent/changed, engine/state/changed) and seed from snapshot +
