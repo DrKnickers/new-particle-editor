@@ -1073,7 +1073,7 @@ describe("chain-load warning glyph (NT-11)", () => {
     // aria-label now carries the FULL formatChainWarning breakdown.
     expect(glyph.getAttribute("title")).toBeNull();
     expect(glyph.getAttribute("aria-label")).toContain("20,000");
-    expect(glyph.getAttribute("aria-label")).toContain("Soft warning");
+    expect(glyph.getAttribute("aria-label")).toContain("may spawn too many particles");
     // Only the offending chain glyphs: Smoke + its two children (the
     // cumulative product carries down), NOT the sane siblings Sparks (3)
     // and Flash (5). Pins the per-row prop wiring, not just presence.

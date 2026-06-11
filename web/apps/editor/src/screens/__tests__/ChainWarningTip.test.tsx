@@ -17,16 +17,28 @@ const warning: ChainWarning = {
 };
 
 describe("ChainWarningTip", () => {
-  it("leads with the meaning and the soft-warning disclaimer", () => {
+  it("leads with the meaning, saying 'chain' for a multi-generation path", () => {
     render(<ChainWarningTip warning={warning} />);
-    expect(screen.getByText("This chain may spawn far too many particles")).toBeInTheDocument();
-    expect(screen.getByText("Soft warning — nothing is blocked")).toBeInTheDocument();
+    expect(screen.getByText("This chain may spawn too many particles")).toBeInTheDocument();
+    // No "Soft warning — nothing is blocked" subtext (dropped per feel test).
+    expect(screen.queryByText(/Soft warning/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/far too many/)).not.toBeInTheDocument();
+  });
+
+  it("says 'emitter' (not 'chain') when a single emitter pins the threshold", () => {
+    render(
+      <ChainWarningTip
+        warning={{ estimate: 1_000_000, path: [{ name: "blast", perEmitter: 1_000_000, cumulative: 1_000_000 }] }}
+      />,
+    );
+    expect(screen.getByText("This emitter may spawn too many particles")).toBeInTheDocument();
+    expect(screen.getByText("~1,000,000 particles")).toBeInTheDocument();
   });
 
   it("renders one row per generation with formatChainWarning's number rules", () => {
     render(<ChainWarningTip warning={warning} />);
     expect(screen.getByText("flash")).toBeInTheDocument();
-    expect(screen.getByText("~12 alive")).toBeInTheDocument();
+    expect(screen.getByText("~12 particles")).toBeInTheDocument();
     expect(screen.getByText("→ detail")).toBeInTheDocument();
     expect(screen.getByText("×60 → ~720")).toBeInTheDocument();
     expect(screen.getByText("→ Smoke")).toBeInTheDocument();

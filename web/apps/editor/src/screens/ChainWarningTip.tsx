@@ -14,11 +14,13 @@ import type { ChainWarning } from "@/lib/chain-load";
 import { fmtCount, fmtMultiplier } from "@/lib/chain-load";
 
 export function ChainWarningTip({ warning }: { warning: ChainWarning }) {
+  // A single-row path is one emitter pinning the threshold on its own; a
+  // multi-row path is a chain whose per-particle multiplication compounds.
+  const subject = warning.path.length > 1 ? "chain" : "emitter";
   return (
     <div data-testid="chain-warning-tip">
       <div className="border-b border-warning/35 bg-warning/15 px-2.5 py-1.5">
-        <div className="font-semibold">This chain may spawn far too many particles</div>
-        <div className="text-[11px] text-text-2">Soft warning — nothing is blocked</div>
+        <div className="font-semibold">This {subject} may spawn too many particles</div>
       </div>
       <div className="px-2.5 py-1.5">
         {warning.path.map((p, i) => (
@@ -30,7 +32,7 @@ export function ChainWarningTip({ warning }: { warning: ChainWarning }) {
               }`}
             >
               {i === 0
-                ? `~${fmtMultiplier(p.perEmitter)} alive`
+                ? `~${fmtMultiplier(p.perEmitter)} particles`
                 : `×${fmtMultiplier(p.perEmitter)} → ~${fmtCount(p.cumulative)}`}
             </span>
           </div>
