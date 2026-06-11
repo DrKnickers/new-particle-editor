@@ -4545,3 +4545,40 @@ compose with. Diagnosed by inspecting `getComputedStyle(el).translate` vs
 carrying the keyframe's second -50%. Cross-reference L-033 (agent mockups /
 screenshots differ from the real host — verify in the actual app), and the
 NT-12 CHANGELOG entry (issue 4).
+
+
+## L-083 — A visual simplification justified as "imperceptible over N ms" is a feel-test claim, not a code decision: match the real thing if it's cheap, else treat it as an explicit feel-pass blocker
+
+**Rule.** When implementing an animation/visual and you reach for a
+shortcut justified by "close enough — the difference is imperceptible
+over the ~Nms it's on screen" (a flat fill standing in for a gradient,
+a simplified easing, a coarser sample count), recognise that the
+justification is a *perceptual* claim that no structural test and no
+code review can verify — only a human eye on the real surface can. Two
+acceptable outcomes: (a) if matching the real thing is cheap, just match
+it (removes the risk for less code than the shortcut "saved"); (b) if
+it's genuinely expensive, ship the shortcut but flag it in the spec's
+risk list AND the handoff as an explicit *feel-pass blocker*, not a
+settled decision. Never let "imperceptible" pass review as if it were a
+correctness fact.
+
+**Corollary (SVG gotcha from the same fix).** When replicating an SVG
+`<linearGradient>`, the direction is NOT optional: omitting
+`x1/y1/x2/y2` defaults to a HORIZONTAL gradient (`x1=0,x2=1`). Matching
+only the stops/opacity of a vertical gradient (`y2=1`) but not the
+coordinates yields a different-looking fill that a stop-checking test
+won't catch — verify the coordinates, the failure mode tests miss.
+
+**Source incident (2026-06-11, session 37, curve morph Part B #128).**
+The morph overlay drew a flat 0.12-alpha fill instead of the static
+layer's vertical gradient, "imperceptible over 180 ms." It passed every
+vitest assertion and TWO code reviews (both explicitly marked it
+"feel-reviewable") — then flickered visibly on the first human glance at
+an interpolation-mode change (where keys don't move, so the
+gradient→flat→gradient fill swap was the only motion). The fix —
+replicate the exact gradient (focus-channel only) + draw the first frame
+synchronously to kill the empty-overlay frame — was ~15 lines, less than
+the flat-fill shortcut had saved. The spec HAD flagged it in §3 as
+feel-reviewable, so the process caught it as designed; the avoidable cost
+was the round-trip. Cross-reference L-033 (the feel still needs the
+user's eye) and L-082 (mockup ≠ real host).
