@@ -11,10 +11,12 @@ import type { Bridge } from "@particle-editor/bridge-schema";
 
 export type OverloadGuardConfig = { enabled: boolean; maxParticles: number };
 
-export const OVERLOAD_GUARD_DEFAULT: OverloadGuardConfig = {
+// Frozen so the by-reference returns from readOverloadGuard() (the empty /
+// corrupt / wrong-type paths) can't be mutated into a corrupted singleton.
+export const OVERLOAD_GUARD_DEFAULT: OverloadGuardConfig = Object.freeze({
   enabled: true,
   maxParticles: 25_000,
-};
+});
 export const MIN_MAX_PARTICLES = 1_000;
 export const MAX_MAX_PARTICLES = 1_000_000;
 
