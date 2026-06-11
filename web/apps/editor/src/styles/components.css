@@ -195,6 +195,49 @@
   .tip-animate[data-state="closed"] { animation: none; }
 }
 
+/* ---- [NT-12] Modal + overload-banner motion (slow tier) ----
+   Same family as the tooltips: fade + slip away from the resting
+   position. Modal rises 8px into center; banner drops 6px from the
+   viewport's top edge. Radix Dialog's Presence plays the modal exit;
+   the banner's exit needs usePresence (lib/use-presence.ts) because it
+   custom-unmounts. The modal keyframes must repeat the -translate-x/y-1/2
+   centering so the transform composes instead of replacing it. */
+@keyframes modal-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--slip-modal))); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes modal-out {
+  from { opacity: 1; transform: translate(-50%, -50%); }
+  to   { opacity: 0; transform: translate(-50%, calc(-50% + var(--slip-modal))); }
+}
+.modal-overlay-animate[data-state="open"]   { animation: modal-overlay-in var(--motion-slow-in) var(--ease-entrance); }
+.modal-overlay-animate[data-state="closed"] { animation: modal-overlay-out var(--motion-slow-out) var(--ease-exit); }
+.modal-animate[data-state="open"]   { animation: modal-in var(--motion-slow-in) var(--ease-entrance); }
+.modal-animate[data-state="closed"] { animation: modal-out var(--motion-slow-out) var(--ease-exit); }
+
+@keyframes banner-in {
+  from { opacity: 0; transform: translate(-50%, calc(-1 * var(--slip-banner))); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes banner-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, calc(-1 * var(--slip-banner))); }
+}
+/* The banner's Tailwind -translate-x-1/2 centering persists outside the
+   animation; the keyframes repeat it in from/to. box-shadow lives here
+   (not a Tailwind arbitrary value) so it stays var()-driven. */
+.banner-animate { box-shadow: var(--shadow-soft); }
+.banner-animate[data-state="open"]   { animation: banner-in var(--motion-slow-in) var(--ease-entrance) both; }
+.banner-animate[data-state="closed"] { animation: banner-out var(--motion-slow-out) var(--ease-exit) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay-animate[data-state="open"], .modal-overlay-animate[data-state="closed"],
+  .modal-animate[data-state="open"], .modal-animate[data-state="closed"],
+  .banner-animate[data-state="open"], .banner-animate[data-state="closed"] { animation: none; }
+}
+
 .window-controls {
   margin-left: auto;
   display: flex;
