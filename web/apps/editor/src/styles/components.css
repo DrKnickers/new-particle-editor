@@ -1214,23 +1214,27 @@
 
 /* ========== Curve editor ========== */
 
-/* Curve key markers. Unselected keys carry NO shadow — only the selected
-   key gets one. Selecting a key intensifies its OWN colour (saturate),
-   grows its radius, and fades in a stronger shadow; the transition
-   animates that select/deselect change. No animation library needed:
-   Chromium transitions the SVG `r` presentation attribute and `filter`
-   (`none` ↔ saturate+drop-shadow interpolates the identity filter list).
-   Selected radius is set in CurveEditor.tsx. First-pass values — tuned
-   live in the host. */
+/* Curve key markers. Selection is shown by a thin concentric ring in a
+   lightened shade of the channel's own colour (set inline in
+   CurveEditor.tsx via color-mix). The dot no longer grows or casts a
+   dark drop-shadow on selection — the old saturate+drop-shadow smudged
+   at marker scale and obscured the curve. */
 .curve-key-marker {
-  filter: none;
-  transition: r 150ms ease, filter 150ms ease;
+  transition: r 150ms ease;
 }
-.curve-key-marker[data-selected="true"] {
-  filter: saturate(1.8) drop-shadow(0 1.5px 2.5px rgba(0, 0, 0, 0.7));
+/* Selected focus key: a thin ring in a lightened shade of the channel's
+   own colour (set inline in CurveEditor.tsx). Replaces the old
+   grow + dark drop-shadow, which smudged at marker scale. */
+.curve-key-ring {
+  opacity: 0;
+  transition: opacity 150ms ease, r 150ms ease;
+}
+.curve-key-ring[data-selected="true"] {
+  opacity: 1;
 }
 @media (prefers-reduced-motion: reduce) {
-  .curve-key-marker { transition: none; }
+  .curve-key-marker,
+  .curve-key-ring { transition: none; }
 }
 
 .curve-editor {

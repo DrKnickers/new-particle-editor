@@ -1371,3 +1371,101 @@ describe("CurveEditor — group-drag fires onGroupDragMove (live-spinner fix)", 
     expect(onGroupDragMove).not.toHaveBeenCalled();
   });
 });
+
+// ─── CRV: channel-colored selection ring (option E) ───────────────────────────
+//
+// Selected focus-channel keys show a thin concentric ring in a lightened shade
+// of the channel's own colour (.curve-key-ring[data-selected="true"]).
+// The dot no longer grows on selection (visR stays at 5 for both states).
+
+describe("CurveEditor — channel-colored selection ring (focus channel)", () => {
+  const RING_CHANNEL: ChannelDef = {
+    id: "red",
+    label: "Red",
+    color: "#FF0000",
+    defaultOn: true,
+    trackName: "red",
+  };
+
+  function makeRingTrack(): TrackDto {
+    // 3 keys at times 0, 50, 100.
+    return {
+      name: "red",
+      keys: [
+        { time: 0, value: 0 },
+        { time: 50, value: 0.5 },
+        { time: 100, value: 1 },
+      ],
+      interpolation: "linear",
+      lockedTo: null,
+    };
+  }
+
+  function renderRingFixture(selectedKeyTimes?: Set<number>) {
+    return render(
+      <CurveEditor
+        tracks={[makeRingTrack()]}
+        channels={[RING_CHANNEL]}
+        visibleChannels={{ red: true }}
+        focusChannel="red"
+        valueRange={{ min: 0, max: 1 }}
+        width={600}
+        height={300}
+        selectedKeyTimes={selectedKeyTimes}
+      />,
+    );
+  }
+
+  it("selected key's .curve-key-ring has data-selected='true', fill='none', stroke contains 'color-mix' and the channel colour, r='9'", () => {
+    const { container } = renderRingFixture(new Set([50]));
+
+    // There should be 3 ring elements — one per key.
+    const rings = container.querySelectorAll(".curve-key-ring");
+    expect(rings).toHaveLength(3);
+
+    // Find the ring that belongs to the selected key (time=50).
+    // The rings are rendered in the same order as the keys; key index 1 = time 50.
+    const selectedRing = rings[1]!;
+    expect(selectedRing.getAttribute("data-selected")).toBe("true");
+    expect(selectedRing.getAttribute("fill")).toBe("none");
+
+    const stroke = selectedRing.getAttribute("stroke") ?? "";
+    expect(stroke).toContain("color-mix");
+    expect(stroke).toContain(RING_CHANNEL.color);
+
+    expect(selectedRing.getAttribute("r")).toBe("9");
+  });
+
+  it("unselected key's .curve-key-ring has data-selected='false'", () => {
+    const { container } = renderRingFixture(new Set([50]));
+
+    const rings = container.querySelectorAll(".curve-key-ring");
+
+    // Key index 0 (time=0) is NOT selected.
+    const unselectedRing = rings[0]!;
+    expect(unselectedRing.getAttribute("data-selected")).toBe("false");
+
+    // Key index 2 (time=100) is also NOT selected.
+    const unselectedRing2 = rings[2]!;
+    expect(unselectedRing2.getAttribute("data-selected")).toBe("false");
+  });
+
+  it("selected dot (.curve-key-marker) keeps r='5' — the dot no longer grows on selection", () => {
+    const { container } = renderRingFixture(new Set([50]));
+
+    const markers = container.querySelectorAll(".curve-key-marker");
+    // All 3 markers must be r=5 (no grow on selection).
+    for (const m of markers) {
+      expect(m.getAttribute("r")).toBe("5");
+    }
+  });
+
+  it("ring is pointerEvents-none (decorative only)", () => {
+    const { container } = renderRingFixture(new Set([50]));
+
+    const rings = container.querySelectorAll(".curve-key-ring");
+    for (const ring of rings) {
+      expect(ring.getAttribute("pointer-events")).toBe("none");
+    }
+  });
+});

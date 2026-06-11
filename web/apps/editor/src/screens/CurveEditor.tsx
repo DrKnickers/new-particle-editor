@@ -1964,23 +1964,26 @@ function MultiChannelCurves({
               // `data-border` attribute below tags them for callers
               // that need the distinction programmatically.
               // Keys always render in their channel's colour; the
-              // selected marker is intensified (saturate) + enlarged +
-              // shadowed via CSS rather than recoloured to a flat blue.
+              // selected marker is shown by a thin concentric ring in a
+              // lightened shade of the channel's own colour (see
+              // .curve-key-ring in components.css). The dot no longer
+              // grows or casts a shadow on selection.
               const fill = channel.color;
               const stroke = "none";
               const strokeWidth = 0;
-              // Each focus key is rendered as a (hit-pad, visible)
-              // pair: the hit pad is a transparent circle ~2× the
+              // Each focus key is rendered as a (hit-pad, ring, visible)
+              // group: the hit pad is a transparent circle ~2× the
               // visible radius that owns every pointer handler +
               // data attribute (so test queries + click targets
-              // land on it), and the visible circle on top is
-              // decorative-only (`pointerEvents="none"`). This
-              // makes keys comfortable to click without forcing a
+              // land on it); the ring is a decorative concentric
+              // circle that appears only when selected; the visible
+              // dot on top is decorative-only (`pointerEvents="none"`).
+              // This makes keys comfortable to click without forcing a
               // larger visual marker that would clutter the curve.
               // hitR was bumped (10/12 → 14/16) because the old pad was
-              // still fiddly to hit; visible dot stays at 5/6.
+              // still fiddly to hit; visible dot stays at 5.
               const hitR = selected ? 18 : 14;
-              const visR = selected ? 8 : 5;
+              const visR = 5;
               return (
                 <g key={i}>
                   <circle
@@ -2020,6 +2023,17 @@ function MultiChannelCurves({
                         onKeyClick?.(p.time, e);
                       }
                     }}
+                  />
+                  <circle
+                    className="curve-key-ring"
+                    data-selected={selected ? "true" : "false"}
+                    cx={p.x}
+                    cy={p.y}
+                    r={9}
+                    fill="none"
+                    stroke={`color-mix(in srgb, ${channel.color} 60%, white)`}
+                    strokeWidth={1.75}
+                    pointerEvents="none"
                   />
                   <circle
                     className="curve-key-marker"
