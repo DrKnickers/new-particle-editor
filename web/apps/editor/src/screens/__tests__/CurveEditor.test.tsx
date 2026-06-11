@@ -846,6 +846,34 @@ function stubMatchMediaMotionOff(): () => void {
   };
 }
 
+/** Variant of mcCurve that lets the caller override the channel colour.
+ *  Used for the var(...) colour branch test. */
+function mcCurveWithColor(
+  tracks: TrackDto[],
+  focusId: string,
+  color: string,
+): React.ReactElement {
+  const channelDefs: ChannelDef[] = tracks.map((t) => ({
+    id: t.name,
+    label: t.name,
+    color,
+    defaultOn: true,
+    trackName: t.name as ChannelDef["trackName"],
+  }));
+  const visibleChannels = Object.fromEntries(tracks.map((t) => [t.name, true]));
+  return (
+    <CurveEditor
+      tracks={tracks}
+      channels={channelDefs}
+      visibleChannels={visibleChannels}
+      focusChannel={focusId}
+      valueRange={{ min: 0, max: 1 }}
+      width={600}
+      height={300}
+    />
+  );
+}
+
 describe("curve morph (structural changes)", () => {
   let restoreMatchMedia: (() => void) | null = null;
 
@@ -964,5 +992,100 @@ describe("curve morph (structural changes)", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-testid="curve-morph-overlay"]')).toBeNull();
     }, { timeout: 2000 });
+  });
+
+  it("sustained interruption-folding: repeated retargets past 430 ms never trigger the stale fallback", async () => {
+    // Regression test for the stale-fallback bug: before the fix, the fallback
+    // was set ONCE at ensureLoop() call time (at the first retarget). A stream
+    // of retargets extending the total duration past MORPH_MS+250 (~430ms)
+    // would hit that deadline and snap everything to done early.
+    //
+    // After the fix, each retarget resets the fallback to MORPH_MS+250 from
+    // NOW, so the overlay survives for the full sequence.
+    //
+    // Approach: retarget 4 times at ~80ms intervals (t≈0, 80, 160, 240, 320).
+    // Assert the overlay still exists at ~500ms (well past the old 430ms
+    // stale deadline, but only ~180ms after the last retarget). Then wait for
+    // natural completion.
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    const t0 = [trk("red", [k(0, 0), k(100, 1)], "linear")];
+    const { rerender, container } = render(mcCurve(t0, "red"));
+
+    // Retarget 1 — starts the morph.
+    rerender(mcCurve([trk("red", [k(0, 0), k(30, 0.7), k(100, 1)], "linear")], "red"));
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="red"]')).not.toBeNull();
+    });
+
+    // Retarget 2 at ~80 ms.
+    await new Promise<void>((r) => setTimeout(r, 80));
+    rerender(mcCurve([trk("red", [k(0, 0), k(45, 0.4), k(100, 1)], "linear")], "red"));
+
+    // Retarget 3 at ~160 ms.
+    await new Promise<void>((r) => setTimeout(r, 80));
+    rerender(mcCurve([trk("red", [k(0, 0), k(55, 0.6), k(100, 1)], "linear")], "red"));
+
+    // Retarget 4 at ~240 ms.
+    await new Promise<void>((r) => setTimeout(r, 80));
+    rerender(mcCurve([trk("red", [k(0, 0), k(65, 0.2), k(100, 1)], "linear")], "red"));
+
+    // Retarget 5 at ~320 ms.
+    await new Promise<void>((r) => setTimeout(r, 80));
+    rerender(mcCurve([trk("red", [k(0, 0), k(70, 0.9), k(100, 1)], "linear")], "red"));
+
+    // At ~400 ms (>430 ms from the first start but only ~80 ms after last
+    // retarget), wait another 100 ms (total ~500 ms from first retarget).
+    // The stale-fallback bug would have snapped done at ~430 ms; the fixed
+    // version must NOT have snapped.
+    await new Promise<void>((r) => setTimeout(r, 100));
+    expect(
+      container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="red"]'),
+      "overlay must still exist at ~500 ms (fallback must NOT have fired at ~430 ms)",
+    ).not.toBeNull();
+
+    // Allow the morph to settle naturally (MORPH_MS=180 from the last
+    // retarget at ~320 ms → done by ~500 ms + rAF latency). Give extra
+    // headroom for CI.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="curve-morph-overlay"]')).toBeNull();
+    }, { timeout: 2000 });
+  });
+
+  it("var(...) channel colour: overlay polyline stroke is the var string; fill path uses fill-opacity '0.12' (not rgba(NaN,...))", async () => {
+    // Covers the hexToRgba else-branch: CSS-var colour strings (e.g.
+    // var(--x-axis)) are not parseable as hex, so drawJob sets fill-opacity
+    // separately instead of emitting rgba(...). This is the path that runs
+    // in production (CurveEditorPanel passes var(--x-axis) etc.).
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    const varColor = "var(--x-axis)";
+    const t0 = [trk("red", [k(0, 0), k(100, 1)], "linear")];
+    const { rerender, container } = render(mcCurveWithColor(t0, "red", varColor));
+
+    rerender(mcCurveWithColor([trk("red", [k(0, 0), k(50, 0.9), k(100, 1)], "linear")], "red", varColor));
+
+    // Wait for the overlay to mount and for drawJob to create the imperative children.
+    const overlayG = await waitFor(() => {
+      const el = container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="red"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    // Give at least one rAF tick so drawJob creates the imperative children.
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    const polyline = overlayG.querySelector("polyline");
+    expect(polyline, "overlay polyline must exist after first rAF tick").not.toBeNull();
+    // The var(...) colour must be forwarded verbatim as the stroke — no NaN corruption.
+    expect(polyline!.getAttribute("stroke")).toBe(varColor);
+
+    const fillPath = overlayG.querySelector("path");
+    expect(fillPath, "overlay fill path must exist").not.toBeNull();
+    // fill-opacity must be set to "0.12" and fill must be the var string.
+    expect(fillPath!.getAttribute("fill")).toBe(varColor);
+    expect(fillPath!.getAttribute("fill-opacity")).toBe("0.12");
+    // Explicitly confirm no rgba(NaN,...) was emitted.
+    expect(fillPath!.getAttribute("fill")).not.toContain("NaN");
   });
 });

@@ -332,6 +332,18 @@ export function useCurveMorph(args: {
 
     if (anyStarted) {
       setActiveIds(Array.from(jobs.current.keys()));
+      // Refresh the fallback deadline every time a job starts or retargets.
+      // This prevents a sustained stream of retargets (interruption folding)
+      // from hitting a stale deadline that was set at the FIRST loop start.
+      // The fallback is always MORPH_MS+250 from the MOST RECENT (re)start,
+      // so an actively-morphing channel is never killed early; a truly stuck
+      // loop (rAF stops firing, no new starts) still gets swept after the
+      // grace period.
+      if (fallback.current !== null) clearTimeout(fallback.current);
+      fallback.current = setTimeout(() => {
+        jobs.current.clear();
+        finish();
+      }, MORPH_MS + 250);
       ensureLoop();
     }
     // Width/height change (canvas resize) re-snapshots via dep change
@@ -364,12 +376,10 @@ export function useCurveMorph(args: {
       }
     };
     raf.current = requestAnimationFrame(tick);
-    // Fallback: throttled rAF can't leak (use-presence rule).
-    if (fallback.current !== null) clearTimeout(fallback.current);
-    fallback.current = setTimeout(() => {
-      jobs.current.clear();
-      finish();
-    }, MORPH_MS + 250);
+    // Note: the fallback deadline is NOT set here. It is set (and refreshed)
+    // in the anyStarted block of the classification effect, so it always
+    // reflects the most-recent (re)start time. ensureLoop() only starts the
+    // rAF; the leak-guard is owned by the caller.
   }
 
   function finish(): void {
