@@ -44,7 +44,7 @@ upward.
 |---|---|
 | Lock semantics | **Live one-way mirror.** Follower shows + follows the master; follower is read-only; follower can never mutate the master. |
 | Data model | **Keep the pointer alias** (`tracks[i] == &trackContents[j]`). No separate per-follower buffer — once read-only is airtight the alias yields the mirror for free, with no master→follower re-sync duty and no save/load reconciliation risk. |
-| Read-only cue | Legacy greys the whole page; the multi-curve overlay can't (colour = channel identity, and opacity is already the dim-the-unfocused signal). Instead: the locked focus curve renders as a **dashed line in the follower's OWN colour** (green stays green) at the emphasized stroke width + full opacity, with **hollow (outline-only) key markers**. The Select/Insert toggle disables, and a small **lock glyph** beside the Lock-to dropdown carries the worded explanation as an NT-12 `Tip` (replaces the earlier verbose pill — the dropdown already shows "Lock to: Red"). A **hover tooltip on the curve itself** is an optional bonus, not the primary cue. |
+| Read-only cue | Legacy greys the whole page; the multi-curve overlay can't (colour = channel identity, and opacity is already the dim-the-unfocused signal). Instead: the locked focus curve renders as a **dashed line in the follower's OWN colour** (green stays green) at the emphasized stroke width + full opacity, with **hollow (outline-only) key markers**. The Select/Insert toggle disables, and a small **lock glyph** beside the Lock-to dropdown carries the worded explanation as an NT-12 `Tip` (replaces the earlier verbose pill — the dropdown already shows "Lock to: Red"). A hover tooltip on the curve itself was considered and **cut** (§5). |
 | Dash colour rationale | The follower aliases the master's buffer, so a locked Green renders the **same points** as Red — the two curves are coincident. Colouring the dash green (not red) preserves "which channel is the mirror" and avoids a redundant red-on-red line; the green dashes over the dimmed solid red read as the lock relationship. Dash array `7 5` (recommended), feel-tunable. |
 | Scope | New React UI only — panel **and** a small renderer branch in `MultiChannelCurves` (the dashed/hollow treatment). No bridge command, no schema change, **no native/C++ change**: legacy Win32 `TrackEditor` already greys the page correctly (`control->editable = (sel == 0)` + toolbar disable at [`TrackEditor.cpp:184-193`](src/UI/TrackEditor.cpp:184)). |
 
@@ -90,16 +90,47 @@ one small render branch is added to `MultiChannelCurves` in
    - omit `onCanvasAdd`, `onKeyDragStart`, `onKeyDragMove`,
      `onKeyDragEnd`, `onGroupDragEnd` (pass `undefined`) so the
      renderer's drag machinery has nothing to commit;
-   - omit `onKeyClick` (selection is meaningless on a read-only mirror;
-     this also drops the `pointer` cursor on the markers, which is the
-     non-interactive visual cue at the marker level);
+   - omit `onKeyClick` **and `onCanvasMarqueeSelect`** — selection is
+     meaningless on a read-only mirror, and critically, selection is
+     the **gateway to three further mutation paths** (the window-scoped
+     Delete keydown, the Time/Value spinners, the key context menu's
+     Delete). Closing only the direct editors while leaving marquee
+     selection open would leave all three reachable. Omitting
+     `onKeyClick` also drops the `pointer` cursor on the markers;
+   - omit `onKeyContextMenu` (its menu's only action is Delete — a
+     mutation; no menu on a read-only key);
+   - gate the **gutter marquee** at
+     [`CurveEditorPanel.tsx:1488`](src/components/CurveEditorPanel.tsx:1488):
+     `curveRef.current?.startMarquee(...)` only when `!focusLocked`;
    - keep `onCanvasClick` / `onCanvasContextMenu` (harmless; preserves
      "right-click clears" and click-on-empty semantics).
 
    The clean way to express this is a single derived
    `interactiveHandlers` object spread into the element, `{}` when
-   `focusLocked`. Avoids five inline `focusLocked ? undefined : fn`
+   `focusLocked`. Avoids eight inline `focusLocked ? undefined : fn`
    ternaries.
+
+1b. **Gate the selection-consuming commit handlers.** Verified in
+   review: none of these check `focusLocked` today, and each commits a
+   mutation against the aliased master buffer if a selection exists —
+   - `handleDelete`
+     ([`CurveEditorPanel.tsx:763`](src/components/CurveEditorPanel.tsx:763))
+     — fired by the window Delete keydown and the key context menu,
+     both bypassing the gated toolbar button. Add a `focusLocked`
+     early-return.
+   - `handleTimeSpinner` / `handleValueSpinner`
+     ([`CurveEditorPanel.tsx:946`](src/components/CurveEditorPanel.tsx:946),
+     [`:987`](src/components/CurveEditorPanel.tsx:987)) — gated only on
+     a selection existing. Add `focusLocked` to `spinnersDisabled` AND
+     an early-return in both handlers.
+   - **Ctrl+X (cut)** — its delete leg routes through the same gate;
+     copy (Ctrl+C) stays allowed (reading a mirror is fine).
+   With marquee omitted (item 1) and selection cleared on lock
+   (`handleLockToChange`), these should be unreachable — the gates are
+   defense-in-depth at the commit site, the same posture as
+   `handleKeyDragEnd`/`handleCanvasAdd` (§3 risk 1), and they are what
+   protects against lock state changing *underneath* an existing
+   selection or drag (§3 risk 2).
 
 2. **Force `mode` to `select` on lock and disable the toggle.** Add a
    `disabled={focusLocked}` to the Select **and** Insert tool buttons
@@ -119,16 +150,22 @@ one small render branch is added to `MultiChannelCurves` in
    worded cue (a `Tip` on a disabled-looking glyph rides an
    `inline-block`/`span` shim per the NT-12 disabled-trigger pattern).
 
-4. **Locked-curve render treatment (`MultiChannelCurves`).** Thread a
-   `focusReadOnly` boolean (true when the focus channel's track is
-   locked) into the renderer. When set, the focus layer draws:
+4. **Locked-curve render treatment (`MultiChannelCurves`).** No new
+   prop: the renderer already holds the `TrackDto`s and `lockedTo` is
+   on the DTO, so derive `focusReadOnly` internally as
+   `focusLayer !== null && focusLayer.track.lockedTo != null` — one
+   source of truth, nothing threaded through the panel. When set, the
+   focus layer draws:
    - the curve `<path>`/`<polyline>` with `stroke-dasharray` (`7 5`
      default, feel-tunable) in the channel's **own** colour at the
      emphasized stroke width + full opacity — NOT greyed, NOT faded;
    - key markers as **hollow rings** (`fill="none"`, channel-colour
      stroke) instead of filled grabbable dots, and without the
      `cursor: pointer` (which is already gone once `onKeyClick` is
-     withheld).
+     withheld). **Border keys included**: the first/last keys' special
+     anchor styling (slate fill + sky ring) is replaced by the same
+     hollow ring on a locked curve — one marker style, no ambiguous
+     mix of "anchor-styled but read-only" dots.
    The non-focus dimmed layers are unchanged. This is the only renderer
    change; the emphasis/dim machinery and projection are untouched.
 
@@ -140,21 +177,33 @@ No new bridge command, no schema change, no native change.
 
 ## §3 Risks + mitigations
 
-1. **A non-handler edit path slips through.** The fix enumerates the
-   known mutation entry points (drag, group-drag, insert-add). If some
-   *other* path can mutate a locked track (a future feature, an
-   accelerator), the leak reopens. *Mitigation:* the test matrix (§4)
-   asserts the bridge receives **zero** `set-track-key` /
-   `add-track-key` for the locked channel across drag, insert-click,
-   and group-drag; a defense-in-depth guard in `handleKeyDragEnd` /
-   `handleCanvasAdd` (early-return when `focusLocked`) backstops the
-   handler-omission so the commit is blocked even if a handler is
-   wired by mistake. Cheap, and it makes the read-only contract local
-   to the commit site, not only the render site.
-2. **Locking a channel mid-drag.** A lock can't be dispatched while a
-   pointer drag is in flight (the lock dropdown isn't reachable
-   mid-drag), so there's no live-drag-then-lock race. *Accepted —* not
-   worth designing around.
+1. **A non-handler edit path slips through.** The review pass already
+   found three beyond the original draft (Delete keydown, spinners,
+   key-context-menu Delete — all reachable via marquee selection); a
+   future feature or accelerator could add another. *Mitigation:* the
+   test matrix (§4) asserts the bridge receives **zero** mutating
+   track commands (`set-track-key` / `add-track-key` /
+   `delete-track-keys`) for the locked channel across drag,
+   insert-click, group-drag, marquee+Delete, marquee+spinner, and
+   context-menu paths; and every commit-site handler
+   (`handleKeyDragEnd`, `handleCanvasAdd`, `handleDelete`, both
+   spinner handlers, the cut leg) carries a `focusLocked`
+   early-return — the read-only contract lives at the commit sites,
+   not only the render site, so a mistakenly-wired handler still
+   can't commit.
+2. **Lock state changes underneath an in-flight gesture or live
+   selection.** The lock dropdown isn't reachable mid-drag, but lock
+   state can still change without it: **Ctrl+Z/Y accelerators** can
+   undo/redo a lock change mid-drag, and **`propagateLinkGroup`**
+   ([`BridgeDispatcher.cpp:3703`](src/host/BridgeDispatcher.cpp:3703))
+   propagates a lock set on a link-group *sibling* onto the focused
+   emitter, firing `tree/changed` while a drag or selection is live —
+   the same mid-drag-mutation class as the drag audit's A1.
+   *Mitigation:* the commit-site `focusLocked` early-returns (risk 1)
+   read the *current* lock state at commit time, so a gesture that
+   started unlocked and commits after a lock lands is refused. The
+   visual mid-gesture state (a drag preview that never commits) is
+   accepted — same acceptance as A1's cancel-on-refetch behaviour.
 3. **Insert mode left active across a focus switch onto a locked
    channel.** Switching focus to an already-locked channel while in
    Insert mode would otherwise leave a crosshair on a read-only canvas.
@@ -181,20 +230,35 @@ locked focus channel (`focusedTrack.lockedTo = "red"`):
   - Insert toggle is **disabled** while locked; programmatically forcing
     Insert + canvas-click commits **no** `emitters/add-track-key`.
   - Group-drag of a multi-selection on a locked curve commits nothing.
-  - Defense-in-depth: `handleKeyDragEnd` / `handleCanvasAdd` early-return
-    under `focusLocked` (unit-level).
+  - **Marquee on a locked curve selects nothing** (canvas + gutter
+    starts both); right-click on a locked key opens **no** context menu.
+  - **Selection-consuming paths refuse under lock**: with a selection
+    forced into state, the Delete keydown, Time/Value spinner commits,
+    and Ctrl+X each produce **zero** `delete-track-keys` /
+    `set-track-key`; Ctrl+C (copy) still works.
+  - Defense-in-depth: `handleKeyDragEnd`, `handleCanvasAdd`,
+    `handleDelete`, `handleTimeSpinner`, `handleValueSpinner`
+    early-return under `focusLocked` (unit-level — covers the
+    lock-changed-mid-gesture race, §3 risk 2).
 - **Mirror still works (no regression):** editing the **master** (Red)
   still updates the followers' rendered curves (alias unchanged) — a
   `set-track-key` on Red, refetch, assert Green/Blue render Red's keys.
+  **Plan-time check:** verify the mock's `set-track-lock`
+  (`setTrackLockInOverlay`, [`mock.ts:884`](src/bridge/mock.ts:884))
+  aliases *reads* too — `get-tracks` on a locked channel must return
+  the master's keys, or this test would pass natively and lie in the
+  mock. If it doesn't, fixing mock parity joins this PR's scope.
 - **Mode reset:** locking the focus channel while `mode === "insert"`
   flips `mode` to `"select"`; `data-state` on the Insert button reflects
   it.
 - **Indicator + render treatment:** the lock glyph renders only when
   `focusLocked`, its tooltip copy matches `lockToValue`, and it's gone
   after unlock. The focus curve carries `stroke-dasharray` and hollow
-  (`fill="none"`) markers only when `focusReadOnly`; an unlocked focus
-  curve is solid with filled markers. (Assert via the rendered
-  `stroke-dasharray` attr + marker `fill`.)
+  (`fill="none"`) markers — border keys included, no anchor styling —
+  only when the renderer-derived `focusReadOnly` is true (i.e. the
+  focus layer's `track.lockedTo != null`); an unlocked focus curve is
+  solid with filled markers + anchor-styled borders. (Assert via the
+  rendered `stroke-dasharray` attr + marker `fill`.)
 - **Unlock round-trip:** unlock restores interactivity (drag commits a
   `set-track-key` again; Insert re-enables).
 
@@ -204,10 +268,11 @@ or regenerate from the full suite per L-081 if the toolbar DOM shifts);
 host Debug x64 build.
 
 User feel pass (L-033 — user-launched): in the real host, lock
-Green→Red and Blue→Red, confirm the locked curves can't be dragged or
-inserted-into, the read-only pill reads clearly, editing Red still
-carries Green/Blue, and unlocking restores editing. Both themes for the
-pill styling.
+Green→Red and Blue→Red, confirm the locked curves can't be dragged,
+inserted-into, marquee-selected, or spinner/Delete-edited; the dashed
+treatment + lock glyph read clearly; editing Red still carries
+Green/Blue; and unlocking restores editing (solid line, filled markers,
+tools re-enable). Both themes for the dash colour + glyph styling.
 
 ## §5 Out of scope (deferred to Part B / elsewhere)
 
