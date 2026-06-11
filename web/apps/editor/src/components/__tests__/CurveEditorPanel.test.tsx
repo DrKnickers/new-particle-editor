@@ -980,6 +980,15 @@ describe("CurveEditorPanel", () => {
         ).toBe("true");
       });
 
+      // Selection must survive the refetch that delivered the lock — a future
+      // change that clears selection on refetch would make subsequent guards
+      // pass vacuously.
+      expect(panel.getAttribute("data-selected-key-count")).toBe("1");
+      const greenInteriorAfterLock = Array.from(
+        document.querySelectorAll("[data-testid='curve-key']"),
+      ).find((c) => c.getAttribute("data-key-time") === "50");
+      expect(greenInteriorAfterLock?.getAttribute("data-selected")).toBe("true");
+
       // Clear call history so we only see calls made AFTER the lock landed.
       (bridge.request as ReturnType<typeof vi.fn>).mockClear();
 
@@ -1001,6 +1010,121 @@ describe("CurveEditorPanel", () => {
       );
       expect(calls).not.toContain("emitters/delete-track-keys");
       expect(calls).not.toContain("emitters/set-track-key");
+    });
+
+    it("blocks a spinner blur-commit that was started pre-lock and fires after the lock lands", async () => {
+      // Exercises the handleValueSpinner guard: a user begins editing the
+      // value spinner input while the track is unlocked, then the lock arrives
+      // (tree/changed refetch) before they blur.  The blur fires onChange which
+      // calls handleValueSpinner — but the guard (focusLocked check at the top
+      // of that callback) must prevent the emitters/set-track-key bridge call.
+      //
+      // Note: disabled arriving on the input mid-edit does NOT remove React's
+      // pending onBlur — the handler still fires, making this scenario testable
+      // in jsdom without any special tricks.
+      const unlockedTracks: TrackDto[] = TRACK_NAMES.map((name) => ({
+        name,
+        keys: name === "green"
+          ? [{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]
+          : [{ time: 0, value: 0 }, { time: 100, value: name === "rotationSpeed" ? -1 : 1 }],
+        interpolation: "linear" as const,
+        lockedTo: null,
+      }));
+      const lockedTracks: TrackDto[] = unlockedTracks.map((t) => ({
+        ...t,
+        lockedTo: t.name === "green" ? "red" : null,
+      }));
+
+      let currentTracks: TrackDto[] = unlockedTracks;
+      const treeChangedListeners: Array<() => void> = [];
+      const bridge = {
+        request: vi.fn().mockImplementation((req: { kind: string }) => {
+          if (req.kind === "engine/state/snapshot") {
+            return Promise.resolve({ ...makeDefaultEngineState(), selectedEmitterId: 1 });
+          }
+          if (req.kind === "emitters/get-tracks") {
+            return Promise.resolve({ tracks: currentTracks });
+          }
+          if (req.kind === "emitters/add-track-key") {
+            const p = (req as unknown as { params: { time: number; value: number } }).params;
+            return Promise.resolve({ time: p.time, value: p.value });
+          }
+          return Promise.resolve({});
+        }),
+        on: vi.fn().mockImplementation((kind: string, h: unknown) => {
+          if (kind === "emitters/tree/changed") treeChangedListeners.push(h as () => void);
+          return () => {
+            if (kind === "emitters/tree/changed") {
+              const idx = treeChangedListeners.indexOf(h as () => void);
+              if (idx >= 0) treeChangedListeners.splice(idx, 1);
+            }
+          };
+        }),
+      } as unknown as Bridge & {
+        request: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+      };
+
+      render(<CurveEditorPanel bridge={bridge} />);
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+      });
+
+      // Focus the green channel (currently UNLOCKED).
+      fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-channel-row-green").dataset.focus).toBe("true");
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-green")).toBeInTheDocument();
+      });
+
+      // Select the interior green key at t=50.
+      const greenInterior = Array.from(
+        document.querySelectorAll("[data-testid='curve-key']"),
+      ).find((c) => c.getAttribute("data-key-time") === "50");
+      expect(greenInterior).toBeDefined();
+      fireEvent.click(greenInterior!);
+
+      const panel = screen.getByTestId("curve-editor-panel");
+      await waitFor(() => {
+        expect(panel.getAttribute("data-selected-key-count")).toBe("1");
+      });
+
+      // Grab the value spinner input and begin an edit while the track is unlocked.
+      const valueInput = screen
+        .getByTestId("ce-spinner-value-wrapper")
+        .querySelector("input") as HTMLInputElement;
+      await waitFor(() => expect(valueInput.disabled).toBe(false));
+      fireEvent.focus(valueInput);
+      fireEvent.change(valueInput, { target: { value: "0.99" } });
+      // At this point the user has typed a new value but NOT yet blurred.
+
+      // ── Race: flip the track to locked and trigger refetch ──
+      currentTracks = lockedTracks;
+      for (const l of treeChangedListeners) l();
+
+      // Wait for the lock to land.
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("ce-lock-to-trigger").getAttribute("data-locked"),
+        ).toBe("true");
+      });
+      // Spinner must now be disabled (focusLocked disables it on re-render).
+      expect(valueInput.disabled).toBe(true);
+
+      // Clear call history — only calls from the blur-commit onward matter.
+      (bridge.request as ReturnType<typeof vi.fn>).mockClear();
+
+      // Blur the input: this fires Spinner's onBlur → commit(text) → onChange
+      // → handleValueSpinner.  The focusLocked guard must intercept it.
+      fireEvent.blur(valueInput);
+      await new Promise((r) => setTimeout(r, 0));
+
+      const afterCalls = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => (c[0] as { kind: string }).kind,
+      );
+      expect(afterCalls).not.toContain("emitters/set-track-key");
     });
 
     it("does not start a marquee from the axis gutter when focus is locked", async () => {

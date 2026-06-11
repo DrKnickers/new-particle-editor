@@ -1551,7 +1551,7 @@ export function CurveEditorPanel({ bridge }: Props) {
           onDelete={() => {
             const t = keyContextMenu.time;
             setKeyContextMenu(null);
-            if (selectedId === null) return;
+            if (selectedId === null || focusLocked) return;
             if (borderKeyTimes.has(t)) return;
             void bridge.request({
               kind: "emitters/delete-track-keys",
