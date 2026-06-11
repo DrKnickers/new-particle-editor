@@ -251,12 +251,17 @@ function PaletteCell({
 
   return (
     <div className="relative">
+      {/* Tip wraps the Popover.Close (not the button inside it) — Tooltip
+          trigger around another Radix asChild trigger is the blessed
+          nesting; both forward their props down to the button. Static
+          occlusionId across grid cells is safe: only one tooltip is ever
+          open at a time (app-level Tooltip.Provider). */}
+      <Tip content={entry.filename} occlusionId="tip:texpop:entry">
       <Popover.Close asChild>
         <button
           type="button"
           onClick={() => onApply(entry.filename)}
           aria-label={`Apply ${entry.filename}`}
-          title={entry.filename}
           className="relative block aspect-square w-full overflow-hidden rounded border border-border-2 transition hover:border-accent"
         >
           {thumb?.dataUri ? (
@@ -290,6 +295,7 @@ function PaletteCell({
           </span>
         </button>
       </Popover.Close>
+      </Tip>
       <button
         type="button"
         onClick={() => onTogglePin(entry.filename)}

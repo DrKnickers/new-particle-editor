@@ -14,6 +14,7 @@
 //   Items with no callback render as disabled.
 
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import { Tip } from "./Tip";
 import type { SpinnerDensity } from "./Spinner";
 
 export type TextureItem = {
@@ -68,13 +69,18 @@ export function TexturePalette({
         const selected = value === item.path;
         return (
           <ContextMenu.Root key={item.path}>
+            {/* Tip wraps the ContextMenu.Trigger (not the button inside it) —
+                Tooltip.Trigger asChild around another Radix trigger is the
+                blessed nesting; both forward their props down to the button.
+                Static occlusionId on grid cells is safe: only ONE tooltip is
+                ever open at a time (app-level Radix Tooltip.Provider). */}
+            <Tip content={item.label ?? item.path} occlusionId="tip:texpal:item">
             <ContextMenu.Trigger asChild>
               <button
                 type="button"
                 role="option"
                 aria-selected={selected}
                 aria-label={item.label ?? item.path}
-                title={item.label ?? item.path}
                 onClick={() => onChange(item.path)}
                 className={`relative overflow-hidden rounded border-2 transition focus:outline-none focus:ring-1 focus:ring-accent ${
                   selected
@@ -100,6 +106,7 @@ export function TexturePalette({
                 )}
               </button>
             </ContextMenu.Trigger>
+            </Tip>
 
             <ContextMenu.Portal>
               <ContextMenu.Content
