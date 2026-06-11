@@ -108,7 +108,10 @@ restore at the same construction site.)
 
 `engine/set/overload-guard { enabled: boolean, maxParticles: number } → { ok: true }`
 
-- Schema (zod) in the bridge-schema package, host handler in
+- Schema in the bridge-schema package (a TypeScript Request-union +
+  ResponseFor entry — the schema layer is type-only, NO runtime
+  validation, which is why the engine-side clamp in §1 is load-bearing),
+  host handler in
   `BridgeDispatcher` (caches per §2, clamps via the engine setter), mock
   parity: MockBridge accepts and stores it (no sim to govern; stored so
   bridge-contract tests can assert the round-trip).
