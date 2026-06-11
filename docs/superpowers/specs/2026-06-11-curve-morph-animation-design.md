@@ -48,10 +48,17 @@ math. Findings:
    arithmetic evaluations per morphing channel per *morph start* (the
    per-frame work is a plain lerp over the two cached arrays).
 3. **Interp-change morphs are well-defined**: both shapes sample onto
-   the same uniform-x grid, so step↔smooth↔linear tween point-for-
-   point with no lateral swimming. Step discontinuities render as
-   near-vertical segments during the morph (1/160 of width) and snap
-   to true verticals at the end.
+   the same shared x-grid, so step↔smooth↔linear tween point-for-
+   point with no lateral swimming. **Step verticals stay TRUE
+   verticals** (user requirement, post-spike): the grid is uniform-N
+   **augmented with duplicated samples at every key time of both the
+   old and new key sets** (x⁻/x⁺ around each potential jump) — a step
+   discontinuity renders as a genuine vertical segment even mid-morph,
+   and continuous shapes are unaffected (both samples yield equal y).
+   At rest the overlay unmounts and the real `buildStepPolyline`
+   renders anyway (the snap-to-truth step) — the spike widget lacks
+   that snap, which is why ITS settled staircase looks faintly sloped;
+   the real build's will not.
 4. **Interruption folding works** by construction: each new morph
    starts `from = the currently displayed samples`, so rapid repeated
    edits (spinner arrows) chain smoothly instead of restarting from a
@@ -109,13 +116,27 @@ export function sampleTrackY(
   x: number,
 ): number;
 
-/** Sample a track into N+1 uniform-x PIXEL-space points using the
- *  given projection (time range + value range + canvas size). */
+/** Build the shared x-grid (data space) for a (prev, next) morph
+ *  pair: N+1 uniform positions UNION every key time of BOTH key sets,
+ *  each key time duplicated as (t−ε, t+ε) so step discontinuities
+ *  render as true verticals mid-morph (continuous shapes sample equal
+ *  y at both — harmless). Sorted ascending. */
+export function buildMorphGrid(
+  prev: TrackDto, next: TrackDto,
+  timeMin: number, timeMax: number, n: number,
+): Float64Array;
+
+/** Sample a track's PIXEL-space y at each grid x using the given
+ *  projection (value range + canvas size). The from/to arrays of a
+ *  morph share one grid. Interruption folding note: when a retarget
+ *  needs a NEW grid (different key sets), the currently-displayed
+ *  shape — a known piecewise-linear (x, y) polyline — is resampled
+ *  onto the new grid by linear interpolation. */
 export function sampleTrackPx(
   track: TrackDto,
-  proj: { timeMin: number; timeMax: number; vMin: number; vMax: number; width: number; height: number },
-  n: number,
-): Float64Array; // y per sample; x is implicit (i/n * width)
+  gridX: Float64Array,
+  proj: { vMin: number; vMax: number; height: number },
+): Float64Array;
 
 /** Classify the change between two consecutive TrackDto snapshots.
  *  "none"   — identical keys + interpolation (no morph)
