@@ -1107,11 +1107,12 @@ describe("curve morph (structural changes)", () => {
     expect(overlay.querySelectorAll("circle").length).toBe(0);
   });
 
-  it("var(...) channel colour: overlay polyline stroke is the var string; fill path uses fill-opacity '0.12' (not rgba(NaN,...))", async () => {
-    // Covers the hexToRgba else-branch: CSS-var colour strings (e.g.
-    // var(--x-axis)) are not parseable as hex, so drawJob sets fill-opacity
-    // separately instead of emitting rgba(...). This is the path that runs
-    // in production (CurveEditorPanel passes var(--x-axis) etc.).
+  it("var(...) channel colour: overlay polyline stroke is the var string; focus fill references gradient with var(...) stops", async () => {
+    // The focus overlay fill must use a self-contained linearGradient whose
+    // stop-color attributes carry the channel colour verbatim — even when the
+    // colour is a CSS variable token (e.g. var(--x-axis)) that is not parseable
+    // as hex. The gradient id is morph-fill-<channelId>. The fill path's fill
+    // attribute is url(#morph-fill-<channelId>).
     restoreMatchMedia = stubMatchMediaMotionOn();
 
     const varColor = "var(--x-axis)";
@@ -1135,13 +1136,51 @@ describe("curve morph (structural changes)", () => {
     // The var(...) colour must be forwarded verbatim as the stroke — no NaN corruption.
     expect(polyline!.getAttribute("stroke")).toBe(varColor);
 
+    // Focus fill: path fill must reference the gradient, not a flat colour.
     const fillPath = overlayG.querySelector("path");
-    expect(fillPath, "overlay fill path must exist").not.toBeNull();
-    // fill-opacity must be set to "0.12" and fill must be the var string.
-    expect(fillPath!.getAttribute("fill")).toBe(varColor);
-    expect(fillPath!.getAttribute("fill-opacity")).toBe("0.12");
-    // Explicitly confirm no rgba(NaN,...) was emitted.
-    expect(fillPath!.getAttribute("fill")).not.toContain("NaN");
+    expect(fillPath, "overlay fill path must exist for focus channel").not.toBeNull();
+    expect(fillPath!.getAttribute("fill")).toBe("url(#morph-fill-red)");
+    // No flat fill-opacity attribute (gradient handles opacity).
+    expect(fillPath!.getAttribute("fill-opacity")).toBeNull();
+
+    // A <linearGradient> with the correct id and two stops must exist.
+    const grad = overlayG.querySelector("linearGradient#morph-fill-red");
+    expect(grad, "linearGradient#morph-fill-red must exist in overlay").not.toBeNull();
+    const stops = grad!.querySelectorAll("stop");
+    expect(stops).toHaveLength(2);
+    // Both stops must carry the channel colour verbatim.
+    expect(stops[0]!.getAttribute("stop-color")).toBe(varColor);
+    expect(stops[1]!.getAttribute("stop-color")).toBe(varColor);
+    // Stops must have the matching opacities.
+    expect(stops[0]!.getAttribute("stop-opacity")).toBe("0.25");
+    expect(stops[1]!.getAttribute("stop-opacity")).toBe("0");
+  });
+
+  it("non-focus channel morph overlay has no fill path", async () => {
+    // The static layer draws no fill under non-focus (background) channels.
+    // The overlay must match: only a polyline, no <path> fill element.
+    restoreMatchMedia = stubMatchMediaMotionOn();
+
+    // red is focus; green is the background channel that will morph.
+    const t0 = [trk("red", KEYS3, "linear"), trk("green", KEYS3, "linear")];
+    const { rerender, container } = render(mcCurve(t0, "red"));
+
+    rerender(mcCurve([trk("red", KEYS3, "linear"),
+                      trk("green", [k(0, 0), k(40, 1), k(100, 0.5)], "linear")], "red"));
+
+    const overlay = await waitFor(() => {
+      const el = container.querySelector('[data-testid="curve-morph-overlay"][data-channel-id="green"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    // Give at least one rAF tick so drawJob runs.
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    // Non-focus: no fill <path> should exist.
+    expect(overlay.querySelector("path"), "non-focus overlay must not have a fill path").toBeNull();
+    // But the line polyline must be there.
+    expect(overlay.querySelector("polyline"), "non-focus overlay must have a polyline").not.toBeNull();
   });
 
   it("a drag-committed move does not re-morph the dragged channel, but its locked follower morphs", async () => {

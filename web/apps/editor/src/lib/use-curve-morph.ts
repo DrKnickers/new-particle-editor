@@ -8,14 +8,16 @@
 // Markers (glide/pop/ghost) are Task 3 — not in this file yet.
 // This task covers line + fill only.
 //
-// Fill simplification: the overlay uses a translucent flat fill at
-// ~0.12 alpha rather than the gradient the static layer uses. The
-// gradient's average opacity over a 180ms morph is close enough to
-// 0.12 that the difference is imperceptible; avoiding a per-channel
-// <defs>/<linearGradient> in the overlay keeps the imperative code
-// simple. This is explicitly documented here for the feel-pass review.
+// Fill: only the FOCUS channel has a fill (matching the static layer
+// which only draws the gradient under the focus curve). The overlay
+// replicates the static gradient exactly: a self-contained <defs>
+// <linearGradient id="morph-fill-<channelId>" x1=0 y1=0 x2=0 y2=1>
+// with stop-opacity 0.25→0, using objectBoundingBox units so the
+// gradient maps to the fill path's own bbox each frame — identical to
+// the static curve-fill-<channelId> gradient in CurveEditor.tsx.
+// Non-focus channels render a stroked line only, no fill path.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TrackDto } from "@particle-editor/bridge-schema";
 import {
   buildMorphGrid,
@@ -190,25 +192,6 @@ function buildFillD(xs: Float64Array, ys: Float64Array, height: number): string 
   return parts.join(" ");
 }
 
-/** Convert a CSS hex color (#RRGGBB or #RGB) to rgba with the given alpha.
- *  Falls back to the color string itself wrapped in rgba() if unparseable. */
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace("#", "");
-  if (h.length === 3) {
-    const r = parseInt(h[0]! + h[0]!, 16);
-    const g = parseInt(h[1]! + h[1]!, 16);
-    const b = parseInt(h[2]! + h[2]!, 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-  if (h.length === 6) {
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-  // Not a simple hex (e.g. CSS var token) — fall back to setting opacity attribute.
-  return hex;
-}
 
 /** Project a key's (time, value) to pixel coordinates using the same
  *  formula as sampleTrackPx / the curve sampler:
@@ -269,8 +252,12 @@ function computeMarkers(
 }
 
 /** Draw a single morph frame into job.el, creating the imperative SVG
- *  children on the first call. The flat fill uses ~0.12 alpha (see the
- *  file-level note on gradient simplification). */
+ *  children on the first call. Only the focus channel gets a fill path;
+ *  non-focus channels render a stroked line only (matching the static
+ *  layer which draws the gradient fill only under the focus curve). The
+ *  focus fill uses a self-contained linearGradient (morph-fill-<id>)
+ *  that is identical to the static curve-fill-<id> gradient: stopOpacity
+ *  0.25→0, x1/y1/x2/y2 = 0/0/0/1, objectBoundingBox units. */
 function drawJob(
   job: Job,
   e: number,
@@ -289,19 +276,35 @@ function drawJob(
   const xs = toPixelXs(job.gridX, timeMin, timeMax, dims.width);
 
   // Create imperative children on first call.
-  if (!job.fill) {
+  // Only the focus channel gets a fill — matching the static layer.
+  if (!job.fill && input.isFocus) {
+    const gradId = `morph-fill-${input.channelId}`;
+    // Self-contained <defs> with gradient identical to the static
+    // curve-fill-<channelId> gradient in CurveEditor.tsx.
+    const defs = document.createElementNS(SVG_NS, "defs") as SVGDefsElement;
+    const grad = document.createElementNS(SVG_NS, "linearGradient") as SVGLinearGradientElement;
+    grad.setAttribute("id", gradId);
+    grad.setAttribute("x1", "0");
+    grad.setAttribute("y1", "0");
+    grad.setAttribute("x2", "0");
+    grad.setAttribute("y2", "1");
+    const stop0 = document.createElementNS(SVG_NS, "stop") as SVGStopElement;
+    stop0.setAttribute("offset", "0%");
+    stop0.setAttribute("stop-color", input.color);
+    stop0.setAttribute("stop-opacity", "0.25");
+    const stop1 = document.createElementNS(SVG_NS, "stop") as SVGStopElement;
+    stop1.setAttribute("offset", "100%");
+    stop1.setAttribute("stop-color", input.color);
+    stop1.setAttribute("stop-opacity", "0");
+    grad.appendChild(stop0);
+    grad.appendChild(stop1);
+    defs.appendChild(grad);
+    el.appendChild(defs);
+
     const fill = document.createElementNS(SVG_NS, "path") as SVGPathElement;
     fill.setAttribute("stroke", "none");
     fill.setAttribute("pointer-events", "none");
-    // Flat translucent fill (gradient simplification — see file comment).
-    const fillColor = hexToRgba(input.color, 0.12);
-    if (fillColor.startsWith("rgba")) {
-      fill.setAttribute("fill", fillColor);
-    } else {
-      // CSS variable or unparseable hex — use fill-opacity.
-      fill.setAttribute("fill", input.color);
-      fill.setAttribute("fill-opacity", "0.12");
-    }
+    fill.setAttribute("fill", `url(#${gradId})`);
     el.appendChild(fill);
     job.fill = fill;
   }
@@ -321,7 +324,7 @@ function drawJob(
   }
 
   // Update geometry every frame.
-  job.fill.setAttribute("d", buildFillD(xs, ys, dims.height));
+  if (job.fill) job.fill.setAttribute("d", buildFillD(xs, ys, dims.height));
   job.line.setAttribute("points", buildPointsString(xs, ys));
 
   // ── Marker circles (focus channel only) ─────────────────────────────────
@@ -557,6 +560,21 @@ export function useCurveMorph(args: {
     // happen from finish(), but be defensive).
     setActiveIds(Array.from(jobs.current.keys()));
   }
+
+  // Fix B — synchronous first frame (no empty-overlay flash).
+  // Runs post-commit, pre-paint, whenever activeIds changes (i.e. when a
+  // new overlay <g> has just been mounted by React). Draws e≈0 immediately
+  // so the first painted frame shows the old shape — seamless handoff from
+  // the hidden static layer. The rAF loop continues from the next frame;
+  // both write the same attributes, no conflict.
+  useLayoutEffect(() => {
+    const now = performance.now();
+    for (const j of jobs.current.values()) {
+      if (!j.el) continue;
+      const e = easeOutCubic(Math.min(1, (now - j.start) / MORPH_MS));
+      drawJob(j, e, { width, height }, timeMin, timeMax);
+    }
+  }, [activeIds]); // eslint-disable-line react-hooks/exhaustive-deps — drawJob/dims read fresh
 
   // Cleanup on unmount.
   useEffect(() => {
