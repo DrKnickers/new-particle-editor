@@ -1190,6 +1190,9 @@ function MultiChannelCurves({
     ? null
     : (layers.find((l) => l.channel.id === focusChannel) ?? null);
   const focusEnabled = focusLayer !== null;
+  // Read-only mirror: the focus channel is locked to another channel.
+  // Derived from the DTO (lockedTo) — no prop threaded from the panel.
+  const focusReadOnly = focusLayer !== null && focusLayer.track.lockedTo != null;
 
   // ── Drag state. Held in refs so pointer-move handlers don't trigger
   // a re-render on every pixel; setDragTick flushes a render when we
@@ -1270,6 +1273,7 @@ function MultiChannelCurves({
     keyValue: number,
   ) => {
     if (!focusEnabled) return;
+    if (focusReadOnly) return;
     if (event.button !== 0) return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     // Group drag when the grabbed key is one of several selected keys —
@@ -1505,6 +1509,7 @@ function MultiChannelCurves({
   // gutter pointerdown. No-op in the read-only (non-focus) overlay.
   const startMarquee = (clientX: number, clientY: number, shiftKey: boolean, pointerId: number) => {
     if (!focusEnabled) return;
+    if (focusReadOnly) return;
     const svg = svgRef.current;
     if (svg === null) return;
     const { x, y } = eventToViewBox(svg, clientX, clientY, width, height);
@@ -1545,6 +1550,10 @@ function MultiChannelCurves({
     }
     const { x, y } = eventToViewBox(svg, event.clientX, event.clientY, width, height);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    // Read-only mirror: no marquee — selection is meaningless and is the
+    // gateway to Delete/spinner edits. Plain clicks still reach the
+    // backdrop's onClick → onCanvasClick (clear-selection UX preserved).
+    if (focusReadOnly) return;
     const t = event.currentTarget;
     if (typeof t.setPointerCapture === "function") {
       try { t.setPointerCapture(event.pointerId); } catch { /* swallow */ }
@@ -1800,6 +1809,7 @@ function MultiChannelCurves({
             data-channel-id={channel.id}
             data-key-count={focusRenderPoints.length}
             data-focus="true"
+            data-readonly={focusReadOnly ? "true" : "false"}
           >
             {/* Gradient definition — objectBoundingBox units mean the
                 stops are positioned within the fill path's own bbox,
@@ -1829,6 +1839,7 @@ function MultiChannelCurves({
                 fill="none"
                 stroke={channel.color}
                 strokeWidth={3}
+                strokeDasharray={focusReadOnly ? "7 5" : undefined}
                 d={buildSmoothPath(focusRenderPoints)}
                 pointerEvents="none"
               />
@@ -1840,6 +1851,7 @@ function MultiChannelCurves({
                 fill="none"
                 stroke={channel.color}
                 strokeWidth={3}
+                strokeDasharray={focusReadOnly ? "7 5" : undefined}
                 points={buildStepPolyline(focusRenderPoints)}
                 pointerEvents="none"
               />
@@ -1851,6 +1863,7 @@ function MultiChannelCurves({
                 fill="none"
                 stroke={channel.color}
                 strokeWidth={3}
+                strokeDasharray={focusReadOnly ? "7 5" : undefined}
                 points={focusRenderPoints.map((p) => `${p.x},${p.y}`).join(" ")}
                 pointerEvents="none"
               />
@@ -1928,9 +1941,9 @@ function MultiChannelCurves({
                     cx={p.x}
                     cy={p.y}
                     r={visR}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={strokeWidth}
+                    fill={focusReadOnly ? "none" : fill}
+                    stroke={focusReadOnly ? channel.color : stroke}
+                    strokeWidth={focusReadOnly ? 2 : strokeWidth}
                     pointerEvents="none"
                   />
                 </g>
