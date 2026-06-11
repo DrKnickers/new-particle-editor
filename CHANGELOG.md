@@ -17,16 +17,19 @@ Conventions:
 ## Changelog
 
 
-### Spinner arrow buttons no longer paint over the box outline
+### Spinner arrow buttons: contained background + a press state
 
 *2026-06-11 · TODO-hash · TODO-PR*
 
-Pressing (or hovering) a spinner's up/down arrow no longer breaks the
-look of the field's rounded border. The arrow column sat flush against
-the input's right edge, so its hover/active background painted over the
-right border line and the rounded corners. The column is now inset 1px
-inside the border and clipped with matching rounded-right corners, so
-the button background stays contained within the box outline.
+Two fixes to the spinner up/down arrows. (1) Pressing or hovering an
+arrow no longer breaks the field's rounded border — the arrow column
+sat flush against the input's right edge, so its hover/active
+background painted over the right border line and the rounded corners;
+the column is now inset 1px inside the border and clipped with matching
+rounded-right corners, so the button background stays contained. (2) The
+arrows now show a clear **press state** (accent-soft background + accent
+glyph on `:active`), so a click or hold-to-repeat gives visible
+feedback — previously only hover was styled.
 
 **How we tackled it.** In
 [`src/primitives/Spinner.tsx`](web/apps/editor/src/primitives/Spinner.tsx:364)
@@ -35,7 +38,9 @@ the absolutely-positioned arrow column changed from `right-0 top-0`
 `width: ARROW_W - 1`) with `overflow-hidden rounded-r-[3px]`. The 3px
 radius is concentric with the input's 4px `rounded` corner, exactly 1px
 inside — the border sits in the gap, and `overflow-hidden` clips the
-square-cornered button fills to the rounded column.
+square-cornered button fills to the rounded column. The press state is
+an `active:bg-accent-soft active:text-accent` pair on the arrow buttons
+(the clip now keeps that fill inside the box too).
 
 ---
 
