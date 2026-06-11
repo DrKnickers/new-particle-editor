@@ -5,9 +5,19 @@
 //   VPT-8 — cursor readout is 2 decimal places (legacy was 2dp).
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render as rtlRender, screen, act } from "@testing-library/react";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import type { ReactElement, ReactNode } from "react";
 import { StatusBar } from "../StatusBar";
 import type { Bridge } from "@particle-editor/bridge-schema";
+
+// [NT-12]: the overloaded Particles cell mounts a Tip (Radix Tooltip.Root),
+// which requires the app-level Tooltip.Provider — wrapper stands in for it
+// (precedent: renderToolbar in Toolbar.test.tsx).
+const TipProvider = ({ children }: { children: ReactNode }) => (
+  <Tooltip.Provider delayDuration={0} skipDelayDuration={0}>{children}</Tooltip.Provider>
+);
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TipProvider });
 
 // A bridge mock that records `on` handlers by event name so the test can
 // drive them, and resolves the engine-state snapshot request.
@@ -56,7 +66,11 @@ describe("StatusBar", () => {
 
   // Preview spawn-overload guard (plan part 2 §3): while stats/tick
   // reports overload=true, the Particles readout tints amber and carries
-  // an explanatory title; it reverts when the overload clears.
+  // an explanatory tooltip; it reverts when the overload clears.
+  // [NT-12]: the native title became a Tip — while warn is active the value
+  // span is a Radix Tooltip trigger (carries data-state); when the overload
+  // clears, Tip's nullish-content early-out renders the bare span with zero
+  // tooltip machinery, so data-state disappears.
   it("tints the particle count amber while overloaded", () => {
     const { bridge, emit } = makeBridge();
     render(<StatusBar bridge={bridge} />);
@@ -67,14 +81,11 @@ describe("StatusBar", () => {
     emit("stats/tick", tick(true));
     const value = screen.getByText("16384");
     expect(value.className).toContain("text-amber-400");
-    expect(value).toHaveAttribute(
-      "title",
-      "preview spawn limit reached — spawning paused",
-    );
+    expect(value).toHaveAttribute("data-state");
 
     emit("stats/tick", tick(false));
     const cleared = screen.getByText("16384");
     expect(cleared.className).not.toContain("text-amber-400");
-    expect(cleared).not.toHaveAttribute("title");
+    expect(cleared).not.toHaveAttribute("data-state");
   });
 });

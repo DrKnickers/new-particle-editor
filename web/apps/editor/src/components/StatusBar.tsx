@@ -6,6 +6,7 @@
 // event fires; the component renders placeholder em-dashes.
 import { useEffect, useState } from "react";
 import type { Bridge } from "@particle-editor/bridge-schema";
+import { Tip } from "@/primitives/Tip";
 
 type Stats = { fps: number; emitters: number; particles: number; instances: number; overload: boolean };
 type Cursor3D = { x: number; y: number; z: number };
@@ -56,20 +57,25 @@ export function StatusBar({ bridge }: { bridge: Bridge }) {
   const placeholder = s === null;
 
   // Preview spawn-overload guard: while stats/tick latches overload,
-  // the value cell can tint amber + carry an explanatory title (used by
+  // the value cell can tint amber + carry an explanatory tooltip (used by
   // the Particles readout; the OverloadBanner over the viewport is the
-  // primary surface — this is the persistent low-key echo).
+  // primary surface — this is the persistent low-key echo). The Tip opens
+  // upward — toward the viewport — hence the occlusionId.
   const cell = (label: string, value: string, dim = placeholder, warn = false) => (
     <span className="flex items-baseline gap-1.5">
       <span className="text-text-3">{label}</span>
-      <span
-        className={`font-mono tabular-nums ${
-          warn ? "text-amber-400" : dim ? "text-text-3" : "text-text-2"
-        }`}
-        title={warn ? "preview spawn limit reached — spawning paused" : undefined}
+      <Tip
+        content={warn ? "preview spawn limit reached — spawning paused" : undefined}
+        occlusionId={`tip:status:${label}`}
       >
-        {value}
-      </span>
+        <span
+          className={`font-mono tabular-nums ${
+            warn ? "text-amber-400" : dim ? "text-text-3" : "text-text-2"
+          }`}
+        >
+          {value}
+        </span>
+      </Tip>
     </span>
   );
 

@@ -436,7 +436,6 @@ export function MenuBar({
                       <Menubar.Item
                         key={path}
                         className={ITEM}
-                        title={path}
                         onSelect={() => handleOpenRecent(path)}
                       >
                         {basename(path)}
