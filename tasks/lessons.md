@@ -4472,3 +4472,76 @@ then snaps at the end; window resize is WORSE — background colour in newly
 revealed area for a second." Reverted same day; C1 (dedupe) + C2 (log
 hygiene) + Fix B (pacing) kept. Cross-reference L-078 (prefer
 continuous-correct; measured wins don''t override feel verdicts).
+
+
+## L-080 — A piped command's exit code is the LAST pipe stage's, not the command's: gating on `cmd | tail -N && echo OK` reports success on failure
+
+**Rule.** Never chain a success gate (`&&`, "EXPECTED: ...") after a
+command whose output is piped through `tail`/`head`/`grep` — the
+pipeline's exit status is the final stage's (tail exits 0), so the gate
+fires even when the command failed. Same trap in disguise: `(ls X 2>/dev/null | head -1 && echo present || echo MISSING)` prints "present"
+when ls FAILED. Capture exit status explicitly (`cmd > log 2>&1; echo
+EXIT: $?`) or test the artifact, not the pipeline.
+
+**Source incident (2026-06-10, session 36, NT-12).** Bit three times in
+one session: (1) a fresh-worktree L-039 check printed "WebView2 pkg:
+present" off a failed ls — the missing NuGet surfaced only when MSBuild
+failed 40 minutes later; (2) `pnpm build 2>&1 | tail -5 && echo BUILD_OK`
+printed BUILD_OK for a nonexistent script; (3) a native-harness run
+piped to `tail -6` cut off the failing spec's name, costing a full 3-min
+re-run to learn which test failed. Cross-reference L-046 (Windows
+build-environment gotchas).
+
+## L-081 — One git worktree, one tree-touching agent at a time; and a11y goldens regenerate ONLY from full-suite runs
+
+**Rule (two halves).** (a) Subagent "reviewers" are not read-only by
+default — one stashed the concurrent implementer's in-flight work to get
+a clean baseline, mis-popped an unrelated stash from another session's
+branch, and left UU conflicts on files neither agent owned. Run agents
+that might stash/checkout/restore SEQUENTIALLY in a shared worktree, or
+explicitly forbid tree manipulation in the reviewer's prompt (read +
+run tests only). (b) The a11y golden suite's per-surface state is
+ESTABLISHED BY EARLIER SPEC FILES in the shared-host run (selection,
+open panels): regenerating one golden via `a11y:update --grep <test>`
+captures a context that doesn't exist in the full run, producing a
+golden that passes in isolation and fails in CI. Regenerate from the
+full `pnpm a11y:update` only, then hand-review the complete diff.
+
+**Source incident (2026-06-10, session 36, NT-12).** (a) A batch-1 spec
+reviewer + batch-2 implementer ran concurrently; the stash collision cost
+a manual UU resolution (no data lost — the foreign stash@{0}
+"T4c.4 react changes - temp" was preserved untouched). (b) A single-test
+golden regen for kbd-tab-cycle-stop-2 produced a 65-line wrong-context
+diff (selection lost, tabpanel empty); the correct full-run regen was
++3 lines. Related: the goldens were also FLAKY until captureDomA11y
+settled tooltip exit animations — see the NT-12 CHANGELOG entry.
+
+
+## L-082 — Tailwind v4 compiles `translate`/`scale`/`rotate` utilities to the standalone CSS PROPERTIES, not `transform`; a keyframe that animates `transform` COMPOSES with them rather than overriding
+
+**Rule.** In Tailwind v4, `-translate-x-1/2 -translate-y-1/2` emits
+`translate: -50% -50%` (the standalone `translate` CSS property), NOT
+`transform: translate(...)`. CSS applies `translate`, then `rotate`, then
+`scale`, then `transform` as INDEPENDENT, COMPOSING transforms. So a
+`@keyframes` rule that sets `transform: translate(-50%, ...)` on a
+Tailwind-centered element does not replace the centering — it STACKS on top
+of it (total -100% shift), and only "snaps" back to the right place when the
+animation ends and `transform` reverts to `none`. Keyframes for a
+Tailwind-centered surface must animate ONLY the delta (e.g.
+`transform: translateY(8px)`) and leave the `-50%/-50%` centering to the
+`translate` property. This is the OPPOSITE of Tailwind v3, where translate
+utilities went through `transform` (so a keyframe `transform` overrode them
+cleanly).
+
+**Source incident (2026-06-10, session 36, NT-12 #123).** The modal and
+overload banner entrance keyframes repeated `translate(-50%, …)` inside
+`transform` (carried verbatim from a standalone HTML mockup that centered via
+`transform`). In the real app both surfaces spawned mis-centered — the modal
+flung toward top-left then snapped to center mid-animation, the banner stuck
+in the top-left corner (its `both` fill made the bad position persist). The
+mockup never showed it because it had no Tailwind `translate` property to
+compose with. Diagnosed by inspecting `getComputedStyle(el).translate` vs
+`.transform` in the live preview: `translate: "-50% -50%"`, `transform`
+carrying the keyframe's second -50%. Cross-reference L-033 (agent mockups /
+screenshots differ from the real host — verify in the actual app), and the
+NT-12 CHANGELOG entry (issue 4).
