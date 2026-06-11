@@ -196,21 +196,31 @@
 }
 
 /* ---- [NT-12] Modal + overload-banner motion (slow tier) ----
-   Same family as the tooltips: fade + slip away from the resting
-   position. Modal rises 8px into center; banner drops 6px from the
-   viewport's top edge. Radix Dialog's Presence plays the modal exit;
-   the banner's exit needs usePresence (lib/use-presence.ts) because it
-   custom-unmounts. The modal keyframes must repeat the -translate-x/y-1/2
-   centering so the transform composes instead of replacing it. */
+   Same family as the tooltips: fade + slip toward the resting position.
+   Modal rises 8px into center; banner drops 6px from the viewport's top
+   edge. Radix Dialog's Presence plays the modal exit; the banner's exit
+   needs usePresence (lib/use-presence.ts) because it custom-unmounts.
+
+   CRITICAL (Tailwind v4): both surfaces center via Tailwind's
+   `-translate-x/y-1/2`, which in v4 compiles to the standalone CSS
+   `translate` PROPERTY (`translate: -50% -50%`) — NOT `transform`. The
+   `translate` and `transform` properties COMPOSE (translate applies
+   first, then transform), so the keyframes must do ONLY the slip via
+   `transform` and leave centering to `translate`. An earlier cut
+   repeated `translate(-50%, …)` inside the keyframe `transform`, which
+   stacked on top of the `translate` property → the surface was
+   double-shifted during the animation and snapped to center when the
+   animation ended (transform → none). Keep these keyframes
+   transform-slip-only. */
 @keyframes modal-overlay-in  { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modal-overlay-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes modal-in {
-  from { opacity: 0; transform: translate(-50%, calc(-50% + var(--slip-modal))); }
-  to   { opacity: 1; transform: translate(-50%, -50%); }
+  from { opacity: 0; transform: translateY(var(--slip-modal)); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes modal-out {
-  from { opacity: 1; transform: translate(-50%, -50%); }
-  to   { opacity: 0; transform: translate(-50%, calc(-50% + var(--slip-modal))); }
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(var(--slip-modal)); }
 }
 .modal-overlay-animate[data-state="open"]   { animation: modal-overlay-in var(--motion-slow-in) var(--ease-entrance); }
 .modal-overlay-animate[data-state="closed"] { animation: modal-overlay-out var(--motion-slow-out) var(--ease-exit); }
@@ -218,16 +228,17 @@
 .modal-animate[data-state="closed"] { animation: modal-out var(--motion-slow-out) var(--ease-exit); }
 
 @keyframes banner-in {
-  from { opacity: 0; transform: translate(-50%, calc(-1 * var(--slip-banner))); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(calc(-1 * var(--slip-banner))); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes banner-out {
-  from { opacity: 1; transform: translate(-50%, 0); }
-  to   { opacity: 0; transform: translate(-50%, calc(-1 * var(--slip-banner))); }
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(calc(-1 * var(--slip-banner))); }
 }
-/* The banner's Tailwind -translate-x-1/2 centering persists outside the
-   animation; the keyframes repeat it in from/to. box-shadow lives here
-   (not a Tailwind arbitrary value) so it stays var()-driven. */
+/* Centering is the Tailwind `translate` property (see CRITICAL above);
+   these keyframes only slip via `transform`, so the two compose. The
+   box-shadow lives here (not a Tailwind arbitrary value) so it stays
+   var()-driven. */
 .banner-animate { box-shadow: var(--shadow-soft); }
 .banner-animate[data-state="open"]   { animation: banner-in var(--motion-slow-in) var(--ease-entrance) both; }
 .banner-animate[data-state="closed"] { animation: banner-out var(--motion-slow-out) var(--ease-exit) both; }
