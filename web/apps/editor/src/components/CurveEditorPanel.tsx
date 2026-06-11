@@ -685,7 +685,7 @@ export function CurveEditorPanel({ bridge }: Props) {
 
   const handleKeyDragEnd = useCallback(
     (keyTime: number, newTime: number, newValue: number) => {
-      if (selectedId === null || focusedTrack === null) return;
+      if (selectedId === null || focusedTrack === null || focusLocked) return;
       // The engine stores track key times as float32; a JS-side
       // double like 49.476439790575924 comes back from the bridge
       // refetch as 49.476440429... — equal at float32 precision but
@@ -722,7 +722,7 @@ export function CurveEditorPanel({ bridge }: Props) {
         },
       }).catch(() => { /* silent — re-fetch on tree/changed */ });
     },
-    [bridge, selectedId, focusedTrack, focusedChannel.trackName],
+    [bridge, selectedId, focusedTrack, focusLocked, focusedChannel.trackName],
   );
 
   const handleKeyDragStart = useCallback(
@@ -758,7 +758,7 @@ export function CurveEditorPanel({ bridge }: Props) {
 
   const handleCanvasAdd = useCallback(
     (time: number, value: number) => {
-      if (selectedId === null) return;
+      if (selectedId === null || focusLocked) return;
       void bridge.request({
         kind: "emitters/add-track-key",
         params: { id: selectedId, track: focusedChannel.trackName, time, value },
@@ -768,7 +768,7 @@ export function CurveEditorPanel({ bridge }: Props) {
         setOptimisticSelected({ time: insertedTime, value });
       }).catch(() => { /* silent */ });
     },
-    [bridge, selectedId, focusedChannel.trackName],
+    [bridge, selectedId, focusLocked, focusedChannel.trackName],
   );
 
   // Delete — filters border keys + fires bridge call.
@@ -934,10 +934,10 @@ export function CurveEditorPanel({ bridge }: Props) {
   // the same path the Time/Value spinners use for multi-selections.
   const handleGroupDragEnd = useCallback(
     (dTime: number, dValue: number) => {
-      if (dTime === 0 && dValue === 0) return;
+      if (focusLocked || (dTime === 0 && dValue === 0)) return;
       applyGroupShift(dTime, dValue);
     },
-    [applyGroupShift],
+    [focusLocked, applyGroupShift],
   );
 
   // Spinner display values + enablement. Single-key wins; otherwise the

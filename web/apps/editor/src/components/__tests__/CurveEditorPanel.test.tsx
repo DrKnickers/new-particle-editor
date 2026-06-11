@@ -1261,6 +1261,119 @@ describe("CurveEditorPanel", () => {
       expect(calls).not.toContain("emitters/add-track-key");
     });
 
+    it("Ctrl+X refuses but Ctrl+C still copies under a lock landed mid-selection", async () => {
+      // Race-test scaffold: select t=50 unlocked → flip fixture → fire tree/changed → waitFor data-locked.
+      const unlockedGreenWith3Keys: TrackDto[] = TRACK_NAMES.map((name) => ({
+        name,
+        keys: name === "green"
+          ? [{ time: 0, value: 0 }, { time: 50, value: 0.5 }, { time: 100, value: 1 }]
+          : [{ time: 0, value: 0 }, { time: 100, value: name === "rotationSpeed" ? -1 : 1 }],
+        interpolation: "linear" as const,
+        lockedTo: null,
+      }));
+      const lockedGreenWith3Keys: TrackDto[] = unlockedGreenWith3Keys.map((t) => ({
+        ...t,
+        lockedTo: t.name === "green" ? "red" : null,
+      }));
+
+      let currentTracks: TrackDto[] = unlockedGreenWith3Keys;
+      const treeChangedListeners: Array<() => void> = [];
+      const bridge = {
+        request: vi.fn().mockImplementation((req: { kind: string }) => {
+          if (req.kind === "engine/state/snapshot") {
+            return Promise.resolve({ ...makeDefaultEngineState(), selectedEmitterId: 1 });
+          }
+          if (req.kind === "emitters/get-tracks") {
+            return Promise.resolve({ tracks: currentTracks });
+          }
+          if (req.kind === "emitters/add-track-key") {
+            const p = (req as unknown as { params: { time: number; value: number } }).params;
+            return Promise.resolve({ time: p.time, value: p.value });
+          }
+          return Promise.resolve({});
+        }),
+        on: vi.fn().mockImplementation((kind: string, h: unknown) => {
+          if (kind === "emitters/tree/changed") treeChangedListeners.push(h as () => void);
+          return () => {
+            const idx = treeChangedListeners.indexOf(h as () => void);
+            if (idx >= 0) treeChangedListeners.splice(idx, 1);
+          };
+        }),
+      } as unknown as Bridge & {
+        request: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+      };
+
+      render(<CurveEditorPanel bridge={bridge} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-red")).toBeInTheDocument();
+      });
+
+      // Focus the green channel (currently UNLOCKED).
+      fireEvent.click(screen.getByTestId("curve-channel-row-green"));
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-channel-row-green").dataset.focus).toBe("true");
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("curve-layer-green")).toBeInTheDocument();
+      });
+
+      // Select the interior green key at t=50.
+      const greenInterior = Array.from(
+        document.querySelectorAll("[data-testid='curve-key']"),
+      ).find((c) => c.getAttribute("data-key-time") === "50");
+      expect(greenInterior).toBeDefined();
+      fireEvent.click(greenInterior!);
+
+      const panel = screen.getByTestId("curve-editor-panel");
+      await waitFor(() => {
+        expect(panel.getAttribute("data-selected-key-count")).toBe("1");
+      });
+
+      // ── Mid-gesture race: flip tracks to locked, trigger refetch ──
+      currentTracks = lockedGreenWith3Keys;
+      for (const l of treeChangedListeners) l();
+
+      // Wait for the lock to land.
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("ce-lock-to-trigger").getAttribute("data-locked"),
+        ).toBe("true");
+      });
+
+      // Selection must survive the refetch (guards would pass vacuously if cleared).
+      expect(panel.getAttribute("data-selected-key-count")).toBe("1");
+
+      // Clear call history so we only see calls issued after the lock landed.
+      (bridge.request as ReturnType<typeof vi.fn>).mockClear();
+
+      // ── Ctrl+X must be refused (delete-track-keys must not fire) ──
+      fireEvent.keyDown(document.body, { key: "x", ctrlKey: true });
+      await new Promise((r) => setTimeout(r, 0));
+      const afterCut = (bridge.request as ReturnType<typeof vi.fn>).mock.calls.map(
+        (c) => (c[0] as { kind: string }).kind,
+      );
+      expect(afterCut).not.toContain("emitters/delete-track-keys");
+
+      // ── Ctrl+C must still copy the selection into the clipboard ──
+      // Reset the clipboard so we get a clean read.
+      setCurveKeysClipboard([]);
+      fireEvent.keyDown(document.body, { key: "c", ctrlKey: true });
+      await waitFor(() => expect(getCurveKeysClipboard()).toHaveLength(1));
+      expect(getCurveKeysClipboard()[0]).toMatchObject({ time: 50, value: 0.5 });
+
+      // Belt-and-braces note: handleKeyDragEnd, handleCanvasAdd, and
+      // handleGroupDragEnd each carry a focusLocked early-return (spec §4
+      // defense-in-depth). Those handlers are not directly invocable via
+      // jsdom (the renderer withholds drag props and the canvas is not
+      // exercisable at pixel level in a unit test), so direct invocation
+      // is not meaningful here. The race guard above (zero mutating calls
+      // after lock lands) covers the §3 risk-2 scenario that motivates
+      // those guards; the guards themselves are belt-and-braces for paths
+      // the renderer's prop-withholding might not reach in all future refactors.
+    });
+
     it("shows the lock glyph with master-naming aria-label only while locked", async () => {
       // ── Locked half ──
       const { bridge: lockedBridge } = makeStubBridge(1, lockedFixtureTracks());
