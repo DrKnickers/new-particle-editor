@@ -95,6 +95,7 @@ import {
 } from "@/lib/drop-zone";
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
 import { estimateChainLoad, formatChainWarning, type ChainWarning } from "@/lib/chain-load";
+import { useOverloadGuardConfig } from "@/lib/overload-guard";
 import { useEstimatedLoadPush } from "@/lib/use-estimated-load-push";
 import { Tip } from "@/primitives/Tip";
 import { ChainWarningTip } from "./ChainWarningTip";
@@ -344,7 +345,7 @@ type RowProps = {
   // LNK-8: dissolve the entire link group this row belongs to.
   onDissolveLinkGroup: (groupId: number) => void;
   // NT-11: non-null when this row sits on a chain whose estimated alive
-  // count crosses CHAIN_WARN_THRESHOLD. Advisory only.
+  // count crosses the warning threshold (guard cap, or the 10k advisory).
   chainWarning: ChainWarning | null;
 };
 
@@ -1270,12 +1271,20 @@ export function EmitterTree({ bridge }: Props) {
   const selectedIds = useEmitterSelectionIds();
   const primaryId = useEmitterSelectionPrimary();
 
+  // [indicator-consistency] Live guard config: the glyph threshold follows
+  // the configurable cap while the guard is enabled (glyph ⟺ gate), and
+  // falls back to the NT-11 advisory 10k when disabled.
+  const guard = useOverloadGuardConfig();
+
   // NT-11: stableId → soft chain-load warning, recomputed whenever the
   // tree refetches (spawn values ride the tree DTO, so a properties edit
   // that matters lands here via emitters/tree/changed → setTree).
   const chainWarnings = useMemo(
-    () => (tree !== null ? estimateChainLoad(tree.root) : new Map<number, ChainWarning>()),
-    [tree],
+    () =>
+      tree !== null
+        ? estimateChainLoad(tree.root, guard.enabled ? guard.maxParticles : undefined)
+        : new Map<number, ChainWarning>(),
+    [tree, guard],
   );
 
   // [hard-guard] Push the system-total alive estimate to the engine on

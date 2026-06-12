@@ -4,7 +4,7 @@
 // emitters/select with the row's id.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ReactElement } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { ZERO_SPAWN } from "@particle-editor/bridge-schema";
@@ -15,6 +15,7 @@ import { useMockEmitterProperties } from "@/bridge/mock-state";
 import { useEmitterSelectionStore } from "@/lib/emitter-selection";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
 import { useDeleteConfirmStore, requestDeleteEmitters } from "@/lib/delete-emitters";
+import { writeOverloadGuard } from "@/lib/overload-guard";
 
 // [NT-12]: EmitterTree mounts Tips (Radix Tooltip.Root) on the per-row eye
 // toggles and the footer toolbar, which requires the Tooltip.Provider that
@@ -1092,5 +1093,49 @@ describe("chain-load warning glyph (NT-11)", () => {
     const childGlyph = await screen.findByTestId("emitter-chain-warning-1");
     expect(childGlyph.getAttribute("aria-label")).toContain("→ Smoke embers");
     expect(screen.getByTestId("emitter-chain-warning-0")).toBeInTheDocument();
+  });
+});
+
+// ── Cap-tracking glyph (overload-indicator-consistency spec, Part 1) ──
+// The glyph threshold follows the configurable guard cap when the guard
+// is enabled, and falls back to the NT-11 advisory 10k when disabled.
+describe("chain-warning glyph tracks the configurable guard cap", () => {
+  beforeEach(() => {
+    useMockEmitterProperties.getState().reset();
+    localStorage.clear();
+  });
+
+  it("fires at the guard cap, below the fixed 10k advisory", async () => {
+    // 200/s × 1 s = 200 own particles: above cap 100, but the worst chain
+    // product (200 × 30 = 6,000) is below the 10k advisory — so the glyph
+    // fires only because of the guard cap, not the advisory threshold.
+    useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 200, lifetime: 1 });
+    writeOverloadGuard({ enabled: true, maxParticles: 100 });
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
+    await screen.findByTestId("emitter-chain-warning-0");
+  });
+
+  it("falls back to the 10k advisory when the guard is disabled", async () => {
+    // Same 200/s × 1 s = 200; chain max 6,000 — well below the 10k advisory,
+    // so no glyph appears when the guard is disabled.
+    useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 200, lifetime: 1 });
+    writeOverloadGuard({ enabled: false, maxParticles: 100 });
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+    expect(screen.queryAllByTestId(/^emitter-chain-warning-/)).toHaveLength(0);
+  });
+
+  it("reacts live to a cap change (Preferences edit, no reload)", async () => {
+    // Start with cap 10,000 (chain max 6,000 < 10,000 → no glyph), then
+    // lower cap to 100 (200 > 100 → glyph appears without a remount).
+    useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 200, lifetime: 1 });
+    writeOverloadGuard({ enabled: true, maxParticles: 10_000 });
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+    expect(screen.queryAllByTestId(/^emitter-chain-warning-/)).toHaveLength(0);
+    act(() => {
+      writeOverloadGuard({ enabled: true, maxParticles: 100 });
+    });
+    await screen.findByTestId("emitter-chain-warning-0");
   });
 });
