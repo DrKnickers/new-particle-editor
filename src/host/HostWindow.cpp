@@ -1367,10 +1367,15 @@ HRESULT HostWindowImpl::FinishWebView2ControllerSetup(ICoreWebView2Controller* c
                 [this](ICoreWebView2* sender, IUnknown* /*args*/) -> HRESULT
                 {
                     LPWSTR title = nullptr;
-                    if (SUCCEEDED(sender->get_DocumentTitle(&title)) && title)
+                    HRESULT thr = sender->get_DocumentTitle(&title);
+                    if (SUCCEEDED(thr) && title)
                     {
                         SetWindowTextW(hMain, title);
                         CoTaskMemFree(title);
+                    }
+                    else
+                    {
+                        Log("[host] get_DocumentTitle failed hr=0x%08lx\n", thr);
                     }
                     return S_OK;
                 }).Get(),
@@ -2629,6 +2634,11 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 webView->remove_PermissionRequested(permissionTok);
                 permissionTok = {};
             }
+            if (docTitleTok.value != 0)
+            {
+                webView->remove_DocumentTitleChanged(docTitleTok);
+                docTitleTok = {};
+            }
         }
         if (webController)
         {
@@ -2639,11 +2649,6 @@ LRESULT HostWindowImpl::MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             {
                 webController->remove_AcceleratorKeyPressed(accelKeyTok);
                 accelKeyTok = {};
-            }
-            if (docTitleTok.value != 0 && webView)
-            {
-                webView->remove_DocumentTitleChanged(docTitleTok);
-                docTitleTok = {};
             }
             webController->Close();
             webController.Reset();
