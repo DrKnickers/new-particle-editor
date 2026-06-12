@@ -109,9 +109,10 @@ jitter should instead perturb the **path** the instance travels — giving an
 Redefine the jitter semantics accordingly (per-instance path perturbation
 over its lifetime, not a one-time velocity offset), update the spawner UI
 label/tooltip to match, and decide whether the old velocity-jitter behavior
-is removed outright or kept under a different control. Relates to [LT-1]
-(spawner v2, which already lists deterministic **arc paths**) — jitter is the
-stochastic counterpart; consider designing them together.
+is removed outright or kept under a different control. This path-shaping
+rework also absorbs the deterministic **arc-path** idea from the old
+"spawner v2" goal (former [LT-1], now dropped): a deterministic arc and a
+stochastic squiggle are one path-perturbation feature, built together here.
 
 - **Difficulty**: ★★★☆☆ (3/5) — engine spawn-path work + UI relabel
 - **Estimated effort**: 4–7 hours
@@ -123,33 +124,7 @@ stochastic counterpart; consider designing them together.
 Larger features that meaningfully expand what the editor can do. Each is
 roughly on the order of a small project rather than a sitting.
 
-### 3.1 [LT-1] Programmable particle spawner v2
-The v1 spawner shipped (see Shipped). v2 fills out the polish and
-extra-mile cases that didn't make the first cut:
-
-- **Arc paths** — rotate the spawn point around an axis by a
-  configurable angle; useful for orbital / sweep test patterns.
-- **Velocity shorthand** — accept magnitude + azimuth + elevation
-  alongside raw XYZ, for "100 units/s up at 45°"-style inputs.
-- **Path visualization in the preview** — render the spawn position
-  (and any path) as a teal marker / line so the user can see where
-  emissions originate without guessing in 3D space. Deferred from v1
-  because the engine has no simple-line draw helper today.
-- **Named presets** — save a config under a name (e.g. "rocket trail",
-  "explosion debris"), recall later. Stored as additional REG_BINARY
-  blobs `SpawnerPreset_<name>`.
-- **Clear-active-spawns button** — explicit "Kill" button for live
-  spawner-emitted instances when the user wants to wipe and re-tune
-  without waiting for natural decay.
-
-Dropped from the original v2 plan: user-drawn curve paths and
-"draw-the-path-in-the-viewport" interactive mode — too much UX
-complexity for the value they add.
-
-- **Difficulty**: ★★★☆☆ (3/5)
-- **Estimated effort**: 5–9 hours
-
-### 3.2 [LT-2] Template particle systems (starter library)
+### 3.1 [LT-2] Template particle systems (starter library)
 Ship a curated set of starter `.alo` files (basic fire, smoke column,
 explosion, sparks, smoke trail, weather, etc.) under `templates/` next to
 the exe. Add a **File → New from Template…** entry that opens a small
@@ -160,7 +135,7 @@ energy for new mod authors.
 - **Difficulty**: ★★★☆☆ (3/5) — most of the work is curating the templates
 - **Estimated effort**: 6–10 hours (excluding template authoring time)
 
-### 3.3 [LT-4] UI overhaul (WebView2 + React chrome)
+### 3.2 [LT-4] UI overhaul (WebView2 + React chrome)
 The current UI is faithful to the original 2009-era tool: native Win32
 controls, plain GDI rendering, the system color scheme, fixed dialog
 layouts that don't reflow. A mockup of a modern design exists in Claude
@@ -268,7 +243,7 @@ a multi-week feature branch.
   fidelity than Path B; worth considering only if WebView2 turns out
   not to be acceptable for some other reason.
 
-### 3.4 [LT-5] Particle shader lighting + colorization (transparent-depth & bump-mapped)
+### 3.3 [LT-5] Particle shader lighting + colorization (transparent-depth & bump-mapped)
 Flagged 2026-06-12. **Adjacent to the editor, not strictly part of it** —
 this is about the game's particle **shaders** (`.fx`), which the editor's
 preview also exercises. Two threads:
@@ -294,7 +269,7 @@ these shaders. Worth timeboxing the triage before committing to a full fix.
 - **Difficulty**: ★★★★☆ (4/5) — shader work + a known-hard past failure
 - **Estimated effort**: 10–20 hours, high variance (mostly investigation)
 
-### 3.5 [LT-6] Distance-unit parity with the game (→ projectile-motion emulation)
+### 3.4 [LT-6] Distance-unit parity with the game (→ projectile-motion emulation)
 Flagged 2026-06-12. **Foundation item.** The editor's distance units don't
 currently correspond to the game's world units; the first job is to **match
 them up** — establish the conversion between an editor unit and a game unit,
@@ -307,7 +282,7 @@ space). Once units are trustworthy, this unlocks the **headline goal**:
   lifetime, gravity / behaviour) and drive the spawner so a previewed effect
   travels exactly as it would in-game — a far more accurate preview of how a
   muzzle flash / trail / impact actually reads *in motion*. Leans on the
-  spawner ([LT-1]) and on unit parity being correct first.
+  spawner and on unit parity being correct first.
 
 Sequence it as: (1) nail the unit calibration + display, then (2) the
 projectile import + motion emulation as a second phase (which could split
@@ -316,16 +291,16 @@ into its own item once scoped). Prerequisite for [LT-7].
 - **Difficulty**: ★★★★☆ (4/5) — calibration is moderate; motion emulation is a real feature
 - **Estimated effort**: 6–10 hours (unit parity) + 15–25 hours (projectile import & emulation)
 
-### 3.6 [LT-7] In-preview scale references: unit grid + imported game objects
+### 3.5 [LT-7] In-preview scale references: unit grid + imported game objects
 Flagged 2026-06-12. **Depends on [LT-6]** (unit parity — a grid or a
 reference model is only meaningful once an editor unit equals a known game
 distance). Two scale aids in the preview:
 
 - **Unit grid** — a measurement grid drawn in the viewport at known
   game-unit spacing, so the author can judge an effect's real size at a
-  glance. Needs the simple line-draw helper the engine still lacks — the same
-  gap noted under [LT-1]'s path-visualization bullet; build it once, both
-  features use it.
+  glance. Needs the simple line-draw helper the engine still lacks (no
+  primitive line / path draw today); build it once and any future
+  spawner path-visualization reuses it.
 - **Import game objects for scale reference** — load an actual game object /
   mesh into the preview (a trooper, a vehicle, a turret) so an effect can be
   sized against the thing it will attach to. Resolve the model from the game
@@ -345,12 +320,14 @@ larger projects.
 
 The medium-term tier mostly adds **environment fidelity** (textures,
 skydomes, lighting) so the preview matches in-game rendering more
-faithfully. Worth doing before the long-term tier because programmable
-spawning and template authoring both benefit from a representative preview.
+faithfully. Worth doing before the long-term tier because the projectile-motion
+emulation ([LT-6]) and template authoring ([LT-2]) both benefit from a
+representative preview.
 
 The long-term tier is where the editor stops being a faithful clone of the
-original tool and starts being a genuinely better one. Programmable spawning
-is the one with the highest leverage on the iteration loop; the **UI
+original tool and starts being a genuinely better one. The
+**projectile-motion emulation** ([LT-6]) has the highest leverage on
+preview fidelity; the **UI
 overhaul** is the largest item in scope and probably wants to land on a
 long-lived branch that other work can be rebased onto rather than blocking
 the rest of the roadmap.
