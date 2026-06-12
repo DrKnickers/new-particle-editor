@@ -40,9 +40,81 @@ risk, and doesn't touch the rendering pipeline or file format.
 Bigger UX investments and modest engine work. Each touches more than one
 subsystem but stays inside the rendering preview / editor surface.
 
-*No medium-term items currently. The [MT-11] architecture-C migration
-shipped across Phase 1+2+3 on the `lt-4` branch through May 2026 —
-see the [MT-11] entry in Shipped §5.*
+> Tags here continue from **MT-14**: `[MT-11]` shipped (arch-C, §5),
+> `[MT-12]` shipped (stats-freeze, §5), and **`[MT-13]` is reserved** for
+> the greenlit legacy/arch-A removal (see `project_daily_driving_legacy`
+> + the `MT-13` references in `CLAUDE.md`) — not yet written up here.
+
+### 2.1 [MT-14] Ground plane lighting — does it respond to the lighting setting?
+Flagged 2026-06-12. The ground plane does not appear to be affected by the
+editor's lighting setting. **This is a triage item first, fix second:**
+determine which of two cases holds —
+
+- the ground plane is simply **excluded** from the scene lighting (lit by a
+  fixed/ambient term) while world lighting otherwise works correctly, or
+- **world lighting itself is broken / not applied**, and the ground is just
+  the most visible symptom (in which case particles and other lit geometry
+  are affected too).
+
+Resolve by toggling the lighting setting and watching the ground vs. other
+lit surfaces, and by reading where the ground slot's draw path consumes (or
+ignores) the light state in the engine. The fix scope depends entirely on
+which case it is — a contained "feed the light into the ground draw" change,
+or a broader lighting-pipeline repair. Related to [LT-5] (shader lighting
+inheritance) and [MT-16] (in-game appearance parity).
+
+- **Difficulty**: ★★★☆☆ (3/5) — unknown until triaged; fix may be small
+- **Estimated effort**: 3–6 hours (triage + a contained fix in the likely case)
+
+### 2.2 [MT-15] Skydome background from the game / mod (primary + secondary)
+Flagged 2026-06-12. Replace the current "pick a background texture" approach
+([`BackgroundPicker.tsx`](web/apps/editor/src/screens/BackgroundPicker.tsx))
+with reading the **actual skydome** from the game and/or the applicable mod
+and rendering it behind the preview — so the background matches what the
+effect will sit against in-game. The Alamo engine has a **primary** and a
+**secondary** skydome; the user should be able to select **both**,
+mirroring the **Petroglyph map editor's** skydome pickers.
+
+Open questions to resolve when picked up: the skydome asset format and where
+it's referenced (per-map? a global/mod default? which file lists the
+available skydomes); how primary + secondary compose (layered? blended?);
+and how mod override + fallback-to-base-game resolution works (reuse the
+existing mod-path / `FileManager` plumbing). Keep the current texture picker
+as a fallback for "no skydome / quick neutral background," or retire it —
+decide during design.
+
+- **Difficulty**: ★★★★☆ (4/5) — asset loading + dome render + dual-slot picker UI
+- **Estimated effort**: 12–20 hours (could split into "load+render one skydome" then "primary/secondary + picker")
+
+### 2.3 [MT-16] Editor ↔ in-game transparency parity
+Flagged 2026-06-12. Particle transparency renders **differently in-game than
+in the editor** — particles look **darker / more opaque in-game**. Triage
+the root cause and get down to exactly what produces the difference.
+Suspects to rule in/out: blend-state / blend-op mismatch, gamma / sRGB
+(linear-vs-gamma) handling, premultiplied vs. straight alpha, depth /
+sort order, or a difference in how the editor's preview pass is set up vs.
+the engine's in-game pass. Deliverable is first a **root-cause writeup**,
+then the matching fix so the preview is a faithful predictor of in-game
+appearance. Tightly coupled to [LT-5] (the particle shaders themselves may
+be the cause) — triage these together.
+
+- **Difficulty**: ★★★☆☆ (3/5) — investigation-led; fix scope depends on cause
+- **Estimated effort**: 4–8 hours (triage), plus the fix once the cause is known
+
+### 2.4 [MT-17] Spawner jitter should perturb the path, not exit velocity
+Flagged 2026-06-12. Today the spawner's **jitter** affects the **exit
+velocity** of each spawned particle instance. That's the wrong mental model:
+jitter should instead perturb the **path** the instance travels — giving an
+**arc or a squiggly line** — rather than randomizing its launch velocity.
+Redefine the jitter semantics accordingly (per-instance path perturbation
+over its lifetime, not a one-time velocity offset), update the spawner UI
+label/tooltip to match, and decide whether the old velocity-jitter behavior
+is removed outright or kept under a different control. Relates to [LT-1]
+(spawner v2, which already lists deterministic **arc paths**) — jitter is the
+stochastic counterpart; consider designing them together.
+
+- **Difficulty**: ★★★☆☆ (3/5) — engine spawn-path work + UI relabel
+- **Estimated effort**: 4–7 hours
 
 ---
 
@@ -195,6 +267,32 @@ a multi-week feature branch.
   the rendering host. ~150–300+ hours. More work for less mockup
   fidelity than Path B; worth considering only if WebView2 turns out
   not to be acceptable for some other reason.
+
+### 3.4 [LT-5] Particle shader lighting + colorization (transparent-depth & bump-mapped)
+Flagged 2026-06-12. **Adjacent to the editor, not strictly part of it** —
+this is about the game's particle **shaders** (`.fx`), which the editor's
+preview also exercises. Two threads:
+
+- **Transparent-depth shader — world-lighting inheritance.** It's not clear
+  the transparent-depth particle shader actually inherits **world lighting**.
+  Verify whether it receives and applies the scene light state; if it
+  doesn't, that's a likely contributor to the editor↔in-game appearance gap
+  ([MT-16]) and the ground-lighting question ([MT-14]).
+- **Bump-mapped particle shader — lighting *and* colorization together.**
+  Re-examine the bump-mapped particle shader. In past attempts we could not
+  get **lighting and colorization to work at the same time** — one or the
+  other, but not both. Reproduce the failure, root-cause why they're mutually
+  exclusive in the current shader (register/instruction limits? a combine
+  stage overwriting one input? a missing term?), and find a formulation that
+  applies both.
+
+This is research-heavy and touches HLSL / fixed-function shader assets
+outside the editor's own source, hence Long-term. Pairs with the [MT-16]
+transparency-parity triage — that investigation may well point straight at
+these shaders. Worth timeboxing the triage before committing to a full fix.
+
+- **Difficulty**: ★★★★☆ (4/5) — shader work + a known-hard past failure
+- **Estimated effort**: 10–20 hours, high variance (mostly investigation)
 
 ---
 
