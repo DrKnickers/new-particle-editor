@@ -1158,6 +1158,7 @@ describe("chain-warning glyph tracks the configurable guard cap", () => {
     renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
     const chip = await screen.findByTestId("system-load-chip");
     expect(chip.textContent).toContain("preview limit");
+    expect(chip.textContent).toContain("1,000"); // the configured cap, formatted
   });
 
   it("no chip at fixture-default spawn values (a11y-stability guard)", async () => {
