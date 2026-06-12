@@ -195,6 +195,33 @@ describe("OverloadBanner", () => {
     expect(bannerAfter!.textContent).toContain("Preview spawning limited");
   }, 10_000);
 
+  it("keeps the refusal copy through the exit fade — no stale latch flash (the s37 bug)", async () => {
+    const { bridge, emit } = makeBridge();
+    render(<OverloadBanner bridge={bridge} />);
+    emit("engine/overload/refused", { estimated: 2000, cap: 1000, attemptedCount: 1 });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5050));
+    });
+    const banner = screen.getByTestId("preview-overload-banner");
+    expect(banner).toHaveAttribute("data-state", "closed");
+    expect(banner.textContent).toContain("Spawn blocked");
+    expect(banner.textContent).not.toContain("Preview spawning limited");
+  }, 10_000);
+
+  it("a refusal clears a stale web-side latch (engine cleared the preview)", async () => {
+    const { bridge, emit } = makeBridge();
+    render(<OverloadBanner bridge={bridge} />);
+    emit("stats/tick", tick(true));
+    emit("engine/overload/refused", { estimated: 2000, cap: 1000, attemptedCount: 1 });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5050));
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 250));
+    });
+    expect(screen.queryByTestId("preview-overload-banner")).not.toBeInTheDocument();
+  }, 10_000);
+
   it("re-firing a refusal restarts the 5s dismiss window", async () => {
     const { bridge, emit } = makeBridge();
     render(<OverloadBanner bridge={bridge} />);
