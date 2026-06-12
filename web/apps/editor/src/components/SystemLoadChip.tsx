@@ -34,10 +34,11 @@ export function SystemLoadChip({
 }) {
   const guard = useOverloadGuardConfig();
   const [instances, setInstances] = useState(0);
-  useEffect(
-    () => bridge.on("stats/tick", (e) => setInstances(e.payload.instances)),
-    [bridge],
-  );
+  useEffect(() => {
+    const off = bridge.on("stats/tick", (e) => setInstances(e.payload.instances));
+    return off;
+  }, [bridge]);
+  // A zero-load effect (no emitters yet, or all disabled) has nothing to warn about.
   if (!guard.enabled || systemLoad <= 0) return null;
   const projected = (instances + 1) * systemLoad;
   if (projected <= guard.maxParticles) return null;

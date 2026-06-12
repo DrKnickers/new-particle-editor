@@ -86,6 +86,16 @@ describe("SystemLoadChip", () => {
     expect(screen.queryByTestId("system-load-chip")).not.toBeInTheDocument();
   });
 
+  it("respects the strictly-greater boundary (systemLoad === cap is hidden, +1 shows)", () => {
+    const { bridge } = makeBridge();
+    writeOverloadGuard({ enabled: true, maxParticles: 1_000 });
+    const { rerender } = render(<SystemLoadChip bridge={bridge} systemLoad={1_000} />);
+    // (0+1) × 1000 = 1000, NOT > 1000 → hidden (gate refuses only on strictly-greater).
+    expect(screen.queryByTestId("system-load-chip")).not.toBeInTheDocument();
+    rerender(<SystemLoadChip bridge={bridge} systemLoad={1_001} />);
+    expect(screen.getByTestId("system-load-chip")).toBeInTheDocument();
+  });
+
   it("clears back below the cap when instances drop (preview cleared)", () => {
     const { bridge, emit } = makeBridge();
     writeOverloadGuard({ enabled: true, maxParticles: 1_000 });
