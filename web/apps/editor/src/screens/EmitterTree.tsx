@@ -93,7 +93,7 @@ import {
   resolveReparentSlot,
   type DropZone,
 } from "@/lib/drop-zone";
-import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
+import { colorForGroup } from "@/lib/link-group-colors";
 import { estimateChainLoad, estimateSystemLoad, formatChainWarning, type ChainWarning } from "@/lib/chain-load";
 import { useOverloadGuardConfig } from "@/lib/overload-guard";
 import { useEstimatedLoadPush } from "@/lib/use-estimated-load-push";
@@ -345,6 +345,8 @@ type RowProps = {
   onHoverLinkGroup: (groupId: number | null) => void;
   // LNK-8: dissolve the entire link group this row belongs to.
   onDissolveLinkGroup: (groupId: number) => void;
+  // Badge / spine click: select every member of this row's link group.
+  onSelectLinkGroup: (groupId: number) => void;
   // NT-11: non-null when this row sits on a chain whose estimated alive
   // count crosses the warning threshold (guard cap, or the 10k advisory).
   chainWarning: ChainWarning | null;
@@ -410,12 +412,19 @@ function EmitterRow({
   row, primaryId, selectedIds, orderedIds, onRowClick, bridge,
   draggingId, draggingIds, indicator, startDrag,
   editing, beginEdit, setEditValue, commitEdit, cancelEdit,
-  linkHover, onHoverLinkGroup, onDissolveLinkGroup, chainWarning,
+  linkHover, onHoverLinkGroup, onDissolveLinkGroup, onSelectLinkGroup, chainWarning,
 }: RowProps) {
   const { node, depth, siblings } = row;
   const isPrimary = primaryId === node.id;
   const isSelected = selectedIds.includes(node.id);
   const isLinked = node.linkGroup !== 0;
+  // Group hue (null when unlinked). `linkColor` is the raw colour used by
+  // the always-on badge; `spineTintColor` is the same hue gated to the
+  // spine + row-tint case (linked AND unselected — selection styling wins
+  // otherwise). Computed once so the style object below doesn't re-call
+  // colorForGroup several times per render.
+  const linkColor = colorForGroup(node.linkGroup);
+  const spineTintColor = isLinked && !isSelected ? linkColor : null;
   const isEditing = editing !== null && editing.id === node.id;
   // Context-menu Paste gates on session clipboard content (SEL-5).
   const hasClipboard = useEmitterClipboardHasContent();
@@ -701,8 +710,12 @@ function EmitterRow({
               rowBgClass,
               reparentTintClass,
               fontClass,
-              // LNK-6: hovering a group's bracket tints its member rows.
-              linkHover ? "bg-accent/10" : "",
+              // LNK-6: hovering a group tints its member rows. On linked
+              // rows the inline group-tint (below) already covers this and
+              // would override the class, so only apply the generic accent
+              // tint where there's no inline tint (selected linked rows, or
+              // an unlinked row sharing the hovered state).
+              linkHover && spineTintColor === null ? "bg-accent/10" : "",
               // Lifted rows read distinctly from hidden ones (plain
               // opacity-50): dragging also desaturates. Dragging wins when
               // both apply.
@@ -711,19 +724,28 @@ function EmitterRow({
             style={{
               paddingLeft: `${8 + indentPx}px`,
               // Visual columns: [eye | role-glyph | name]. The role glyph
-              // (children only) sits in col 2; the name in col 3. The LNK-2
-              // link dot (linked rows only) is appended INLINE to the END of
-              // the name cell rather than reserving its own column — that
-              // reclaims the old 10px col and shifts names left. DOM order
-              // stays [eye, name(+dot), role]; the dot is aria-hidden — so the
-              // accessibility tree (and the emitter-tree a11y goldens, which
-              // capture "default ↻" + the row's accessible name) are
-              // unchanged. Eye auto-places into column 1.
+              // (children only) sits in col 2; the name in col 3. The badge
+              // (linked rows) is appended INLINE to the END of the name cell
+              // — no own column. DOM order stays [eye, name(+badge), role];
+              // badge is aria-hidden — so the accessibility tree (and the
+              // emitter-tree a11y goldens) are unchanged.
+              // Eye auto-places into column 1.
               // NT-11: warned rows append a 16px col 4 for the chain-load
               // glyph; unwarned rows keep the 3-column template.
               gridTemplateColumns: chainWarning !== null
                 ? "18px 18px 1fr 16px"
                 : "18px 18px 1fr",
+              // Spine: override the left-border colour to the group hue on
+              // linked, unselected rows. Selected rows keep the accent border
+              // (selection wins). Tint: soft full-row wash on the same rows —
+              // 20% alpha while the group is hovered, 12% at rest (selected
+              // rows fall through to the existing rowBgClass).
+              ...(spineTintColor !== null
+                ? {
+                    borderLeftColor: spineTintColor,
+                    backgroundColor: spineTintColor + (linkHover ? "33" : "1f"),
+                  }
+                : {}),
             }}
           >
             {/* F1: visibility toggle on the LEFT (replaces the old role
@@ -811,7 +833,7 @@ function EmitterRow({
                 />
               ) : (
                 <span
-                  className="truncate min-w-0"
+                  className="truncate min-w-0 flex-1"
                   data-emitter-name
                   onDoubleClick={(e) => {
                     // Double-click on the label starts inline rename. The
@@ -825,19 +847,36 @@ function EmitterRow({
                   {node.name}
                 </span>
               )}
-              {/* LNK-2: per-row "is-linked" dot, appended to the END of the
-                  name (right side, after the name text). Decorative
-                  (aria-hidden) so the accessible name — and the emitter-tree
-                  a11y goldens — stay unchanged. Coloured to MATCH this row's
-                  bracket (colorForGroup), so the dot and the gutter bracket
-                  read as the same group at a glance. */}
+              {/* Badge: small G{n} chip at the right end of the name cell,
+                  coloured to the group. Shrinks-0 so it stays visible even
+                  when the name truncates. Clicking selects the whole group. */}
               {isLinked && (
-                <span
-                  aria-hidden
-                  data-testid={`emitter-link-dot-${node.id}`}
-                  style={{ background: colorForGroup(node.linkGroup) ?? undefined }}
-                  className="pointer-events-none size-1.5 shrink-0 rounded-full"
-                />
+                <Tip
+                  content={`Select link group ${node.linkGroup}`}
+                  side="right"
+                  occlusionId={`tip:link-badge:${node.id}`}
+                >
+                  <span
+                    aria-hidden
+                    data-testid={`emitter-link-badge-${node.id}`}
+                    className="shrink-0 cursor-pointer rounded"
+                    style={{
+                      fontSize: 10,
+                      padding: "2px 5px",
+                      border: `1px solid ${linkColor ?? undefined}`,
+                      color: linkColor ?? undefined,
+                      background: "transparent",
+                      pointerEvents: "auto",
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectLinkGroup(node.linkGroup);
+                    }}
+                  >
+                    G{node.linkGroup}
+                  </span>
+                </Tip>
               )}
             </div>
             {/* Spawn-role glyph for child emitters (lifetime ↻ / on-death ✕),
@@ -1013,22 +1052,33 @@ function EmitterRow({
           </OccludingContextMenuContent>
         </ContextMenu.Portal>
       </ContextMenu.Root>
+      {/* Spine hit-strip: 8px wide invisible strip over the row's left
+          edge, so the 2px coloured border is easy to click. Rendered
+          only on linked rows. Sits absolutely inside the relative <li>.
+          Width 8px stays inside the gutter (eye toggle begins at
+          paddingLeft ≥ 8px) so it never overlaps content. */}
+      {isLinked && (
+        <Tip
+          content={`Select link group ${node.linkGroup}`}
+          side="right"
+          occlusionId={`tip:link-spine:${node.id}`}
+        >
+          <span
+            aria-hidden
+            data-testid={`emitter-link-spine-${node.id}`}
+            className="cursor-pointer"
+            style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 8, pointerEvents: "auto" }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectLinkGroup(node.linkGroup);
+            }}
+          />
+        </Tip>
+      )}
     </li>
   );
 }
-
-// Row-height for the bracket gutter math. Matches the `py-1`+`text-sm`
-// row styling — empirically ~24px in the current theme. Static so the
-// bracket layer can lay out absolutely without per-render measurement
-// (a ResizeObserver pass adds complexity for a polish detail; if the
-// tree theme changes this constant moves with it).
-const ROW_HEIGHT_PX     = 20;
-const LANE_WIDTH_PX     = 10;  // 2px bracket + 8px gap to next lane
-// Gap between the longest emitter name's right edge and the first bracket
-// lane. The bracket layer is absolutely positioned at (measured longest-name
-// right + this gap) so the brackets hug the names instead of sitting at the
-// panel's far-right edge. See the measure effect in EmitterTree.
-const BRACKET_NAME_GAP_PX = 16;
 
 // ─── Panel-header toolbar ────────────────────────────────────────────
 // FD10 (Group A polish): restore the legacy panel toolbar from
@@ -1911,20 +1961,10 @@ export function EmitterTree({ bridge }: Props) {
     document.addEventListener("pointercancel", onCancel);
   };
 
-  // Bracket descriptors for the link-group gutter. One entry per group
-  // with ≥2 members; each carries a dedicated lane + every member row
-  // index. The renderer absolute-positions the layer so the brackets
-  // hug the names (measure effect below) and draws a stub at each member.
-  const brackets = useMemo(
-    () => computeLinkGroupBrackets(flatRows.map((r) => r.node)),
-    [flatRows],
-  );
-
-  // LNK-6: hovering a LINKED row lights up its whole group — the member
-  // rows tint and the gutter bracket thickens/brightens. `hoveredLinkGroup`
-  // is the group currently hovered (null = none). The hover signal comes from
-  // both member rows AND the bracket's own hit-zone (which is now clickable to
-  // select the whole group — see the bracket render + handleSelectLinkGroup).
+  // LNK-6: hovering a LINKED row lights up its whole group — member rows
+  // tint when `linkHover` is true. `hoveredLinkGroup` is the group currently
+  // hovered (null = none). The hover signal comes from member rows via
+  // onHoverLinkGroup.
   const [hoveredLinkGroup, setHoveredLinkGroup] = useState<number | null>(null);
 
   // LNK-8: dissolve a whole link group in one action. Gather every member
@@ -1964,49 +2004,7 @@ export function EmitterTree({ bridge }: Props) {
     [flatRows, bridge],
   );
 
-  // [link-group polish] "Hug the longest name": position the bracket
-  // layer at (longest visible name's right edge + gap) instead of the
-  // panel's far-right edge. The 1fr name column FILLS the row, so the
-  // column edge ≠ the text edge — measure each name's text node (Range),
-  // cap at the column edge for truncated names, take the max. Re-measure
-  // on tree change, container resize, and after web fonts settle.
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
-  const [bracketLeft, setBracketLeft] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const container = treeScrollRef.current;
-    if (container === null) return;
-    const measure = () => {
-      const names = container.querySelectorAll<HTMLElement>("[data-emitter-name]");
-      if (names.length === 0) {
-        setBracketLeft(null);
-        return;
-      }
-      const cRect = container.getBoundingClientRect();
-      const range = document.createRange();
-      // jsdom (vitest) doesn't implement Range.getBoundingClientRect; fall
-      // back to the element rect there so the effect degrades gracefully
-      // instead of throwing. Real browsers measure the text node.
-      const canMeasureText = typeof range.getBoundingClientRect === "function";
-      let maxRight = 0;
-      names.forEach((el) => {
-        let right = el.getBoundingClientRect().right;
-        if (canMeasureText) {
-          range.selectNodeContents(el);
-          // Cap at the column's right edge so a truncated (overflowing)
-          // name doesn't push the bracket past the visible text.
-          right = Math.min(range.getBoundingClientRect().right, right);
-        }
-        const rel = right - cRect.left + container.scrollLeft;
-        if (rel > maxRight) maxRight = rel;
-      });
-      setBracketLeft(Math.round(maxRight) + BRACKET_NAME_GAP_PX);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(container);
-    void document.fonts?.ready?.then(measure).catch(() => {});
-    return () => ro.disconnect();
-  }, [flatRows]);
 
   // ── Marquee (rubber-band) selection (SEL-1) ──────────────────────
   // A primary-button drag starting on EMPTY space inside the scroll
@@ -2299,6 +2297,7 @@ export function EmitterTree({ bridge }: Props) {
                   }
                   onHoverLinkGroup={setHoveredLinkGroup}
                   onDissolveLinkGroup={handleDissolveLinkGroup}
+                  onSelectLinkGroup={handleSelectLinkGroup}
                   chainWarning={chainWarnings.get(row.node.stableId) ?? null}
                 />
               </Fragment>
@@ -2316,107 +2315,6 @@ export function EmitterTree({ bridge }: Props) {
             />
           )}
           </ul>
-          {/* Link-group bracket layer. Absolutely positioned at the
-              measured longest-name right edge (bracketLeft) so the
-              brackets HUG the names rather than sitting at the panel's
-              far-right edge. Each group has its own DEDICATED lane (one
-              per group, by groupId); a STUB is drawn at every member row
-              (including first + last), not just top/bottom caps. The
-              layer scrolls with the rows (absolute inside the relative
-              scroll container). The gutter container stays
-              pointer-events-none so the gaps between lanes click through;
-              each bracket re-enables pointer events for LNK-6 (click =
-              select the group, hover = tint members). Brackets stay
-              aria-hidden — they're a mouse convenience over the already
-              keyboard-accessible row selection, so the a11y tree (and the
-              goldens) are unchanged. */}
-          {bracketLeft !== null && brackets.length > 0 && (
-            <div
-              data-testid="link-group-bracket-gutter"
-              aria-hidden
-              className="pointer-events-none absolute top-0"
-              style={{ left: bracketLeft }}
-            >
-              {brackets.map((b) => {
-                const top    = b.firstRowIndex * ROW_HEIGHT_PX + ROW_HEIGHT_PX / 2;
-                const height = (b.lastRowIndex - b.firstRowIndex) * ROW_HEIGHT_PX;
-                const left   = b.lane * LANE_WIDTH_PX;
-                const hovered = hoveredLinkGroup === b.groupId;
-                // The clickable hit-zone is one lane wide (LANE_WIDTH_PX),
-                // ~5× the visible 2px line, so it's easy to hit yet never
-                // overlaps an adjacent lane. It sits inset 4px so the visible
-                // line keeps its original x. LNK-6 (clicking the bracket wiped
-                // a row selection) is guarded by: (a) pointer-events live ONLY
-                // on this hit-zone, not the whole gutter; (b) stopPropagation
-                // on click + pointerdown so the press never reaches the row
-                // button beneath nor starts a marquee. Hovering the hit-zone
-                // also lights the group (the click affordance).
-                const HITZONE_INSET = 4;
-                return (
-                  <Tip
-                    key={b.groupId}
-                    content={`Select link group ${b.groupId}`}
-                    side="right"
-                    occlusionId={`tip:tree-linkgroup:${b.groupId}`}
-                  >
-                    <div
-                      data-testid={`link-group-bracket-${b.groupId}`}
-                      data-link-group={b.groupId}
-                      data-lane={b.lane}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Select link group ${b.groupId}`}
-                      className="pointer-events-auto absolute cursor-pointer"
-                      style={{ top, left: left - HITZONE_INSET, width: LANE_WIDTH_PX, height }}
-                      onPointerEnter={() => setHoveredLinkGroup(b.groupId)}
-                      onPointerLeave={() => setHoveredLinkGroup(null)}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSelectLinkGroup(b.groupId);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleSelectLinkGroup(b.groupId);
-                        }
-                      }}
-                    >
-                      {/* The visible coloured line. */}
-                      <div
-                        aria-hidden
-                        className="absolute"
-                        style={{
-                          left: HITZONE_INSET,
-                          top: 0,
-                          width: hovered ? 3 : 2,
-                          height,
-                          background: b.color,
-                          opacity: hovered ? 1 : 0.85,
-                        }}
-                      />
-                      {b.memberRowIndices.map((rowIdx) => (
-                        <div
-                          key={rowIdx}
-                          aria-hidden
-                          data-testid={`link-group-stub-${b.groupId}-${rowIdx}`}
-                          className="absolute"
-                          style={{
-                            top: (rowIdx - b.firstRowIndex) * ROW_HEIGHT_PX - 1,
-                            left: 0,
-                            width: 5,
-                            height: 2,
-                            background: b.color,
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </Tip>
-                );
-              })}
-            </div>
-          )}
           {/* Marquee (rubber-band) selection rectangle (SEL-1). */}
           {marqueeBox !== null && (
             <div
