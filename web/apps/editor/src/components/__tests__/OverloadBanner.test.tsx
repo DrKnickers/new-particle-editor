@@ -178,6 +178,11 @@ describe("OverloadBanner", () => {
     emit("engine/overload/refused", { estimated: 24000, cap: 10000, attemptedCount: 1 });
     expect(screen.getByTestId("preview-overload-banner").textContent).toContain("Spawn blocked");
     expect(screen.getByTestId("preview-overload-banner").textContent).toContain("24,000");
+    // The engine is GENUINELY still latched (estimate undercount case):
+    // the 4 Hz stream keeps reporting overload=true after the refusal.
+    // (The refusal handler force-clears the web latch — this re-assert is
+    // how a real latch survives it.)
+    emit("stats/tick", tick(true));
     // After 5s window with latch still active → banner returns to latch copy.
     // Wait past REFUSAL_MS so setRefusal(null) fires.
     await act(async () => {
