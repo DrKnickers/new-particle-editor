@@ -163,6 +163,8 @@ export function OverloadBanner({ bridge }: { bridge: Bridge }) {
   // (Render-time ref write is safe: idempotent "last rendered value".)
   const lastShownRef = useRef<RefusalState | null>(null);
   if (visible) lastShownRef.current = refusal;
+  // A null frozen value is valid: it means the latch copy (not a refusal)
+  // was on screen when the exit began, so the body renders the latch copy.
   const shownRefusal = visible ? refusal : lastShownRef.current;
   const { mounted, state, onAnimationEnd } = usePresence(visible, EXIT_MS);
   if (!mounted) return null;
