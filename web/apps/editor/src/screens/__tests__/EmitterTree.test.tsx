@@ -1151,4 +1151,18 @@ describe("chain-warning glyph tracks the configurable guard cap", () => {
     });
     await screen.findByTestId("emitter-chain-warning-0");
   });
+
+  it("mounts the system-load chip when the effect exceeds the cap (system view)", async () => {
+    useMockEmitterProperties.getState().patch(0, { nParticlesPerSecond: 2_000, lifetime: 1 });
+    writeOverloadGuard({ enabled: true, maxParticles: 1_000 });
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
+    const chip = await screen.findByTestId("system-load-chip");
+    expect(chip.textContent).toContain("preview limit");
+  });
+
+  it("no chip at fixture-default spawn values (a11y-stability guard)", async () => {
+    renderWithTooltips(<EmitterTree bridge={new MockBridge()} />);
+    await waitFor(() => expect(screen.getByText("Smoke")).toBeInTheDocument());
+    expect(screen.queryByTestId("system-load-chip")).not.toBeInTheDocument();
+  });
 });

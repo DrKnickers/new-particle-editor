@@ -94,9 +94,10 @@ import {
   type DropZone,
 } from "@/lib/drop-zone";
 import { computeLinkGroupBrackets, colorForGroup } from "@/lib/link-group-colors";
-import { estimateChainLoad, formatChainWarning, type ChainWarning } from "@/lib/chain-load";
+import { estimateChainLoad, estimateSystemLoad, formatChainWarning, type ChainWarning } from "@/lib/chain-load";
 import { useOverloadGuardConfig } from "@/lib/overload-guard";
 import { useEstimatedLoadPush } from "@/lib/use-estimated-load-push";
+import { SystemLoadChip } from "@/components/SystemLoadChip";
 import { Tip } from "@/primitives/Tip";
 import { ChainWarningTip } from "./ChainWarningTip";
 import { useEmitterTreeStore } from "@/lib/emitter-tree";
@@ -1287,6 +1288,15 @@ export function EmitterTree({ bridge }: Props) {
     [tree, guard],
   );
 
+  // [indicator-consistency] System-total estimate for the chip — the same
+  // walk useEstimatedLoadPush(bridge, tree) runs for the engine push below;
+  // recomputing the pure O(nodes) walk here is cheaper than widening the
+  // hook's signature.
+  const systemLoad = useMemo(
+    () => (tree !== null ? estimateSystemLoad(tree.root) : 0),
+    [tree],
+  );
+
   // [hard-guard] Push the system-total alive estimate to the engine on
   // every tree update (same source as the ⚠ glyph — gate and glyph agree
   // by construction). BridgeDispatcher caches the value and reapplies on
@@ -2216,6 +2226,7 @@ export function EmitterTree({ bridge }: Props) {
       }}
       className="flex h-full flex-col outline-none"
     >
+      {tree !== null && <SystemLoadChip bridge={bridge} systemLoad={systemLoad} />}
       {tree === null ? (
         <div className="flex-1 min-h-0 text-text-3 text-sm">(loading…)</div>
       ) : rootChildren.length === 0 ? (
