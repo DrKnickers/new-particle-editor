@@ -710,22 +710,20 @@ function EmitterRow({
             ].join(" ")}
             style={{
               paddingLeft: `${8 + indentPx}px`,
-              // Visual columns: [eye | role-glyph | link-dot | name]. The
-              // role glyph (children only) sits in col 2; the LNK-2 link dot
-              // (linked rows only) reserves col 3 on EVERY row so names stay
-              // left-aligned whether linked or not. DOM order stays
-              // [eye, label, role, dot] — glyph/label/dot are placed VISUALLY
-              // via grid-column below, and the dot is aria-hidden — so the
+              // Visual columns: [eye | role-glyph | name]. The role glyph
+              // (children only) sits in col 2; the name in col 3. The LNK-2
+              // link dot (linked rows only) is appended INLINE to the END of
+              // the name cell rather than reserving its own column — that
+              // reclaims the old 10px col and shifts names left. DOM order
+              // stays [eye, name(+dot), role]; the dot is aria-hidden — so the
               // accessibility tree (and the emitter-tree a11y goldens, which
               // capture "default ↻" + the row's accessible name) are
               // unchanged. Eye auto-places into column 1.
-              // NT-11: warned rows append a 16px col 5 for the chain-load
-              // glyph; unwarned rows keep the 4-column template so their
-              // layout (and the existing grid-template assertion) is
-              // byte-identical.
+              // NT-11: warned rows append a 16px col 4 for the chain-load
+              // glyph; unwarned rows keep the 3-column template.
               gridTemplateColumns: chainWarning !== null
-                ? "18px 18px 10px 1fr 16px"
-                : "18px 18px 10px 1fr",
+                ? "18px 18px 1fr 16px"
+                : "18px 18px 1fr",
             }}
           >
             {/* F1: visibility toggle on the LEFT (replaces the old role
@@ -766,67 +764,88 @@ function EmitterRow({
                   : <EyeOff className="size-3" />}
               </span>
             </Tip>
-            {isEditing ? (
-              // Inline-rename input. Stops click + drag propagation so
-              // typing doesn't accidentally re-trigger row selection /
-              // drag-start. Commit on Enter, cancel on Esc; blur also
-              // commits. Empty value reverts on commit (handled in the
-              // parent's `commitEdit`).
-              <input
-                ref={inputRef}
-                style={{ gridColumn: 4, gridRow: 1 }}
-                data-testid={`emitter-rename-input-${node.id}`}
-                value={editing!.value}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={(e) => {
-                  // Stop the tree-level keyboard handler from snatching
-                  // Backspace / Enter / Esc / arrows from the input.
-                  e.stopPropagation();
-                  if (e.key === "Enter") {
-                    e.preventDefault();
+            {/* Name cell (col 3): the label (or inline-rename input) with the
+                LNK-2 link dot appended INLINE at its right end on linked rows.
+                Wrapping name + dot in one flex cell lets the dot sit at the
+                END of the name text and reclaims the old reserved dot column. */}
+            <div
+              style={{ gridColumn: 3, gridRow: 1, minWidth: 0 }}
+              className="flex items-center gap-1.5"
+            >
+              {isEditing ? (
+                // Inline-rename input. Stops click + drag propagation so
+                // typing doesn't accidentally re-trigger row selection /
+                // drag-start. Commit on Enter, cancel on Esc; blur also
+                // commits. Empty value reverts on commit (handled in the
+                // parent's `commitEdit`).
+                <input
+                  ref={inputRef}
+                  data-testid={`emitter-rename-input-${node.id}`}
+                  value={editing!.value}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Stop the tree-level keyboard handler from snatching
+                    // Backspace / Enter / Esc / arrows from the input.
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitEdit();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelEdit();
+                    }
+                  }}
+                  onBlur={() => {
+                    // Blur happens AFTER Enter / Esc handlers fire and
+                    // toggle `editing` off; the conditional in the parent
+                    // makes a second commit a no-op. Safer to always
+                    // route through commitEdit on blur so click-outside
+                    // works without an explicit click handler.
                     commitEdit();
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    cancelEdit();
-                  }
-                }}
-                onBlur={() => {
-                  // Blur happens AFTER Enter / Esc handlers fire and
-                  // toggle `editing` off; the conditional in the parent
-                  // makes a second commit a no-op. Safer to always
-                  // route through commitEdit on blur so click-outside
-                  // works without an explicit click handler.
-                  commitEdit();
-                }}
-                onClick={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onDoubleClick={(e) => e.stopPropagation()}
-                className="min-w-0 flex-1 rounded border border-accent bg-bg px-1 py-0 text-sm text-text outline-none"
-              />
-            ) : (
-              <span
-                className="truncate"
-                data-emitter-name
-                style={{ gridColumn: 4, gridRow: 1 }}
-                onDoubleClick={(e) => {
-                  // Double-click on the label starts inline rename. The
-                  // stopPropagation prevents the click-handler chain
-                  // above from re-firing single-select on the second
-                  // click.
-                  e.stopPropagation();
-                  beginEdit(node.id, node.name);
-                }}
-              >
-                {node.name}
-              </span>
-            )}
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  className="min-w-0 flex-1 rounded border border-accent bg-bg px-1 py-0 text-sm text-text outline-none"
+                />
+              ) : (
+                <span
+                  className="truncate min-w-0"
+                  data-emitter-name
+                  onDoubleClick={(e) => {
+                    // Double-click on the label starts inline rename. The
+                    // stopPropagation prevents the click-handler chain
+                    // above from re-firing single-select on the second
+                    // click.
+                    e.stopPropagation();
+                    beginEdit(node.id, node.name);
+                  }}
+                >
+                  {node.name}
+                </span>
+              )}
+              {/* LNK-2: per-row "is-linked" dot, appended to the END of the
+                  name (right side, after the name text). Decorative
+                  (aria-hidden) so the accessible name — and the emitter-tree
+                  a11y goldens — stay unchanged. Coloured to MATCH this row's
+                  bracket (colorForGroup), so the dot and the gutter bracket
+                  read as the same group at a glance. */}
+              {isLinked && (
+                <span
+                  aria-hidden
+                  data-testid={`emitter-link-dot-${node.id}`}
+                  style={{ background: colorForGroup(node.linkGroup) ?? undefined }}
+                  className="pointer-events-none size-1.5 shrink-0 rounded-full"
+                />
+              )}
+            </div>
             {/* Spawn-role glyph for child emitters (lifetime ↻ / on-death ✕),
-                placed VISUALLY in column 2 (between the eye and the label)
-                via grid-column. Rendered last in DOM so the accessible name
-                stays "…default lifetime child" and the goldens are stable.
-                Root rows omit it; column 2 then sits empty and the label
-                stays in column 3. */}
+                placed VISUALLY in column 2 (between the eye and the name) via
+                grid-column. Rendered after the name cell in DOM so the
+                accessible name stays "…default lifetime child" and the
+                goldens are stable. Root rows omit it; column 2 then sits empty
+                and the name stays in column 3. */}
             {node.role !== "root" && (
               <span
                 aria-label={roleLabel(node.role)}
@@ -835,23 +854,6 @@ function EmitterRow({
               >
                 {roleGlyph(node.role)}
               </span>
-            )}
-            {/* LNK-2: per-row "is-linked" dot, placed in col 3 (left of the
-                name). Decorative (aria-hidden) so the accessible name — and
-                the emitter-tree a11y goldens — stay unchanged. Coloured to
-                MATCH this row's bracket (colorForGroup), so the dot and the
-                gutter bracket read as the same group at a glance. */}
-            {isLinked && (
-              <span
-                aria-hidden
-                data-testid={`emitter-link-dot-${node.id}`}
-                style={{
-                  gridColumn: 3,
-                  gridRow: 1,
-                  background: colorForGroup(node.linkGroup) ?? undefined,
-                }}
-                className="pointer-events-none size-1.5 justify-self-center rounded-full"
-              />
             )}
             {/* NT-11: soft chain-load warning glyph, placed VISUALLY in
                 col 5 (right of the name) via grid-column but rendered
@@ -870,7 +872,7 @@ function EmitterRow({
                 occlusionId={`tip:chain-warn:${node.id}`}
               >
                 <span
-                  style={{ gridColumn: 5, gridRow: 1 }}
+                  style={{ gridColumn: 4, gridRow: 1 }}
                   data-testid={`emitter-chain-warning-${node.id}`}
                   aria-label={formatChainWarning(chainWarning)}
                   className="grid place-items-center w-4 h-4 shrink-0 justify-self-center text-amber-400"

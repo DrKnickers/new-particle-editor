@@ -17,6 +17,27 @@ Conventions:
 ## Changelog
 
 
+### Link-group dot moved to the end of the emitter name
+
+*2026-06-12 · TODO-hash · TODO-PR*
+
+The small coloured dot that marks an emitter as part of a link group now
+sits at the **end** of the emitter's name (to its right) instead of in a
+reserved column on the left. Names reclaim that space and shift left, so
+the tree reads a touch cleaner; the dot still matches its group-bracket
+colour and stays decorative.
+
+**How we tackled it.** In [`EmitterTree.tsx`](src/screens/EmitterTree.tsx:711)
+the per-row grid dropped its dedicated 10px link-dot column (`18px 18px
+10px 1fr` → `18px 18px 1fr`, and the chain-warning glyph slid from grid
+column 5 to 4). The name label (or inline-rename input) and the dot are
+now wrapped in one flex cell at grid column 3, with the dot rendered after
+the name as a `shrink-0` element so it hugs the end of the (truncating)
+name text. The dot keeps `aria-hidden`, so the accessible name and the
+emitter-tree a11y goldens are unchanged — this is a CSS-only reposition.
+
+---
+
 ### Open file's name in the titlebar + "Particle Editor" rebrand
 
 *2026-06-12 · [`8dc8256`](https://github.com/DrKnickers/new-particle-editor/commit/8dc8256) · [#142](https://github.com/DrKnickers/new-particle-editor/pull/142)*

@@ -721,13 +721,13 @@ describe("EmitterTree", () => {
     });
 
     // Each row's outer button carries the grid template via inline style.
-    // Columns are [eye | role-glyph | link-dot | name]: the glyph sits in
-    // col 2, the LNK-2 dot in col 3 (reserved on every row). DOM order stays
-    // [eye, label, role, dot] (all re-placed visually via grid-column; the
-    // dot is aria-hidden) so the a11y tree / goldens are unchanged — assert
-    // that DOM order explicitly below.
+    // Columns are [eye | role-glyph | name]: the glyph sits in col 2, the
+    // name in col 3. The LNK-2 link dot no longer reserves its own column —
+    // it's appended INLINE to the END of the name cell (reclaiming the old
+    // 10px col 3) and is aria-hidden, so the a11y tree / goldens are
+    // unchanged. DOM order stays [eye, name(+dot), role].
     const rowButton = screen.getByText("Smoke").closest("button")!;
-    expect(rowButton.style.gridTemplateColumns).toBe("18px 18px 10px 1fr");
+    expect(rowButton.style.gridTemplateColumns).toBe("18px 18px 1fr");
 
     // The visibility toggle is the FIRST DOM child (auto-placed in column 1).
     expect(rowButton.firstElementChild).toBe(
@@ -900,6 +900,15 @@ describe("EmitterTree", () => {
     // The dot is decorative — it must NOT add to the accessible tree
     // (keeps the a11y goldens stable, L-052/L-053).
     expect(dot0.getAttribute("aria-hidden")).toBe("true");
+
+    // The dot is appended to the END of the name (to the right of the name
+    // text), not the left — it follows the row's name element in DOM order.
+    const name0 = dot0
+      .closest("button")!
+      .querySelector("[data-emitter-name]")!;
+    expect(
+      name0.compareDocumentPosition(dot0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("does NOT render a link dot on unlinked rows (linkGroup === 0)", async () => {
