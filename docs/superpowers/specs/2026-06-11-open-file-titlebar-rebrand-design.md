@@ -183,17 +183,31 @@ identifier, comment, legacy, or dev scaffolding — unchanged (§1 Out).
    load-bearing identity. *Mitigation:* §1 Out makes the boundary explicit;
    the plan's rebrand task enumerates the eight §3.3 sites rather than a
    find-and-replace.
-4. **`DocumentTitleChanged` not firing in composition mode.** It is a base
-   `ICoreWebView2` event, hosting-mode-independent; and the a11y goldens
-   would catch a silent failure (root window Name would stay
-   `Particle Editor` instead of `a11y-base-state.alo — Particle Editor`).
-   *Mitigation:* covered by the golden assertion; plus a manual launch in
-   the feel test.
-5. **Non-deterministic golden titles.** The root window Name now varies
-   with file state at capture time. The goldens already capture the
-   dynamic document-title node (`a11y-base-state.alo — AloParticleEditor`),
-   so determinism of file state at capture is established practice — the
-   root simply joins it. *Accepted.*
+4. **`DocumentTitleChanged` not firing.** It is a base `ICoreWebView2`
+   event, hosting-mode-independent. *Mitigation:* the `document.title`
+   value is asserted end-to-end against the **real host** in
+   `file-ops.spec.ts` (composition mode), plus a manual cold-launch smoke
+   confirms the OS titlebar itself. **CORRECTION (verified during
+   execution, session 39):** this risk's original mitigation claimed the
+   *UIA goldens* would catch a silent mirror failure via the root window
+   Name. That is **false for the active harness** — the HWND/UIA (JSON)
+   golden lane auto-skips when `ALO_HOSTING_MODE !== "legacy"` (the default
+   composition mode, [`a11y-chrome.spec.ts:11,76`](../../../web/apps/editor/tests/a11y-chrome.spec.ts)),
+   and the composition (YAML) lane is a DOM snapshot with **no** Win32
+   window-Name node. So the goldens do **not** prove `SetWindowTextW`. The
+   real proof is the `file-ops.spec.ts` `document.title` assertion (real
+   host) + the manual launch. The `SetWindowTextW` call itself is trivial
+   (mirror `get_DocumentTitle`), so residual risk is low.
+5. **Stale HWND/UIA (JSON) goldens after rebrand.** The dormant HWND lane's
+   goldens still embed `AloParticleEditor` (window Name + header span).
+   They are **not regenerated** by this work: that lane is not run by the
+   default harness, not CI-gated (the native harness is local-only —
+   commented out in `lt-4.yml`; CI is ubuntu Vitest + the C++ build), and
+   activating it (`ALO_HOSTING_MODE=legacy … --update`) is outside the
+   project's established "180/0 composition" green bar and risks surfacing
+   unrelated drift. *Accepted as known rebrand-exposed debt* — refresh the
+   JSON goldens via an `ALO_HOSTING_MODE=legacy` `--update` run if/when the
+   HWND lane is ever reactivated.
 
 ## 5. Testing & verification
 
@@ -210,12 +224,16 @@ identifier, comment, legacy, or dev scaffolding — unchanged (§1 Out).
   title test updated: `● ` prefix instead of `* `, `Particle Editor`
   instead of `AloParticleEditor`, plus an untitled-state assertion
   (`Untitled.alo — Particle Editor` after `file/new`).
-- UIA goldens (full regen): root window Name =
-  `a11y-base-state.alo — Particle Editor` — this **is** the end-to-end
-  proof that `SetWindowTextW` mirroring works.
-- Full native harness green (~180 specs; L-066 — if only
+- a11y goldens (full regen, composition lane): the diff must be **only**
+  the header-span node removal + the About-dialog brand substitution — the
+  regression gate. (Corrected from the original spec: the composition lane
+  has no Win32 window-Name node, so it does **not** capture the OS titlebar
+  — see risk #4. The OS-titlebar mirror is proven by the `file-ops.spec.ts`
+  `document.title` assertion against the real host, not by a golden.)
+- Full native harness green (~180 composition specs; L-066 — if only
   `preview-overload` specs fail with SIGTERM at the tail, re-run them in
-  isolation before suspecting this change).
+  isolation before suspecting this change; the 30 HWND/UIA specs skip in
+  composition mode by design).
 
 **Manual (pre-handoff, then user feel test):**
 - Cold launch: titlebar reads `Untitled.alo — Particle Editor` from first
