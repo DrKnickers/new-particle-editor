@@ -222,6 +222,26 @@ test("Window title reflects dirty + currentFilePath", async () => {
 // ── 5. Untitled state: file/new resets the title to the placeholder ────────
 
 test("Window title shows Untitled.alo after file/new", async () => {
+  // Establish a NAMED doc first so file/new has a real named→untitled
+  // reset to perform. (The spec-level beforeEach already file/new's, so
+  // without naming the doc here the assertion would pass vacuously on the
+  // pre-existing untitled state.)
+  await page.evaluate(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = (window as any).bridge;
+    await b.request({
+      kind: "file/save",
+      params: { path: "C:/Temp/untitled-reset.alo" },
+    });
+  });
+  await page.waitForFunction(
+    () => /untitled-reset\.alo/.test(document.title),
+    null,
+    { timeout: 3000 },
+  );
+
+  // file/new clears the current path → the title returns to the
+  // Untitled placeholder.
   await page.evaluate(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b = (window as any).bridge;
@@ -232,4 +252,5 @@ test("Window title shows Untitled.alo after file/new", async () => {
     null,
     { timeout: 3000 },
   );
+  expect(await page.title()).toBe("Untitled.alo — Particle Editor");
 });
