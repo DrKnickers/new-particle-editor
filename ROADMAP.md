@@ -294,6 +294,47 @@ these shaders. Worth timeboxing the triage before committing to a full fix.
 - **Difficulty**: ★★★★☆ (4/5) — shader work + a known-hard past failure
 - **Estimated effort**: 10–20 hours, high variance (mostly investigation)
 
+### 3.5 [LT-6] Distance-unit parity with the game (→ projectile-motion emulation)
+Flagged 2026-06-12. **Foundation item.** The editor's distance units don't
+currently correspond to the game's world units; the first job is to **match
+them up** — establish the conversion between an editor unit and a game unit,
+and apply it consistently across every distance-bearing field (spawner
+offsets / velocities, emitter geometry, camera framing, anything measured in
+space). Once units are trustworthy, this unlocks the **headline goal**:
+
+- **Import a game projectile and have the spawner emulate its motion.** Read
+  a projectile's definition from the game / mod (launch speed, acceleration,
+  lifetime, gravity / behaviour) and drive the spawner so a previewed effect
+  travels exactly as it would in-game — a far more accurate preview of how a
+  muzzle flash / trail / impact actually reads *in motion*. Leans on the
+  spawner ([LT-1]) and on unit parity being correct first.
+
+Sequence it as: (1) nail the unit calibration + display, then (2) the
+projectile import + motion emulation as a second phase (which could split
+into its own item once scoped). Prerequisite for [LT-7].
+
+- **Difficulty**: ★★★★☆ (4/5) — calibration is moderate; motion emulation is a real feature
+- **Estimated effort**: 6–10 hours (unit parity) + 15–25 hours (projectile import & emulation)
+
+### 3.6 [LT-7] In-preview scale references: unit grid + imported game objects
+Flagged 2026-06-12. **Depends on [LT-6]** (unit parity — a grid or a
+reference model is only meaningful once an editor unit equals a known game
+distance). Two scale aids in the preview:
+
+- **Unit grid** — a measurement grid drawn in the viewport at known
+  game-unit spacing, so the author can judge an effect's real size at a
+  glance. Needs the simple line-draw helper the engine still lacks — the same
+  gap noted under [LT-1]'s path-visualization bullet; build it once, both
+  features use it.
+- **Import game objects for scale reference** — load an actual game object /
+  mesh into the preview (a trooper, a vehicle, a turret) so an effect can be
+  sized against the thing it will attach to. Resolve the model from the game
+  / mod via the existing `FileManager` plumbing; render it as inert reference
+  geometry (no simulation), ideally toggleable and swappable.
+
+- **Difficulty**: ★★★★☆ (4/5) — grid is modest; game-object mesh import is the bulk
+- **Estimated effort**: 12–20 hours (grid ~3–5h once the line helper exists; object import the rest)
+
 ---
 
 ## 4. Notes on prioritization
