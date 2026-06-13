@@ -6,6 +6,116 @@ _2026-06-13 · status **SCOPING** (no code — for a future session) · difficul
 
 ---
 
+## 0. §5a CLOSED — first-party findings + corrections (2026-06-13, session 42)
+
+The §5a hard gate is **closed**, verified against a **real FoC install on the dev box**
+(`D:\SteamLibrary\steamapps\common\Star Wars Empire at War\corruption`) — base game in
+MEGs (`config.meg`/`models.meg`/`shaders.meg`/`textures.meg`) plus a canonical vanilla
+source extraction (`Mods\Empire-at-War-Source-Files\src\{Base,FOC}\Data\XML\…`) and two
+real content mods (`Chelmod`, `EmpireAtWarExpanded`). Three corrections below materially
+change §2.4 / §3. **Build decision (user, session 42): full faithful in ONE pass** — no
+a1 phase. Map-editor UX check **skipped** (user — XML already answers it).
+
+### Confirmed skydome data model (first-party)
+- **A skydome is a `.alo` mesh + a baked material.** The GameObject XML carries only a
+  name, a model path, a scale, and sort/layer hints — **NOT** textures or cloud params.
+- **XML schema** (vanilla `src/FOC/Data/XML/{Land,Space}{Primary,Secondary}Skydomes.xml`):
+  root `<{Land,Space}{Primary,Secondary}Skydomes>`; entries `<{…}Skydome Name="DisplayName">`;
+  model ref via `<Land_Model_Name>` / `<Space_Model_Name>` / `<Galactic_Model_Name>`
+  (galactic empty here; pick Land vs Space by battle context); plus `<Scale_Factor>`,
+  `<Sort_Order_Adjust>`, `<Layer_Z_Adjust>`, `<Behavior>` (`SKY_DOME` or empty),
+  `<In_Background>`, `<Exclude_From_Distance_Fade>`. **No texture/cloud/SH fields.**
+- **Dome-list source:** `GameObjectFiles.xml` registers the four files
+  (`<File>SpacePrimarySkydomes.xml</File>` … verified). Picker = read those four via
+  `FileManager` (mod→base→MEG) and list each `<…Skydome Name>`.
+- **Primary/secondary are INDEPENDENT** (separate lists) → **two free pickers** (fork e
+  resolved → independent). The map stores one `Name` per axis.
+- **Semantics confirmed.** SPACE: primary = starfield (`Stars_*`, scale 1–20), secondary
+  = nebula backdrop (`Star_Backdrop_*`, scale 25 — larger/outer shell); both full domes.
+  LAND: primary = full sky dome (`Day_Blue_Sky`, `Bespin_Clouds`…, `Behavior=SKY_DOME`),
+  secondary = **partial overlay** (planet rings `W_sky_rings*`, horizon band, urban
+  traffic) — NOT a second full dome. (Resolves fork b: independent; compose differs
+  land vs space.)
+- **Land vs space are separate axes** (4 lists) — not space-only.
+- **Base-game enumeration:** base defines domes (in `config.meg`); picker populates from
+  base via the existing MEG read. No install → bundled-RCDATA fallback only.
+- **`.ted` per-map reference:** map stores the dome `Name` string. **Out of scope** for
+  MT-15 (we pick from the list); defer to LT-8.
+
+### Correction 1 — route a1 is DEAD; a2 (real mesh) is MANDATORY
+Verified `.alo` material strings: `w_skydome_clearblue.ALO` → `Skydome.fx` ·
+`BaseTexture=W_clearbluesky.dds` · `CloudTexture` · `CloudScrollRate` · `CloudScale` ·
+vertex `alD3dVertNU2C` · a sub-mesh literally named *"inner clouds"*. The base texture is
+unobtainable without parsing the `.alo`, and the **land secondary overlays
+(rings/horizon/traffic) have no spherical representation** — a textured sphere structurally
+cannot render them. So a1 is incapable; **load the real mesh.** (This is the §5a materiality
+check, returned decisive.)
+
+### Correction 2 — domes run DIFFERENT game shaders, not just `Skydome.fx`
+`W_Skydome_Space_Nebula_SanF_1.ALO` → `MeshAdditive.fx` + `MeshGloss.fx` with
+`UVScrollRate`/`Diffuse`/`Color` and mixed vertex formats. Faithful rendering = load the
+`.alo` and **run each sub-mesh's own named game shader** (from `shaders.meg`), bind its
+textures, set its params — never hardcode one dome shader (honours the 1:1 no-fork rule,
+MEMORY `feedback_no_shader_fork_1to1_rendering`). This is the **general
+`.alo`-mesh-with-game-materials capability LT-7 and LT-8 also need** — shared infrastructure,
+not throwaway.
+
+### Correction 3 — corrected reader contract (supersedes §3's `SkydomeRef`)
+The §3 struct's `baseTexturePath`/`cloudTexturePath`/`cloudScrollRate`/`cloudScale` are
+WRONG (those live in the `.alo` material). Corrected:
+```cpp
+struct SkydomeRef {
+    std::string name;            // GameObject Name (.ted stores it; picker shows it)
+    std::string modelPath;       // Land_/Space_Model_Name → FileManager::getFile
+    float       scaleFactor;     // <Scale_Factor>
+    int         sortOrderAdjust; // <Sort_Order_Adjust>
+    float       layerZAdjust;    // <Layer_Z_Adjust>
+    bool        inBackground;    // <In_Background>
+    // textures / cloud-scroll / SH all come from the parsed .alo material, NOT here
+};
+```
+The `MapEnvironment{primary,secondary}` split and the LT-8 colour-grade extension point stand.
+
+### `.alo` chunk vocabulary (alo-viewer, MIT — port source, verified live)
+From `GlyphXTools/alo-viewer` `src/Assets/Models.cpp` (branch `master`). Attribution to add
+when porting: `// Portions derived from GlyphX Tools alo-viewer (MIT, © 2017 GlyphX Tools)`.
+Static-mesh subset (skip skeleton `0x200`, lights `0x1300`, connections/proxies/dazzles `0x600`):
+
+| Chunk | Meaning | Parent | Payload |
+|---|---|---|---|
+| `0x400` | Mesh | root | container |
+| `0x401` | Mesh name | `0x400` | string |
+| `0x402` | Mesh header | `0x400` | subMesh count, bounds, flags |
+| `0x10100` | SubMesh | `0x400` | container (shader + params + geometry) |
+| `0x10101` | Shader name | `0x10100` | string (e.g. `"Skydome.fx"`) |
+| `0x10102/3/4/5/6` | Param INT/FLOAT/FLOAT3/TEXTURE/FLOAT4 | `0x10100` | mini-1 = name, mini-2 = value |
+| `0x10000` | Geometry header | `0x10100` | container |
+| `0x10001` | counts | `0x10000` | vertexCount, primitiveCount (indices = prim×3) |
+| `0x10002` | vertex format name | `0x10000` | string (`"alD3dVertNU2C"` on disk) |
+| `0x10007` | vertex data (new) | `0x10000` | `MASTER_VERTEX[]` raw |
+| `0x10005` | vertex data (old) | `0x10000` | `OldVertex[]` (convert) |
+| `0x10004` | index data | `0x10000` | `uint16[]` raw |
+| `0x10006` | skin map | `0x10000` | optional (absent for static) |
+
+- **Material params:** each `0x10102`–`0x10106` = [mini-1: name string][mini-2: value].
+  TEXTURE(`0x10105`)→filename; FLOAT(`0x10103`)→`CloudScrollRate`/`CloudScale`;
+  FLOAT3(`0x10104`)→`Diffuse`/`Emissive`; etc. Recover textures + cloud params from these.
+- **Vertex (runtime NU2C, 36 B):** pos float3 @0 · normal float3 @12 · D3DCOLOR @24 ·
+  uv float2 @28. Decl: POSITION / NORMAL / COLOR(D3DCOLOR) / TEXCOORD0.
+  ⚠ **On-disk `0x10007` payload is the fixed `MASTER_VERTEX`** (pos + normal + **4 UV sets**
+  + tangent + binormal + color + pad). Agent reported **~88–100 B and was NOT certain** —
+  **pin `sizeof(MASTER_VERTEX)` against a real `.alo` during impl** (the one residual unknown).
+- **Indices:** `uint16`, triangle **LIST**. Little-endian; vertex/index data raw-copyable to
+  DX9 buffers after the reader's LE deswap. Strings null-terminated ASCII. Left-handed / Y-up,
+  translation in matrix bottom row. Container chunks flagged by `0x80000000` in the size word.
+
+### Remaining open = render-time visual feel-tests only (NOT blockers)
+Compose back-to-front order (space: secondary nebula behind, via larger scale +
+`Sort_Order_Adjust`/`Layer_Z_Adjust` — confirm visually); SH-lighting + cloud-scroll
+materiality — all confirmable only once geometry draws (user feel-test).
+
+---
+
 ## 1. Goal + scope
 
 **Goal.** Replace the editor's current "pick a background texture" model ([`BackgroundPicker.tsx`](web/apps/editor/src/screens/BackgroundPicker.tsx:77)) with reading the **actual skydome(s)** the game and/or the active mod defines, and rendering them behind the preview, so the background matches the in-game environment. The Alamo engine exposes a **primary** and a **secondary** skydome (community parlance "Dome1 = starfield, Dome2 = backdrop"); the user should be able to select **both**, mirroring the Petroglyph map editor's two skydome pickers. (Whether the two slots are *independently* pickable or the pair is constrained by the GameObject is itself unconfirmed — §5a, fork b/e.)
