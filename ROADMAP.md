@@ -275,6 +275,31 @@ distance). Two scale aids in the preview:
 - **Difficulty**: ★★★★☆ (4/5) — grid is modest; game-object mesh import is the bulk
 - **Estimated effort**: 12–20 hours (grid ~3–5h once the line helper exists; object import the rest)
 
+### 3.6 [LT-8] Recreate the game's rendering pipeline (1:1 scene composite, no shader forks)
+Flagged 2026-06-13 out of the [MT-16] / [LT-5] render-fidelity triage
+(`docs/superpowers/specs/2026-06-13-mt16-transparency-parity-triage.md`).
+**Principle:** render parity must come from running the game's **real**
+shaders 1:1 — the editor must not fork or approximate the game's shader
+source to "match" it. Particle shaders (`Engine\Prim*.fx`) are already
+loaded from the game at runtime (1:1); the divergence is the **scene
+composite** — the editor runs its own bundled `SceneHeat.fx` (a simplified
+heat+distort fork) instead of the game's `SceneComposite/Scene_*.fx`
+pipeline, so the game's per-map colour grade (saturation → `pow(gamma)` →
+contrast → tint → brightness, applied to the whole scene) is missing and
+the preview reads lighter / less graded than in-game.
+
+Recreate the game's post-process pipeline so the editor runs the actual
+`Scene_*.fx` composites (the multi-RT, phase-annotated framework), driven
+by per-map grade parameters. The FoC shader source is in-repo at
+`reference/foc-shaders/`. Absorbs the **colour-grade / tone** half of
+[MT-16] (the transparency half is a separate editor-compositing fix needing
+no shader). Likely also retires the other editor shader forks (`Skydome.fx`,
+the ground shader) in favour of the game's. **Depends on [MT-15]** /
+map-environment plumbing for the per-map grade params.
+
+- **Difficulty**: ★★★★★ (5/5) — reimplements the engine's scene-composite framework
+- **Estimated effort**: large; scope in its own planning session before building
+
 ---
 
 ## 4. Notes on prioritization
