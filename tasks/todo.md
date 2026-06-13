@@ -1,231 +1,328 @@
-# MT-17 — Spawner jitter perturbs the *path*, not exit velocity
+# MT-14 — Bump-mapped terrain lighting for the ground plane (session 40)
 
-Session 40. Branch `claude/eager-knuth-973ec8`. Roadmap item `[MT-17]`
-(ROADMAP.md §2.4). Absorbs the deterministic arc-path idea from the
-retired LT-1.
+_2026-06-13. Triage-first ROADMAP item that, by user direction, grew into a
+full game-faithful **bump-mapped terrain** ground render. Grounded in the
+Petroglyph FoC shader source the user supplied (`foc_shaders.zip`, extracted
+to `.tmp-foc-shaders/` — untracked; see Risk 9 for its permanent home).
+Status: **PLAN APPROVED — risks iterated, both blockers resolved (see below).
+Ready for execution. ★★★★.**_
 
-User design calls (locked 2026-06-13):
-- **Velocity-jitter → removed outright.** No "spread" survivor.
-- **Squiggle → smooth sinusoidal wiggle** (per-instance random phase),
-  not random-walk noise.
-- **Arc → acceleration Vec3** (gravity-like constant accel).
+**Resolved decisions (2026-06-13):**
+- **Normal-map naming (Risk 1):** convention is **`<base>_bc.dds`** — e.g.
+  grass `W_TEMPGRND00.dds` → `W_TEMPGRND00_bc.dds`, sand → `W_SAND00_bc.dds`,
+  snow → `W_SNOW_RGH_bc.dds`. Per-user (first-party modder knowledge);
+  **verify each resolves via FileManager and looks like a tangent-space normal
+  (RGB≈128,128,255 baseline) during impl** — if `_bc` is actually a
+  color/gloss map, the flat-normal fallback keeps us safe.
+- **Reference shaders (Risk 9):** **track in `reference/foc-shaders/`**
+  (committed, "Confidential — Do Not Distribute" header retained).
+
+---
+
+## 0. Triage verdict (the original MT-14 question, answered)
+
+**Case 1 confirmed — the ground is *excluded* from scene lighting; world
+lighting is NOT broken.** The editor's lighting setting
+([`LightingPanel.tsx`](../web/apps/editor/src/screens/LightingPanel.tsx) →
+`engine/set/light` + `engine/set/ambient` →
+[`Engine::SetLight`](../src/engine.cpp:1421)) drives `m_lights[]` / `m_ambient`,
+consumed **only by the shader-lit particles** (`pEffect->SetVector(hDirLight…)`
+at [engine.cpp:767](../src/engine.cpp:767), plus the SPH matrices). The ground
+is drawn fixed-function with `D3DRS_LIGHTING = FALSE` (set once at
+[engine.cpp:2023](../src/engine.cpp:2023), never re-enabled) and a hardcoded
+**white** vertex diffuse ([engine.cpp:868-871](../src/engine.cpp:868)), so it
+always renders `texture × white`, independent of the lighting state. The fix is
+therefore "feed the light into the ground draw" — but the user chose to do it
+the **game-faithful** way (bump-mapped terrain), not a cheap tint.
 
 ---
 
 ## 1. Goal + scope
 
-**Goal.** A spawned instance no longer flies off in a random straight
-line. Instead each instance follows a **shaped path** over its lifetime:
-a deterministic **arc** (constant acceleration) plus an optional smooth
-**squiggle** (per-axis sinusoidal lateral wander with a per-instance
-random phase, so sibling instances in a burst diverge organically). The
-emit point traces this path, so the particle trail itself arcs/squiggles.
+**Goal.** When this ships, the editor's ground plane renders with the game's
+**bump-mapped terrain lighting** (the `TerrainMeshBump.fx` `bump_spec` path):
+per-pixel dot3 sun diffuse off a tangent-space **normal map**, spherical-harmonic
+**fill** lighting per-vertex, gloss-alpha-gated specular, all `×2` (`MODULATE2X`)
+over the base texture — so changing the editor's sun / fill / ambient visibly and
+faithfully relights the ground exactly as in-game terrain reacts. Normal maps are
+resolved **from the game/mod at runtime** via `FileManager`, with a neutral
+flat-normal fallback when none is found. This makes the ground a faithful
+predictor of in-game appearance (also advances MT-16) and reuses the exact SPH
+lighting data the editor already maintains.
 
-**In:**
-- New `SpawnerConfig` fields: `acceleration` (Vec3), `squiggleAmplitude`
-  (Vec3), `squiggleFrequency` (scalar Hz). Remove `jitterVelocity`.
-- Analytic path integration in `ParticleSystemInstance::Update`, keeping
-  `m_velocity` live each frame so emitted particles inherit the correct
-  instantaneous velocity (EmitterInstance.cpp:557).
-- Per-instance random phase seeding in `SpawnerDriver`.
-- React `SpawnerPanel`: drop "Jitter velocity"; add "Acceleration (arc)"
-  Vec3 row, "Squiggle amplitude" Vec3 row, "Squiggle frequency" scalar.
-- bridge-schema DTO + defaults + BridgeDispatcher JSON converters.
-- Legacy Win32 dialog kept *compiling + coherent*: strip the velocity
-  column from the Jitter groupbox; do NOT add arc/squiggle there.
-- `jitterPosition` stays exactly as-is (spawn-point scatter is correct).
+**In scope (In):**
+- A new bundled effect `GroundLit.fx` — a trimmed `TerrainMeshBump` (bump+spec
+  technique) with the cloud-shadow and fog-of-war multiplies removed, plus a
+  ps_1_1 gloss fallback technique and graceful no-effect degrade to today's
+  unlit FF quad.
+- Engine render path mirroring the **skydome effect precedent**:
+  `m_pGroundEffect` + parameter handles + `m_pGroundDecl`
+  (POSITION/NORMAL/TEXCOORD0/TANGENT/BINORMAL) + a `RenderGroundLit()` method;
+  effect lifecycle (`OnLostDevice`/`OnResetDevice`), compile-failure
+  graceful-degrade.
+- Normal-map resolution: slot → known-vanilla-base-name → derived companion
+  normal-map name → `FileManager` load; flat-normal (RGBA 128,128,255,255)
+  procedural fallback texture when absent; companion-next-to-path for custom
+  slots.
+- Binding the existing lighting state to the effect: `m_sphLightFill` (fill
+  SPH), sun world vector (`m_lights[0].Position`), eye world position, sun
+  diffuse/specular, material defaults, the `×2`, and an explicit identity world
+  transform for the quad.
+- Commit the Petroglyph reference shaders into the repo (see Risk 9) so this and
+  LT-5 have a tracked source of truth.
+- ROADMAP re-tier (MT-14 grew — move out of near-term; cross-ref LT-5/MT-16) +
+  CHANGELOG entry.
 
-**Out:**
-- Wiring arc/squiggle into the legacy Win32 spawner dialog. Legacy is
-  `--legacy` opt-out and slated for deletion (MT-13, greenlit). Adding 7
-  spinners + resource layout to a doomed dialog is wasted work; legacy
-  just won't expose path-shaping. *Reason: MT-13 will delete it.*
-- Per-axis squiggle *frequency* (only a single scalar freq). Per-axis
-  amplitude + per-instance random phase already gives 3-D organic wander;
-  per-axis freq is more knobs for marginal gain. *Reason: simplicity-first;
-  revisit only if the wander reads too regular.*
-- Persisting the new fields anywhere in the `.alo` — spawner state is
-  session/registry-only by existing design.
+**Out of scope (Out) — with reasons:**
+- **Cloud-shadow & fog-of-war multiplies** — no editor equivalent; user
+  explicitly confirmed dropping them.
+- **Per-slot custom normal-map picker UI** — user chose runtime game/mod
+  resolution; a manual picker is a *future PR if anyone asks*.
+- **Bundling normal-map assets** — user chose runtime load, not bundling.
+- **Heightmapped / multi-splat terrain** (`TerrainRender*.fx`) — irrelevant to a
+  single-quad ground; *out-of-scope, wrong shader family*.
+- **Colorization** (`BumpColorize`) and the **particle** bump shader — that's
+  **[LT-5]**, a separate ROADMAP entry.
+- **Specular on the dirt (slot 0) / solid-color / empty-custom slots' gloss
+  realism** — these have no vanilla normal/gloss source; they get the
+  flat-normal fallback (correct lighting, no relief) — *deliberate, not
+  forgotten*.
+
+---
 
 ## 2. What the codebase already gives us
 
-- `SpawnerConfig` struct + `ClampSpawnerConfig` — [src/SpawnerDriver.h:18],
-  [src/SpawnerDriver.cpp:56]. `JITTER_MAX = 10000`. Add `SQUIGGLE_FREQ_MAX`.
-- `Jitter()` / `JitterAxis()` rand helpers — [src/SpawnerDriver.cpp:21].
-  Reuse the same `std::rand()` source for phase seeding.
-- Spawn loop stamps pos+vel then `Detach()` — [src/SpawnerDriver.cpp:185].
-  After detach `m_parent==NULL`, so `GetPosition/GetVelocity == m_position/
-  m_velocity`.
-- Motion lives in `ParticleSystemInstance::Update`, currently
-  `m_position += m_velocity*dt` (constant velocity) — [src/ParticleSystemInstance.cpp:13].
-  Baseline `m_spawnTime`/`m_lastUpdateTime` already established on first
-  Update. `MarkSpawnerOwned()` captures launch velocity into `m_velocity`
-  ([src/ParticleSystemInstance.h:39]).
-- Emitted particles inherit instance velocity:
-  `velocity += GetVelocity() * parentLinkStrength` — [src/EmitterInstance.cpp:557].
-  ⇒ arc/squiggle MUST update `m_velocity` to instantaneous, not freeze it.
-- JSON ↔ config converters + default JSON —
-  [src/host/BridgeDispatcher.cpp:320] (`JsonToSpawnerConfig`),
-  [src/host/BridgeDispatcher.cpp:342] (`SpawnerConfigToJson`),
-  [src/host/BridgeDispatcher.cpp:563] (`DefaultSpawnerConfigJson`).
-- TS DTO + defaults — [web/packages/bridge-schema/src/index.ts:103].
-  Consumers: `SpawnerPanel.tsx`, `mock-state.ts`, `bridge-contract.test.ts`.
-- React panel rows — [web/apps/editor/src/screens/SpawnerPanel.tsx:373]
-  ("Jitter position"/"Jitter velocity" sections + `setJitterVelAxis`).
-- Legacy Win32 dialog — `.rc` Jitter groupbox [src/ParticleEditor.en.rc:128]
-  (IDC_SPAWNER_JIT_VEL_X/Y/Z), load/read in main.cpp
-  [src/main.cpp:5841] / [src/main.cpp:5877].
+- **Skydome effect path = the template.** MT-3 already renders a textured quad
+  through a `D3DXEffect`: `m_pSkydomeEffect` created via `D3DXCreateEffect`
+  ([engine.cpp:2226](../src/engine.cpp:2226)), param handles
+  ([:2240](../src/engine.cpp:2240)), `OnLostDevice`/`OnResetDevice`
+  ([:1506](../src/engine.cpp:1506)/[:1552](../src/engine.cpp:1552)),
+  graceful-degrade if compile fails ([:2610](../src/engine.cpp:2610)), its own
+  vertex decl `m_pSkydomeDecl` ([:2109](../src/engine.cpp:2109)), and a
+  `RenderSkydome()` Begin/Pass/draw/End ([:2298](../src/engine.cpp:2298)).
+  `RenderGroundLit()` mirrors this almost verbatim.
+- **The SPH lighting data is already built and live.** `m_sphLightAll[3]` /
+  `m_sphLightFill[3]` (`D3DXMATRIX`, [engine.h:664](../src/engine.h:664)) are
+  rebuilt on every `SetLight`/`SetAmbient` via `SPH_Calculate_Matrices`
+  ([engine.cpp:1438-1448](../src/engine.cpp:1438)) — the **same** matrices the
+  game's `Sph_Compute_Diffuse_Light_*` evaluates (`AlamoEngine.fxh`). The bump
+  path uses the **fill** set per-vertex; the sun is per-pixel.
+- **`m_lights[3]`** (`Light{ Diffuse, Specular, Position, Direction }`,
+  [engine.h:77](../src/engine.h:77)) + `m_ambient` — the sun vector
+  (`Position`), diffuse, specular all ready to bind.
+- **Runtime game/mod texture loading.** `LoadTextureViaFileManager(pDevice,
+  m_fileManager, path)` (used by the skydome) over `IFileManager::getFile`
+  ([managers.h:13](../src/managers.h:13)) resolves a `DATA\ART\TEXTURES\…` path
+  from the active mod → basepaths → MEG archives. `FileManager::SetModPath`
+  drives mod priority.
+- **Ground slot model.** 8 slots: dirt(0)/grass(1)/sand(2)/snow(3) bundled as
+  `IDB_GROUND*`, solid-color(4) procedural, 5-7 custom; per-slot custom paths
+  `m_groundSlotCustomPaths[]`; `ReloadGroundTexture()`
+  ([engine.cpp:1283](../src/engine.cpp:1283)) is the single re-decode choke
+  point. **Known vanilla base names** (from the table comments,
+  [engine.cpp:1200](../src/engine.cpp:1200)): grass=`W_TEMPGRND00`,
+  sand=`W_SAND00`, snow=`W_SNOW_RGH`; dirt=unknown (pre-MT-2 `dirt.bmp`).
+- **Vertex-decl pattern** — `ParticleElements[]`
+  ([engine.cpp:105](../src/engine.cpp:105)) and the skydome decl show the
+  `D3DVERTEXELEMENT9` idiom for the new tangent/binormal ground decl.
+- **The ground draw is already per-frame** ([engine.cpp:864](../src/engine.cpp:864))
+  — rebuilding the quad each frame, so live re-lighting is free.
+
+---
 
 ## 3. Architecture / implementation approach
 
-**Path math (analytic on τ = currentTime − spawnTime).** Replace the
-incremental Euler step with a closed form so the arc is exact and
-frame-rate independent:
+**Render path (engine.cpp).** Replace the FF ground block
+([:859-881](../src/engine.cpp:859)) with: if `m_pGroundEffect` is ready, call
+`RenderGroundLit()`; else fall back to the existing unlit FF quad (kept as the
+degrade path). `RenderGroundLit()`:
+1. `SetTransform(D3DTS_WORLD, &Identity)` so object space == world space (the
+   game's bump VS works in object space; identity world makes
+   `m_light0ObjVector == m_lights[0].Position` and `m_eyePosObj == eye`).
+2. Bind params: `g_World`/`g_WorldViewProj`, the **fill** SPH matrix array
+   (`m_sphLightFill`, 3×float4x4), sun obj vector + diffuse + specular, eye obj
+   pos, base texture (`m_pGroundTexture`), normal texture
+   (`m_pGroundNormalTexture` or the flat fallback), material Diffuse/Specular/
+   Emissive defaults.
+3. Build the 4-vertex quad in the new `GroundVertex` layout (constant
+   `T=(1,0,0)`, `B=(0,1,0)`, `N=(0,0,1)` — flat plane), `SetVertexDeclaration(
+   m_pGroundDecl)`, `Begin`/`BeginPass`/`DrawPrimitiveUP`/`EndPass`/`End`.
+4. Restore: re-assert `D3DRS_ZWRITEENABLE FALSE` (already done at
+   [:886](../src/engine.cpp:886) before particles) and the particle vertex decl,
+   exactly as the skydome restores `oldDecl` ([:2348](../src/engine.cpp:2348)).
 
-```
-ω        = 2π · squiggleFreq
-base(τ)  = spawnPos + spawnVel·τ + ½·accel·τ²
-sq_i(τ)  = Aᵢ·( sin(ωτ + φᵢ) − sin(φᵢ) )          // 0 at τ=0 → emanates from spawn point
-pos(τ)   = base(τ) + sq(τ)
-vel(τ)   = spawnVel + accel·τ + Aᵢ·ω·cos(ωτ + φᵢ)  // instantaneous, for particle inheritance
-```
+**`GroundLit.fx`** (new bundled RCDATA, loaded like the skydome effect).
+Verbatim port of `TerrainMeshBump`'s `sph_bump_spec_vs_main` /
+`bump_spec_ps_main` minus the cloud + FOW samplers/multiplies:
+`diff = base.rgb·(ndotl·Diffuse·m_light0Diffuse + sph_fill)·2;
+spec = m_light0Specular·Specular·pow(ndoth,16)·base.a·2; final = diff+spec`.
+Three techniques: bump+spec (ps_2_0, primary), gloss (ps_1_1 fallback), and we
+rely on the C++ no-effect path rather than the FF technique. Parameter names via
+semantics where possible so they bind off the existing engine state.
 
-`− sin(φᵢ)` zeroes the squiggle offset at τ=0 so the instance still
-starts exactly at its spawn point; the residual `Aᵢ·ω·cos(φᵢ)` initial
-lateral velocity is the desired per-instance launch divergence.
+**Normal-map resolution** (extend `ReloadGroundTexture`, or a sibling
+`ReloadGroundNormalTexture`): map slot→vanilla-base-name (the 3 known) → derive
+the companion normal name (**convention TBD — Risk 1**) → `LoadTextureViaFileManager`
+from `DATA\ART\TEXTURES\…`; on miss, point `m_pGroundNormalTexture` at the
+procedural flat-normal texture (created once, like the solid-color 1px tile at
+[:1246](../src/engine.cpp:1246)). Custom slots: derive companion next to the
+custom path. Re-run on `SetGroundTexture` and in `Reset` (D3DPOOL_DEFAULT).
 
-**New instance state** (frozen at spawn, in `ParticleSystemInstance`):
-`m_spawnPos`, `m_spawnVel`, `m_accel`, `m_squiggleAmp` (Vec3),
-`m_squiggleFreq` (float), `m_squigglePhase` (Vec3). Setter
-`SetPathShape(accel, amp, freq, phase)` called by the driver right before
-`Detach()`. `m_spawnPos`/`m_spawnVel` captured at the first-Update
-baseline (where `m_spawnTime` is set), before `m_velocity` starts being
-overwritten each frame.
+**New engine members:** `m_pGroundEffect`, `m_pGroundDecl`,
+`m_pGroundNormalTexture`, `m_pGroundFlatNormalTexture`, handles `m_hGround*`.
+All NULL-init in the ctor/`Reset`, released in dtor + `OnLostDevice`, recreated
+in `OnResetDevice`, mirroring the skydome members 1:1.
 
-**SpawnerDriver.** Drop `Jitter(jitterVelocity)`; stamp plain
-`m_cfg.velocity`. After spawn, seed a per-instance phase
-`D3DXVECTOR3(RandPhase(), RandPhase(), RandPhase())` with
-`RandPhase()=2π·rand/RAND_MAX` and pass via `SetPathShape`.
-
-**Clamp.** `acceleration`/`squiggleAmplitude` → `ClampVec(JITTER_MAX)`;
-`squiggleFrequency` → `Clamp(0, SQUIGGLE_FREQ_MAX=20)`.
-
-**Bridge.** DTO: remove `jitterVelocity`; add `acceleration: Vec3`,
-`squiggleAmplitude: Vec3`, `squiggleFrequency: number` (default freq 1,
-amps/accel 0 ⇒ no-op). Mirror in all three BridgeDispatcher functions.
-
-**React panel.** Remove the "Jitter velocity" `ToolPanel.Section` +
-`setJitterVelAxis`. Add: "Acceleration (arc)" Vec3 row, "Squiggle
-amplitude" Vec3 row, "Squiggle frequency" single `Spinner` (Hz). Update
-the file header comment list. Keep "Jitter position" untouched.
-
-**Legacy.** `.rc`: rename groupbox "Spawn-point jitter (+/-)", drop the
-"Velocity" LTEXT + the three IDC_SPAWNER_JIT_VEL_* controls, shrink the
-box. main.cpp: delete the JIT_VEL `ConfigureFloatSpinner` lines and the
-`cfg.jitterVelocity` read. No arc/squiggle controls added.
+---
 
 ## 4. Risks named up front + mitigations
 
-1. **Stale-velocity inheritance.** If `m_velocity` is left frozen while
-   only `m_position` follows the arc, particles emitted mid-flight inherit
-   the launch velocity and the trail "lies" about its motion.
-   *Mitigation:* compute and write `vel(τ)` every Update tick (the
-   formula above); covered by a native-harness assertion that
-   `GetVelocity()` changes under nonzero accel.
-2. **τ=0 position pop.** A raw `sin(ωτ+φ)` squiggle is nonzero at τ=0,
-   so instances would teleport off the spawn point on frame 1.
-   *Mitigation:* the `− sin(φᵢ)` term; assert `pos(0)==spawnPos` in the
-   harness.
-3. **Schema drift across the bridge.** Removing `jitterVelocity` from the
-   DTO without updating all three BridgeDispatcher converters (or
-   mock-state/contract test) yields a snapshot that fails round-trip and
-   a red `bridge-contract.test`. *Mitigation:* grep `jitterVelocity`
-   repo-wide to zero before building; the contract test is the gate.
-4. **Legacy build break.** `jitterVelocity` removal breaks the legacy
-   dialog compile (it reads the field). *Mitigation:* the legacy `.rc` +
-   main.cpp edits in this same change; Debug x64 host build is the proof.
-5. **Old persisted registry config** with a `jitterVelocity` key. JSON
-   `value("jitterVelocity", …)` is simply dropped on read (no such field
-   now); new keys default when absent. *Mitigation:* `value(key,
-   default)` already tolerates missing keys both directions — accepted,
-   no migration needed.
-6. **Frequency units confusion.** Hz vs rad/s in the UI. *Mitigation:*
-   label "Squiggle frequency (Hz)"; ω=2πf conversion lives only in the
-   integrator.
+1. **Normal-map naming convention is UNKNOWN — top risk, blocks real relief.**
+   Alamo binds `NormalTexture` via the terrain **material/MTD**, not a shader-side
+   suffix, so there is no convention in the shader source the user gave. I do not
+   know the vanilla EaW/FoC terrain normal-map filenames (e.g. is grass's normal
+   `W_TEMPGRND00_NRM.dds`? `W_TEMPGRND00_bump`? a separate name entirely?).
+   *Mitigation:* (a) **ask the user** (a modder with the game files) for the
+   convention / a known example pair; (b) ship the flat-normal fallback so the
+   pipeline is correct and verifiable *now*, with relief lighting appearing the
+   moment the names resolve; (c) verify any proposed name against the actual game
+   archives before hardcoding. **This needs the user's answer before the
+   normal-resolution code is worth writing.**
+2. **Ground base is bundled-only (not game/mod-resolved).** Unlike skydome, the
+   base ground texture comes from `IDB_GROUND*`, so I can't read its source path —
+   I derive the normal name from the slot→vanilla-name map. Dirt(0) has no known
+   vanilla name. *Mitigation:* resolve normals for the 3 named slots; flat-normal
+   for dirt/solid/empty-custom (lit, no relief — acceptable per scope).
+3. **ps_2_0 support.** `bump_spec_ps_main` compiles ps_2_0. The editor already
+   runs ps_2_0-class post-process (bloom/heat), so the D3D9Ex device supports it.
+   *Mitigation:* the ps_1_1 gloss technique + the C++ unlit-FF degrade cover any
+   compile/caps failure — same graceful-degrade contract as the skydome.
+4. **Render-state restore into the particle passes.** The effect sets ZWrite/blend
+   for opaque terrain; the particle loop immediately after needs `ZWRITEENABLE
+   FALSE` + painter's order ([:883-891](../src/engine.cpp:883)). *Mitigation:*
+   re-assert that state after `End()` (it's already set at :886) and restore the
+   particle decl, exactly like `RenderSkydome`.
+5. **Device-reset lifecycle under D3D9Ex.** Effect + both normal textures
+   (D3DPOOL_DEFAULT) must release on `OnLostDevice` and recreate/reload on
+   `OnResetDevice`/`Reset`. *Mitigation:* mirror the skydome's lifecycle lines
+   1:1; reload normals in `Reset` alongside `ReloadGroundTexture`.
+6. **World-matrix assumption.** Object-space lighting needs identity world. The
+   current FF ground draw never sets `D3DTS_WORLD`. *Mitigation:* `RenderGroundLit`
+   sets it to `Identity` explicitly and the effect's `m_world` semantic picks it up.
+7. **Perf.** A per-frame `Begin/End` for two triangles — negligible (the skydome
+   already does this every frame).
+8. **Test goldens.** a11y/HWND goldens are DOM/UIA — unaffected by an engine
+   render change. Native preview specs that snapshot the viewport *could* shift if
+   any capture includes ground pixels. *Mitigation:* run the native harness and
+   diff; regenerate only if a ground-bearing snapshot is intentional.
+9. **Reference shaders are untracked.** They live in `.tmp-foc-shaders/`.
+   *Mitigation:* commit them to `reference/foc-shaders/` (or
+   `docs/petroglyph-shaders/`) with the "Confidential — Do Not Distribute" header
+   noted; decide with the user whether to track them at all vs. keep local-only +
+   `.gitignore`. (They're Petroglyph-released; tracking aids LT-5.)
+
+---
 
 ## 5. Testing & verification
 
-**Build.** `pnpm --filter @particle-editor/editor test` (expect ≥795,
-adjust for added/removed cases), `tsc -b` clean, host Debug x64 MSBuild
-clean (L-046), native harness ~180/0 (re-run overload specs isolated if
-the tail flakes — L-066).
+**Build:** host Debug x64 clean (VS18 MSBuild, L-046); fresh worktree → L-039
+(NuGet copy) + L-040 (`pnpm build`) done first.
 
-**Native harness (add SpawnerDriver/path cases):**
-- `pos(0) == spawnPos` for nonzero amp+phase (risk 2).
-- Under accel only (amp=0): position is the analytic parabola at τ;
-  `vel(τ) == spawnVel + accel·τ` (risk 1).
-- Under squiggle only (accel=0): position oscillates, returns toward base
-  each period; bounded by amplitude.
-- `jitterVelocity` fully gone — config has no such field.
+**Happy paths:**
+- Toggle sun intensity / azimuth / altitude / diffuse colour / ambient in the
+  Lighting panel → ground brightens / dims / tints live, in the same direction as
+  the particles.
+- A slot whose normal map resolves → visible per-pixel relief that shifts with
+  sun azimuth; specular glint tracks the sun.
 
-**Web:** bridge-contract round-trip green with new DTO; SpawnerPanel
-renders the three new controls + no "Jitter velocity"; a11y/golden specs
-updated if they snapshot the panel.
+**Edge cases / degrade:**
+- Slot with no normal (dirt/solid/empty-custom) → lit, flat, no relief, no crash.
+- `GroundLit.fx` compile forced to fail → silent fall-back to today's unlit quad.
+- ps_2_0 unavailable (simulate) → gloss technique renders.
+- Custom-path slot with & without a companion normal.
 
-**Manual (host, both UIs):** React panel — set accel (0,−5,0) ⇒ fountain
-arc; set squiggle amp + freq ⇒ burst instances each wander on a distinct
-phase; zero all ⇒ straight line (old non-jitter behavior). Legacy dialog
-opens, shows position-only jitter, fires without crash. Mod/file switch
-mid-burst, rapid trigger, cap (50) still enforced.
+**Lifecycle:** alt-tab / resize / device-reset → ground re-renders correctly
+(effect + normals reloaded), no leaked/black ground.
 
-**Debug instrumentation:** none planned; add `#ifndef NDEBUG` `[MT17]`
-printf of (accel,amp,freq,phase) at spawn only if a path looks wrong.
+**Non-regression:** particle passes unchanged — z-order, blend, painter's order
+intact (compare a particle scene before/after); skydome + bloom + heat passes
+unaffected.
+
+**Harness:** `pnpm --filter @particle-editor/editor test` → 795 (web untouched —
+this is engine-only); native harness ~180/0 (overload specs flake at the tail —
+L-066, re-run in isolation); diff any viewport goldens.
+
+**Debug instrumentation (`#ifndef NDEBUG`):** `[GroundLit]` printfs for effect
+load (ok/fail→degrade), per-slot normal resolution (`resolved <path>` /
+`fallback flat`), and the ps technique selected. Grep tag: `[GroundLit]`.
 
 ---
 
 ## Review
 
-**Shipped as planned.** All three locked design calls implemented: velocity
-jitter removed outright, smooth sinusoidal squiggle (per-instance random
-phase), acceleration Vec3 arc. No scope drift.
+**Implemented (session 40, on `claude/exciting-dubinsky-4e993d`).**
+- New bundled effect [`GroundLit.fx`](../src/Resources/Engine/GroundLit.fx)
+  (`IDR_SHADER_GROUND_LIT`, RCDATA in [`ParticleEditor.rc`](../src/ParticleEditor.rc)):
+  self-contained port of `TerrainMeshBump`'s bump+spec path — per-pixel dot3
+  sun off a tangent-space normal map, SPH-**fill** per-vertex, gloss-alpha-gated
+  specular, ×2. Cloud/FOW dropped. **Single `vs_2_0`/`ps_2_0` technique** (the
+  planned ps_1_1 gloss fallback was cut — the runtime D3DX compiler rejects
+  ps_1_x, X3539; the flat-normal fallback covers the no-relief case → L-084).
+- Engine path mirroring the skydome effect: `m_pGroundEffect` + handles +
+  `m_pGroundDecl` (POS/NORMAL/TEX/TANGENT/BINORMAL) + `RenderGroundLit()`, with
+  full `OnLostDevice`/`OnResetDevice` lifecycle and a compile-failure
+  graceful-degrade to the original unlit FF quad. Identity world ⇒ object==world.
+  Particle depth state (`ZENABLE TRUE`, `ZWRITE FALSE`) re-asserted after the
+  ground block so it's path-independent (L-032 decl restore honoured).
+- Normal-map resolution ([`Engine::ReloadGroundNormalTexture`](../src/engine.cpp)):
+  slot→vanilla-base→`<base>_bc.dds` via `LoadTextureViaFileManager`
+  (grass/sand/snow); custom-slot companion-next-to-path; 1px (128,128,255)
+  flat-normal fallback. Hooked into `SetGroundTexture`/`SetGroundSlotCustomPath`
+  + the `OnResetDevice` reload chain.
 
-**One design refinement during build:** the path math was extracted into a
-pure header-only `EvalSpawnerPath` ([src/SpawnerPath.h](../src/SpawnerPath.h))
-rather than left inline in `Update`. This was the natural seam to make the
-risk-1/risk-2 assertions testable headless (the rest of `Update` is
-D3D-coupled) — `tests/test_spawner_path.cpp` (12 cases) hits the *shipped*
-function, not a copy.
+**Verified (automated, this session).**
+- Host **Debug x64 builds clean** (only the pre-existing benign LNK4098).
+- **Cold-launch smoke (stderr capture):** `[GroundLit] effect loaded ok;
+  technique=bump` — the shader compiles and the bump technique validates on the
+  D3D9Ex device. `[GroundLit] slot=0/5 normal=flat-fallback` — resolution runs,
+  flat fallback where no `_bc` resolves. **No startup crash.**
+- Web baseline unaffected (engine-only change): **795/795** at session start.
 
-**Files touched.**
-- Engine: `SpawnerDriver.h/.cpp` (config fields, clamp, phase seeding),
-  `ParticleSystemInstance.h/.cpp` (path state + analytic Update),
-  `SpawnerPath.h` (new, pure kinematics).
-- Bridge: `BridgeDispatcher.cpp` (3 converters), `bridge-schema/index.ts`.
-- UI: `SpawnerPanel.tsx` (drop velocity-jitter, add 3 sections),
-  `mock-state.ts`.
-- Legacy: `main.cpp` + `ParticleEditor.en.rc` (strip velocity column),
-  `.vcxproj`/`.filters` (track new header).
-- Tests: `bridge-contract.test.ts`, `render-loop.spec.ts`,
-  `preview-overload.spec.ts` (DTO literals), `tests/test_spawner_path.*` (new).
-- Docs: `ROADMAP.md` (MT-17 → Shipped §5.1, tag vacated), `CHANGELOG.md`.
+**Feel-test (2026-06-13) — PASSED after one iteration.**
+- First look: ground lit + responding, but **specular blew out at certain
+  angles**. Root-caused to porting the wrong sibling shader (`TerrainMeshBump`):
+  (a) gloss read from base-colour alpha (placeholder = 1 → full gloss) instead
+  of the **`_bc` map's alpha** (`TerrainRenderBump.fx:177`), (b) specular x2 when
+  the heightmap terrain shader uses **x1**, (c) the flat-fallback normal had
+  alpha 1 (glossy) — set to **0 (matte)**. Also fixed a single-quad specular
+  smear by moving to **per-pixel world-space** evaluation. → user: "much better.
+  this is great." (Lessons L-084, L-085.)
+- Final verification: web **795/795**, host Debug **+ Release** x64 clean, native
+  harness **181 passed / 30 skipped** (no golden shift), visual confirmed.
 
-**Verification (all green).**
-- `pnpm --filter @particle-editor/editor lint` — tsc clean.
-- `pnpm --filter @particle-editor/editor test` — **795 passed**.
-- Host **Debug x64** MSBuild — **0 errors** (only pre-existing expat C4244
-  + LNK4098 LIBCMTD warnings). Legacy dialog + `.rc` compile.
-- `tests/test_spawner_path.exe` — **12 passed, 0 failed**.
-- Live dev server: a11y snapshot confirms the new Spawner sections
-  (Acceleration / Squiggle amplitude / Squiggle frequency) render, no
-  "Jitter velocity", no console errors. (Screenshot timed out — headless
-  D3D-canvas rasterizer hang, environmental; a11y tree is authoritative.)
+**Still unverified — needs the user's MOD (not blocking):**
+- **Real `_bc` resolution + per-pixel relief + gloss-gated specular in motion.**
+  This dev box has no game/mod, so every slot read flat-fallback (matte). The
+  `_bc` naming + the gloss-in-alpha convention are per the user's spec; validate
+  against a real mod when convenient. If a slot reads wrong, it's a one-line fix.
 
-**Known non-blocker.** The a11y composition goldens
-(`web/apps/editor/tests/a11y-goldens/*.composition.golden.yaml`) still list
-a "Jitter velocity" button. These are dormant/stale by design (per the
-session kickoff) and not part of the vitest gate; regenerating needs the
-host GUI. Left as-is, consistent with their existing drift.
+**Original pre-feel-test unknowns (now resolved by the feel-test above):**
+1. **Visual relight** — does toggling the Lighting panel (sun intensity /
+   azimuth / altitude / ambient) actually brighten/dim/tint the ground? (The
+   whole point of the feature; can't be auto-judged.)
+2. **Real `_bc` normal resolution + per-pixel relief** — only resolves with a
+   game/mod configured that ships `W_TEMPGRND00_bc.dds` etc.; this dev box has
+   none, so every slot read flat-fallback. Needs the user's game/mod + a
+   grass/sand/snow slot to confirm the `_bc` naming is right and relief appears.
+3. **×2 brightness parity** — does the lit ground read like in-game terrain?
+4. **Device reset** (alt-tab / resize) preserves the ground; **particle passes**
+   visually unaffected (z-order / blend).
 
-**Not done (awaiting user):** no commit/PR yet (master-touching gate).
-CHANGELOG + ROADMAP carry `#TODO` placeholders for the merge hash/PR number,
-to backfill once the PR merges (standard pattern, cf. PR #27).
+**Deferred until after the feel-test confirms the visual:**
+- **ROADMAP re-tier** (MT-14 grew to a 12–20h bump-terrain feature; move out of
+  near-term, cross-ref LT-5/MT-16) and **CHANGELOG** entry — both land in the PR
+  once the user confirms it looks right, to avoid documenting a feature that
+  might need a lighting-direction/brightness tweak.
+- **Native a11y/UIA harness** — engine-render change; goldens are DOM/UIA so
+  expected byte-stable, but run before merge to confirm no viewport-snapshot
+  golden shifted.

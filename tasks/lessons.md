@@ -4582,3 +4582,84 @@ the flat-fill shortcut had saved. The spec HAD flagged it in §3 as
 feel-reviewable, so the process caught it as designed; the avoidable cost
 was the round-trip. Cross-reference L-033 (the feel still needs the
 user's eye) and L-082 (mockup ≠ real host).
+
+## L-084 — The runtime D3DX effect compiler rejects ps_1_x / vs_1_x (X3539); target vs_2_0/ps_2_0 minimum, and a cold-launch stderr capture is the cheap way to catch a runtime-compiled shader's errors
+
+**Trigger.** A new bundled `.fx` (loaded at runtime via `D3DXCreateEffect`,
+not at host build time) with a `compile ps_1_1 …` pass fails to compile —
+`error X3539: ps_1_x is no longer supported; use /Gec in fxc to automatically
+upgrade to ps_2_0`. `D3DXCreateEffect` compiles **every** technique in the
+file, so one ps_1_x pass fails the whole effect, and the engine's
+graceful-degrade then silently falls back (here: to the unlit fixed-function
+ground), so the feature looks "done" (clean host build, no crash) while doing
+nothing.
+
+**Why.** The D3DX9 redist on this box (the bundled `d3dx9_43.dll`, see the
+`project_d3dx9_redist` memory) dropped the legacy ps_1_x / vs_1_x compiler
+profiles. The game's original `.fx` files keep ps_1_1 *fallback* techniques
+(for 2004-era DX8 hardware) — do **not** copy those passes verbatim into a
+new editor shader; they won't compile. Target **vs_2_0 / ps_2_0** as the floor
+(the engine already runs ps_2_0 bloom/heat, so the device supports it). A
+ps_1_x "low-end" fallback technique is pointless here — it can't even be
+compiled, and a flat-normal/neutral-input feeding the ps_2_0 path covers the
+degenerate case anyway.
+
+**How to apply (verification).** A host `.fx` error only surfaces at runtime,
+so build-clean ≠ shader-OK. **Cold-launch the Debug binary with stderr
+redirected and grep for the compile error** — this app writes engine
+diagnostics (`[host]`, `[AlphaCompositor]`, effect-compile failures) to
+**stderr**, while many `[Skydome]`/`[Ground]` success printfs go to **stdout**,
+which is **not captured** for this GUI-subsystem exe when launched detached.
+So: route your own verification printfs to **stderr**, launch via
+`Start-Process -RedirectStandardError`, `Start-Sleep` a few seconds, kill, and
+`Select-String` the stderr file. This caught the X3539 in ~6 s without needing
+the WebView `dist` built (engine `Init*Effect` runs during engine init,
+independent of the UI content). Cross-reference L-040 (dist not needed for an
+engine-only smoke check), L-033 (the *visual* relight still needs the user's
+feel-test), and the `project_d3dx9_redist` memory.
+
+## L-085 — Porting a game shader: the gloss-alpha channel AND the brightness multiplier differ between sibling shader variants; verify against the one the game actually uses for that surface, and make "no data" fallbacks neutral
+
+**Trigger (MT-14 ground lighting).** Ported the ground shader from
+`TerrainMeshBump.fx` (the "mesh terrain" variant) and the specular blew out at
+certain camera/sun angles, not matching the game. Two wrong assumptions, both
+from copying the wrong sibling:
+
+1. **Gloss-alpha source.** `TerrainMeshBump.fx` reads gloss from
+   `base_texel.a` (the *base-colour* texture's alpha). But the game's *actual*
+   ground is the heightmap terrain — `TerrainRenderBump.fx` — which reads gloss
+   from the **normal/`_bc` map's alpha** path and this game stores terrain gloss
+   in the `_bc` bump map's alpha, not the diffuse. Reading `base.a` of the
+   bundled placeholder colour texture (alpha = 1, fully glossy) → specular fired
+   everywhere.
+2. **Brightness multiplier.** `TerrainMeshBump` does `spec … * 2.0`
+   (MODULATE2X on BOTH diffuse and spec). `TerrainRenderBump` multiplies only
+   the **diffuse** by 2; specular is **x1**. Carrying the x2 onto specular
+   doubled an already-overblown highlight.
+
+**How to apply.** When a game ships several near-identical `.fx` files for one
+effect family (`Terrain*Bump`, `*MeshGloss`, `RSkin*`, …), they differ in
+exactly the load-bearing details — which texture/channel holds gloss, whether
+specular is x1 or x2, per-vertex vs per-pixel. **Identify which variant renders
+the surface you're emulating** (here: heightmap terrain = `TerrainRenderBump`,
+not the mesh-terrain `TerrainMeshBump`) and match THAT one, channel-for-channel.
+Trust the domain owner's "the gloss is in the `_bc` alpha" over your reading of
+one sibling shader — then confirm it in the right sibling.
+
+**Corollary — neutral fallbacks.** A procedural "no data" texture must encode
+the *absence* of its effect, not a default-on value. The flat-fallback normal
+map was `RGBA(128,128,255,255)` — flat normal but **alpha 1 = full gloss**, so
+slots with no real `_bc` were maximally shiny. Fixed to **alpha 0** (matte): no
+gloss data → no specular. Same rule applies to any placeholder/neutral map
+(AO=1, roughness mid, etc.) — pick the value that makes the term vanish.
+
+**Corollary — per-pixel for a single large quad.** The game computes the
+tangent-space light/half vectors per-vertex and interpolates them across a
+finely-tessellated terrain mesh. Our ground is ONE 1600x1600 quad (4 verts), so
+interpolating a per-vertex half-vector smeared the specular into a broad wash.
+Because the ground is flat and world-axis-aligned, evaluating the whole model
+**per-pixel in world space** (pass world-pos as a perspective-correct
+interpolant; the tangent-space normal map == world normal) is exact and avoids
+tessellation. For a flat world-aligned surface, per-pixel world-space ==
+per-vertex tangent-space-on-a-fine-mesh. Cross-reference L-084 (the same shader's
+ps_1_x/X3539 issue), L-033 (the visual still needs the user's eye).
