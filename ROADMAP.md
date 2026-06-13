@@ -327,7 +327,7 @@ position `5.1`; the rest shift down. Entries shipped before this
 convention have no bracketed `[TIER-K]` tag; they're referenced by PR
 number.
 
-### 5.1 [MT-17] ~~Spawner jitter should perturb the path, not exit velocity~~ ✅ Shipped (#TODO)
+### 5.1 [MT-17] ~~Spawner jitter should perturb the path, not exit velocity~~ ✅ Shipped (#149)
 
 *Estimate: ★★★ (3/5), ~4-7 hours.*
 *Actual: ~3 hours (locked three design forks up front — remove velocity
