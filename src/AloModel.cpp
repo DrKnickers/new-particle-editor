@@ -39,6 +39,12 @@ namespace
 
     const long kIndexSize = 2;  // uint16 triangle-list indices
 
+    // Bounds for file-derived counts, to cap allocation and keep the 16-bit
+    // index space valid. kAloMaxPrimitives is generous (1M triangles) so real
+    // detailed meshes (LT-7 game objects) load while pathological counts don't.
+    const uint32_t kAloMaxVertices   = 0xFFFF;
+    const uint32_t kAloMaxPrimitives = 0x100000;
+
     // Material-param mini-chunk ids (max2alamo alo_build.cpp).
     const ChunkType MINI_PARAM_NAME  = 1;
     const ChunkType MINI_PARAM_VALUE = 2;
@@ -148,9 +154,10 @@ namespace
                 case CHUNK_VERTEX_NEW:
                 {
                     const long sz = r.size();
-                    Verify(sm.vertexCount > 0);
-                    Verify(sm.vertexCount <= 0xFFFF);   // 16-bit index space
-                    Verify(sz == (long)sm.vertexCount * kAloVertexStride);
+                    Verify(sm.vertexCount > 0 && sm.vertexCount <= kAloMaxVertices);  // 16-bit index space
+                    // 64-bit product: MSVC `long` is 32-bit even on x64, so a 32-bit
+                    // product could wrap and let a crafted count slip past this check.
+                    Verify((unsigned long long)sz == (unsigned long long)sm.vertexCount * kAloVertexStride);
                     sm.rawVertexBytes.resize((size_t)sz);
                     r.read(sm.rawVertexBytes.data(), sz);
                     break;
@@ -163,7 +170,10 @@ namespace
                 case CHUNK_INDICES:
                 {
                     const long sz = r.size();
-                    Verify(sz == (long)sm.primitiveCount * 3 * kIndexSize);
+                    Verify(sm.primitiveCount <= kAloMaxPrimitives);   // bound the allocation below
+                    // 64-bit product (see CHUNK_VERTEX_NEW): primitiveCount is otherwise
+                    // unbounded, so a 32-bit overflow could bypass this size check.
+                    Verify((unsigned long long)sz == (unsigned long long)sm.primitiveCount * 3 * kIndexSize);
                     sm.indexBytes.resize((size_t)sz);
                     if (sz > 0) r.read(sm.indexBytes.data(), sz);
                     break;

@@ -291,6 +291,19 @@ int main(int argc, char** argv) {
         CHECK(threw, "vertexCount > 0xFFFF -> BadFileException");
     }
     {
+        // Huge primitiveCount -> BadFileException (bound + 64-bit size check;
+        // guards against 32-bit `long` overflow bypassing the check + a giant alloc).
+        std::vector<Bytes> geoKids;
+        geoKids.push_back(countsChunk(4, 0x80000001u));
+        Bytes f; cstr(f, "alD3dVertNU2C"); geoKids.push_back(leaf(0x10002, f));
+        geoKids.push_back(leaf(0x10007, vertexBlob(4, false)));  // valid verts
+        geoKids.push_back(leaf(0x10004, indexBlob(1)));          // 6 bytes (1 tri)
+        Bytes file = assemble({ mesh("ovf", { { material("Skydome.fx", {}), container(0x10000, geoKids) } }) });
+        bool threw = false;
+        try { parseBytes(file); } catch (BadFileException&) { threw = true; } catch (...) {}
+        CHECK(threw, "huge primitiveCount -> BadFileException");
+    }
+    {
         // No mesh chunk -> WrongFileException
         bool wrong = false;
         try { parseBytes(assemble({ skeletonStub(), connectionsStub() })); }

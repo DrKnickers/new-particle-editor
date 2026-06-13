@@ -78,15 +78,18 @@ bool LoadSkydomeList(IFileManager& fm, SkydomeAxis axis, std::vector<SkydomeRef>
         const XMLNode* e = root->getChild(i);
         if (e->getName() != cfg.entryTag) continue;   // tolerate comments / other elements
 
+        std::string name = WideToAnsi(e->getAttribute(L"Name"));
+        if (name.empty()) continue;                   // unnamed entry can't be referenced -> skip
+
         std::wstring model = childData(e, cfg.modelTag);
         if (model.empty()) model = childData(e, cfg.altModelTag);
         if (model.empty()) continue;                  // no renderable model -> skip
 
         SkydomeRef ref;
-        ref.name      = WideToAnsi(e->getAttribute(L"Name"));
+        ref.name      = name;
         ref.modelPath = WideToAnsi(model);
-        const std::wstring sf = childData(e, L"Scale_Factor");
-        ref.scaleFactor     = sf.empty() ? 1.0f : wtofSafe(sf);
+        const float scale   = wtofSafe(childData(e, L"Scale_Factor"));
+        ref.scaleFactor     = (scale > 0.0f) ? scale : 1.0f;  // absent / junk / <=0 -> 1.0 (avoid invisible dome)
         ref.sortOrderAdjust = wtoiSafe(childData(e, L"Sort_Order_Adjust"));
         ref.layerZAdjust    = wtofSafe(childData(e, L"Layer_Z_Adjust"));
         ref.inBackground    = isYes(childData(e, L"In_Background"));

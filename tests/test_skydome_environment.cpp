@@ -58,6 +58,13 @@ static const char* kSpacePrimary =
     "  <SpacePrimarySkydome Name=\"NoModel\">\n"
     "    <Space_Model_Name></Space_Model_Name>\n"
     "  </SpacePrimarySkydome>\n"
+    "  <SpacePrimarySkydome>\n"
+    "    <Space_Model_Name>w_noname.alo</Space_Model_Name>\n"
+    "  </SpacePrimarySkydome>\n"
+    "  <SpacePrimarySkydome Name=\"GarbageScale\">\n"
+    "    <Space_Model_Name>w_garbage.alo</Space_Model_Name>\n"
+    "    <Scale_Factor>not_a_number</Scale_Factor>\n"
+    "  </SpacePrimarySkydome>\n"
     "</SpacePrimarySkydomes>\n";
 
 static const char* kSpaceSecondary =
@@ -131,7 +138,7 @@ int main(int argc, char** argv)
         std::vector<SkydomeRef> list;
         bool ok = LoadSkydomeList(fm, SkydomeAxis::SpacePrimary, list);
         CHECK(ok, "SpacePrimary load ok");
-        CHECK(list.size() == 2, "2 refs (NoModel entry skipped)");
+        CHECK(list.size() == 3, "3 refs (NoModel + unnamed entries skipped)");
         const SkydomeRef* low = find(list, "Stars_Low");
         CHECK(low != nullptr, "Stars_Low present");
         if (low)
@@ -150,6 +157,11 @@ int main(int argc, char** argv)
             CHECK(grn->inBackground == false, "Green inBackground false (case-insensitive No)");
         }
         CHECK(find(list, "NoModel") == nullptr, "NoModel skipped (empty model)");
+        const SkydomeRef* gs = find(list, "GarbageScale");
+        CHECK(gs != nullptr && gs->scaleFactor == 1.0f, "GarbageScale: non-numeric Scale_Factor defaults to 1.0");
+        bool anyEmptyName = false;
+        for (const auto& r : list) if (r.name.empty()) anyEmptyName = true;
+        CHECK(!anyEmptyName, "unnamed entry skipped (no empty-name refs)");
     }
 
     // ---- land axis uses Land_Model_Name ------------------------------------
@@ -198,12 +210,14 @@ int main(int argc, char** argv)
 
         // Asymmetric miss: secondary name not in the list.
         MapEnvironment env2;
-        LoadMapEnvironment(fm, SkydomeContext::Space, "Stars_Low", "DoesNotExist", env2);
+        bool ok2 = LoadMapEnvironment(fm, SkydomeContext::Space, "Stars_Low", "DoesNotExist", env2);
+        CHECK(ok2, "asymmetric: load returns ok (both lists readable)");
         CHECK(env2.hasPrimary && !env2.hasSecondary, "asymmetric: primary resolves, secondary unset");
 
         // Empty secondary name -> primary only, no secondary lookup.
         MapEnvironment env3;
-        LoadMapEnvironment(fm, SkydomeContext::Space, "Stars_Low", "", env3);
+        bool ok3 = LoadMapEnvironment(fm, SkydomeContext::Space, "Stars_Low", "", env3);
+        CHECK(ok3, "empty secondary: load returns ok");
         CHECK(env3.hasPrimary && !env3.hasSecondary, "empty secondary name -> primary only");
     }
 
