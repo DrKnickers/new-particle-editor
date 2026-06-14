@@ -271,6 +271,28 @@ map-environment plumbing for the per-map grade params.
 
 ---
 
+### 3.7 [LT-9] MCP particle toolkit (inspect / transform / generate `.alo`)
+A local MCP server that lets an agent read, edit, and author particle systems
+conversationally — explain an effect, recolour it to a faction palette, batch N
+variants, or generate a new effect ("big orange explosion," "looping mouse-cursor
+glow") from a description. It deliberately does **not** reimplement the format or
+the renderer: a headless `particle-cli` built from the repo's own
+`ParticleSystem` / `Rescale` / `FileManager` / `ModManager` gives faithful
+read/write plus corpus enumeration across loose files, the selected mod, and
+**base-game / mod MEG archives** (`MegaFile::getNumFiles()` / `getFilename()`);
+the existing `--capture` host — extended to frame-strips + GIF loops (shared work
+with the capture tool) — provides an off-screen **render-and-critique loop** so the
+user only ever sees a visually-verified result. Generative v1 is template/precedent
+instantiation + parametric edit; new-sprite texture generation and from-scratch
+synthesis are deferred. Lands in five independently-shippable steps: inspect →
+transforms → preview → corpus → generative. Full plan:
+[`tasks/mcp-particle-toolkit-plan.md`](tasks/mcp-particle-toolkit-plan.md).
+
+- **Difficulty**: ★★★★★ (5/5) — new headless build target + MCP surface + capture-pipeline extension + MEG corpus enumeration + the generative quality loop
+- **Estimated effort**: 40–70 hours across five landable steps; steps 1–2 are small given the existing pure-IO `DoRescaleEmitter` + UI-free loader, step 3 co-builds with the capture tool
+
+---
+
 ## 4. Notes on prioritization
 
 The near-term tier is intentionally chosen so each item can land in a single
