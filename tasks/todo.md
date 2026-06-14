@@ -485,3 +485,110 @@ Vitest contract + component tests + the native build cover the surfaces; Playwri
 test and deferred. The `#ifndef NDEBUG` env-var bring-up driver is still in (TODO to remove now
 that the picker drives selection). **The render itself is unverified — needs the user's visual
 feel-test** (point the editor at the FoC install / a mod, pick a dome).
+
+---
+
+## 7. Session 44 — render-capture feel-test + two MT-15 render-blocker fixes + live capture bridge
+
+**One combined PR** (user-chosen). Off `master` `ec3f1aa`.
+
+### 7.1 Goal + scope
+
+**Goal.** Give Claude a way to *see* the D3D render, use it to feel-test MT-15 against
+the real FoC install, fix what the feel-test finds, and add a live in-session capture
+bridge for future render work + particle filmstrips.
+
+- **In:** (a) two render-blocker bug fixes found via the feel-test; (b) a live
+  `debug/capture-frame { path }` bridge kind; (c) strip the temp `#ifndef NDEBUG`
+  diagnostics; (d) a regression test for the file-layer bug; (e) MT-15 ROADMAP/CHANGELOG
+  follow-ups + remove the env-var bring-up driver; (f) lessons + memory updates.
+- **Out (deferred):** the Playwright two-section-picker spec (still the heaviest test;
+  separate follow-up). A camera-up / ground-off scripted "filmstrip" driver (the bridge
+  is the primitive; an orchestrated driver is a later nicety).
+
+### 7.2 What the codebase already gives us (key finding)
+
+Most of the planned "capture tool, option A" already existed under LT-4 rendering-fidelity:
+- [`AlphaCompositor::CaptureSnapshotToFile(path)`](../src/host/AlphaCompositor.cpp:921) —
+  `GetRenderTargetData` → GDI+ PNG of the real engine RT (crops to scene rect if set).
+- The `--capture <alo> <png> [--frames N] [--skydome <slot>]` headless mode
+  ([`main.cpp:8079`](../src/main.cpp:8079), [`HostWindow.cpp:3518`](../src/host/HostWindow.cpp:3518)).
+- The MT-15 `ALO_MT15_TEST_DOME` env hook ([`engine.cpp:3152`](../src/engine.cpp:3152)).
+
+So a NEW `GetRenderTargetData → D3DXSaveSurfaceToFileW` engine method is **redundant** —
+the bridge reuses `CaptureSnapshotToFile` via a new `LayoutBroker` forwarder. The
+dispatcher's response helpers (`sendOk`/`sendErr`), `Utf8ToWide`, and `m_layout`
+(LayoutBroker) are the surfaces; mirror `viewport/capture-snapshot`.
+
+### 7.3 Bugs found by the feel-test (both fixed)
+
+1. **`SubFile::read` over-read** ([`files.cpp:78`](../src/files.cpp:78)). Didn't clamp the
+   read to the sub-view's remaining bytes, so `XMLTree::parse`'s 32 KB chunks on a small
+   packed XML spilled adjacent MEG bytes into expat → parse threw → `LoadSkydomeList`
+   returned false → **0 game domes on any MEG install**. The session-42 leaf tests only
+   parsed *loose* XML so never hit it. Fix: 3-line bounds clamp. (Also unblocks LT-7/LT-8
+   game-object XML import.)
+2. **`loadMaterialTexture` missing `.tga`→`.dds`** ([`SkydomeMesh.cpp:98`](../src/SkydomeMesh.cpp:98)).
+   `.alo` materials name the SOURCE `.tga`; the packed game ships compiled `.dds`. The
+   engine's `TextureManager::getTexture` (main.cpp:193) swaps the extension; the skydome
+   path didn't → every dome texture MISSed → **dome rendered black**. Fix: mirror the swap.
+
+After both: `Day_Blue_Sky` renders the real `w_sky00.alo` dome (blue `W_SkyBlue_clear`
+texture, SH-lit, `Skydome.fx`/`MeshAdditive.fx` 1:1); space `Stars_High` + `Star_Backdrop_Blue`
+nebula loads `MeshGloss`/`MeshAdditive`/`MeshAdditiveVColor` sub-meshes + textures.
+Risk-2 settled empirically: `[SkyDraw]` post-`BeginPass` state dumps show states ARE applied.
+
+### 7.4 Live bridge — `debug/capture-frame { path }`
+
+- New `LayoutBroker::CaptureSnapshotToFile(const std::wstring&)` forwarder → AlphaCompositor.
+- Dispatcher handler: gate to Debug builds always / Release only under `--test-host`;
+  `Utf8ToWide(path)`; `sendOk({path, ok:true})` / `sendErr(...)`. Reuses the proven
+  readback (no new engine method). Pairs with existing `engine/set/paused` +
+  `engine/action/step-frames` for pause→step→capture filmstrips.
+
+### 7.5 Risks
+
+1. **File-layer fix blast radius.** `SubFile::read` is used by ALL MEG reads. Mitigation:
+   the clamp only changes the over-read case (always a bug); exact-size reads
+   (`ReadAndRelease`, used by every texture/.alo/shader load) are unchanged because
+   `size == remaining` there. Verify: leaf tests + a cold-launch smoke (textures still load).
+2. **Arbitrary-path write from the renderer.** `debug/capture-frame` writes a caller-chosen
+   PNG path. Mitigation: gated to Debug/`--test-host`; never reachable in a normal Release.
+3. **Bundling tooling with a bugfix in one PR.** Accepted (user-chosen). The two fixes are
+   the headline; the bridge is the tool that found them.
+
+### 7.6 Testing & verification
+
+- [x] Feel-test: land `Day_Blue_Sky` renders blue (post both fixes) — capture PNG read.
+- [x] Feel-test: space `Stars_High`+nebula sub-meshes + textures all load (`[SkyTex] LOADED`).
+- [ ] Strip ALL temp diagnostics (`[SkyDbg]`/`[SkyTex]`/extra `[AloVtx]` vertex loop) — keep
+      only the two real fixes + the bridge.
+- [ ] Regression test for `SubFile::read` (read a sub-view with a buffer > its size → no spill).
+- [ ] Native Debug+Release x64 clean; leaf `build_test_alo_model.bat` 30/30 +
+      `build_test_skydome_environment.bat` 25/25; web Vitest; cold-launch smoke (textures load).
+- [ ] `debug/capture-frame` returns ok + writes a PNG (Debug); errors in Release w/o `--test-host`.
+- [ ] MT-15 follow-ups: ROADMAP ✅ Shipped (#163)+Actual+move; CHANGELOG; remove env-var driver.
+
+### 7.7 Execution log
+
+- **Feel-test (via the existing `--capture` + env hook, real FoC install):** initial capture
+  showed the OLD bundled slot-1 gradient (no `[SkyDraw]`); diagnostics traced
+  `RebuildSkydomeMeshes` → `LoadMapEnvironment` MISS → `LoadSkydomeList` ok=0 (parse threw) →
+  `getFile` FOUND the XML + it's plain text → `SubFile::read` over-read. **Fix 1** (clamp): 22
+  land / 9 space domes enumerate. Dome then drew BLACK → `[SkyTex]` MISS on `W_SkyBlue_clear.tga`
+  → **Fix 2** (`.tga`→`.dds`): textures LOAD, `Day_Blue_Sky` renders blue. Space `Stars_High`+
+  nebula sub-meshes/textures all load.
+- **Live bridge:** `LayoutBroker::CaptureSnapshotToFile` forwarder + `debug/capture-frame` handler
+  (Debug-always / Release-`--test-host`, reuses CaptureSnapshotToFile). Builds Debug+Release clean.
+- **Cleanup:** all temp `[SkyDbg]`/`[SkyTex]`/extra-`[AloVtx]` diagnostics stripped (engine.cpp
+  net-zero diff). **KEPT** the `ALO_MT15_TEST_DOME` env hook — it is the only dome selector for a
+  *headless* `--capture` render (the picker is interactive-only); debug-only, zero Release cost.
+- **Tests:** `tests/test_subfile_read.cpp` (new) PASSED — and verified it FAILS (5 fails) with the
+  clamp disabled, so it's a real guard. Leaf: AloModel 30/30, SkydomeEnvironment 25/25. Web Vitest
+  799/799. Native Debug+Release x64 clean. Cold-launch smoke = the `--capture` runs (textures load,
+  no crash). NOT done: live `debug/capture-frame` round-trip (needs Playwright/dev-UI driver —
+  deferred, same lane as the Playwright picker spec).
+- **Docs:** CHANGELOG entry (TODO-backfill hash/PR); ROADMAP MT-15 → Shipped §5.1 (renumbered the
+  34 existing Shipped headings, §2 now empty, `[MT-15]` tag retired); lessons L-086/L-087; memories
+  `project_mt15_skydome_5a_closed` + `project_render_capture_tool` + MEMORY.md index updated.
+- **Pending:** combined PR (no merge without explicit OK); backfill CHANGELOG hash/PR# after merge.

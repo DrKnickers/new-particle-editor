@@ -4663,3 +4663,52 @@ interpolant; the tangent-space normal map == world normal) is exact and avoids
 tessellation. For a flat world-aligned surface, per-pixel world-space ==
 per-vertex tangent-space-on-a-fine-mesh. Cross-reference L-084 (the same shader's
 ps_1_x/X3539 issue), L-033 (the visual still needs the user's eye).
+
+## L-086 — A leaf/unit test on loose files + mocks does NOT exercise the real MEG `SubFile` read path; a render against the real install is what catches it — and a bounded file-view read MUST clamp the request to the view's own remaining bytes
+
+**Two-part lesson from the MT-15 feel-test (session 44).** The session-42
+`SkydomeEnvironment` leaf test parsed only *loose* XML through a mock FileManager
+and passed 25/25 — yet against a real MEG-packed install the dome picker enumerated
+**zero** domes. The bug was one layer down: [`SubFile::read`](../src/files.cpp:78)
+(the bounded view `MegaFile::getFile` returns for a packed entry) read `size` bytes
+from the **parent** MEG without clamping to the sub-view's remaining bytes, so
+`XMLTree::parse`'s 32 KB chunks on a small packed XML spilled the **adjacent** MEG
+entry's bytes into expat → parse threw → `LoadSkydomeList` returned false → 0 domes.
+
+**Rule (two halves).**
+1. **Bounded-view reads must clamp.** Any "window into a larger file" abstraction
+   (`SubFile`, ranged reads, mmap slices) must cap a read request at
+   `remaining = size - position` *before* delegating to the parent, or an
+   oversized buffer silently grabs whatever bytes follow. Exact-size reads
+   (`ReadAndRelease`, which reads exactly `size()`) hid the bug for years because
+   `size == remaining` there — only a chunked reader (XMLTree, 32 KB) over-reads.
+   Pin it with a regression test that reads a sub-view with a buffer LARGER than
+   the view and asserts no spill ([`tests/test_subfile_read.cpp`](../tests/test_subfile_read.cpp)).
+2. **Test the real container, not a stand-in.** A data-path test over loose
+   fixtures + mocks proves the *parser*, not the *resolution + read* path the
+   running engine uses (mod→base→MEG via `FileManager`). When a feature reads game
+   assets, verify it against the real install at least once — a mock-only green is
+   a partial green. The render-capture tool exists precisely to make that cheap.
+Cross-reference L-058 (don't trust a doc that a binary/state exists — verify),
+L-033 (GUI render still needs an eye / a capture).
+
+## L-087 — New asset-loading code must mirror the engine's `.tga`→`.dds` extension fallback: `.alo` material / GameObject asset names are SOURCE names, but the packed game ships COMPILED `.dds`
+
+**Trigger (MT-15 feel-test, session 44).** The skydome dome loaded and drew (218
+prims, real `Skydome.fx`), but rendered **black**. Cause: the `.alo` material names
+its textures by the **source** asset — `W_SkyBlue_clear.tga` — but the packed game
+(and most mods) ship the **compiled** `W_SkyBlue_clear.dds`. The new
+[`loadMaterialTexture`](../src/SkydomeMesh.cpp:98) tried only the exact name + bare
+name, both MISS → no base texture → `surface_color * light = black`.
+
+**Rule.** The engine's main texture path
+([`TextureManager::getTexture`](../src/main.cpp:193)) already resolves this: try the
+name as-given, then retry with the extension swapped to `.dds`. ANY new code that
+resolves a game/mod asset by a name pulled from an `.alo` / XML / material block must
+mirror that fallback (and the `Data\Art\Textures\` prefix + bare-name loose-file
+attempt). Don't assume the on-disk extension matches the authored one. A missing
+texture that degrades to a NEUTRAL placeholder would have been obvious; degrading to
+**black** (a multiply identity-killer) looked like a lighting bug instead — when a
+fallback can't find the asset, prefer a loud/neutral result over a silent black.
+Cross-reference L-085 (neutral "no data" fallbacks), L-084 (a new render path's real
+failure shows only at runtime — capture/stderr-smoke it).
