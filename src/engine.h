@@ -8,6 +8,7 @@
 #include "utils.h"
 #include "SkydomeEnvironment.h"   // [MT-15] SkydomeContext
 #include "SkydomeMesh.h"          // [MT-15] game-faithful dome render core
+#include "ReferenceObjectMesh.h"  // [LT-7] imported game-object render core
 #include <memory>
 
 namespace host { class AlphaCompositor; }
@@ -595,6 +596,11 @@ private:
 	void				RenderSkydomeMesh(SkydomeMesh& mesh, const D3DXMATRIX& world);
 	void				RenderSkydomes();
 
+	// [LT-7] Draw the imported reference object as solid, depth-tested,
+	// backface-culled geometry -- each rigid sub-mesh placed by its bone and
+	// running its own game shader 1:1. No-op when empty/unresolved.
+	void				RenderReferenceObject();
+
 	// MT-14: compile IDR_SHADER_GROUND_LIT from RCDATA, cache parameter
 	// handles, and build the tangent-space ground vertex declaration.
 	void				InitGroundEffect();
@@ -745,6 +751,11 @@ private:
 	std::string              m_skydomeSecondaryName;   // "" = none
 	SkydomeMesh              m_skydomePrimaryMesh;
 	SkydomeMesh              m_skydomeSecondaryMesh;
+
+	// [LT-7] Imported reference object (a game-object .alo placed in the preview
+	// for scale). Rigid multi-part: each sub-mesh placed by its skeleton bone.
+	// PR-B is the render path only; the picker/transform/persistence are PR-D.
+	ReferenceObjectMesh      m_referenceObjectMesh;
 
 	// MT-14: bump-mapped ground lighting. Effect + tangent-space vertex decl +
 	// normal-map state, mirroring the skydome effect lifecycle. Faithful port
