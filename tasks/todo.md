@@ -348,3 +348,140 @@ _(original questions retained below for context)_
 4. **Default secondary on first run.** Off (empty) for both slots, or seed a sensible default? Plan assumes both Off.
 5. **Primary-persistence fix shipping independently.** OK to land the new-UI `SkydomeIndex` write-back (a pre-existing bug) as its own PR *before* the dual-slot work, so it's bisectable and ships value early?
 6. **`0x10005` old-vertex domes.** Accept graceful-skip (out-of-scope) as planned, or is there a known vanilla/mod dome using it that forces the convert path into MT-15 now?
+
+---
+
+## 6. Session 43 execution log (render core + dual-slot — one PR)
+
+**Scope decision (user, session 43): ALL-IN-ONE.** The render core (STEP 3) **and** the
+dual-slot plumbing + two-section picker (STEP 5) land as a **single PR**, not two. Tradeoff
+named + accepted: feel-test happens only at the end; harder to bisect. Mitigation (does NOT
+change PR shape): build *internally* in feel-testable milestones so the risky render core is
+proven before the UI wraps it.
+
+**Green baseline at `12e4cff`** (fresh worktree `goofy-shockley-1cbd90`): L-039 ✅, L-040 ✅
+(pnpm build exit 0), host **Debug x64** ✅ (0 errors), `test_alo_model` ✅ 30/30,
+`test_skydome_environment` ✅ 25/25. Fresh-worktree quirk (→ lessons): the leaf-test `.bat`s
+need `tests\obj\` created first **and** the host solution built first (so
+`libs\expat-2.2.0\x64\Debug\expatw_static.lib` exists, used by the skydome test link).
+
+**Internal milestones:**
+- **M1 — primary dome (the risky core).** `src/SkydomeMesh.{h,cpp}` (Load→transcode,
+  Resolve→getShader+decl+matHandles, CreateBuffers, OnLostDevice/OnResetEffects) +
+  `Engine::RenderSkydomeMesh`/`RenderSkydomes`, wired into engine state + device lost/reset
+  seams + `Engine::Render()`. Minimal selection path to load `clearblue`. **← first feel-test.**
+- **M2 — secondary slot + nebula (MeshGloss + MeshAdditive) + compose order.**
+- **M3 — dual-slot plumbing**: bridge schema + handlers + persistence + React two-section
+  picker + mock/Vitest/Playwright.
+
+**Design refinements vs §3.2 (made while writing the header, flagged for review):**
+1. `SubMeshGpu` caches the **transcoded** vertex bytes + index bytes (not the retained
+   `AloModel`); device-reset refill is a pure memcpy, no re-transcode, no re-parse. The
+   `AloModel` is consumed by `Load` and not retained (LT-7 loads it separately as a leaf).
+2. Reset is **split** into `OnResetEffects()` (per-sub-mesh `effect->OnResetDevice`) +
+   `CreateBuffers()` so the engine seam can do all-effects-then-all-buffers across **both**
+   domes (Risk 7), matching the existing dance.
+3. **Mod-switch is engine-driven**, not a `SkydomeMesh` method: `ReloadTextures` re-drives
+   `Load`→`Resolve`→`CreateBuffers` from the persisted dome Names (after `ReloadShaders`→
+   `Clear()` fired, so `getShader` returns the new mod's `.fxo`; Risk 6). Covers the
+   override-`.fxo` / override-texture / override-`.alo` granularities in one rebuild.
+
+**Risk-2 (state blocks) — verify empirically during M1 bring-up.** `AlamoEngine.fxh` does set
+`ALAMO_STATE_BLOCKS 0`, but empty `SB_START`/`SB_END` makes the inner `ZWriteEnable=FALSE;…`
+**bare pass-state**, which D3DX `BeginPass` normally *applies* — opposite of "no-op'd." The
+shipped `.fxo`'s actual behaviour depends on the flag Petroglyph compiled with (undeterminable
+by static read). Implementation is robust either way (app sets per-sub-mesh state + saves/
+restores the full delta), but the `[SkyDraw]` instrumentation must dump
+`GetRenderState(ZWRITEENABLE/ALPHABLENDENABLE/CULLMODE)` right after `BeginPass` to confirm.
+
+### M1 code review (`/code-review high`, 7 angles) — outcomes
+
+**FIXED in M1:**
+- **Vertex-format layouts were WRONG (critical, would garble M2 nebula).** The plan +
+  my `classifyFormat` had `alD3dVertN`=Pos+Normal+UV and `alD3dVertNU2`=Pos+UV-only.
+  First-party truth (max2alamo `vertex_format_selector` table — MeshGloss/MeshAdditive/
+  MeshAlpha → `alD3dVertNU2`; `alD3dVertN` only on shadow/collision/solid — **plus** the
+  shader VS_INPUTs: MeshGloss reads `In.Norm`) is: `N`=Pos+Normal(no UV, 24B),
+  `NU2`=Pos+Normal+UV(32B), `NU2C`=Pos+Normal+UV+Color(36B), canonical prefix-superset.
+  Rewrote `strideFor`/`declElementsFor`/`transcodeVertex` + normalized NU2C offsets. M1
+  clearblue (NU2C) was internally consistent so unaffected, but M2 would have rendered the
+  nebula gloss base unlit/garbled. *(The synthetic `test_alo_model` nebula fixture still
+  hardcodes the old `alD3dVertN` for MeshGloss — it only tests AloModel's verbatim string
+  storage, not interpretation, so it's not wrong, but its comment is misleading.)*
+- VB/IB created-but-Lock-failed left a non-NULL uninitialized buffer reaching the draw →
+  `relptr` on Lock failure.
+- `matHandles` `std::map<string,…>` → index-parallel `std::vector<D3DXHANDLE>` (kills the
+  per-frame string lookup + the duplicate-name-collapse risk).
+- Dropped the dead `outStride` out-param from `GetOrCreateDecl` (gpu.stride is authoritative).
+- `Load(fm,"")` empty-path FileManager probe for a deselected slot → new `SkydomeMesh::Clear()`.
+- FLOAT4 `SetVector(&D3DXVECTOR4(temp))` → named local (clarity; the temp was actually
+  alive for the call, but the local removes all doubt).
+- Comment corrections: decl lifetime ("released on Load/Clear-replace + dtor, never on
+  device-lost"), the `ReloadTextures` re-resolve rationale, and the `getShader` default-
+  placeholder reality (a missing shader resolves to the placeholder, NOT skipped).
+- `TODO(MT-15 M3)` linking the env-var bring-up driver to its removal.
+
+**DEFERRED (noted, not bugs for M1):**
+- *Shared-shader double `OnLostDevice`/`OnResetDevice`* if two sub-meshes use the same shader
+  name (getShader caches → same Effect). Benign (D3DX idempotent) + uncommon; revisit if a
+  real multi-band dome surfaces it.
+- *Device-null-then-no-re-resolve*: if `SetSkydomeEnvironment` ran before the device existed,
+  nothing re-Resolves later. Doesn't bite M1 (the bring-up driver runs in the ctor, device
+  valid); **must wire a post-device-init re-resolve in M3** (startup-restore path).
+- *Two skydome mechanisms shadow each other* (game dome vs legacy bundled slot) — **by design**;
+  M3's picker unifies them into one mutually-exclusive selection.
+- *Per-frame material re-push + `getD3DEffect` AddRef/Release*: a cold path (one dome, few
+  sub-meshes); set-constants-once is complicated by device-reset texture-pointer churn, so
+  deferred as an optimization, not a correctness issue.
+- *Texture-loader duplication* (`loadTextureExact` vs engine's file-static
+  `LoadTextureViaFileManager`): deliberate — SkydomeMesh is engine-decoupled; a shared neutral
+  TU is the right move only if a third consumer appears.
+- *Additive/gloss blend state* is M2 scope (M1 draws Skydome opaque only).
+
+### M2 (nebula multi-submesh + compose + per-shader blend) + review
+
+Built clean. `SkydomeBlendFor` (3-way: additive `ONE/ONE` / alpha `SRCALPHA/INVSRCALPHA` /
+opaque) from the shaders' SB blocks; full lighting binding (eye + dir-light0 + SH, mirroring
+the particle template) so MeshGloss specular/SH is faithful; context-dependent compose
+(space: secondary nebula behind primary starfield; land: secondary overlay on top of primary).
+
+`/code-review medium` (3 angles) — **FIXED:** draw order is now **phase-faithful** (opaque
+sub-meshes first, then additive/alpha), matching the game's Opaque→Transparent order instead
+of relying on `.alo` sub-mesh authoring order (would've dropped additive stars if a nebula were
+authored stars-first). **Confirmed-correct (no action):** compose order is right for real
+content (opaque nebula backdrop behind additive/transparent starfield); `m_lightScale` left at
+the `.fxo` default `{1,1,1,1}` is the faithful full-bright skydome value (particle template
+doesn't bind it either); `hDirLightVec0==hDirLightObjVec0` mirrors the working particle template
+(dome world has no rotation). **Deferred:** back-to-front z-sort among *multiple* overlapping
+transparent sub-meshes, and depth among overlapping *opaque* sub-meshes — neither occurs in the
+in-scope domes (clearblue=1 submesh; nebula=1 opaque + 1 additive).
+
+### M3 (dual-slot plumbing: bridge + dispatcher + persistence + restore + React picker) + review
+
+**Native:** `engine/set/skydome-environment` (context+primary+secondary Names) + `engine/query/
+skydome-list` bridge kinds; dispatcher handlers + DTO snapshot (skydomeContext/PrimaryName/
+SecondaryName) + `PersistSkydomeEnvironment` (registry, gated like the lighting persister);
+HostWindow startup restore (post-device-init → also closes the M1-deferred device-null re-resolve);
+Engine getters + `EnumerateSkydomeNames`. **Web:** BackgroundPicker rewritten — game-dome section
+(Land/Space toggle + Primary/Secondary Name `<select>`s from skydome-list) + simple-background
+fallback (solid colour + custom slots); fake gradient tiles removed; BackgroundDropdown swatch
+shows a game-dome indicator; mock handlers + state; 4 new Vitest (contract round-trip ×2 + picker
+component ×2). Native Debug x64 + editor `tsc`/vite + 799 Vitest all green.
+
+`/code-review` (3 angles: native / web / cross-cutting-contract). Cross-cutting came back **clean**
+(schema↔dispatcher↔mock↔picker fields + kinds + response shapes all consistent). **FIXED:** the
+game-dome `<select>` now injects the current Name as a fallback `<option>` so a persisted/mod/
+not-yet-loaded Name shows correctly instead of silently reverting to "None". **Dismissed:** the
+"un-awaited clear+slot ordering" finding — final state (empty environment + slot) is identical
+regardless of message order, so reordering can't lose the selection. **ACCEPTED-AND-NAMED
+limitation:** dome Names flow as `WideToAnsi`/CP_ACP end-to-end (SkydomeEnvironment → SkydomeRef →
+DTO/registry); a *non-ASCII* GameObject Name would break restore (persist `Utf8ToWide` vs restore
+`WideToAnsi`) and could throw in the snapshot `json.dump()`. GameObject dome Names are ASCII
+identifiers (Stars_Low, Day_Blue_Sky, Planet_Rings00) so this never triggers for real content; a
+full fix needs `WideToUtf8` plumbed through the leaf module + utils.h + restore (deferred).
+
+**M3 NOT done (remaining):** the Playwright two-section picker spec (native round-trip) — the
+Vitest contract + component tests + the native build cover the surfaces; Playwright is the heaviest
+test and deferred. The `#ifndef NDEBUG` env-var bring-up driver is still in (TODO to remove now
+that the picker drives selection). **The render itself is unverified — needs the user's visual
+feel-test** (point the editor at the FoC install / a mod, pick a dome).
