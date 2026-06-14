@@ -245,4 +245,24 @@ multi-part), `All_Terrain_Anti_Aircraft.alo` (Chelmod, mixed rigid+skinned),
   `MeshBumpColorize.fx` 1:1; collision/shadow hulls filtered (3 visible sub-meshes). Debug x64
   clean; Release TUs compile clean (link deferred to CI — dev-box Release exe was locked by the
   user's running test instance). Winding (CCW) + up-axis confirmed correct on the first real model.
-- **NEXT: PR-C** (GameObjectCatalog — enumerate by Name) — independent of A/B, can start now.
+- **PR-C done (this branch):** `src/GameObjectCatalog.{h,cpp}` (pure `IFileManager`, parallels
+  `SkydomeEnvironment`): reads `Data\XML\GameObjectFiles.xml` → two-phase parse (all listed object
+  files' direct-child objects → `Variant_Of_Existing_Type` resolution after all load; cross-file +
+  cyclic/self-cyclic-safe; a variant's own model overrides its parent). Model-field chain
+  `Land → Space → Galactic → Model_Name` (added `Galactic_Model_Name`, missing from the original §3).
+  `GameObjectCategory` from the container tag, with a **name escalation** for turrets (vanilla
+  declares them `<GroundStructure Name="..._Turret">` so tag-only gave Turret=0). **Lazy**
+  `ProbeModelSkinned` → `Renderable`/`SkinnedUnsupported`/`LoadFailed`, accept condition mirroring
+  `ReferenceObjectMesh`'s draw filter — and to keep the two in lockstep the skinned/non-visible
+  predicates were **hoisted onto the `AloModel` pure-data leaf** (`AloIsSkinnedVertexFormat` /
+  `AloIsNonVisibleShader`), with `ReferenceObjectMesh` refactored to call them (no behaviour change).
+  vcxproj updated. **VERIFIED:** host Debug x64 clean; new leaf test `tests/test_game_object_catalog.cpp`
+  **ALL PASS** (17 mock objects: enumeration, model-field fallback+precedence, same-file/cross-file/
+  deep-chain/cyclic/self-cyclic/missing-parent variant resolution, first-wins dedup, category map,
+  sort, never-throws); `AloModel` leaf test still green. Real-install dump-mode (vanilla FoC XML)
+  = **2642 objects**, variant resolution correct (`AT_AT_Walker_REB09 → EV_AT-AT.ALO` inherited),
+  Turret bucket populated (45); `--probe` of a real turret `.alo` = **Renderable**, a real skinned
+  trooper `.alo` = **SkinnedUnsupported**. No CHANGELOG yet (LT-7 batches its user-facing entry to
+  PR-D's picker, per the A/B precedent).
+- **NEXT: PR-D** (engine ref-object state + bridge + persistence + React `ReferenceObjectPicker` +
+  numeric 6-`Spinner` transform) — depends on B + C, both now in place.
