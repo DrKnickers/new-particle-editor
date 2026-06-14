@@ -230,4 +230,19 @@ multi-part), `All_Terrain_Anti_Aircraft.alo` (Chelmod, mixed rigid+skinned),
 
 ## 7. Execution log
 - Planning complete (two design passes). Build order A→B→C→D→E→F.
-- **PR-A in progress** (skeleton/connection decode — independent, pure-data, unit-tested).
+- **PR-A SHIPPED** (#167, merge `53e8a10`): skeleton/connection decode, validated byte-for-byte
+  vs the real `AI_Bunker_Turret1.alo`; +17 unit assertions, existing 30 green.
+- **PR-B done (this branch `claude/lt-7b-renderer`):** `src/ReferenceObjectMesh.{h,cpp}` (clone of
+  SkydomeMesh: extended transcoder adding `alD3dVertNU2U3` / `NU2U3U3` / `NU2U3U3C` with
+  `TANGENT0`@56 + `BINORMAL0`@68 — verified vs `MeshBumpColorize`'s VS_INPUT_MESH; skinned
+  (`RSkin*`/`B4I4*`) + collision/shadow shader filter; `computeBoneObjectMatrices` chain
+  `obj[i]=local[i]*obj[parent[i]]`, column-major→D3DXMATRIX no-transpose; per-sub-mesh placement).
+  `Engine::RenderReferenceObject()` — SOLID state (ZENABLE/ZWRITE TRUE, CULL_CCW, L-032
+  save/restore), injected after the ground + before particles; device lost/reset wired (3 phases);
+  a `#ifndef NDEBUG` `ALO_LT7_TEST_OBJECT` bring-up hook (kept, like MT-15's). vcxproj updated.
+  **VERIFIED via capture:** `AI_Bunker_Turret1.alo` renders upright on the ground with the barrels
+  HORIZONTAL (bone-chain placement proven), solid + correctly-culled (not inside-out), lit, running
+  `MeshBumpColorize.fx` 1:1; collision/shadow hulls filtered (3 visible sub-meshes). Debug x64
+  clean; Release TUs compile clean (link deferred to CI — dev-box Release exe was locked by the
+  user's running test instance). Winding (CCW) + up-axis confirmed correct on the first real model.
+- **NEXT: PR-C** (GameObjectCatalog — enumerate by Name) — independent of A/B, can start now.
