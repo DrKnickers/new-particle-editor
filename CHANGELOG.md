@@ -19,7 +19,7 @@ Conventions:
 
 ### MT-15 skydome renders for real — two render-blocker fixes + a render-capture bridge
 
-*2026-06-13 · [`TODO`](https://github.com/DrKnickers/new-particle-editor/commit/TODO) · [#TODO](https://github.com/DrKnickers/new-particle-editor/pull/TODO)*
+*2026-06-13 · [`70fc6a8`](https://github.com/DrKnickers/new-particle-editor/commit/70fc6a8) · [#165](https://github.com/DrKnickers/new-particle-editor/pull/165)*
 
 The MT-15 game/mod skydome ([#163](https://github.com/DrKnickers/new-particle-editor/pull/163))
 shipped code-complete but **render-unverified**. A render-capture feel-test against a
