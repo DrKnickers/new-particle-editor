@@ -98,9 +98,12 @@ namespace
     //
     // Extension fallback: the .alo names the SOURCE texture (e.g.
     // "W_SkyBlue_clear.tga") but the packed game ships the COMPILED ".dds" -- so
-    // every candidate is also tried with the extension swapped to .dds, exactly
-    // like the engine's TextureManager::getTexture (main.cpp: try as-named, then
-    // ".DDS"). Without this every dome texture misses and the dome renders black.
+    // every candidate is also tried with the extension swapped to .dds, mirroring
+    // the engine's TextureManager::getTexture (main.cpp: try as-named, then swap to
+    // ".DDS"). Lowercase ".dds" here is fine: case is irrelevant on both resolution
+    // paths -- MegaFile::getFile uppercases the path before the CRC match
+    // (MegaFiles.cpp), and the loose-disk lookup is NTFS case-insensitive
+    // (managers.cpp). Without this every dome texture misses and the dome draws black.
     IDirect3DTexture9* loadMaterialTexture(IDirect3DDevice9* dev, IFileManager& fm, const std::string& bareName)
     {
         if (bareName.empty()) return nullptr;

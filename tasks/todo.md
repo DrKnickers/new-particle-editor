@@ -587,7 +587,11 @@ Risk-2 settled empirically: `[SkyDraw]` post-`BeginPass` state dumps show states
   clamp disabled, so it's a real guard. Leaf: AloModel 30/30, SkydomeEnvironment 25/25. Web Vitest
   799/799. Native Debug+Release x64 clean. Cold-launch smoke = the `--capture` runs (textures load,
   no crash). NOT done: live `debug/capture-frame` round-trip (needs Playwright/dev-UI driver —
-  deferred, same lane as the Playwright picker spec).
+  deferred, same lane as the Playwright picker spec). **Deferred WITH it** (review #165 finding):
+  the `debug/capture-frame` kind's bridge-schema typing (`Request` union + `ResponseFor` map in
+  `web/packages/bridge-schema/src/index.ts`) + a mock arm in `web/apps/editor/src/bridge/mock.ts`
+  — the C++ handler matches on the kind string regardless, so this is only needed for a *typed*
+  test-host/Playwright caller, which is the deferred lane.
 - **Docs:** CHANGELOG entry (TODO-backfill hash/PR); ROADMAP MT-15 → Shipped §5.1 (renumbered the
   34 existing Shipped headings, §2 now empty, `[MT-15]` tag retired); lessons L-086/L-087; memories
   `project_mt15_skydome_5a_closed` + `project_render_capture_tool` + MEMORY.md index updated.
